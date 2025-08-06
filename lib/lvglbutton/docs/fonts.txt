@@ -1,0 +1,9 @@
+yellow title: semibold 14
+header: regular 14
+value: 
+  - medium 50
+  - medium 32
+  - regular 20
+  - regular 14
+hint
+ - regular 14
