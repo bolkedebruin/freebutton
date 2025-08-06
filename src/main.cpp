@@ -1,15 +1,60 @@
 #include <Arduino.h>
-#include <HardwareSerial.h>
+#include <map>
+#include <Wire.h>
+
+#include "config.h"
+#include "pins.h"
+#include "core/FileSystem.h"
+#include "core/WifiManager.h"
+#include "drivers/NeoPixel.h"
+#include "utils/helpers.h"
+
+static auto TAG = "main";
+
+const std::string deviceId(platform_create_id_string());
+
+const std::map<std::string_view, std::string_view> deviceInfo = {
+    {"name", "Button+ Base"},
+    {"manufacturer", "ButtonPlus"},
+    {"model", "Button+ " MACRO_TO_STRING(HW)},
+    {"sw_version", MACRO_TO_STRING(FIRMWARE)},
+};
+
+NeoPixelController neopixels(NEOPIN);
 
 void setup() {
-    Serial.begin(115200);
-    Serial.println("Starting FreeButton Application...");
-    // Your initialization code here
+    ESP_LOGI(TAG, "FreeButton Firmware: %s  Id: %s starting!", FIRMWARE, deviceId.c_str());
 
-    // ... rest of your setup
+    init_littlefs();
+
+    // set log levels
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+    esp_log_level_set("broker", ESP_LOG_DEBUG);
+    esp_log_level_set("displayitem", ESP_LOG_DEBUG);
+    esp_log_level_set("mqtt", ESP_LOG_DEBUG);
+    esp_log_level_set("item", ESP_LOG_DEBUG);
+    esp_log_level_set("sensor", ESP_LOG_DEBUG);
+    esp_log_level_set("config", ESP_LOG_DEBUG);
+    esp_log_level_set("button", ESP_LOG_DEBUG);
+
+    // Two wire init
+    Wire.begin(CH1_SDA, CH1_SCL);
+    Wire1.begin(BUTTON_SDA, BUTTON_SCL);
+
+    neopixels.begin();
+    neopixels.flash();
+
+    start_wifi_manager();
 }
 
 void loop() {
-    // Your main loop code here
-    // ... your application logic
+    static unsigned long lastSensorUpdateTime = 0;
+    unsigned long currentTime = millis();
+
+    if (currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
+        lastSensorUpdateTime = currentTime;
+        // sampleSensors();
+    }
+
+    delay(10);
 }
