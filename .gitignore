@@ -6,3 +6,39 @@ lib/lvgl_esp32_drivers
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 /.vscode/launch.json
+
+
+# ESP-IDF Component Manager
+dependencies.lock
+managed_components/
+.espressif/
+
+# ESP-IDF build artifacts
+sdkconfig
+sdkconfig.old
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+*.swp
+*.swo
+*~
+.vscode/settings.json
+.idea/
+
+# Node.js 
+web/node_modules/
+web/build/
+web/.env.local
+web/.env.development.local
+web/.env.test.local
+web/.env.production.local
+
