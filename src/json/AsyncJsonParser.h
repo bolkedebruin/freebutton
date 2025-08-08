@@ -141,7 +141,7 @@ private:
     // Constants
     static constexpr size_t PARSE_TASK_STACK_SIZE = 8096;
     static constexpr UBaseType_t PARSE_TASK_PRIORITY = tskIDLE_PRIORITY + 2;
-    static constexpr const char* PARSE_TASK_NAME = "AsyncJsonParser";
+    static constexpr auto PARSE_TASK_NAME = "AsyncJsonParser";
 };
 
 /**

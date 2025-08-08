@@ -20,6 +20,7 @@
 #define PUBLICMQTT "mqtt://mqtt.button.plus"
 
 #include <string>
+#include <unordered_map>
 
 constexpr unsigned long SENSOR_UPDATE_INTERVAL = 1000;
 

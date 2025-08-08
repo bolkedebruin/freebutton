@@ -5,6 +5,7 @@
 #include "config.h"
 #include "pins.h"
 #include "core/FileSystem.h"
+#include "core/WebServer.h"
 #include "core/WifiManager.h"
 #include "drivers/NeoPixel.h"
 #include "utils/helpers.h"
@@ -21,6 +22,10 @@ const std::map<std::string_view, std::string_view> deviceInfo = {
 };
 
 NeoPixelController neopixels(NEOPIN);
+
+void log_free_heap() {
+    ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
+}
 
 void setup() {
     ESP_LOGI(TAG, "FreeButton Firmware: %s  Id: %s starting!", FIRMWARE, deviceId.c_str());
@@ -46,13 +51,16 @@ void setup() {
 
     setup_wifi_event_handler();
     start_wifi_manager();
+
+    log_free_heap();
+    webserver_start();
+    log_free_heap();
 }
 
 void loop() {
     static unsigned long lastSensorUpdateTime = 0;
-    unsigned long currentTime = millis();
 
-    if (currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
+    if (const unsigned long currentTime = millis(); currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
         lastSensorUpdateTime = currentTime;
         ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
 
