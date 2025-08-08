@@ -44,6 +44,7 @@ void setup() {
     neopixels.begin();
     neopixels.flash();
 
+    setup_wifi_event_handler();
     start_wifi_manager();
 }
 
@@ -53,6 +54,8 @@ void loop() {
 
     if (currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
         lastSensorUpdateTime = currentTime;
+        ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
+
         // sampleSensors();
     }
 

@@ -6,6 +6,7 @@
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
+#include <esp_log.h>
 
 #include "mdns.h"
 
@@ -276,7 +277,7 @@ void wifi_manager_monitor(void* parameter) {
             WiFi.mode(WIFI_STA);
         } else if (WiFi.status() != WL_CONNECTED && wifiConnected) {
             wifiConnected = false;
-            Serial.println("WiFi Disconnected!");
+            ESP_LOGW(TAG, "WiFi Disconnected!");
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -300,17 +301,12 @@ void start_wifi_manager() {
         int attempts = 0;
         while (WiFi.status() != WL_CONNECTED && attempts < 20) {
             delay(500);
-            Serial.print(".");
+            ESP_LOGD(TAG, "Connecting attempt %d/20", attempts + 1);
             attempts++;
         }
 
         if (WiFi.status() == WL_CONNECTED) {
             ESP_LOGI(TAG, "WiFi Connected!");
-            ESP_LOGI(TAG, "IPv4 Address: %s", WiFi.localIP().toString().c_str());
-            ESP_LOGI(TAG, "IPv6 Address: %s", WiFi.globalIPv6().toString().c_str());
-
-            // move this to callbacks
-            mdns_start();
 
             wifiConnected = true;
             portalstarted = true;
@@ -345,4 +341,93 @@ void reset_wifi_credentials() {
     delay(500);
 
     ESP.restart();
+}
+
+void wifi_event_handler(WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_READY:
+            ESP_LOGI(TAG, "WiFi interface ready");
+            break;
+        case ARDUINO_EVENT_WIFI_SCAN_DONE:
+            ESP_LOGI(TAG, "Completed scan for access points");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_START:
+            ESP_LOGI(TAG, "WiFi client started");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_STOP:
+            ESP_LOGI(TAG, "WiFi client stopped");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+            ESP_LOGI(TAG, "Connected to access point");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            ESP_LOGW(TAG, "Disconnected from WiFi access point, reason: %d", info.wifi_sta_disconnected.reason);
+            wifiConnected = false;
+            // Stop mDNS when disconnected
+            mdns_stop();
+            break;
+        case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:
+            ESP_LOGI(TAG, "Authentication mode of access point has changed");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            ESP_LOGI(TAG, "Obtained IPv4 address: " IPSTR, IP2STR(&info.got_ip.ip_info.ip));
+            if (!wifiConnected) {
+                ESP_LOGI(TAG, "Starting mDNS responder");
+                mdns_start();
+            } else {
+                ESP_LOGI(TAG, "WiFi already connected, skipping mDNS start");
+            }
+            wifiConnected = true;
+            // Start mDNS when we get IP
+            break;
+        case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+            ESP_LOGW(TAG, "Lost IP address and IP address is reset to 0");
+            wifiConnected = false;
+            // Stop mDNS when we lose IP
+            mdns_stop();
+            break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP6:
+            ESP_LOGI(TAG, "IPv6 Global Address: %s", WiFi.globalIPv6().toString().c_str());
+            ESP_LOGI(TAG, "IPv6 Link Local Address: %s", WiFi.linkLocalIPv6().toString().c_str());
+            if (!wifiConnected) {
+                ESP_LOGI(TAG, "Starting mDNS responder");
+                mdns_start();
+            } else {
+                ESP_LOGI(TAG, "WiFi already connected, skipping mDNS start");
+            }
+            wifiConnected = true;
+
+            break;
+        case ARDUINO_EVENT_WIFI_AP_START:
+            ESP_LOGI(TAG, "WiFi access point started");
+            break;
+        case ARDUINO_EVENT_WIFI_AP_STOP:
+            ESP_LOGI(TAG, "WiFi access point stopped");
+            break;
+        case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+            ESP_LOGI(TAG, "Client " MACSTR " connected", MAC2STR(info.wifi_ap_staconnected.mac));
+            break;
+        case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+            ESP_LOGI(TAG, "Client " MACSTR " disconnected", MAC2STR(info.wifi_ap_stadisconnected.mac));
+            break;
+        case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+            ESP_LOGI(TAG, "Assigned IP address to client");
+            break;
+        case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED:
+            ESP_LOGD(TAG, "Received probe request");
+            break;
+        case ARDUINO_EVENT_WIFI_AP_GOT_IP6:
+            ESP_LOGI(TAG, "AP IPv6 is preferred");
+            ESP_LOGI(TAG, "IPv6 Global Address: %s", WiFi.globalIPv6().toString().c_str());
+            ESP_LOGI(TAG, "IPv6 Link Local Address: %s", WiFi.linkLocalIPv6().toString().c_str());
+            break;
+        default:
+            ESP_LOGD(TAG, "Unhandled WiFi event: %d", event);
+            break;
+    }
+}
+
+void setup_wifi_event_handler() {
+    WiFi.onEvent(wifi_event_handler);
+    ESP_LOGI(TAG, "WiFi event handler registered");
 }

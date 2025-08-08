@@ -6,5 +6,6 @@
 #define MDNS_H
 
 void mdns_start();
+void mdns_stop();
 
 #endif //MDNS_H

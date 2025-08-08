@@ -34,3 +34,9 @@ void mdns_start()
     // Add version and other metadata
     // MDNS.addServiceTxt("_http", "_tcp", "version", "1.0");
 }
+
+void mdns_stop()
+{
+    ESP_LOGI(TAG, "Stopping mDNS responder");
+    MDNS.end();
+}
