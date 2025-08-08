@@ -7,6 +7,8 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 
+#include "mdns.h"
+
 static auto TAG = "wifi";
 
 extern AsyncWebServer server;
@@ -291,6 +293,7 @@ void start_wifi_manager() {
     if (strlen(savedCreds.ssid) > 0) {
         ESP_LOGI(TAG, "Attempting to connect with saved credentials...");
         WiFi.mode(WIFI_STA);
+        WiFi.softAPenableIPv6();
         WiFi.enableIPv6();
         WiFi.begin(savedCreds.ssid, savedCreds.password);
 
@@ -305,7 +308,10 @@ void start_wifi_manager() {
             ESP_LOGI(TAG, "WiFi Connected!");
             ESP_LOGI(TAG, "IPv4 Address: %s", WiFi.localIP().toString().c_str());
             ESP_LOGI(TAG, "IPv6 Address: %s", WiFi.globalIPv6().toString().c_str());
-            
+
+            // move this to callbacks
+            mdns_start();
+
             wifiConnected = true;
             portalstarted = true;
 

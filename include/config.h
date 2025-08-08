@@ -13,10 +13,19 @@
 #define CDN "1.8"
 #define GAMMA (2.2)
 #define BASE_TOPIC "buttonplus/"
+#define BUTTONEVENTSUBSCRIBELIMIT 8
+
 
 #define PUBLICMQTTID "buttonplus"
 #define PUBLICMQTT "mqtt://mqtt.button.plus"
 
+#include <string>
+
 constexpr unsigned long SENSOR_UPDATE_INTERVAL = 1000;
+
+extern const std::string deviceId;
+
+// helpers for backwards compatibility
+extern std::unordered_map<uint8_t, std::string> idToBrokerName;
 
 #endif //CONFIG_H

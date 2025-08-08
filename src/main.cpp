@@ -9,7 +9,7 @@
 #include "drivers/NeoPixel.h"
 #include "utils/helpers.h"
 
-static auto TAG = "main";
+static const auto TAG = "main";
 
 const std::string deviceId(platform_create_id_string());
 
