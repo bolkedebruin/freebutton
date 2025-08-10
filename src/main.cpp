@@ -8,6 +8,7 @@
 #include "core/WebServer.h"
 #include "core/WifiManager.h"
 #include "drivers/NeoPixel.h"
+#include "mqtt/Broker.h"
 #include "utils/helpers.h"
 
 static const auto TAG = "main";
@@ -54,6 +55,11 @@ void setup() {
 
     log_free_heap();
     webserver_start();
+    log_free_heap();
+
+    auto broker = MqttBroker(0, "mqtt://192.168.1.10");
+    broker.start();
+    broker.sendBirth();
     log_free_heap();
 }
 
