@@ -23,6 +23,8 @@ const std::map<std::string_view, std::string_view> deviceInfo = {
 };
 
 NeoPixelController neopixels(NEOPIN);
+auto broker = MqttBroker(0, "mqtt://192.168.1.10");
+
 
 void log_free_heap() {
     ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
@@ -57,9 +59,8 @@ void setup() {
     webserver_start();
     log_free_heap();
 
-    auto broker = MqttBroker(0, "mqtt://192.168.1.10");
     broker.start();
-    broker.sendBirth();
+
     log_free_heap();
 }
 

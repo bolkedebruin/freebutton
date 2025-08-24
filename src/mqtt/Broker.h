@@ -4,6 +4,7 @@
 
 #ifndef BROKER_H
 #define BROKER_H
+#include <functional>
 #include <mqtt_client.h>
 #include <string>
 
@@ -27,8 +28,17 @@ public:
     void sendBirth() const;
 
     void publish(std::string_view topic, std::string_view data, int qos, int retain) const;
+    void subscribe(std::string_view topic, int qos) const;
+    void unsubscribe(std::string_view topic) const;
 
-    //void sendDiscovery() const;
+    // Event callbacks
+    void setOnConnectedCallback(std::function<void(uint8_t)> callback);
+    void setOnDisconnectedCallback(std::function<void(uint8_t)> callback);
+    void setOnMessageCallback(std::function<void(uint8_t, const char*, const char*, size_t)> callback);
+    void setOnErrorCallback(std::function<void(uint8_t, esp_mqtt_error_codes*)> callback);
+
+    // Instance event handler
+    void handleMqttEvent(esp_mqtt_event_handle_t event) const;
 
 private:
     uint8_t brokerId;
@@ -44,6 +54,16 @@ private:
     std::string deviceTopic;
 
     bool enabled = false;
+
+    // Event callbacks
+    std::function<void(uint8_t)> on_connected_callback_;
+    std::function<void(uint8_t)> on_disconnected_callback_;
+    std::function<void(uint8_t, const char*, const char*, size_t)> on_message_callback_;
+    std::function<void(uint8_t, esp_mqtt_error_codes*)> on_error_callback_;
+
+    // Static event handler
+    static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
+                                  int32_t event_id, void* event_data);
 };
 
 #endif //BROKER_H
