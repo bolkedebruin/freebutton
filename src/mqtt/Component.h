@@ -20,7 +20,7 @@ struct TopicSubscription {
 class MqttComponent {
 public:
     virtual ~MqttComponent() = default;
-    //virtual const char* getComponentType() const = 0;
+    virtual const std::string getComponentType() const = 0;
 
 protected:
     std::string device_id_;

@@ -23,6 +23,10 @@ public:
                (int)topic.length(), topic.data(),
                (int)data.length(), data.data());
     }
+
+    const std::string getComponentType() const override {
+        return "MyComponent";
+    }
 };
 
 
@@ -90,7 +94,7 @@ void loop() {
 
     if (const unsigned long currentTime = millis(); currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
         lastSensorUpdateTime = currentTime;
-        ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
+        //ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
 
         // sampleSensors();
     }
