@@ -62,4 +62,19 @@ void MqttSubscriber::removeSubscription(uint8_t brokerId, const std::string &top
     }
 };
 
+void MqttPublisher::publish(uint8_t brokerId, const std::string &topic, const std::string &data, int qos, bool retain) {
+    if (topic.empty()) {
+        ESP_LOGE(TAG, "Cannot publish to empty topic");
+        return;
+    }
+
+    auto &registry = MqttBrokerRegistry::instance();
+    if (auto* broker = registry.getBroker(brokerId)) {
+        broker->publish(topic, data, qos, retain ? 1 : 0);
+        ESP_LOGD(TAG, "Published to topic %s on broker %d", topic.c_str(), brokerId);
+    } else {
+        ESP_LOGE(TAG, "Broker with ID %d not found, cannot publish to topic %s", brokerId, topic.c_str());
+    }
+}
+
 

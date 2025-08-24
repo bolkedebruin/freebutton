@@ -39,7 +39,7 @@ private:
 
 class MqttPublisher : public virtual MqttComponent {
 protected:
-    void publish(uint8_t brokerId, const std::string &topic, const std::string &data, int qos = 0, bool retain = false);
+    static void publish(uint8_t brokerId, const std::string &topic, const std::string &data, int qos = 0, bool retain = false);
 };
 
 #endif //FREEBUTTON_COMPONENT_H
