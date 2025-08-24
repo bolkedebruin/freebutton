@@ -114,7 +114,7 @@ void MqttBroker::unsubscribe(std::string_view topic) const {
 }
 
 void MqttBroker::mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data) {
-    auto* broker = static_cast<MqttBroker*>(handler_args);
+    const auto* broker = static_cast<MqttBroker*>(handler_args);
     auto* event = static_cast<esp_mqtt_event_handle_t>(event_data);
     broker->handleMqttEvent(event);
 }
