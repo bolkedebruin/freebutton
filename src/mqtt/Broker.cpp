@@ -82,7 +82,7 @@ void MqttBroker::publish(std::string_view topic, std::string_view data, const in
     }
 }
 
-void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber *subscriber) const {
+void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber *subscriber) {
     if (!client) {
         ESP_LOGE(TAG, "MQTT client not initialized, cannot subscribe to topic: %s\n", topic.data());
         return;
@@ -98,6 +98,8 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
     auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(),
                            [topic](const SubscriptionEntry& entry) { return entry.topic == topic; });
 
+    bool needsBrokerSubscription = false;
+    
     if (it != subscriptions_.end()) {
         // Topic already exists, add subscriber if not already present
         if (std::find(it->subscribers.begin(), it->subscribers.end(), subscriber) == it->subscribers.end()) {
@@ -106,20 +108,23 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
             ESP_LOGW(TAG, "Subscriber already registered for topic: %s\n", topic.data());
         }
     } else {
-        // New topic, create entry
+        // New topic, create entry and mark for broker subscription
         SubscriptionEntry newEntry;
         newEntry.topic = std::string(topic);
         newEntry.subscribers.push_back(subscriber);
         subscriptions_.push_back(newEntry);
+        needsBrokerSubscription = true;
     }
-    if (enabled) {
+    
+    // Only subscribe to broker if this is the first subscriber to this topic
+    if (enabled && needsBrokerSubscription) {
         if (int msg_id = esp_mqtt_client_subscribe(client, topic.data(), qos); msg_id < 0) {
             ESP_LOGW(TAG, "Failed to subscribe to topic: %s, error: %d\n", topic.data(), msg_id);
         }
     }
 }
 
-void MqttBroker::unsubscribe(std::string_view topic) const {
+void MqttBroker::unsubscribe(std::string_view topic) {
     if (!client) {
         ESP_LOGE(TAG, "MQTT client not initialized, cannot unsubscribe from topic: %s\n", topic.data());
         return;
@@ -132,9 +137,42 @@ void MqttBroker::unsubscribe(std::string_view topic) const {
 
     ESP_LOGD(TAG, "Unsubscribing from topic: %.*s\n", topic.length(), topic.data());
 
+    // Remove from internal subscription list
+    auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(),
+                           [topic](const SubscriptionEntry& entry) { return entry.topic == topic; });
+    
+    if (it != subscriptions_.end()) {
+        subscriptions_.erase(it);
+    }
+
     if (enabled) {
         if (int msg_id = esp_mqtt_client_unsubscribe(client, topic.data()); msg_id < 0) {
             ESP_LOGW(TAG, "Failed to unsubscribe from topic: %s, error: %d\n", topic.data(), msg_id);
+        }
+    }
+}
+
+void MqttBroker::unsubscribe(MqttSubscriber* subscriber) {
+    if (!subscriber) {
+        ESP_LOGE(TAG, "Cannot unsubscribe null subscriber");
+        return;
+    }
+
+    // Remove subscriber from all topics and clean up empty topics
+    for (auto it = subscriptions_.begin(); it != subscriptions_.end();) {
+        // Remove subscriber from this topic
+        auto& subscribers = it->subscribers;
+        std::erase(subscribers, subscriber);
+        
+        // If no subscribers left, unsubscribe from broker and remove topic
+        if (subscribers.empty()) {
+            ESP_LOGD(TAG, "No more subscribers for topic %s, unsubscribing from broker", it->topic.c_str());
+            if (enabled && client) {
+                esp_mqtt_client_unsubscribe(client, it->topic.c_str());
+            }
+            it = subscriptions_.erase(it);
+        } else {
+            ++it;
         }
     }
 }
@@ -170,11 +208,28 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
             ESP_LOGI(TAG, "Message published (msg_id: %d)", event->msg_id);
             break;
         case MQTT_EVENT_DATA:
-            ESP_LOGI(TAG, "Message received on topic: %.*s", event->topic_len, event->topic);
-            if (on_message_callback_) {
-                on_message_callback_(brokerId, event->topic, event->data, event->data_len);
+            {
+                ESP_LOGI(TAG, "Message received on topic: %.*s", event->topic_len, event->topic);
+                
+                // Dispatch to subscribers
+                std::string_view topic_view(event->topic, event->topic_len);
+                std::string_view data_view(event->data, event->data_len);
+                
+                for (const auto& subscription : subscriptions_) {
+                    if (subscription.topic == topic_view) {
+                        for (auto* subscriber : subscription.subscribers) {
+                            subscriber->onMessage(brokerId, topic_view, data_view);
+                        }
+                        break;
+                    }
+                }
+                
+                // Keep existing callback for backward compatibility
+                if (on_message_callback_) {
+                    on_message_callback_(brokerId, event->topic, event->data, event->data_len);
+                }
+                break;
             }
-            break;
         case MQTT_EVENT_ERROR:
             ESP_LOGE(TAG, "MQTT error occurred");
             if (on_error_callback_ && event->error_handle) {

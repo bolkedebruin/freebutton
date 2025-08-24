@@ -5,7 +5,7 @@
 #include "Registry.h"
 #include "esp_log.h"
 
-auto TAG = "broker_registry";
+static const char* TAG = "broker_registry";
 
 MqttBrokerRegistry& MqttBrokerRegistry::instance() {
     static MqttBrokerRegistry instance;

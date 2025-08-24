@@ -30,8 +30,9 @@ public:
     void sendBirth() const;
 
     void publish(std::string_view topic, std::string_view data, int qos, int retain) const;
-    void subscribe(std::string_view topic, int qos, MqttSubscriber* subscriber ) const;
-    void unsubscribe(MqttSubscriber *component) const;
+    void subscribe(std::string_view topic, int qos, MqttSubscriber* subscriber);
+    void unsubscribe(std::string_view topic);
+    void unsubscribe(MqttSubscriber* subscriber);
 
     // Event callbacks
     void setOnConnectedCallback(std::function<void(uint8_t)> callback);

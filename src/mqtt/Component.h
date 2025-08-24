@@ -4,7 +4,6 @@
 
 #ifndef FREEBUTTON_COMPONENT_H
 #define FREEBUTTON_COMPONENT_H
-#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -31,11 +30,11 @@ protected:
 
 class MqttSubscriber : public virtual MqttComponent {
 public:
-    //virtual void onMessage(uint8_t brokerId, const char* topic, const char* data, size_t len) = 0;
-    //virtual const std::vector<TopicSubscription> getSubscriptions() const = 0;
+    virtual void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) = 0;
 
 protected:
     void addSubscription(uint8_t brokerId, const std::string &topic, int qos = 0);
+    void removeSubscription(uint8_t brokerId, const std::string &topic);
 
 private:
     std::vector<TopicSubscription> subscriptions;

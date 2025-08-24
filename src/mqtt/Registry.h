@@ -36,7 +36,6 @@ public:
 
     void connectAll();
     void disconnectAll();
-
-
 };
+
 #endif //FREEBUTTON_REGISTRY_H
