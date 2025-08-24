@@ -116,11 +116,13 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
         needsBrokerSubscription = true;
     }
     
-    // Only subscribe to broker if this is the first subscriber to this topic
+    // Only subscribe to broker if this is the first subscriber to this topic and broker is connected
     if (enabled && needsBrokerSubscription) {
         if (int msg_id = esp_mqtt_client_subscribe(client, topic.data(), qos); msg_id < 0) {
-            ESP_LOGW(TAG, "Failed to subscribe to topic: %s, error: %d\n", topic.data(), msg_id);
+            ESP_LOGW(TAG, "Failed to subscribe to topic: %s, error: %d (will retry on reconnect)\n", topic.data(), msg_id);
         }
+    } else if (!enabled && needsBrokerSubscription) {
+        ESP_LOGI(TAG, "Broker not connected yet, topic %.*s will be subscribed when connection is established", (int)topic.length(), topic.data());
     }
 }
 
@@ -188,6 +190,10 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT %s broker connected", url.c_str());
             sendBirth();
+            
+            // Resubscribe to all existing subscriptions
+            const_cast<MqttBroker*>(this)->resubscribeAll();
+            
             if (on_connected_callback_) {
                 on_connected_callback_(brokerId);
             }
@@ -257,4 +263,25 @@ void MqttBroker::setOnMessageCallback(std::function<void(uint8_t, const char*, c
 
 void MqttBroker::setOnErrorCallback(std::function<void(uint8_t, esp_mqtt_error_codes*)> callback) {
     on_error_callback_ = callback;
+}
+
+void MqttBroker::resubscribeAll() {
+    if (!enabled || !client) {
+        ESP_LOGW(TAG, "Cannot resubscribe: broker not enabled or client not initialized");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Resubscribing to %d topics", subscriptions_.size());
+
+    // Resubscribe to all topics that have subscribers
+    for (const auto& subscription : subscriptions_) {
+        if (!subscription.subscribers.empty()) {
+            ESP_LOGD(TAG, "Resubscribing to topic: %s", subscription.topic.c_str());
+            // Use QoS 1 as default for resubscription - in a more sophisticated implementation 
+            // you might want to store the original QoS per subscription
+            if (int msg_id = esp_mqtt_client_subscribe(client, subscription.topic.c_str(), 1); msg_id < 0) {
+                ESP_LOGW(TAG, "Failed to resubscribe to topic: %s, error: %d", subscription.topic.c_str(), msg_id);
+            }
+        }
+    }
 }

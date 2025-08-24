@@ -42,6 +42,9 @@ public:
 
     // Instance event handler
     void handleMqttEvent(esp_mqtt_event_handle_t event) const;
+    
+    // Resubscribe to all existing subscriptions (called on reconnect)
+    void resubscribeAll();
 
     void setBrokerId(const uint8_t id) { brokerId = id; }
     uint8_t getBrokerId() const { return brokerId; }

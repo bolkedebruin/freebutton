@@ -20,9 +20,7 @@ struct TopicSubscription {
 class MqttComponent {
 public:
     virtual ~MqttComponent() = default;
-    virtual void setup() = 0;
-    virtual void loop() = 0;
-    virtual const char* getComponentType() const = 0;
+    //virtual const char* getComponentType() const = 0;
 
 protected:
     std::string device_id_;
@@ -32,7 +30,6 @@ class MqttSubscriber : public virtual MqttComponent {
 public:
     virtual void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) = 0;
 
-protected:
     void addSubscription(uint8_t brokerId, const std::string &topic, int qos = 0);
     void removeSubscription(uint8_t brokerId, const std::string &topic);
 

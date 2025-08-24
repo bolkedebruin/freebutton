@@ -10,9 +10,22 @@
 #include "drivers/NeoPixel.h"
 #include "mqtt/Broker.h"
 #include "mqtt/Registry.h"
+#include "mqtt/Component.h"
 #include "utils/helpers.h"
 
 static const auto TAG = "main";
+
+class MyComponent : public MqttSubscriber {
+public:
+    void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override {
+        printf("Received message on broker %d, topic: %.*s, data: %.*s\n",
+               brokerId,
+               (int)topic.length(), topic.data(),
+               (int)data.length(), data.data());
+    }
+};
+
+
 
 const std::string deviceId(platform_create_id_string());
 
@@ -25,6 +38,8 @@ const std::map<std::string_view, std::string_view> deviceInfo = {
 
 NeoPixelController neopixels(NEOPIN);
 auto& registry = MqttBrokerRegistry::instance();
+
+std::unique_ptr<MyComponent> globalComponent;
 
 void log_free_heap() {
     ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
@@ -62,6 +77,10 @@ void setup() {
     auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
     registry.addBroker(std::move(broker));
     registry.connectAll();
+
+    globalComponent = std::make_unique<MyComponent>();
+    const uint8_t brokerId = MqttBrokerRegistry::getBrokerId("homeserver");
+    globalComponent->addSubscription(brokerId, "test/topic", 1);
 
     log_free_heap();
 }
