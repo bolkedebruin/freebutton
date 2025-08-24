@@ -8,6 +8,7 @@
 #include <mqtt_client.h>
 #include <string>
 
+#include "Component.h"
 #include "config.h"
 
 class MqttBroker {
@@ -29,8 +30,8 @@ public:
     void sendBirth() const;
 
     void publish(std::string_view topic, std::string_view data, int qos, int retain) const;
-    void subscribe(std::string_view topic, int qos) const;
-    void unsubscribe(std::string_view topic) const;
+    void subscribe(std::string_view topic, int qos, MqttSubscriber* subscriber ) const;
+    void unsubscribe(MqttSubscriber *component) const;
 
     // Event callbacks
     void setOnConnectedCallback(std::function<void(uint8_t)> callback);
@@ -72,6 +73,13 @@ private:
     // Static event handler
     static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
                                   int32_t event_id, void* event_data);
+
+    struct SubscriptionEntry {
+        std::string topic;
+        std::vector<MqttSubscriber*> subscribers;  // Multiple components can subscribe to same topic
+    };
+
+    std::vector<SubscriptionEntry> subscriptions_;
 };
 
 #endif //BROKER_H
