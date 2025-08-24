@@ -44,6 +44,15 @@ void MqttBroker::start() {
     }
 }
 
+void MqttBroker::stop() {
+    if (client) {
+        esp_mqtt_client_stop(client);
+        esp_mqtt_client_destroy(client);
+        client = nullptr;
+        enabled = false;
+    }
+}
+
 void MqttBroker::sendBirth() const {
     const std::string lwt_topic = std::string(deviceTopic) + "/status";
     publish(lwt_topic, "online", 1, 1);

@@ -9,6 +9,7 @@
 #include "core/WifiManager.h"
 #include "drivers/NeoPixel.h"
 #include "mqtt/Broker.h"
+#include "mqtt/Registry.h"
 #include "utils/helpers.h"
 
 static const auto TAG = "main";
@@ -23,8 +24,6 @@ const std::map<std::string_view, std::string_view> deviceInfo = {
 };
 
 NeoPixelController neopixels(NEOPIN);
-auto broker = MqttBroker(0, "mqtt://192.168.1.10");
-
 
 void log_free_heap() {
     ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
@@ -59,7 +58,10 @@ void setup() {
     webserver_start();
     log_free_heap();
 
-    broker.start();
+    auto& registry = MqttBrokerRegistry::instance();
+    auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
+    registry.addBroker(std::move(broker));
+    registry.connectAll();
 
     log_free_heap();
 }

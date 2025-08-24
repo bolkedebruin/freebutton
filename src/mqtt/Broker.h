@@ -12,7 +12,8 @@
 
 class MqttBroker {
 public:
-    MqttBroker(const uint8_t brokerId, const std::string& url) : brokerId(brokerId), url(std::move(url)) {
+    MqttBroker(const std::string& name, const std::string& url) : brokerId(0), name(std::move(name)),
+                                                                  url(std::move(url)) {
         port = 0;
         wsPort = 0;
         client = nullptr;
@@ -23,7 +24,7 @@ public:
     }
 
     void start();
-    //void stop();
+    void stop();
 
     void sendBirth() const;
 
@@ -40,8 +41,15 @@ public:
     // Instance event handler
     void handleMqttEvent(esp_mqtt_event_handle_t event) const;
 
+    void setBrokerId(const uint8_t id) { brokerId = id; }
+    uint8_t getBrokerId() const { return brokerId; }
+
+    std::string_view getName() const { return name; }
+
 private:
     uint8_t brokerId;
+
+    std::string name;
     std::string url;
 
     uint32_t port = 0;
