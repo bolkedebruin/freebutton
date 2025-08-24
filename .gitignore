@@ -6,7 +6,7 @@ lib/lvgl_esp32_drivers
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 /.vscode/launch.json
-
+compile_commands.json
 
 # ESP-IDF Component Manager
 dependencies.lock
