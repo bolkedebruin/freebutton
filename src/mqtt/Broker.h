@@ -34,6 +34,9 @@ public:
     void unsubscribe(std::string_view topic);
     void unsubscribe(MqttSubscriber* subscriber);
 
+    // Connection state
+    [[nodiscard]] constexpr bool isConnected() const noexcept { return connected_; }
+
     // Event callbacks
     void setOnConnectedCallback(std::function<void(uint8_t)> callback);
     void setOnDisconnectedCallback(std::function<void(uint8_t)> callback);
@@ -67,6 +70,7 @@ private:
     std::string deviceTopic;
 
     bool enabled = false;
+    bool connected_ = false;
 
     // Event callbacks
     std::function<void(uint8_t)> on_connected_callback_;

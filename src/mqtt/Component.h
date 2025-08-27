@@ -21,6 +21,10 @@ class MqttComponent {
 public:
     virtual ~MqttComponent() = default;
     virtual const std::string getComponentType() const = 0;
+    
+    // Virtual methods for HA discovery - return empty if not applicable
+    virtual std::vector<std::string> getSubscriptionTopics(uint8_t brokerId) const { return {}; }
+    virtual std::vector<std::string> getPublicationTopics(uint8_t brokerId) const { return {}; }
 
 protected:
     std::string device_id_;
@@ -32,14 +36,40 @@ public:
 
     void addSubscription(uint8_t brokerId, const std::string &topic, int qos = 0);
     void removeSubscription(uint8_t brokerId, const std::string &topic);
+    
+    // Override base class method for HA discovery
+    std::vector<std::string> getSubscriptionTopics(uint8_t brokerId) const override;
+    const std::vector<TopicSubscription>& getSubscriptions() const { return subscriptions; }
 
 private:
     std::vector<TopicSubscription> subscriptions;
 };
 
+struct TopicPublication {
+    uint8_t brokerId;
+    std::string topic;
+    int qos = 0;
+    bool retain = false;
+
+    TopicPublication(uint8_t brokerId, const std::string &topic, int qos = 0, bool retain = false) :
+        brokerId(brokerId), topic(topic), qos(qos), retain(retain) {}
+};
+
 class MqttPublisher : public virtual MqttComponent {
+public:
+    void addPublication(uint8_t brokerId, const std::string &topic, int qos = 0, bool retain = false);
+    void removePublication(uint8_t brokerId, const std::string &topic);
+    
+    // Override base class method for HA discovery
+    std::vector<std::string> getPublicationTopics(uint8_t brokerId) const override;
+    const std::vector<TopicPublication>& getPublications() const { return publications; }
+
 protected:
+    void publish(const std::string &data, int qos = -1, bool retain_override = false);
     static void publish(uint8_t brokerId, const std::string &topic, const std::string &data, int qos = 0, bool retain = false);
+
+private:
+    std::vector<TopicPublication> publications;
 };
 
 #endif //FREEBUTTON_COMPONENT_H

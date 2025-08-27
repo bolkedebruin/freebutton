@@ -189,6 +189,7 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT %s broker connected", url.c_str());
+            const_cast<MqttBroker*>(this)->connected_ = true;
             sendBirth();
             
             // Resubscribe to all existing subscriptions
@@ -200,6 +201,7 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "MQTT broker %s disconnected", url.c_str());
+            const_cast<MqttBroker*>(this)->connected_ = false;
             if (on_disconnected_callback_) {
                 on_disconnected_callback_(brokerId);
             }

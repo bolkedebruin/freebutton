@@ -11,6 +11,7 @@
 #include "mqtt/Broker.h"
 #include "mqtt/Registry.h"
 #include "mqtt/Component.h"
+#include "mqtt/HomeAssistantDiscovery.h"
 #include "utils/helpers.h"
 
 static const auto TAG = "main";
@@ -20,11 +21,11 @@ public:
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override {
         printf("Received message on broker %d, topic: %.*s, data: %.*s\n",
                brokerId,
-               (int)topic.length(), topic.data(),
-               (int)data.length(), data.data());
+               static_cast<int>(topic.length()), topic.data(),
+               static_cast<int>(data.length()), data.data());
     }
 
-    const std::string getComponentType() const override {
+    [[nodiscard]] const std::string getComponentType() const override {
         return "MyComponent";
     }
 };
@@ -79,12 +80,22 @@ void setup() {
     log_free_heap();
 
     auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
+    
+    // Set up connection callback for HomeAssistant discovery
+    broker->setOnConnectedCallback([](const uint8_t brokerId) {
+        HomeAssistantDiscovery::onBrokerConnected(brokerId);
+    });
+    HomeAssistantDiscovery::setDeviceInfo({.identifiers = deviceId});
+
     registry.addBroker(std::move(broker));
     registry.connectAll();
 
     globalComponent = std::make_unique<MyComponent>();
     const uint8_t brokerId = MqttBrokerRegistry::getBrokerId("homeserver");
     globalComponent->addSubscription(brokerId, "test/topic", 1);
+
+    HomeAssistantDiscovery::configureBroker(brokerId);
+    HomeAssistantDiscovery::registerComponent(brokerId, globalComponent.get(), "sensor", "my_component_1", "My Component 1", "temperature");
 
     log_free_heap();
 }
