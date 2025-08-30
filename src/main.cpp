@@ -13,6 +13,9 @@
 #include "mqtt/Component.h"
 #include "mqtt/HomeAssistantDiscovery.h"
 #include "utils/helpers.h"
+#include "drivers/Sensors.h"
+
+using namespace ButtonPlus;
 
 static const auto TAG = "main";
 
@@ -79,6 +82,8 @@ void setup() {
     webserver_start();
     log_free_heap();
 
+    initializeSensors();
+
     auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
     
     // Set up connection callback for HomeAssistant discovery
@@ -96,6 +101,9 @@ void setup() {
 
     HomeAssistantDiscovery::configureBroker(brokerId);
     HomeAssistantDiscovery::registerComponent(brokerId, globalComponent.get(), "sensor", "my_component_1", "My Component 1", "temperature");
+    
+    // Register sensors with Home Assistant Discovery
+    registerSensorsWithDiscovery(brokerId);
 
     log_free_heap();
 }
@@ -107,7 +115,7 @@ void loop() {
         lastSensorUpdateTime = currentTime;
         //ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
 
-        // sampleSensors();
+        sampleSensors();
     }
 
     delay(10);

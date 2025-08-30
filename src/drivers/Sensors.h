@@ -6,6 +6,7 @@
 #include <map>
 #include <string_view>
 #include <memory>
+#include <functional>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 
@@ -113,87 +114,9 @@ public:
     virtual float sample() = 0;
 };
 
-class STS35Sensor final : public SensorDevice {
-public:
-    STS35Sensor(
-        const SensorType type_,
-        std::string_view name_,
-        std::string_view description_,
-        const uint8_t address_
-    ) : SensorDevice(
-            type_,
-            name_,
-            description_,
-            "temperature",
-            "°C",
-            SENSOR_TYPE_AMBIENT_TEMPERATURE
-        )
-        , address(address_) {
-        online = !sts3x_probe(address);
-    }
-
-    float sample() override {
-        int32_t temperature;
-        if (const int16_t ret = sts3x_measure_blocking_read(address, &temperature); ret == STATUS_OK) {
-            return temperature / 1000.0f - 1.5;
-        }
-        return 0.0f;
-    }
-
-private:
-    uint8_t address;
-};
-
-class BME280Sensor final : public SensorDevice {
-public:
-    BME280Sensor(
-        const SensorType type_,
-        std::string_view name_,
-        std::string_view description_,
-        std::string_view deviceClass_,
-        std::string_view unitOfMeasurement_,
-        const sensors_type_t sensorType_,
-        const uint8_t address_
-    ) : SensorDevice(
-            type_,
-            name_,
-            description_,
-            deviceClass_,
-            unitOfMeasurement_,
-            sensorType_
-        )
-        , address(address_) {
-        extern Adafruit_BME280 bme;
-        online = bme.begin(address, &Wire1);
-        if (online) {
-            bme.setSampling(
-                Adafruit_BME280::MODE_FORCED,
-                Adafruit_BME280::SAMPLING_X1,
-                Adafruit_BME280::SAMPLING_X1,
-                Adafruit_BME280::SAMPLING_X1,
-                Adafruit_BME280::FILTER_OFF
-            );
-        }
-    }
-
-    float sample() override {
-        if (!online) return 0.0f;
-
-        extern Adafruit_BME280 bme;
-        bme.takeForcedMeasurement();
-        switch (type) {
-            case SensorType::BME280_PRESSURE:
-                return bme.readPressure() / 100.0f;
-            case SensorType::BME280_HUMIDITY:
-                return bme.readHumidity();
-            default:
-                return 0.0f;
-        }
-    }
-
-private:
-    uint8_t address;
-};
+// Forward declarations for sensor implementations
+class STS35Sensor;
+class BME280Sensor;
 
 class VirtualSensor final : public SensorDevice {
 public:
@@ -235,5 +158,7 @@ extern Adafruit_BME280 bme;
 
 void addSensor(int address);
 void sampleSensors();
+void initializeSensors();
+void registerSensorsWithDiscovery(uint8_t brokerId);
 
 }

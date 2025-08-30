@@ -14,7 +14,7 @@ static auto TAG = "ha_discovery";
 std::map<uint8_t, HomeAssistantDiscovery::BrokerDiscoveryConfig> HomeAssistantDiscovery::broker_configs_;
 HomeAssistantDevice HomeAssistantDiscovery::global_device_info_;
 
-void HomeAssistantDiscovery::configureBroker(uint8_t brokerId, bool enabled, const std::string& discovery_prefix) {
+void HomeAssistantDiscovery::configureBroker(const uint8_t brokerId, const bool enabled, const std::string& discovery_prefix) {
     auto& config = broker_configs_[brokerId];
     config.enabled = enabled;
     config.discovery_prefix = discovery_prefix;
