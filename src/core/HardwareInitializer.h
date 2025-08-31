@@ -55,12 +55,13 @@ private:
     bool initialized_;
     int tft320Bar_;  // -1 if none, connector number if found
 
-    bool initializeI2C();
+    static bool initializeI2C();
     bool initializeMCPs();
     int initializeButtons();
-    bool initializeSensors();
-    
-    void onDeviceDetected(const I2CDevice& device);
+
+    static bool initializeSensors();
+
+    static void onDeviceDetected(const I2CDevice& device);
     void onConnectorDetected(int connector, ConnectorType type);
     
     std::shared_ptr<Adafruit_MCP23008> getMCPForConnector(int connector);

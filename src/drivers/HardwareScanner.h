@@ -77,9 +77,9 @@ private:
     DeviceDetectedCallback deviceCallback_;
     ConnectorDetectedCallback connectorCallback_;
 
-    [[nodiscard]] DeviceType identifyDevice(uint8_t address) const;
-    [[nodiscard]] std::string getDeviceDescription(DeviceType type) const;
-    [[nodiscard]] bool probeI2CAddress(uint8_t address, TwoWire& wire) const;
+    [[nodiscard]] static DeviceType identifyDevice(uint8_t address);
+    [[nodiscard]] static std::string getDeviceDescription(DeviceType type);
+    [[nodiscard]] static bool probeI2CAddress(uint8_t address, TwoWire& wire);
 };
 
 } // namespace ButtonPlus

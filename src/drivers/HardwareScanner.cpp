@@ -171,7 +171,7 @@ bool HardwareScanner::hasButtonBars() const {
     });
 }
 
-DeviceType HardwareScanner::identifyDevice(const uint8_t address) const {
+DeviceType HardwareScanner::identifyDevice(const uint8_t address) {
     if (address >= 0x20 && address < 0x28) {
         return DeviceType::BUTTON_BAR_DUAL;  // Could be dual or large, determined later
     }
@@ -184,7 +184,7 @@ DeviceType HardwareScanner::identifyDevice(const uint8_t address) const {
     return DeviceType::UNKNOWN;
 }
 
-std::string HardwareScanner::getDeviceDescription(const DeviceType type) const {
+std::string HardwareScanner::getDeviceDescription(const DeviceType type) {
     switch (type) {
         case DeviceType::BUTTON_BAR_DUAL:
             return "Button bar: Dual or Large";
@@ -198,7 +198,7 @@ std::string HardwareScanner::getDeviceDescription(const DeviceType type) const {
     }
 }
 
-bool HardwareScanner::probeI2CAddress(const uint8_t address, TwoWire& wire) const {
+bool HardwareScanner::probeI2CAddress(const uint8_t address, TwoWire& wire) {
     wire.beginTransmission(address);
     return wire.endTransmission() == 0;
 }
