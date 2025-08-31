@@ -57,7 +57,7 @@ private:
 
     bool initializeI2C();
     bool initializeMCPs();
-    bool initializeButtons();
+    int initializeButtons();
     bool initializeSensors();
     
     void onDeviceDetected(const I2CDevice& device);

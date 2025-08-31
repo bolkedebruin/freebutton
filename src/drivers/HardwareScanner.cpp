@@ -15,7 +15,7 @@ HardwareScanner::HardwareScanner() {
 }
 
 void HardwareScanner::scanI2CDevices() {
-    ESP_LOGI(TAG, "Starting I2C device scan...");
+    ESP_LOGI(TAG, "Scanning I2C devices...");
     
     i2cDevices_.clear();
     
@@ -28,11 +28,10 @@ void HardwareScanner::scanI2CDevices() {
             
             i2cDevices_.emplace(address, I2CDevice{address, type, description, &Wire});
             
-            ESP_LOGI(TAG, "I2C device found on Wire at 0x%02X: %s", address, description.c_str());
+            ESP_LOGD(TAG, "I2C device found on Wire at 0x%02X: %s", address, description.c_str());
             
             // Add sensor if applicable
             if (type == DeviceType::STS35_TEMPERATURE || type == DeviceType::BME280_SENSOR) {
-                ESP_LOGI(TAG, "Adding sensor at address 0x%02X (type: %d)", address, static_cast<int>(type));
                 addSensor(address);
             }
             
@@ -78,7 +77,7 @@ void HardwareScanner::scanI2CDevices() {
 }
 
 void HardwareScanner::scanConnectors() {
-    ESP_LOGI(TAG, "Starting connector scan...");
+    ESP_LOGI(TAG, "Scanning connectors...");
     
     connectors_.clear();
     

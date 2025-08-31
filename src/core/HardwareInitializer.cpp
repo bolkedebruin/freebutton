@@ -52,9 +52,13 @@ bool HardwareInitializer::initializeHardware() {
     }
     
     // Step 4: Initialize buttons
-    if (success && !initializeButtons()) {
-        ESP_LOGE(TAG, "Failed to initialize buttons");
-        success = false;
+    int buttonCount = 0;
+    if (success) {
+        buttonCount = initializeButtons();
+        if (buttonCount == 0) {
+            ESP_LOGE(TAG, "Failed to initialize buttons");
+            success = false;
+        }
     }
     
     // Step 5: Initialize sensors
@@ -64,11 +68,11 @@ bool HardwareInitializer::initializeHardware() {
     }
     
     // Step 6: Start button monitoring
-    if (success && !buttonManager_.getButton(1)) { // Check if we have at least one button
-        ESP_LOGW(TAG, "No buttons found, monitoring not started");
-    } else if (success) {
+    if (success && buttonCount > 0) {
         buttonManager_.startMonitoring();
         ESP_LOGI(TAG, "Button monitoring started");
+    } else if (success) {
+        ESP_LOGW(TAG, "No buttons found, monitoring not started");
     }
     
     initialized_ = success;
@@ -160,7 +164,7 @@ bool HardwareInitializer::initializeMCPs() {
     return true;
 }
 
-bool HardwareInitializer::initializeButtons() {
+int HardwareInitializer::initializeButtons() {
     ESP_LOGI(TAG, "Initializing buttons...");
     
     int buttonCount = 0;
@@ -192,7 +196,7 @@ bool HardwareInitializer::initializeButtons() {
     }
     
     ESP_LOGI(TAG, "Button initialization completed. Created %d buttons", buttonCount);
-    return buttonCount > 0;
+    return buttonCount;
 }
 
 bool HardwareInitializer::initializeSensors() {
