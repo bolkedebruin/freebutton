@@ -1,7 +1,7 @@
 #include "sts3x.h"
-#include "sensirion_arch_config.h"
-#include "sensirion_common.h"
-#include "sensirion_i2c.h"
+#include "../stscommon/sensirion_arch_config.h"
+#include "../stscommon/sensirion_common.h"
+#include "../stscommon/sensirion_i2c.h"
 
 /* all measurement commands return T (CRC) RH (CRC) */
 #if USE_SENSIRION_CLOCK_STRETCHING

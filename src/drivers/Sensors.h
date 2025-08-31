@@ -10,7 +10,10 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 
-#include <sts3x.h>
+#include "../../lib/vendored/stscommon/sensirion_arch_config.h"
+#include "../../lib/vendored/stscommon/sensirion_i2c.h"
+#include "../../lib/vendored/stscommon/sensirion_common.h"
+#include "../../lib/vendored/sts3x/sts3x.h" // Vendored library
 
 namespace ButtonPlus {
 
@@ -114,8 +117,38 @@ public:
     virtual float sample() = 0;
 };
 
-// Forward declarations for sensor implementations
-class STS35Sensor;
+// STS35 Temperature sensor implementation
+class STS35Sensor final : public SensorDevice {
+public:
+    explicit STS35Sensor(uint8_t i2cAddress, TwoWire* wire = &Wire, int avgWindowSize = 5);
+    ~STS35Sensor() override = default;
+
+    // Non-copyable, non-movable (due to const members in base class)
+    STS35Sensor(const STS35Sensor&) = delete;
+    STS35Sensor& operator=(const STS35Sensor&) = delete;
+    STS35Sensor(STS35Sensor&&) = delete;
+    STS35Sensor& operator=(STS35Sensor&&) = delete;
+
+    float sample() override;
+    
+    // Configuration
+    void setAverageWindowSize(int size) { movingAvg_.setWindowSize(size); }
+    [[nodiscard]] bool isOnline() const { return online; }
+    [[nodiscard]] uint8_t getAddress() const { return address_; }
+
+private:
+    static constexpr const char* TAG = "STS35Sensor";
+    
+    uint8_t address_;
+    TwoWire* wire_;
+    MovingAverage movingAvg_;
+    unsigned long lastReadTime_;
+    static constexpr unsigned long READ_INTERVAL_MS = 1000; // 1 second between reads
+    
+    bool initializeSensor() const;
+};
+
+// Forward declaration for BME280
 class BME280Sensor;
 
 class VirtualSensor final : public SensorDevice {

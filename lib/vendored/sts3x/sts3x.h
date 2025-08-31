@@ -1,8 +1,8 @@
 #ifndef STS3X_H
 #define STS3X_H
 
-#include "sensirion_arch_config.h"
-#include "sensirion_i2c.h"
+#include "../stscommon/sensirion_arch_config.h"
+#include "../stscommon/sensirion_i2c.h"
 #include "sts_git_version.h"
 
 #ifdef __cplusplus

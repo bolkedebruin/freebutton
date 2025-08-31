@@ -65,7 +65,7 @@ public:
     const std::vector<TopicPublication>& getPublications() const { return publications; }
 
 protected:
-    void publish(const std::string &data, int qos = -1, bool retain_override = false);
+    void publish(const std::string &data, int qos = -1, bool retain_override = false) const;
     static void publish(uint8_t brokerId, const std::string &topic, const std::string &data, int qos = 0, bool retain = false);
 
 private:

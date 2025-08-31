@@ -7,7 +7,7 @@
 #include "Component.h"
 #include "Registry.h"
 
-static const char* TAG = "mqtt_component";
+static auto TAG = "mqtt_component";
 
 void MqttSubscriber::addSubscription(uint8_t brokerId, const std::string &topic, int qos) {
     if (topic.empty()) {
@@ -87,7 +87,6 @@ void MqttPublisher::addPublication(uint8_t brokerId, const std::string &topic, i
     }
 
     publications.emplace_back(brokerId, topic, qos, retain);
-    ESP_LOGI(TAG, "Added publication to topic %s on broker %d", topic.c_str(), brokerId);
 }
 
 void MqttPublisher::removePublication(uint8_t brokerId, const std::string &topic) {
@@ -119,7 +118,7 @@ std::vector<std::string> MqttPublisher::getPublicationTopics(uint8_t brokerId) c
     return topics;
 }
 
-void MqttPublisher::publish(const std::string &data, int qos, bool retain_override) {
+void MqttPublisher::publish(const std::string &data, int qos, bool retain_override) const {
     // Publish to all registered publications
     for (const auto& pub : publications) {
         auto &registry = MqttBrokerRegistry::instance();
