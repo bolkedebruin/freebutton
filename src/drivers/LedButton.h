@@ -54,6 +54,9 @@ public:
     void setLedState(bool on);
     void setLedBrightness(uint8_t brightness);
 
+    // MCP access
+    [[nodiscard]] std::shared_ptr<Adafruit_MCP23008> getMCP() const { return mcp_; }
+
 private:
     static constexpr const char* TAG = "LedButton";
     static constexpr uint8_t DEFAULT_LONG_PRESS_DELAY = 40;
@@ -112,7 +115,6 @@ private:
     static constexpr uint32_t DEFAULT_UPDATE_INTERVAL = 20; // ms
 
     std::vector<std::unique_ptr<LedButton>> buttons_;
-    std::vector<std::shared_ptr<Adafruit_MCP23008>> mcps_;
     
     GlobalButtonCallback globalCallback_;
     TaskHandle_t taskHandle_;
@@ -122,7 +124,7 @@ private:
 
     static void buttonTaskWrapper(void* parameter);
     void buttonTask();
-    void updateAllButtons();
+    void updateAllButtons() const;
 };
 
 } // namespace ButtonPlus

@@ -121,7 +121,6 @@ ButtonManager::ButtonManager()
     , monitoring_(false) {
     
     buttons_.reserve(BUTTON_COUNT);
-    mcps_.reserve(BUTTON_COUNT / 2);  // Assuming 2 buttons per MCP
     
     ESP_LOGI(TAG, "ButtonManager initialized");
 }
@@ -187,7 +186,7 @@ void ButtonManager::startMonitoring() {
     const BaseType_t result = xTaskCreatePinnedToCore(
         buttonTaskWrapper,
         "ButtonManager",
-        4096 * 2,
+        4096,
         this,
         1,  // Priority
         &taskHandle_,
@@ -252,15 +251,14 @@ void ButtonManager::buttonTask() {
     vTaskDelete(nullptr);
 }
 
-void ButtonManager::updateAllButtons() {
-    // Group buttons by MCP
+void ButtonManager::updateAllButtons() const {
+    // Group buttons by their shared MCP
     std::unordered_map<Adafruit_MCP23008*, std::vector<LedButton*>> mcpGroups;
     
     for (const auto& button : buttons_) {
-        // Access the MCP through the button's row information
-        const int connector = button->row();
-        if (connector < static_cast<int>(mcps_.size()) && mcps_[connector]) {
-            mcpGroups[mcps_[connector].get()].push_back(button.get());
+        // Get MCP from button itself
+        if (auto mcp = button->getMCP()) {
+            mcpGroups[mcp.get()].push_back(button.get());
         }
     }
     
@@ -268,6 +266,8 @@ void ButtonManager::updateAllButtons() {
     for (const auto& [mcp, buttonGroup] : mcpGroups) {
         if (pdTRUE == xSemaphoreTake(mcpMutex_, pdMS_TO_TICKS(20))) {
             const uint8_t gpioState = mcp->readGPIO();
+            
+            ESP_LOGD(TAG, "Read GPIO state 0x%02X from MCP", gpioState);
             
             // Update all buttons connected to this MCP
             for (auto* button : buttonGroup) {
