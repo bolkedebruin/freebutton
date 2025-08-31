@@ -7,6 +7,7 @@
 #include "core/FileSystem.h"
 #include "core/WebServer.h"
 #include "core/WifiManager.h"
+#include "core/HardwareInitializer.h"
 #include "drivers/NeoPixel.h"
 #include "mqtt/Broker.h"
 #include "mqtt/Registry.h"
@@ -68,12 +69,14 @@ void setup() {
     esp_log_level_set("config", ESP_LOG_DEBUG);
     esp_log_level_set("button", ESP_LOG_DEBUG);
 
-    // Two wire init
-    Wire.begin(CH1_SDA, CH1_SCL);
-    Wire1.begin(BUTTON_SDA, BUTTON_SCL);
-
     neopixels.begin();
     neopixels.flash();
+
+    // Initialize all hardware (I2C, sensors, displays, buttons)
+    if (!initializeAllHardware()) {
+        ESP_LOGE(TAG, "Hardware initialization failed!");
+        return;
+    }
 
     setup_wifi_event_handler();
     start_wifi_manager();
@@ -81,8 +84,6 @@ void setup() {
     log_free_heap();
     webserver_start();
     log_free_heap();
-
-    initializeSensors();
 
     auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
     
