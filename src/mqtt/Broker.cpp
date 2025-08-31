@@ -64,7 +64,7 @@ void MqttBroker::publish(std::string_view topic, std::string_view data, const in
         return;
     }
 
-    ESP_LOGI(TAG, "topic: %.*s data: %.*s\n", topic.length(), topic.data(), data.length(), data.data());
+    ESP_LOGI(TAG, "topic: %.*s data: %.*s", topic.length(), topic.data(), data.length(), data.data());
 
     if (enabled) {
         // ensure null terminated with no heap allocation
