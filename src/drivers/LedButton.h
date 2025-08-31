@@ -51,8 +51,8 @@ public:
     void setLongPressRepeat(uint8_t repeat) { longPressRepeat_ = repeat; }
 
     // LED control (if needed in future)
-    void setLedState(bool on);
-    void setLedBrightness(uint8_t brightness);
+    void setLedState(bool on) const;
+    void setLedBrightness(uint8_t brightness) const;
 
     // MCP access
     [[nodiscard]] std::shared_ptr<Adafruit_MCP23008> getMCP() const { return mcp_; }

@@ -68,7 +68,7 @@ void LedButton::onLongPress(LongPressCallback callback) {
     longPressCallback_ = std::move(callback);
 }
 
-void LedButton::setLedState(const bool on) {
+void LedButton::setLedState(const bool on) const {
     if (mcp_) {
         // LED control implementation would go here
         // This depends on the specific LED pin configuration
@@ -76,7 +76,7 @@ void LedButton::setLedState(const bool on) {
     }
 }
 
-void LedButton::setLedBrightness(const uint8_t brightness) {
+void LedButton::setLedBrightness(const uint8_t brightness) const {
     if (mcp_) {
         // LED brightness control would go here
         ESP_LOGD(TAG, "Button %d LED brightness set to %d", position(), brightness);
@@ -121,8 +121,6 @@ ButtonManager::ButtonManager()
     , monitoring_(false) {
     
     buttons_.reserve(BUTTON_COUNT);
-    
-    ESP_LOGI(TAG, "ButtonManager initialized");
 }
 
 void ButtonManager::addButton(std::unique_ptr<LedButton> button) {
@@ -186,7 +184,7 @@ void ButtonManager::startMonitoring() {
     const BaseType_t result = xTaskCreatePinnedToCore(
         buttonTaskWrapper,
         "ButtonManager",
-        4096,
+        3072,
         this,
         1,  // Priority
         &taskHandle_,
