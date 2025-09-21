@@ -45,9 +45,9 @@ public:
     size_t getSmallDisplayCount() const { return small_displays_.size(); }
 
     // Small display buffer management
-    bool acquireSmallDisplayBuffer(int index);
-    void releaseSmallDisplayBuffer();
-    void clearAllSmallDisplays();
+    bool acquireSmallDisplayBuffer(int index) const;
+    void releaseSmallDisplayBuffer() const;
+    void clearAllSmallDisplays() const;
 
     // Utility
     bool isInitialized() const { return initialized_; }

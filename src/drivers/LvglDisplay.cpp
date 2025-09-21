@@ -388,7 +388,7 @@ lv_display_t* LvglDisplay::getSmallDisplay(int index) const {
     return nullptr;
 }
 
-bool LvglDisplay::acquireSmallDisplayBuffer(int index) {
+bool LvglDisplay::acquireSmallDisplayBuffer(int index) const {
     if (!small_buffer_mutex_ || !shared_small_buffer_) {
         return false;
     }
@@ -414,14 +414,14 @@ bool LvglDisplay::acquireSmallDisplayBuffer(int index) {
     return true;
 }
 
-void LvglDisplay::releaseSmallDisplayBuffer() {
+void LvglDisplay::releaseSmallDisplayBuffer() const {
     if (small_buffer_mutex_) {
         xSemaphoreGive(small_buffer_mutex_);
         ESP_LOGD(TAG, "Small display buffer released");
     }
 }
 
-void LvglDisplay::clearAllSmallDisplays() {
+void LvglDisplay::clearAllSmallDisplays() const {
     if (!g_display_mgr) {
         ESP_LOGW(TAG, "Display manager not available for clearing small displays");
         return;
@@ -444,12 +444,12 @@ void LvglDisplay::clearAllSmallDisplays() {
 
         // Use DisplayManager's selectSmallDisplay method
         g_display_mgr->selectSmallDisplay(connector, position);
-        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay for CS setup
+        //vTaskDelay(pdMS_TO_TICKS(10)); // Small delay for CS setup
 
         // Clear to black
         small_gfx->fillScreen(0x0000);
 
-        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay before deselect
+        //vTaskDelay(pdMS_TO_TICKS(10)); // Small delay before deselect
         g_display_mgr->deselectAllDisplays();
 
         ESP_LOGI(TAG, "Cleared small display %zu (connector %d, position %d)", i, connector, position);

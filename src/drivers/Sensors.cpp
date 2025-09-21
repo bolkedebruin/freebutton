@@ -1,6 +1,7 @@
 #include "Sensors.h"
 #include <esp_heap_caps.h>
 #include <string_view>
+#include <lvgl.h>
 #include "../mqtt/Registry.h"
 #include "../mqtt/HomeAssistantDiscovery.h"
 
@@ -222,16 +223,60 @@ void initializeSensors() {
             return static_cast<float>(esp_get_free_heap_size());
         }
     );
-    
+
     sensorDevices[VirtualSensorIds::FREE_HEAP_ID] = freeMem;
-    
+
     // Create MQTT component and register with Home Assistant Discovery
     auto component = std::make_unique<SensorMqttComponent>(
-        VirtualSensorIds::FREE_HEAP_ID, 
+        VirtualSensorIds::FREE_HEAP_ID,
         std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/free_memory"
     );
-    
+
     sensorComponents[VirtualSensorIds::FREE_HEAP_ID] = std::move(component);
+
+    // LVGL Used Memory sensor
+    const auto lvglUsedMem = std::make_shared<VirtualSensor>(
+        VirtualSensorIds::LV_USED_MEM_ID,
+        "LVGL Used Memory"sv,
+        "memory"sv,
+        "bytes"sv,
+        []() {
+            lv_mem_monitor_t mon;
+            lv_mem_monitor(&mon);
+            return static_cast<float>(mon.total_size - mon.free_size);
+        }
+    );
+
+    sensorDevices[VirtualSensorIds::LV_USED_MEM_ID] = lvglUsedMem;
+
+    auto lvglUsedComponent = std::make_unique<SensorMqttComponent>(
+        VirtualSensorIds::LV_USED_MEM_ID,
+        std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/lvgl_used_memory"
+    );
+
+    sensorComponents[VirtualSensorIds::LV_USED_MEM_ID] = std::move(lvglUsedComponent);
+
+    // LVGL Free Memory sensor
+    const auto lvglFreeMem = std::make_shared<VirtualSensor>(
+        VirtualSensorIds::LV_FREE_MEM_ID,
+        "LVGL Free Memory"sv,
+        "memory"sv,
+        "bytes"sv,
+        []() {
+            lv_mem_monitor_t mon;
+            lv_mem_monitor(&mon);
+            return static_cast<float>(mon.free_size);
+        }
+    );
+
+    sensorDevices[VirtualSensorIds::LV_FREE_MEM_ID] = lvglFreeMem;
+
+    auto lvglFreeComponent = std::make_unique<SensorMqttComponent>(
+        VirtualSensorIds::LV_FREE_MEM_ID,
+        std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/lvgl_free_memory"
+    );
+
+    sensorComponents[VirtualSensorIds::LV_FREE_MEM_ID] = std::move(lvglFreeComponent);
 }
 
 void registerSensorsWithDiscovery(const uint8_t brokerId) {
@@ -263,8 +308,19 @@ void registerSensorsWithDiscovery(const uint8_t brokerId) {
                     stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/bme280_humidity/state";
                     break;
                 case SensorType::VIRTUAL:
-                    objectId = "virtual_" + std::to_string(id);
-                    stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/free_memory/state";
+                    if (id == VirtualSensorIds::FREE_HEAP_ID) {
+                        objectId = "free_memory_" + std::to_string(id);
+                        stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/free_memory/state";
+                    } else if (id == VirtualSensorIds::LV_USED_MEM_ID) {
+                        objectId = "lvgl_used_memory_" + std::to_string(id);
+                        stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/lvgl_used_memory/state";
+                    } else if (id == VirtualSensorIds::LV_FREE_MEM_ID) {
+                        objectId = "lvgl_free_memory_" + std::to_string(id);
+                        stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/lvgl_free_memory/state";
+                    } else {
+                        objectId = "virtual_" + std::to_string(id);
+                        stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/virtual_" + std::to_string(id) + "/state";
+                    }
                     break;
                 default:
                     objectId = "sensor_" + std::to_string(id);
