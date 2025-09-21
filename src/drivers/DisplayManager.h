@@ -6,6 +6,11 @@
 #include <vector>
 #include <Adafruit_MCP23008.h>
 
+// Forward declaration to avoid circular dependency
+namespace ButtonPlus {
+    class BusAwareFileSystem;
+}
+
 namespace ButtonPlus {
 
 class LGFX_ESP32_SPI : public lgfx::LGFX_Device {
@@ -158,6 +163,9 @@ public:
     // Utility
     size_t getDisplayCount() const { return smallDisplays_.size() + (mainDisplay_ ? 1 : 0); }
     size_t getSmallDisplayCount() const { return smallDisplays_.size(); }
+
+    // Bus-aware filesystem access
+    BusAwareFileSystem& getFileSystem();
 
     // Display selection (public for LVGL integration)
     void selectMainDisplay() const;

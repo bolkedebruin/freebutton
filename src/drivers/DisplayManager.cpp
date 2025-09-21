@@ -1,4 +1,5 @@
 #include "DisplayManager.h"
+#include "BusAwareFileSystem.h"
 #include "pins.h"
 #include <esp_log.h>
 
@@ -281,6 +282,16 @@ void DisplayManager::setBacklight(const int displayIndex, const uint8_t brightne
             smallDisplays_[smallIndex].display->setBrightness(brightness);
         }
     }
+}
+
+BusAwareFileSystem& DisplayManager::getFileSystem() {
+    // Initialize the bus-aware filesystem with the main display if not already done
+    static bool initialized = false;
+    if (!initialized && mainDisplay_) {
+        initializeBusAwareFileSystem(mainDisplay_.get());
+        initialized = true;
+    }
+    return getBusAwareFileSystem();
 }
 
 // Global convenience functions

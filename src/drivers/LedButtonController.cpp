@@ -104,7 +104,7 @@ void LedButtonController::onMessage(uint8_t brokerId, std::string_view topic, st
 void LedButtonController::handleStateCommand(const JsonDocument& json) {
     bool stateChanged = false;
 
-    if (json.containsKey("state")) {
+    if (json["state"].is<JsonVariant>()) {
         const std::string state = json["state"].as<std::string>();
         const bool newState = (state == "ON");
         if (newState != ledState_.on) {
@@ -114,7 +114,7 @@ void LedButtonController::handleStateCommand(const JsonDocument& json) {
         }
     }
 
-    if (json.containsKey("brightness")) {
+    if (json["brightness"].is<JsonVariant>()) {
         const uint8_t brightness = json["brightness"].as<uint8_t>();
         if (brightness != ledState_.brightness) {
             ledState_.brightness = brightness;
@@ -123,9 +123,9 @@ void LedButtonController::handleStateCommand(const JsonDocument& json) {
         }
     }
 
-    if (json.containsKey("color")) {
+    if (json["color"].is<JsonVariant>()) {
         const auto color = json["color"];
-        if (color.containsKey("r") && color.containsKey("g") && color.containsKey("b")) {
+        if (color["r"].is<JsonVariant>() && color["g"].is<JsonVariant>() && color["b"].is<JsonVariant>()) {
             const uint8_t r = color["r"].as<uint8_t>();
             const uint8_t g = color["g"].as<uint8_t>();
             const uint8_t b = color["b"].as<uint8_t>();
@@ -140,7 +140,7 @@ void LedButtonController::handleStateCommand(const JsonDocument& json) {
         }
     }
 
-    if (json.containsKey("effect")) {
+    if (json["effect"].is<JsonVariant>()) {
         const std::string effect = json["effect"].as<std::string>();
         if (effect != ledState_.effect) {
             ledState_.effect = effect;
@@ -171,7 +171,7 @@ void LedButtonController::handleBrightnessCommand(const std::string& data) {
 }
 
 void LedButtonController::handleColorCommand(const JsonDocument& json) {
-    if (json.containsKey("r") && json.containsKey("g") && json.containsKey("b")) {
+    if (json["r"].is<JsonVariant>() && json["g"].is<JsonVariant>() && json["b"].is<JsonVariant>()) {
         const uint8_t r = json["r"].as<uint8_t>();
         const uint8_t g = json["g"].as<uint8_t>();
         const uint8_t b = json["b"].as<uint8_t>();
