@@ -61,13 +61,19 @@ bool HardwareInitializer::initializeHardware() {
         }
     }
     
-    // Step 5: Initialize sensors
+    // Step 5: Initialize displays
+    if (success && !initializeDisplays()) {
+        ESP_LOGW(TAG, "Display initialization had issues (non-fatal)");
+        // Display failure is not fatal for the overall system
+    }
+
+    // Step 6: Initialize sensors
     if (success && !initializeSensors()) {
         ESP_LOGW(TAG, "Sensor initialization had issues (non-fatal)");
         // Sensor failure is not fatal for the overall system
     }
     
-    // Step 6: Start button monitoring
+    // Step 7: Start button monitoring
     if (success && buttonCount > 0) {
         buttonManager_.startMonitoring();
         ESP_LOGI(TAG, "Button monitoring started");
@@ -199,12 +205,29 @@ int HardwareInitializer::initializeButtons() {
     return buttonCount;
 }
 
+bool HardwareInitializer::initializeDisplays() {
+    ESP_LOGI(TAG, "Initializing displays...");
+
+    // Initialize display subsystem with detected hardware
+    bool success = ButtonPlus::initializeDisplays(mcps_, tft320Bar_);
+
+    if (success) {
+        // Show hello world and display numbers
+        auto& displayManager = ButtonPlus::getDisplayManager();
+        displayManager.showHelloWorld();
+        displayManager.showDisplayNumbers();
+    }
+
+    ESP_LOGI(TAG, "Display initialization completed");
+    return success;
+}
+
 bool HardwareInitializer::initializeSensors() {
     ESP_LOGI(TAG, "Initializing sensors...");
-    
+
     // Initialize sensor subsystem
     ButtonPlus::initializeSensors();
-    
+
     ESP_LOGI(TAG, "Sensor initialization completed");
     return true;
 }
