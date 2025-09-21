@@ -50,9 +50,10 @@ public:
     void setLongPressDelay(uint8_t delay) { longPressDelay_ = delay; }
     void setLongPressRepeat(uint8_t repeat) { longPressRepeat_ = repeat; }
 
-    // LED control (if needed in future)
+    // LED control (delegated to controller)
     void setLedState(bool on) const;
     void setLedBrightness(uint8_t brightness) const;
+    void setLedColor(uint8_t red, uint8_t green, uint8_t blue) const;
 
     // MCP access
     [[nodiscard]] std::shared_ptr<Adafruit_MCP23008> getMCP() const { return mcp_; }

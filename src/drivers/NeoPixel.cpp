@@ -110,9 +110,9 @@ CRGB NeoPixelController::colorFromRGB(uint8_t red, uint8_t green, uint8_t blue) 
  * @param colorString The color code string to be converted.
  * @return A CRGB object representing the color.
  */
-CRGB NeoPixelController::colorFromString(std::string_view colorString) {
+CRGB NeoPixelController::colorFromString(const std::string_view colorString) {
     if (colorString.empty()) {
-        return CRGB(0);
+        return {0};
     }
 
     // Handle 0x/0X prefix
@@ -131,7 +131,7 @@ CRGB NeoPixelController::colorFromString(std::string_view colorString) {
 
     // Check if we have any characters left after prefix
     if (startPos >= colorString.length()) {
-        return CRGB(0);
+        return {0};
     }
 
     std::string_view numPart = colorString.substr(startPos);
@@ -147,7 +147,7 @@ CRGB NeoPixelController::colorFromString(std::string_view colorString) {
     }
 
     if (!isValid) {
-        return CRGB(0);
+        return {0};
     }
 
     // Convert to unsigned long long manually for hex
@@ -219,7 +219,7 @@ void NeoPixelController::startEffect(const char* effectName, const char* paramet
     if (strcmp(effectName, "glow") == 0) {
         xTaskCreate(effectTask, "glowEffect", EFFECT_TASK_STACK_SIZE, (void*)this, EFFECT_TASK_PRIORITY, &effectTaskHandle);
     } else if (strcmp(effectName, "ambient") == 0 && parameter != nullptr) {
-        CRGB color = colorFromString(parameter);
+        const CRGB color = colorFromString(parameter);
         runAmbientEffect(color);
     } else if (strcmp(effectName, "flash") == 0) {
         runFlashEffect();

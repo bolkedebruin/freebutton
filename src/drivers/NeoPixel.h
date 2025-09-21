@@ -24,7 +24,7 @@ public:
     int pixelIndex(int row, bool isRight, bool isWall);
     CRGB colorFromHex(uint32_t hexColor);
     CRGB colorFromRGB(uint8_t red, uint8_t green, uint8_t blue);
-    CRGB colorFromString(std::string_view colorString);
+    static CRGB colorFromString(std::string_view colorString);
 
     void runTestPattern();
     void flash();

@@ -83,6 +83,13 @@ void LedButton::setLedBrightness(const uint8_t brightness) const {
     }
 }
 
+void LedButton::setLedColor(const uint8_t red, const uint8_t green, const uint8_t blue) const {
+    if (mcp_) {
+        // LED color control would go here  
+        ESP_LOGD(TAG, "Button %d LED color set to RGB(%d,%d,%d)", position(), red, green, blue);
+    }
+}
+
 void LedButton::handleClick() {
     ESP_LOGI(TAG, "Button %d clicked", position());
     
