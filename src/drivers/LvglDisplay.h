@@ -3,6 +3,7 @@
 
 #include <lvgl.h>
 #include <memory>
+#include <vector>
 #include "DisplayManager.h"
 
 namespace ButtonPlus {
@@ -11,7 +12,10 @@ class LvglDisplay {
 private:
     lv_display_t* main_display_;
     std::unique_ptr<uint8_t[]> buffer1_;
+    std::vector<lv_display_t*> small_displays_;
+    std::unique_ptr<uint8_t[]> shared_small_buffer_;
     SemaphoreHandle_t lvgl_mutex_;
+    SemaphoreHandle_t small_buffer_mutex_;
     bool initialized_;
     lv_obj_t* progress_bar_;
     lv_obj_t* progress_label_;
@@ -37,13 +41,22 @@ public:
 
     // Get display objects
     lv_display_t* getMainDisplay() const { return main_display_; }
+    lv_display_t* getSmallDisplay(int index) const;
+    size_t getSmallDisplayCount() const { return small_displays_.size(); }
+
+    // Small display buffer management
+    bool acquireSmallDisplayBuffer(int index);
+    void releaseSmallDisplayBuffer();
+    void clearAllSmallDisplays();
 
     // Utility
     bool isInitialized() const { return initialized_; }
 
 private:
     static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
+    static void flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
     void setupProgressBar();
+    void initializeSmallDisplays(DisplayManager& displayManager);
 };
 
 // Global LVGL display instance

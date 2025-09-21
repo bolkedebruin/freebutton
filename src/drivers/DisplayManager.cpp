@@ -118,6 +118,15 @@ LGFX_ESP32_SPI_Small* DisplayManager::getSmallDisplay(const int index) const {
     return nullptr;
 }
 
+bool DisplayManager::getSmallDisplayInfo(int index, int& connector, int& position) const {
+    if (index >= 0 && index < static_cast<int>(smallDisplays_.size())) {
+        connector = smallDisplays_[index].connector;
+        position = smallDisplays_[index].position;
+        return true;
+    }
+    return false;
+}
+
 void DisplayManager::selectMainDisplay() const {
     deselectAllDisplays();
     if (mainDisplayConnector_ >= 0 && mainDisplayConnector_ < mcps_.size() && mcps_[mainDisplayConnector_]) {

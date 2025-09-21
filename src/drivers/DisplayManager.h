@@ -146,6 +146,9 @@ public:
     // Get small display by index
     LGFX_ESP32_SPI_Small* getSmallDisplay(int index) const;
 
+    // Get connector and position for small display
+    bool getSmallDisplayInfo(int index, int& connector, int& position) const;
+
     // Display control
     void showHelloWorld() const;
     void showDisplayNumbers() const;

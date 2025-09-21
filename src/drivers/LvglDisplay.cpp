@@ -17,7 +17,9 @@ static DisplayManager* g_display_mgr = nullptr;
 LvglDisplay::LvglDisplay()
     : main_display_(nullptr)
     , buffer1_(nullptr)
+    , shared_small_buffer_(nullptr)
     , lvgl_mutex_(nullptr)
+    , small_buffer_mutex_(nullptr)
     , initialized_(false)
     , progress_bar_(nullptr)
     , progress_label_(nullptr)
@@ -27,6 +29,9 @@ LvglDisplay::LvglDisplay()
 LvglDisplay::~LvglDisplay() {
     if (lvgl_mutex_) {
         vSemaphoreDelete(lvgl_mutex_);
+    }
+    if (small_buffer_mutex_) {
+        vSemaphoreDelete(small_buffer_mutex_);
     }
 }
 
@@ -102,6 +107,9 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
 
     // Setup progress bar for startup
     setupProgressBar();
+
+    // Initialize small displays
+    initializeSmallDisplays(displayManager);
 
     initialized_ = true;
     ESP_LOGI(TAG, "LVGL display initialization completed successfully");
@@ -271,6 +279,183 @@ LvglDisplay& getLvglDisplay() {
     }
 
     return *g_lvglDisplay;
+}
+
+void LvglDisplay::initializeSmallDisplays(DisplayManager& displayManager) {
+    ESP_LOGI(TAG, "Initializing small display LVGL integration");
+
+    // Create shared buffer mutex
+    small_buffer_mutex_ = xSemaphoreCreateMutex();
+    if (!small_buffer_mutex_) {
+        ESP_LOGE(TAG, "Failed to create small buffer mutex");
+        return;
+    }
+
+    // Allocate shared buffer for small displays (5 lines buffer like reference)
+    constexpr size_t small_buffer_size = 160 * 5 * sizeof(lv_color_t);
+    shared_small_buffer_ = std::make_unique<uint8_t[]>(small_buffer_size);
+
+    if (!shared_small_buffer_) {
+        ESP_LOGE(TAG, "Failed to allocate shared small display buffer");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Allocated shared small display buffer: %zu bytes", small_buffer_size);
+
+    // Create LVGL displays for each small display
+    size_t smallDisplayCount = displayManager.getSmallDisplayCount();
+    small_displays_.reserve(smallDisplayCount);
+
+    for (size_t i = 0; i < smallDisplayCount; ++i) {
+        auto* small_gfx = displayManager.getSmallDisplay(static_cast<int>(i));
+        if (!small_gfx) continue;
+
+        // Create LVGL display
+        lv_display_t* small_disp = lv_display_create(160, 80);
+        if (!small_disp) {
+            ESP_LOGE(TAG, "Failed to create LVGL display for small display %zu", i);
+            continue;
+        }
+
+        // Set flush callback
+        lv_display_set_flush_cb(small_disp, flush_small_cb);
+
+        // Store the LVGL display object
+        small_displays_.push_back(small_disp);
+
+        // Set user data to the index for easy lookup in flush callback
+        lv_display_set_user_data(small_disp, reinterpret_cast<void*>(i));
+
+        ESP_LOGI(TAG, "Small display %zu LVGL integration created", i);
+    }
+
+    ESP_LOGI(TAG, "Small display LVGL integration completed - %zu displays", small_displays_.size());
+
+    // Clear all small displays to black background
+    clearAllSmallDisplays();
+}
+
+void LvglDisplay::flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
+    if (!g_display_mgr || !g_lvglDisplay) {
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    // Get display index from user data
+    int index = reinterpret_cast<intptr_t>(lv_display_get_user_data(disp));
+    auto* small_gfx = g_display_mgr->getSmallDisplay(index);
+    if (!small_gfx) {
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    // Get the proper connector and position from DisplayManager
+    int connector, position;
+    if (!g_display_mgr->getSmallDisplayInfo(index, connector, position)) {
+        ESP_LOGE(TAG, "Could not get connector/position info for display %d", index);
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    // Select the specific small display using DisplayManager's method
+    g_display_mgr->selectSmallDisplay(connector, position);
+
+    // Calculate area dimensions
+    uint32_t width = area->x2 - area->x1 + 1;
+    uint32_t height = area->y2 - area->y1 + 1;
+
+    // Start write operation
+    small_gfx->startWrite();
+    small_gfx->setAddrWindow(area->x1, area->y1, width, height);
+
+    // Push pixels to display
+    small_gfx->writePixels(reinterpret_cast<uint16_t*>(px_map), width * height);
+
+    // End write operation
+    small_gfx->endWrite();
+
+    // Deselect all displays after operation
+    g_display_mgr->deselectAllDisplays();
+
+    // Signal LVGL that flushing is complete
+    lv_display_flush_ready(disp);
+}
+
+lv_display_t* LvglDisplay::getSmallDisplay(int index) const {
+    if (index >= 0 && index < static_cast<int>(small_displays_.size())) {
+        return small_displays_[index];
+    }
+    return nullptr;
+}
+
+bool LvglDisplay::acquireSmallDisplayBuffer(int index) {
+    if (!small_buffer_mutex_ || !shared_small_buffer_) {
+        return false;
+    }
+
+    auto* disp = getSmallDisplay(index);
+    if (!disp) {
+        return false;
+    }
+
+    if (xSemaphoreTake(small_buffer_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire small buffer mutex for display %d", index);
+        return false;
+    }
+
+    constexpr size_t small_buffer_size = 160 * 5 * sizeof(lv_color_t);
+    lv_display_set_buffers(disp, shared_small_buffer_.get(), nullptr,
+                          small_buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+
+    // Enable invalidation now that buffer is properly set
+    lv_display_enable_invalidation(disp, true);
+
+    ESP_LOGD(TAG, "Small display %d buffer acquired", index);
+    return true;
+}
+
+void LvglDisplay::releaseSmallDisplayBuffer() {
+    if (small_buffer_mutex_) {
+        xSemaphoreGive(small_buffer_mutex_);
+        ESP_LOGD(TAG, "Small display buffer released");
+    }
+}
+
+void LvglDisplay::clearAllSmallDisplays() {
+    if (!g_display_mgr) {
+        ESP_LOGW(TAG, "Display manager not available for clearing small displays");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Clearing all small displays to black");
+
+    for (size_t i = 0; i < small_displays_.size(); ++i) {
+        auto* small_gfx = g_display_mgr->getSmallDisplay(static_cast<int>(i));
+        if (!small_gfx) continue;
+
+        // Get the proper connector and position from DisplayManager
+        int connector, position;
+        if (!g_display_mgr->getSmallDisplayInfo(static_cast<int>(i), connector, position)) {
+            ESP_LOGW(TAG, "Could not get connector/position info for display %zu", i);
+            continue;
+        }
+
+        ESP_LOGD(TAG, "Clearing small display %zu (connector %d, position %d)", i, connector, position);
+
+        // Use DisplayManager's selectSmallDisplay method
+        g_display_mgr->selectSmallDisplay(connector, position);
+        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay for CS setup
+
+        // Clear to black
+        small_gfx->fillScreen(0x0000);
+
+        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay before deselect
+        g_display_mgr->deselectAllDisplays();
+
+        ESP_LOGI(TAG, "Cleared small display %zu (connector %d, position %d)", i, connector, position);
+    }
+
+    ESP_LOGI(TAG, "All small displays cleared to black");
 }
 
 } // namespace ButtonPlus
