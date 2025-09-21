@@ -9,7 +9,8 @@
 namespace ButtonPlus {
 
 class LGFX_ESP32_SPI : public lgfx::LGFX_Device {
-    lgfx::Panel_ST7789 _panel_instance; // Use correct ST7789 driver like working implementation
+    //lgfx::Panel_ST7789 _panel_instance; // Use correct ST7789 driver like working implementation
+    lgfx::Panel_ILI9341 _panel_instance; // Temporary: Use ILI9341 driver for testing
     lgfx::Bus_SPI _bus_instance;
     lgfx::Light_PWM _light_instance;
 
@@ -42,16 +43,17 @@ public:
             cfg.panel_height = 240;
             cfg.offset_x = 0;
             cfg.offset_y = 0;
-            cfg.offset_rotation = 0;
-            cfg.dummy_read_pixel = 8;
+            cfg.offset_rotation = 7;
+            cfg.dummy_read_pixel = 16;
             cfg.dummy_read_bits = 1;
             cfg.readable = true;
-            cfg.invert = true;  // ST7789 typically needs inversion ON
+            cfg.invert = false;  // ST7789 typically needs inversion ON
             cfg.rgb_order = false;  // BGR order like working implementation
             cfg.dlen_16bit = false;
             cfg.bus_shared = true;
-            cfg.memory_width = cfg.panel_width;
-            cfg.memory_height = cfg.panel_height;
+            // CRITICAL: ST7789 memory dimensions - controller has 240x320 internal memory
+            cfg.memory_width = 320;   // ST7789 internal memory width
+            cfg.memory_height = 240;  // ST7789 internal memory height
             _panel_instance.config(cfg);
         }
 
