@@ -50,15 +50,10 @@ void DisplayManager::initializeMainDisplay(std::shared_ptr<Adafruit_MCP23008> mc
     deselectAllDisplays();
     vTaskDelay(pdMS_TO_TICKS(10));
     mcp->digitalWrite(MCP320_CS, LOW);  // Select main display
-    vTaskDelay(pdMS_TO_TICKS(10)); // CS setup time
 
     // Initialize the display with proper timing
     if (mainDisplay_->init()) {
-        vTaskDelay(pdMS_TO_TICKS(120)); // Match TFT_eSPI delay after init
-        mainDisplay_->setRotation(1); // Landscape
-        mainDisplay_->setSwapBytes(true); // Important for proper color display
         mainDisplay_->setBrightness(128);
-        vTaskDelay(pdMS_TO_TICKS(50)); // Allow brightness to settle
         mainDisplay_->fillScreen(0x0000); // Black
         ESP_LOGI(TAG, "Main display initialized successfully");
     } else {
@@ -68,7 +63,6 @@ void DisplayManager::initializeMainDisplay(std::shared_ptr<Adafruit_MCP23008> mc
 
     // Deselect after initialization
     mcp->digitalWrite(MCP320_CS, HIGH);
-    vTaskDelay(pdMS_TO_TICKS(10));
 }
 
 void DisplayManager::initializeSmallDisplay(std::shared_ptr<Adafruit_MCP23008> mcp, int connector, int position) {
@@ -145,23 +139,18 @@ void DisplayManager::showHelloWorld() {
         ESP_LOGI(TAG, "Displaying test pattern on main display");
 
         selectMainDisplay();
-        vTaskDelay(pdMS_TO_TICKS(100)); // Longer delay for CS setup
 
         // Clear screen first
         mainDisplay_->fillScreen(0x0000); // Black
-        vTaskDelay(pdMS_TO_TICKS(50));
 
         // Fill with bright red to test basic pixel writing
         mainDisplay_->fillScreen(0xF800); // Bright red
-        vTaskDelay(pdMS_TO_TICKS(200));
 
         // Draw a green rectangle border to test drawing operations
         mainDisplay_->drawRect(10, 10, 300, 220, 0x07E0); // Green border
-        vTaskDelay(pdMS_TO_TICKS(50));
 
         // Fill center with blue
         mainDisplay_->fillRect(50, 50, 220, 140, 0x001F); // Blue center
-        vTaskDelay(pdMS_TO_TICKS(50));
 
         // White text on blue background
         mainDisplay_->setTextColor(0xFFFF, 0x001F); // White on blue
@@ -169,9 +158,8 @@ void DisplayManager::showHelloWorld() {
         mainDisplay_->setCursor(60, 100);
         mainDisplay_->print("HELLO");
         mainDisplay_->setCursor(60, 140);
-        mainDisplay_->print("WORLD");
+        mainDisplay_->print("Bolke!");
 
-        vTaskDelay(pdMS_TO_TICKS(100));
         deselectAllDisplays();
 
         ESP_LOGI(TAG, "Test pattern display completed");

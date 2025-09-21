@@ -43,7 +43,7 @@ public:
             cfg.panel_height = 240;
             cfg.offset_x = 0;
             cfg.offset_y = 0;
-            cfg.offset_rotation = 7;
+            cfg.offset_rotation = 4;
             cfg.dummy_read_pixel = 16;
             cfg.dummy_read_bits = 1;
             cfg.readable = true;
