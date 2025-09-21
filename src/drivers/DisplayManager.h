@@ -153,18 +153,18 @@ public:
     LGFX_ESP32_SPI_Small* getSmallDisplay(int index) const;
 
     // Display control
-    void showHelloWorld();
-    void showDisplayNumbers();
-    void showRotationTestPattern();
-    void setBacklight(int displayIndex, uint8_t brightness);
+    void showHelloWorld() const;
+    void showDisplayNumbers() const;
+    void showRotationTestPattern() const;
+    void setBacklight(int displayIndex, uint8_t brightness) const;
 
     // Utility
     size_t getDisplayCount() const { return smallDisplays_.size() + (mainDisplay_ ? 1 : 0); }
     size_t getSmallDisplayCount() const { return smallDisplays_.size(); }
 
 private:
-    void initializeMainDisplay(std::shared_ptr<Adafruit_MCP23008> mcp, int connector);
-    void initializeSmallDisplay(std::shared_ptr<Adafruit_MCP23008> mcp, int connector, int position);
+    void initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector);
+    void initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector, int position);
     void selectMainDisplay() const;
     void selectSmallDisplay(int connector, int position) const;
     void deselectAllDisplays() const;

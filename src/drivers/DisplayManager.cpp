@@ -4,7 +4,7 @@
 
 namespace ButtonPlus {
 
-static const char* TAG = "DisplayManager";
+static auto TAG = "DisplayManager";
 
 // Global instance
 std::unique_ptr<DisplayManager> g_displayManager;
@@ -39,7 +39,7 @@ bool DisplayManager::initialize(const std::vector<std::shared_ptr<Adafruit_MCP23
     return true;
 }
 
-void DisplayManager::initializeMainDisplay(std::shared_ptr<Adafruit_MCP23008> mcp, int connector) {
+void DisplayManager::initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector) {
     ESP_LOGI(TAG, "Initializing main display on connector %d", connector);
 
     // CS pin is controlled by MCP, use proper backlight pin
@@ -65,7 +65,7 @@ void DisplayManager::initializeMainDisplay(std::shared_ptr<Adafruit_MCP23008> mc
     mcp->digitalWrite(MCP320_CS, HIGH);
 }
 
-void DisplayManager::initializeSmallDisplay(std::shared_ptr<Adafruit_MCP23008> mcp, int connector, int position) {
+void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector, int position) {
     ESP_LOGI(TAG, "Initializing small display on connector %d, position %d", connector, position);
 
     // CS pin is controlled by MCP (left or right)
@@ -120,33 +120,32 @@ LGFX_ESP32_SPI_Small* DisplayManager::getSmallDisplay(const int index) const {
 void DisplayManager::selectMainDisplay() const {
     deselectAllDisplays();
     if (mainDisplayConnector_ >= 0 && mainDisplayConnector_ < mcps_.size() && mcps_[mainDisplayConnector_]) {
-        // Main display uses display index connector * 2 (like TFT_eSPI implementation)
+        // Main display uses display index connector * 2 (because each connector can have 2 small displays)
         int displayIndex = mainDisplayConnector_ * 2;
-        // Use left CS for display index (even numbers use left CS)
         mcps_[mainDisplayConnector_]->digitalWrite(MCP160_CS_LEFT, LOW);
         ESP_LOGD(TAG, "Selected main display on connector %d (display index %d)", mainDisplayConnector_, displayIndex);
     }
 }
 
-void DisplayManager::selectSmallDisplay(int connector, int position) const {
+void DisplayManager::selectSmallDisplay(const int connector, const int position) const {
     deselectAllDisplays();
     if (connector >= 0 && connector < mcps_.size() && mcps_[connector]) {
-        int csPin = (position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT;
+        const int csPin = (position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT;
         mcps_[connector]->digitalWrite(csPin, LOW);
         ESP_LOGD(TAG, "Selected small display on connector %d, position %d", connector, position);
     }
 }
 
 void DisplayManager::deselectAllDisplays() const {
-    for (size_t i = 0; i < mcps_.size(); ++i) {
-        if (mcps_[i]) {
-            mcps_[i]->digitalWrite(MCP160_CS_LEFT, HIGH);
-            mcps_[i]->digitalWrite(MCP160_CS_RIGHT, HIGH);
+    for (const auto & mcp : mcps_) {
+        if (mcp) {
+            mcp->digitalWrite(MCP160_CS_LEFT, HIGH);
+            mcp->digitalWrite(MCP160_CS_RIGHT, HIGH);
         }
     }
 }
 
-void DisplayManager::showHelloWorld() {
+void DisplayManager::showHelloWorld() const {
     if (mainDisplay_) {
         ESP_LOGI(TAG, "Displaying test pattern on main display");
 
@@ -178,7 +177,7 @@ void DisplayManager::showHelloWorld() {
     }
 }
 
-void DisplayManager::showRotationTestPattern() {
+void DisplayManager::showRotationTestPattern() const {
     ESP_LOGI(TAG, "Displaying rotation test pattern on small displays");
 
     for (size_t i = 0; i < smallDisplays_.size(); ++i) {
@@ -226,7 +225,7 @@ void DisplayManager::showRotationTestPattern() {
     }
 }
 
-void DisplayManager::showDisplayNumbers() {
+void DisplayManager::showDisplayNumbers() const {
     ESP_LOGI(TAG, "Displaying numbers on small displays");
 
     for (size_t i = 0; i < smallDisplays_.size(); ++i) {
@@ -263,7 +262,7 @@ void DisplayManager::showDisplayNumbers() {
     }
 }
 
-void DisplayManager::setBacklight(int displayIndex, uint8_t brightness) {
+void DisplayManager::setBacklight(const int displayIndex, const uint8_t brightness) const {
     if (displayIndex == 0 && mainDisplay_) {
         mainDisplay_->setBrightness(brightness);
     } else if (displayIndex > 0) {
@@ -275,7 +274,7 @@ void DisplayManager::setBacklight(int displayIndex, uint8_t brightness) {
 }
 
 // Global convenience functions
-bool initializeDisplays(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, int mainDisplayConnector) {
+bool initializeDisplays(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, const int mainDisplayConnector) {
     if (!g_displayManager) {
         g_displayManager = std::make_unique<DisplayManager>();
     }
