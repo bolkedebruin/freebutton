@@ -84,6 +84,7 @@ void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23
 
     if (rotation == 3) {
         cfg.offset_x = 24;
+        cfg.offset_y = 2;
     } else {
         cfg.offset_x = 28;
     }

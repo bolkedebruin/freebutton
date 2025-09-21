@@ -44,7 +44,7 @@ public:
             cfg.offset_x = 0;
             cfg.offset_y = 0;
             cfg.offset_rotation = 4;
-            cfg.dummy_read_pixel = 16;
+            cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits = 1;
             cfg.readable = true;
             cfg.invert = false;  // ST7789 typically needs inversion ON
@@ -102,13 +102,7 @@ public:
             cfg.pin_busy = -1;
             cfg.panel_width = 80;
             cfg.panel_height = 160;
-            //cfg.memory_width = 160;   // ST7789 internal memory width
-            //cfg.memory_height = 240;  // ST7789 internal memory height
-
-            cfg.offset_x = 24;
-            //cfg.offset_y = 26;
-            //cfg.offset_rotation = 1;
-            cfg.dummy_read_pixel = 16;
+            cfg.dummy_read_pixel = 8;
             cfg.dummy_read_bits = 1;
             cfg.readable = true;
             cfg.invert = false;
