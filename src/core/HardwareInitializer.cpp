@@ -215,7 +215,8 @@ bool HardwareInitializer::initializeDisplays() {
         // Show hello world and display numbers
         auto& displayManager = ButtonPlus::getDisplayManager();
         displayManager.showHelloWorld();
-        displayManager.showDisplayNumbers();
+        //displayManager.showDisplayNumbers();
+        displayManager.showRotationTestPattern();
     }
 
     ESP_LOGI(TAG, "Display initialization completed");

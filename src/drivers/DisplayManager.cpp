@@ -74,20 +74,33 @@ void DisplayManager::initializeSmallDisplay(std::shared_ptr<Adafruit_MCP23008> m
 
     // Select the display before initialization
     deselectAllDisplays();
-    vTaskDelay(pdMS_TO_TICKS(10));
     int csPin = (position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT;
     mcp->digitalWrite(csPin, LOW);
-    vTaskDelay(pdMS_TO_TICKS(10)); // CS setup time
+
+    auto cfg = smallDisplay->panel()->config();
+
+    int rotation = (position % 2 ? 1 : 3);
+    cfg.offset_rotation = rotation;
+
+    if (rotation == 3) {
+        cfg.offset_x = 24;
+    } else {
+        cfg.offset_x = 28;
+    }
+    smallDisplay->panel()->config(cfg);
 
     // Initialize the display
     if (smallDisplay->init()) {
-        vTaskDelay(pdMS_TO_TICKS(50)); // Match initialization timing
-        // Set rotation based on position like in the working implementation
-        smallDisplay->setRotation(position % 2 ? 3 : 1);
-        smallDisplay->setSwapBytes(true); // Important for proper color display
+        //smallDisplay->setSwapBytes(true); // Important for proper color display
         smallDisplay->setBrightness(128);
-        smallDisplay->fillScreen(0x0000); // Black
-        smallDisplays_.push_back(std::move(smallDisplay));
+        smallDisplay->fillScreen((0x0000FF)); // Black
+
+        SmallDisplayEntry entry;
+        entry.display = std::move(smallDisplay);
+        entry.connector = connector;
+        entry.position = position;
+        smallDisplays_.push_back(std::move(entry));
+
         ESP_LOGI(TAG, "Small display %zu initialized successfully", smallDisplays_.size() - 1);
     } else {
         ESP_LOGE(TAG, "Failed to initialize small display on connector %d, position %d", connector, position);
@@ -95,17 +108,16 @@ void DisplayManager::initializeSmallDisplay(std::shared_ptr<Adafruit_MCP23008> m
 
     // Deselect after initialization
     mcp->digitalWrite(csPin, HIGH);
-    vTaskDelay(pdMS_TO_TICKS(10));
 }
 
-LGFX_ESP32_SPI_Small* DisplayManager::getSmallDisplay(int index) {
-    if (index >= 0 && index < smallDisplays_.size()) {
-        return smallDisplays_[index].get();
+LGFX_ESP32_SPI_Small* DisplayManager::getSmallDisplay(const int index) const {
+    if (index >= 0 && index < static_cast<int>(smallDisplays_.size())) {
+        return smallDisplays_[index].display.get();
     }
     return nullptr;
 }
 
-void DisplayManager::selectMainDisplay() {
+void DisplayManager::selectMainDisplay() const {
     deselectAllDisplays();
     if (mainDisplayConnector_ >= 0 && mainDisplayConnector_ < mcps_.size() && mcps_[mainDisplayConnector_]) {
         // Main display uses display index connector * 2 (like TFT_eSPI implementation)
@@ -116,7 +128,7 @@ void DisplayManager::selectMainDisplay() {
     }
 }
 
-void DisplayManager::selectSmallDisplay(int connector, int position) {
+void DisplayManager::selectSmallDisplay(int connector, int position) const {
     deselectAllDisplays();
     if (connector >= 0 && connector < mcps_.size() && mcps_[connector]) {
         int csPin = (position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT;
@@ -125,7 +137,7 @@ void DisplayManager::selectSmallDisplay(int connector, int position) {
     }
 }
 
-void DisplayManager::deselectAllDisplays() {
+void DisplayManager::deselectAllDisplays() const {
     for (size_t i = 0; i < mcps_.size(); ++i) {
         if (mcps_[i]) {
             mcps_[i]->digitalWrite(MCP160_CS_LEFT, HIGH);
@@ -166,11 +178,61 @@ void DisplayManager::showHelloWorld() {
     }
 }
 
+void DisplayManager::showRotationTestPattern() {
+    ESP_LOGI(TAG, "Displaying rotation test pattern on small displays");
+
+    for (size_t i = 0; i < smallDisplays_.size(); ++i) {
+        auto& entry = smallDisplays_[i];
+        auto* display = entry.display.get();
+        if (!display) continue;
+
+        int connector = entry.connector;
+        int position  = entry.position;
+        int csPin     = (position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT;
+
+        ESP_LOGI(TAG, "Updating small display %zu (connector %d, pos %d)", i, connector, position);
+
+        if (connector < 0 || connector >= mcps_.size() || !mcps_[connector]) {
+            ESP_LOGE(TAG, "Invalid connector %d for small display %zu", connector, i);
+            continue;
+        }
+
+        deselectAllDisplays();
+        mcps_[connector]->digitalWrite(csPin, LOW);
+
+        int w = 160, h = 80;
+        display->fillScreen(0x0000);
+
+        // Orientation bands
+        display->fillRect(0, 0, w, 10, 0xF800);      // Top = Red
+        display->fillRect(0, h - 10, w, 10, 0x001F); // Bottom = Blue
+        display->fillRect(0, 0, 10, h, 0x07E0);      // Left = Green
+        display->fillRect(w - 10, 0, 10, h, 0xFFE0); // Right = Yellow
+
+        // Corner labels
+        display->setTextColor(0xFFFF);
+        display->setTextSize(1);
+        display->setCursor(2, 2);      display->print("0");
+        display->setCursor(w - 8, 2);  display->print("1");
+        display->setCursor(2, h - 10); display->print("2");
+        display->setCursor(w - 8, h - 10); display->print("3");
+
+        // Center index
+        display->setTextSize(2);
+        display->setCursor(w / 2 - 12, h / 2 - 8);
+        display->printf("%zu", i + 1);
+
+        mcps_[connector]->digitalWrite(csPin, HIGH);
+    }
+}
+
 void DisplayManager::showDisplayNumbers() {
     ESP_LOGI(TAG, "Displaying numbers on small displays");
 
     for (size_t i = 0; i < smallDisplays_.size(); ++i) {
-        auto* display = smallDisplays_[i].get();
+        auto& entry = smallDisplays_[i];
+        auto* display = entry.display.get();
+
         if (display) {
             // Calculate which connector and position this display is on
             int connector = (static_cast<int>(i) / 2) + 1; // Skip connector 0 (main display)
@@ -187,7 +249,7 @@ void DisplayManager::showDisplayNumbers() {
             selectSmallDisplay(connector, position);
             vTaskDelay(pdMS_TO_TICKS(10)); // Small delay for CS setup
 
-            display->fillScreen(0x0000); // Black
+            display->fillScreen(0x0000FF); // Black
             display->setTextColor(0xFFFF); // White
             display->setTextSize(2);
             display->setCursor(10, 30);
@@ -207,7 +269,7 @@ void DisplayManager::setBacklight(int displayIndex, uint8_t brightness) {
     } else if (displayIndex > 0) {
         int smallIndex = displayIndex - 1;
         if (smallIndex < smallDisplays_.size()) {
-            smallDisplays_[smallIndex]->setBrightness(brightness);
+            smallDisplays_[smallIndex].display->setBrightness(brightness);
         }
     }
 }

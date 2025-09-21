@@ -72,7 +72,7 @@ public:
 };
 
 class LGFX_ESP32_SPI_Small : public lgfx::LGFX_Device {
-    lgfx::Panel_ST7735 _panel_instance;
+    lgfx::Panel_ST7735S _panel_instance;
     lgfx::Bus_SPI _bus_instance;
 
 public:
@@ -100,12 +100,15 @@ public:
             cfg.pin_cs = -1;  // CS controlled manually through MCP
             cfg.pin_rst = -1;
             cfg.pin_busy = -1;
-            cfg.panel_width = 160;
-            cfg.panel_height = 80;
-            cfg.offset_x = 26;
-            cfg.offset_y = 1;
-            cfg.offset_rotation = 0;
-            cfg.dummy_read_pixel = 8;
+            cfg.panel_width = 80;
+            cfg.panel_height = 160;
+            //cfg.memory_width = 160;   // ST7789 internal memory width
+            //cfg.memory_height = 240;  // ST7789 internal memory height
+
+            cfg.offset_x = 24;
+            //cfg.offset_y = 26;
+            //cfg.offset_rotation = 1;
+            cfg.dummy_read_pixel = 16;
             cfg.dummy_read_bits = 1;
             cfg.readable = true;
             cfg.invert = false;
@@ -123,11 +126,16 @@ public:
 
 class DisplayManager {
 public:
-    static constexpr int MAX_SMALL_DISPLAYS = 16;
+    static constexpr int MAX_SMALL_DISPLAYS = 8;
 
 private:
     std::unique_ptr<LGFX_ESP32_SPI> mainDisplay_;
-    std::vector<std::unique_ptr<LGFX_ESP32_SPI_Small>> smallDisplays_;
+    struct SmallDisplayEntry {
+        std::unique_ptr<LGFX_ESP32_SPI_Small> display;
+        int connector;
+        int position;
+    };
+    std::vector<SmallDisplayEntry> smallDisplays_;
     std::vector<std::shared_ptr<Adafruit_MCP23008>> mcps_;
     int mainDisplayConnector_;
 
@@ -142,11 +150,12 @@ public:
     LGFX_ESP32_SPI* getMainDisplay() { return mainDisplay_.get(); }
 
     // Get small display by index
-    LGFX_ESP32_SPI_Small* getSmallDisplay(int index);
+    LGFX_ESP32_SPI_Small* getSmallDisplay(int index) const;
 
     // Display control
     void showHelloWorld();
     void showDisplayNumbers();
+    void showRotationTestPattern();
     void setBacklight(int displayIndex, uint8_t brightness);
 
     // Utility
@@ -156,9 +165,9 @@ public:
 private:
     void initializeMainDisplay(std::shared_ptr<Adafruit_MCP23008> mcp, int connector);
     void initializeSmallDisplay(std::shared_ptr<Adafruit_MCP23008> mcp, int connector, int position);
-    void selectMainDisplay();
-    void selectSmallDisplay(int connector, int position);
-    void deselectAllDisplays();
+    void selectMainDisplay() const;
+    void selectSmallDisplay(int connector, int position) const;
+    void deselectAllDisplays() const;
 };
 
 // Global display manager instance
