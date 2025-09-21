@@ -121,10 +121,9 @@ LGFX_ESP32_SPI_Small* DisplayManager::getSmallDisplay(const int index) const {
 void DisplayManager::selectMainDisplay() const {
     deselectAllDisplays();
     if (mainDisplayConnector_ >= 0 && mainDisplayConnector_ < mcps_.size() && mcps_[mainDisplayConnector_]) {
-        // Main display uses display index connector * 2 (because each connector can have 2 small displays)
-        int displayIndex = mainDisplayConnector_ * 2;
-        mcps_[mainDisplayConnector_]->digitalWrite(MCP160_CS_LEFT, LOW);
-        ESP_LOGD(TAG, "Selected main display on connector %d (display index %d)", mainDisplayConnector_, displayIndex);
+        // Main display uses MCP320_CS pin
+        mcps_[mainDisplayConnector_]->digitalWrite(MCP320_CS, LOW);
+        ESP_LOGD(TAG, "Selected main display on connector %d", mainDisplayConnector_);
     }
 }
 
@@ -142,6 +141,7 @@ void DisplayManager::deselectAllDisplays() const {
         if (mcp) {
             mcp->digitalWrite(MCP160_CS_LEFT, HIGH);
             mcp->digitalWrite(MCP160_CS_RIGHT, HIGH);
+            mcp->digitalWrite(MCP320_CS, HIGH);  // Also deselect main display
         }
     }
 }

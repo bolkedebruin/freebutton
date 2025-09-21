@@ -214,7 +214,7 @@ bool HardwareInitializer::initializeDisplays() {
     if (success) {
         // Show hello world and display numbers
         auto& displayManager = ButtonPlus::getDisplayManager();
-        displayManager.showHelloWorld();
+        //displayManager.showHelloWorld();
         //displayManager.showDisplayNumbers();
         displayManager.showRotationTestPattern();
     }

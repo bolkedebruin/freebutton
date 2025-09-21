@@ -156,12 +156,14 @@ public:
     size_t getDisplayCount() const { return smallDisplays_.size() + (mainDisplay_ ? 1 : 0); }
     size_t getSmallDisplayCount() const { return smallDisplays_.size(); }
 
-private:
-    void initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector);
-    void initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector, int position);
+    // Display selection (public for LVGL integration)
     void selectMainDisplay() const;
     void selectSmallDisplay(int connector, int position) const;
     void deselectAllDisplays() const;
+
+private:
+    void initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector);
+    void initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector, int position);
 };
 
 // Global display manager instance

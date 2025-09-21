@@ -1,0 +1,276 @@
+#include "LvglDisplay.h"
+#include <esp_log.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+namespace ButtonPlus {
+
+static auto TAG = "LvglDisplay";
+
+// Global instance
+std::unique_ptr<LvglDisplay> g_lvglDisplay;
+
+// Reference to display manager for flush callback
+static DisplayManager* g_display_mgr = nullptr;
+
+LvglDisplay::LvglDisplay()
+    : main_display_(nullptr)
+    , buffer1_(nullptr)
+    , lvgl_mutex_(nullptr)
+    , initialized_(false)
+    , progress_bar_(nullptr)
+    , progress_label_(nullptr)
+{
+}
+
+LvglDisplay::~LvglDisplay() {
+    if (lvgl_mutex_) {
+        vSemaphoreDelete(lvgl_mutex_);
+    }
+}
+
+bool LvglDisplay::initialize(DisplayManager& displayManager) {
+    ESP_LOGI(TAG, "Initializing LVGL display integration");
+
+    g_display_mgr = &displayManager;
+
+    // Initialize LVGL
+    lv_init();
+
+    // Create mutex for thread safety
+    lvgl_mutex_ = xSemaphoreCreateMutex();
+    if (!lvgl_mutex_) {
+        ESP_LOGE(TAG, "Failed to create LVGL mutex");
+        return false;
+    }
+
+    // Allocate display buffer (10 lines buffer like reference implementation)
+    constexpr size_t buffer_size = 320 * 10 * sizeof(lv_color_t); // 10 lines buffer
+    buffer1_ = std::make_unique<uint8_t[]>(buffer_size);
+
+    if (!buffer1_) {
+        ESP_LOGE(TAG, "Failed to allocate LVGL buffer");
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Allocated LVGL buffer: %zu bytes", buffer_size);
+
+    // Get main display from display manager
+    auto* main_gfx = displayManager.getMainDisplay();
+    if (!main_gfx) {
+        ESP_LOGE(TAG, "No main display available");
+        return false;
+    }
+
+    // Create LVGL display
+    main_display_ = lv_display_create(320, 240);
+    if (!main_display_) {
+        ESP_LOGE(TAG, "Failed to create LVGL display");
+        return false;
+    }
+
+    // Set flush callback
+    lv_display_set_flush_cb(main_display_, flush_cb);
+
+    // Set display buffer (single buffer only)
+    lv_display_set_buffers(main_display_, buffer1_.get(), nullptr,
+                          buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+
+    // Set default theme
+    lv_theme_t* theme = lv_theme_default_init(main_display_,
+                                             lv_palette_main(LV_PALETTE_BLUE),
+                                             lv_palette_main(LV_PALETTE_RED),
+                                             LV_THEME_DEFAULT_DARK,
+                                             LV_FONT_DEFAULT);
+    lv_display_set_theme(main_display_, theme);
+
+    // Create and start LVGL tick timer
+    const esp_timer_create_args_t timer_args = {
+        .callback = [](void* arg) { lv_tick_inc(1); },
+        .name = "lvgl_tick"
+    };
+
+    esp_timer_handle_t timer;
+    if (esp_timer_create(&timer_args, &timer) == ESP_OK) {
+        esp_timer_start_periodic(timer, 1000); // 1ms tick
+        ESP_LOGI(TAG, "LVGL tick timer started");
+    } else {
+        ESP_LOGE(TAG, "Failed to create LVGL tick timer");
+        return false;
+    }
+
+    // Setup progress bar for startup
+    setupProgressBar();
+
+    initialized_ = true;
+    ESP_LOGI(TAG, "LVGL display initialization completed successfully");
+
+    return true;
+}
+
+void LvglDisplay::flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
+    if (!g_display_mgr) {
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    auto* main_gfx = g_display_mgr->getMainDisplay();
+    if (!main_gfx) {
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    // Select main display before operations
+    g_display_mgr->selectMainDisplay();
+
+    // Calculate area dimensions
+    uint32_t width = area->x2 - area->x1 + 1;
+    uint32_t height = area->y2 - area->y1 + 1;
+
+    // Start write operation
+    main_gfx->startWrite();
+    main_gfx->setAddrWindow(area->x1, area->y1, width, height);
+
+    // Push pixels to display
+    main_gfx->writePixels(reinterpret_cast<uint16_t*>(px_map), width * height);
+
+    // End write operation
+    main_gfx->endWrite();
+
+    // Deselect all displays after operation
+    g_display_mgr->deselectAllDisplays();
+
+    // Signal LVGL that flushing is complete
+    lv_display_flush_ready(disp);
+}
+
+void LvglDisplay::setupProgressBar() {
+    if (!main_display_) return;
+
+    // Select main display and clear it first
+    if (g_display_mgr) {
+        g_display_mgr->selectMainDisplay();
+        auto* main_gfx = g_display_mgr->getMainDisplay();
+        if (main_gfx) {
+            main_gfx->fillScreen(0x0000); // Clear to black
+        }
+        g_display_mgr->deselectAllDisplays();
+    }
+
+    // Create main screen
+    lv_obj_t* scr = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
+    lv_scr_load(scr);
+
+    // Create progress label (centered above progress bar)
+    progress_label_ = lv_label_create(scr);
+    lv_label_set_text(progress_label_, "Initializing...");
+    lv_obj_set_style_text_color(progress_label_, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(progress_label_, &lv_font_montserrat_14, 0);
+    lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, -30);
+
+    // Create iPhone-style progress bar (thin, rounded, centered)
+    progress_bar_ = lv_bar_create(scr);
+    lv_obj_set_size(progress_bar_, 200, 3);
+    lv_obj_align(progress_bar_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(progress_bar_, lv_color_hex(0x3a3a3c), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(progress_bar_, lv_color_hex(0xffffff), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(progress_bar_, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(progress_bar_, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_border_width(progress_bar_, 0, LV_PART_MAIN);
+    lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
+
+    ESP_LOGI(TAG, "Progress bar setup completed");
+}
+
+void LvglDisplay::showProgressBar(const char* message) {
+    if (!initialized_ || !progress_label_) return;
+
+    lock();
+    lv_label_set_text(progress_label_, message);
+    lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
+    unlock();
+}
+
+void LvglDisplay::updateProgress(int percentage, const char* message) {
+    if (!initialized_ || !progress_bar_) return;
+
+    lock();
+
+    // Update progress bar
+    lv_bar_set_value(progress_bar_, percentage, LV_ANIM_ON);
+
+    // Update message if provided
+    if (message && progress_label_) {
+        lv_label_set_text(progress_label_, message);
+    }
+
+
+    unlock();
+
+    ESP_LOGD(TAG, "Progress updated: %d%% - %s", percentage, message ? message : "");
+}
+
+void LvglDisplay::hideProgressBar() {
+    if (!initialized_ || !progress_bar_) return;
+
+    lock();
+
+    // Create new main application screen
+    lv_obj_t* main_scr = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(main_scr, lv_color_hex(0x000000), 0);
+
+    // Create welcome label
+    lv_obj_t* welcome_label = lv_label_create(main_scr);
+    lv_label_set_text(welcome_label, "FreeButton Ready");
+    lv_obj_set_style_text_color(welcome_label, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(welcome_label, &lv_font_montserrat_14, 0);
+    lv_obj_center(welcome_label);
+
+    // Load the new screen
+    lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_IN, 500, 0, false);
+
+    unlock();
+
+    ESP_LOGI(TAG, "Progress bar hidden, main UI loaded");
+}
+
+void LvglDisplay::task() {
+    if (!initialized_) return;
+
+    lock();
+    lv_timer_handler();
+    unlock();
+}
+
+void LvglDisplay::lock() {
+    if (lvgl_mutex_) {
+        xSemaphoreTake(lvgl_mutex_, portMAX_DELAY);
+    }
+}
+
+void LvglDisplay::unlock() {
+    if (lvgl_mutex_) {
+        xSemaphoreGive(lvgl_mutex_);
+    }
+}
+
+// Global convenience functions
+bool initializeLvgl(DisplayManager& displayManager) {
+    if (!g_lvglDisplay) {
+        g_lvglDisplay = std::make_unique<LvglDisplay>();
+    }
+
+    return g_lvglDisplay->initialize(displayManager);
+}
+
+LvglDisplay& getLvglDisplay() {
+    if (!g_lvglDisplay) {
+        g_lvglDisplay = std::make_unique<LvglDisplay>();
+    }
+
+    return *g_lvglDisplay;
+}
+
+} // namespace ButtonPlus

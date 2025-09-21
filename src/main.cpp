@@ -15,6 +15,7 @@
 #include "mqtt/HomeAssistantDiscovery.h"
 #include "utils/helpers.h"
 #include "drivers/Sensors.h"
+#include "drivers/LvglDisplay.h"
 
 using namespace ButtonPlus;
 
@@ -48,6 +49,14 @@ const std::map<std::string_view, std::string_view> deviceInfo = {
 NeoPixelController neopixels(NEOPIN);
 auto& registry = MqttBrokerRegistry::instance();
 
+// LVGL task for UI updates
+void lvgl_task(void* pvParameter) {
+    while (true) {
+        ButtonPlus::getLvglDisplay().task();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
 std::unique_ptr<MyComponent> globalComponent;
 
 void log_free_heap() {
@@ -78,12 +87,29 @@ void setup() {
         return;
     }
 
+    // Initialize LVGL display with progress bar
+    if (ButtonPlus::initializeLvgl(ButtonPlus::getDisplayManager())) {
+        ButtonPlus::getLvglDisplay().showProgressBar("Starting WiFi...");
+
+        // Start LVGL task
+        xTaskCreatePinnedToCore(lvgl_task, "lvgl", 4096, nullptr, 5, nullptr, 1);
+        ESP_LOGI(TAG, "LVGL initialized successfully");
+    } else {
+        ESP_LOGE(TAG, "LVGL initialization failed!");
+    }
+
+    // Update progress
+    ButtonPlus::getLvglDisplay().updateProgress(25, "WiFi starting...");
+
     setup_wifi_event_handler();
     start_wifi_manager();
 
     log_free_heap();
+    ButtonPlus::getLvglDisplay().updateProgress(50, "Starting web server...");
     webserver_start();
     log_free_heap();
+
+    ButtonPlus::getLvglDisplay().updateProgress(70, "Configuring MQTT...");
 
     auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
     
@@ -105,6 +131,14 @@ void setup() {
     
     // Register sensors with Home Assistant Discovery
     registerSensorsWithDiscovery(brokerId);
+
+    ButtonPlus::getLvglDisplay().updateProgress(90, "Finalizing setup...");
+    vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to show final progress
+
+    ButtonPlus::getLvglDisplay().updateProgress(100, "Ready!");
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
+
+    ButtonPlus::getLvglDisplay().hideProgressBar();
 
     log_free_heap();
 }
