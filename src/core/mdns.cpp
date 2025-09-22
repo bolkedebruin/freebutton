@@ -19,7 +19,7 @@ void mdns_start()
 
     // Set an instance name
     const String macAddress = WiFi.macAddress();
-    String instanceName = "ButtonPlus_" + macAddress;
+    String instanceName = "FreeButton_" + macAddress;
     instanceName.replace(":", "");
     MDNS.setInstanceName(instanceName);
 
@@ -28,7 +28,7 @@ void mdns_start()
 
     // Add TXT records for service discovery
     MDNS.addServiceTxt("_http", "_tcp", "id", macAddress);
-    MDNS.addServiceTxt("_http", "_tcp", "md", "Button+");
+    MDNS.addServiceTxt("_http", "_tcp", "md", "FreeButton");
     MDNS.addServiceTxt("_http", "_tcp", "path", "/"); // Root path for HTTP service
 
     // Add version and other metadata

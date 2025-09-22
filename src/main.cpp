@@ -17,7 +17,7 @@
 #include "drivers/Sensors.h"
 #include "drivers/LvglDisplay.h"
 
-using namespace ButtonPlus;
+using namespace FreeButton;
 
 static const auto TAG = "main";
 
@@ -52,7 +52,7 @@ auto& registry = MqttBrokerRegistry::instance();
 // LVGL task for UI updates
 void lvgl_task(void* pvParameter) {
     while (true) {
-        ButtonPlus::getLvglDisplay().task();
+        FreeButton::getLvglDisplay().task();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -88,8 +88,8 @@ void setup() {
     }
 
     // Initialize LVGL display with progress bar
-    if (ButtonPlus::initializeLvgl(ButtonPlus::getDisplayManager())) {
-        ButtonPlus::getLvglDisplay().showProgressBar("Starting WiFi...");
+    if (FreeButton::initializeLvgl(FreeButton::getDisplayManager())) {
+        FreeButton::getLvglDisplay().showProgressBar("Starting WiFi...");
 
         // Start LVGL task
         xTaskCreatePinnedToCore(lvgl_task, "lvgl", 4096, nullptr, 5, nullptr, 1);
@@ -99,17 +99,17 @@ void setup() {
     }
 
     // Update progress
-    ButtonPlus::getLvglDisplay().updateProgress(25, "WiFi starting...");
+    FreeButton::getLvglDisplay().updateProgress(25, "WiFi starting...");
 
     setup_wifi_event_handler();
     start_wifi_manager();
 
     log_free_heap();
-    ButtonPlus::getLvglDisplay().updateProgress(50, "Starting web server...");
+    FreeButton::getLvglDisplay().updateProgress(50, "Starting web server...");
     webserver_start();
     log_free_heap();
 
-    ButtonPlus::getLvglDisplay().updateProgress(70, "Configuring MQTT...");
+    FreeButton::getLvglDisplay().updateProgress(70, "Configuring MQTT...");
 
     auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
     
@@ -132,13 +132,13 @@ void setup() {
     // Register sensors with Home Assistant Discovery
     registerSensorsWithDiscovery(brokerId);
 
-    ButtonPlus::getLvglDisplay().updateProgress(90, "Finalizing setup...");
+    FreeButton::getLvglDisplay().updateProgress(90, "Finalizing setup...");
     vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to show final progress
 
-    ButtonPlus::getLvglDisplay().updateProgress(100, "Ready!");
+    FreeButton::getLvglDisplay().updateProgress(100, "Ready!");
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
 
-    ButtonPlus::getLvglDisplay().hideProgressBar();
+    FreeButton::getLvglDisplay().hideProgressBar();
 
     log_free_heap();
 }

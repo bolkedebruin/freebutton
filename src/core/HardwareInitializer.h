@@ -14,7 +14,7 @@
 #include <functional>
 #include <esp_log.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 class HardwareInitializer {
 public:
@@ -76,4 +76,4 @@ extern std::unique_ptr<HardwareInitializer> g_hardwareInitializer;
 bool initializeAllHardware();
 HardwareInitializer& getHardwareInitializer();
 
-} // namespace ButtonPlus
+} // namespace FreeButton

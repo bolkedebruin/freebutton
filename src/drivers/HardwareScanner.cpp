@@ -8,7 +8,7 @@
 #include "pins.h"
 #include <algorithm>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 HardwareScanner::HardwareScanner() {
     connectors_.reserve(MAX_CONNECTORS);
@@ -203,4 +203,4 @@ bool HardwareScanner::probeI2CAddress(const uint8_t address, TwoWire& wire) {
     return wire.endTransmission() == 0;
 }
 
-} // namespace ButtonPlus
+} // namespace FreeButton

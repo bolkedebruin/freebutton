@@ -5,7 +5,7 @@
 #include "HardwareInitializer.h"
 #include <Wire.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 // Global instance
 std::unique_ptr<HardwareInitializer> g_hardwareInitializer;
@@ -209,11 +209,11 @@ bool HardwareInitializer::initializeDisplays() {
     ESP_LOGI(TAG, "Initializing displays...");
 
     // Initialize display subsystem with detected hardware
-    bool success = ButtonPlus::initializeDisplays(mcps_, tft320Bar_);
+    bool success = FreeButton::initializeDisplays(mcps_, tft320Bar_);
 
     if (success) {
         // Show hello world and display numbers
-        auto& displayManager = ButtonPlus::getDisplayManager();
+        auto& displayManager = FreeButton::getDisplayManager();
         //displayManager.showHelloWorld();
         //displayManager.showDisplayNumbers();
         displayManager.showRotationTestPattern();
@@ -227,7 +227,7 @@ bool HardwareInitializer::initializeSensors() {
     ESP_LOGI(TAG, "Initializing sensors...");
 
     // Initialize sensor subsystem
-    ButtonPlus::initializeSensors();
+    FreeButton::initializeSensors();
 
     ESP_LOGI(TAG, "Sensor initialization completed");
     return true;
@@ -271,4 +271,4 @@ HardwareInitializer& getHardwareInitializer() {
     return *g_hardwareInitializer;
 }
 
-} // namespace ButtonPlus
+} // namespace FreeButton

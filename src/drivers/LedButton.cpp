@@ -7,7 +7,7 @@
 #include "config.h"
 #include <algorithm>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 // LedButton Implementation
 LedButton::LedButton(const int id, const int pin, std::shared_ptr<Adafruit_MCP23008> mcp)
@@ -286,4 +286,4 @@ void ButtonManager::updateAllButtons() const {
     }
 }
 
-} // namespace ButtonPlus
+} // namespace FreeButton

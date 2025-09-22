@@ -4,7 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 static auto TAG = "LvglDisplay";
 
@@ -458,4 +458,4 @@ void LvglDisplay::clearAllSmallDisplays() const {
     ESP_LOGI(TAG, "All small displays cleared to black");
 }
 
-} // namespace ButtonPlus
+} // namespace FreeButton

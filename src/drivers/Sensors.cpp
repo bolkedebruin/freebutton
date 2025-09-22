@@ -7,7 +7,7 @@
 
 using namespace std::string_view_literals;
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 std::map<int, std::shared_ptr<SensorDevice>> sensorDevices;
 Adafruit_BME280 bme;

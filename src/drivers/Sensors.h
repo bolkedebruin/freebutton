@@ -15,7 +15,7 @@
 #include "../../lib/vendored/stscommon/sensirion_common.h"
 #include "../../lib/vendored/sts3x/sts3x.h" // Vendored library
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 // Forward declarations
 class SensorDevice;
@@ -194,4 +194,4 @@ void sampleSensors();
 void initializeSensors();
 void registerSensorsWithDiscovery(uint8_t brokerId);
 
-}
+} // namespace FreeButton

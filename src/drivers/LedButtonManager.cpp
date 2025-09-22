@@ -8,7 +8,7 @@
 #include <esp_log.h>
 #include <algorithm>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 LedButtonManager::LedButtonManager(std::shared_ptr<NeoPixelController> neopixel, 
                                  uint8_t brokerId, 
@@ -136,4 +136,4 @@ void registerLedButtonsWithDiscovery(const uint8_t brokerId, LedButtonManager* m
     ESP_LOGI("LedButtonManager", "Registered LED buttons with Home Assistant discovery");
 }
 
-} // namespace ButtonPlus
+} // namespace FreeButton

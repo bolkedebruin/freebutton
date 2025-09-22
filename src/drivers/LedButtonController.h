@@ -11,7 +11,7 @@
 #include <memory>
 #include <ArduinoJson.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 class LedButtonController : public MqttSubscriber, public MqttPublisher {
 public:
@@ -94,4 +94,4 @@ private:
     [[nodiscard]] std::string colorToJson() const;
 };
 
-} // namespace ButtonPlus
+} // namespace FreeButton

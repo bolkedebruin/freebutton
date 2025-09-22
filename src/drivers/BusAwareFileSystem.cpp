@@ -1,7 +1,7 @@
 #include "BusAwareFileSystem.h"
 #include <esp_log.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 static const char* TAG = "BusAwareFS";
 
@@ -332,4 +332,4 @@ bool initializeBusAwareFileSystem(LGFX_ESP32_SPI* display) {
     return result;
 }
 
-} // namespace ButtonPlus
+} // namespace FreeButton

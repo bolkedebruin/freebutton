@@ -7,11 +7,11 @@
 #include <Adafruit_MCP23008.h>
 
 // Forward declaration to avoid circular dependency
-namespace ButtonPlus {
+namespace FreeButton {
     class BusAwareFileSystem;
 }
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 class LGFX_ESP32_SPI : public lgfx::LGFX_Device {
     //lgfx::Panel_ST7789 _panel_instance; // Use correct ST7789 driver like working implementation
@@ -184,6 +184,6 @@ extern std::unique_ptr<DisplayManager> g_displayManager;
 bool initializeDisplays(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, int mainDisplayConnector);
 DisplayManager& getDisplayManager();
 
-} // namespace ButtonPlus
+} // namespace FreeButton
 
 #endif // DISPLAYMANAGER_H

@@ -9,7 +9,7 @@
 #include <esp_log.h>
 #include <ArduinoJson.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 LedButtonController::LedButtonController(std::shared_ptr<LedButton> button, 
                                        std::shared_ptr<NeoPixelController> neopixel,
@@ -370,4 +370,4 @@ void LedButtonController::registerWithHomeAssistant() const {
     ESP_LOGI(TAG, "Registered button %d LED with Home Assistant as: %s", getPosition(), name.c_str());
 }
 
-} // namespace ButtonPlus
+} // namespace FreeButton

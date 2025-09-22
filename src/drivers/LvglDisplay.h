@@ -6,7 +6,7 @@
 #include <vector>
 #include "DisplayManager.h"
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 class LvglDisplay {
 private:
@@ -66,6 +66,6 @@ extern std::unique_ptr<LvglDisplay> g_lvglDisplay;
 bool initializeLvgl(DisplayManager& displayManager);
 LvglDisplay& getLvglDisplay();
 
-} // namespace ButtonPlus
+} // namespace FreeButton
 
 #endif // LVGLDISPLAY_H

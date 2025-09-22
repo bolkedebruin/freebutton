@@ -6,7 +6,7 @@
 #include <memory>
 #include "DisplayManager.h"
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 /**
  * @brief Bus-aware filesystem wrapper that integrates with LovyanGFX bus sharing
@@ -140,6 +140,6 @@ private:
 BusAwareFileSystem& getBusAwareFileSystem();
 bool initializeBusAwareFileSystem(LGFX_ESP32_SPI* display);
 
-} // namespace ButtonPlus
+} // namespace FreeButton
 
 #endif // BUSAWAREFILESYSTEM_H

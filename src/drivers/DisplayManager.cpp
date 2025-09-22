@@ -3,7 +3,7 @@
 #include "pins.h"
 #include <esp_log.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 static auto TAG = "DisplayManager";
 
@@ -311,4 +311,4 @@ DisplayManager& getDisplayManager() {
     return *g_displayManager;
 }
 
-} // namespace ButtonPlus
+} // namespace FreeButton

@@ -11,7 +11,7 @@
 #include <vector>
 #include <memory>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 class LedButtonManager {
 public:
@@ -63,4 +63,4 @@ private:
 // Convenience function to register LED button controllers with Home Assistant Discovery
 void registerLedButtonsWithDiscovery(uint8_t brokerId, LedButtonManager* manager);
 
-} // namespace ButtonPlus
+} // namespace FreeButton

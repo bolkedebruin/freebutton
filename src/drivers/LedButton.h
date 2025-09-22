@@ -10,7 +10,7 @@
 #include <memory>
 #include <esp_log.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 class LedButton {
 public:
@@ -128,4 +128,4 @@ private:
     void updateAllButtons() const;
 };
 
-} // namespace ButtonPlus
+} // namespace FreeButton

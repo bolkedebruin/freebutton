@@ -11,7 +11,7 @@
 #include <esp_log.h>
 #include <Wire.h>
 
-namespace ButtonPlus {
+namespace FreeButton {
 
 enum class DeviceType : uint8_t {
     UNKNOWN = 0,
@@ -82,4 +82,4 @@ private:
     [[nodiscard]] static bool probeI2CAddress(uint8_t address, TwoWire& wire);
 };
 
-} // namespace ButtonPlus
+} // namespace FreeButton
