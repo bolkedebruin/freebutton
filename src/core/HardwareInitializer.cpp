@@ -72,8 +72,14 @@ bool HardwareInitializer::initializeHardware() {
         ESP_LOGW(TAG, "Sensor initialization had issues (non-fatal)");
         // Sensor failure is not fatal for the overall system
     }
-    
-    // Step 7: Start button monitoring
+
+    // Step 7: Initialize device info button
+    if (success && !initializeDeviceInfoButton()) {
+        ESP_LOGW(TAG, "Device info button initialization had issues (non-fatal)");
+        // Device info button failure is not fatal for the overall system
+    }
+
+    // Step 8: Start button monitoring
     if (success && buttonCount > 0) {
         buttonManager_.startMonitoring();
         ESP_LOGI(TAG, "Button monitoring started");
@@ -252,6 +258,22 @@ std::shared_ptr<Adafruit_MCP23008> HardwareInitializer::getMCPForConnector(const
         return mcps_[connector];
     }
     return nullptr;
+}
+
+bool HardwareInitializer::initializeDeviceInfoButton() {
+    ESP_LOGI(TAG, "Initializing device info button...");
+
+    // Initialize device info button with CONFIG_BUTTON pin
+    if (!FreeButton::initializeDeviceInfoButton(CONFIG_BUTTON)) {
+        ESP_LOGE(TAG, "Failed to initialize device info button");
+        return false;
+    }
+
+    // Start the device info button monitoring
+    FreeButton::startDeviceInfoButton();
+
+    ESP_LOGI(TAG, "Device info button initialized successfully");
+    return true;
 }
 
 // Global convenience functions

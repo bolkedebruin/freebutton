@@ -92,7 +92,7 @@ void setup() {
         FreeButton::getLvglDisplay().showProgressBar("Starting WiFi...");
 
         // Start LVGL task
-        xTaskCreatePinnedToCore(lvgl_task, "lvgl", 4096, nullptr, 5, nullptr, 1);
+        xTaskCreatePinnedToCore(lvgl_task, "lvgl", 8192, nullptr, 5, nullptr, 1);
         ESP_LOGI(TAG, "LVGL initialized successfully");
     } else {
         ESP_LOGE(TAG, "LVGL initialization failed!");

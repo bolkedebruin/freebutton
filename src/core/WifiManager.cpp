@@ -199,14 +199,14 @@ void start_wifimanager_portal() {
             String body = String((char*)data).substring(0, len);
 
             // Parse JSON manually for simplicity
-            int ssidStart = body.indexOf("\"ssid\":\"") + 8;
-            int ssidEnd = body.indexOf("\"", ssidStart);
-            int passStart = body.indexOf("\"password\":\"") + 12;
+            const int ssidStart = body.indexOf("\"ssid\":\"") + 8;
+            const int ssidEnd = body.indexOf("\"", ssidStart);
+            const int passStart = body.indexOf("\"password\":\"") + 12;
             int passEnd = body.indexOf("\"", passStart);
 
             if (ssidStart > 7 && ssidEnd > ssidStart && passStart > 11 && passEnd > passStart) {
-                String ssid = body.substring(ssidStart, ssidEnd);
-                String password = body.substring(passStart, passEnd);
+                const String ssid = body.substring(ssidStart, ssidEnd);
+                const String password = body.substring(passStart, passEnd);
 
                 // Save credentials
                 saveWiFiCredentials(ssid.c_str(), password.c_str());

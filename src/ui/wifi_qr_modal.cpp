@@ -34,7 +34,7 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
     // Create modal container
     modal = lv_obj_create(screen);
     lv_obj_move_foreground(modal);
-    lv_obj_set_size(modal, LV_PCT(90), LV_PCT(80));
+    lv_obj_set_size(modal, LV_PCT(90), LV_PCT(90));
     lv_obj_center(modal);
     lv_obj_add_style(modal, &modal_style, 0);
 
