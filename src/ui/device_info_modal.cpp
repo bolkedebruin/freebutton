@@ -21,12 +21,13 @@ void show_device_info_modal(lv_obj_t* screen, const char* device_info) {
 
     // Initialize styles only once
     static bool styles_initialized = false;
+
     if (!styles_initialized) {
         lv_style_init(&modal_style);
-        lv_style_set_bg_opa(&modal_style, LV_OPA_90);
-        lv_style_set_bg_color(&modal_style, lv_color_hex(0x1a1a1a));
+        lv_style_set_bg_opa(&modal_style, LV_OPA_COVER);
+        lv_style_set_bg_color(&modal_style, lv_color_hex(0x000000));
         lv_style_set_border_width(&modal_style, 2);
-        lv_style_set_border_color(&modal_style, lv_color_hex(0x4a90e2));
+        lv_style_set_border_color(&modal_style, lv_color_hex(0x666666));
         lv_style_set_radius(&modal_style, 8);
 
         lv_style_init(&text_style);
@@ -38,7 +39,7 @@ void show_device_info_modal(lv_obj_t* screen, const char* device_info) {
 
     // Create modal container
     modal = lv_obj_create(screen);
-    lv_obj_set_size(modal, 272, 190); // Fixed size instead of percentage
+    lv_obj_set_size(modal, 280, 200); // Fixed size instead of percentage
     lv_obj_center(modal);
     lv_obj_add_style(modal, &modal_style, 0);
 
