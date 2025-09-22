@@ -9,6 +9,7 @@
 #include <esp_log.h>
 
 #include "mdns.h"
+#include "../ui/wifi_qr_modal.h"
 
 static auto TAG = "wifi";
 
@@ -163,8 +164,8 @@ void saveWiFiCredentials(const char* ssid, const char* password) {
 void start_wifimanager_portal() {
     ESP_LOGI(TAG, "Starting WiFi Configuration Portal");
 
-    // do this via callbacks
-    //set_modal("WIFI not connected\nAccess Point started\nUse Button+ AP to configure....");
+    // Show QR code modal for WiFi setup
+    show_wifi_qr_modal(lv_screen_active(), AP_SSID, AP_PASSWORD);
 
     // Set up access point
     WiFi.mode(WIFI_AP_STA);
@@ -225,6 +226,9 @@ void start_wifimanager_portal() {
                     
                     request->send(200, "application/json", "{\"success\":true,\"message\":\"Connected successfully\"}");
                     wifiConnected = true;
+
+                    // Hide QR modal on successful connection
+                    hide_wifi_qr_modal();
 
                     // Clean up portal
                     if (dnsServer) {

@@ -123,7 +123,7 @@
 #define LV_USE_BAR        1  /* For progress bar */
 #define LV_USE_BTN        1  /* Required by some widgets */
 #define LV_USE_BTNMATRIX  0
-#define LV_USE_CANVAS     0
+#define LV_USE_CANVAS     1
 #define LV_USE_CHECKBOX   0
 #define LV_USE_DROPDOWN   1  /* Required by calendar */
 #define LV_USE_IMG        0
@@ -149,7 +149,7 @@
 #define LV_USE_BMP 0
 #define LV_USE_SJPG 0
 #define LV_USE_GIF 0
-#define LV_USE_QRCODE 0
+#define LV_USE_QRCODE 1
 #define LV_USE_FREETYPE 0
 #define LV_USE_RLOTTIE 0
 #define LV_USE_FFMPEG 0
