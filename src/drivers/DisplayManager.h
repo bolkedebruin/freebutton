@@ -20,7 +20,7 @@ class LGFX_ESP32_SPI : public lgfx::LGFX_Device {
     lgfx::Light_PWM _light_instance;
 
 public:
-    LGFX_ESP32_SPI(int cs_pin, int dc_pin, int backlight_pin) {
+    LGFX_ESP32_SPI(int cs_pin, const int dc_pin, const int backlight_pin) {
         // CS is controlled manually through MCP, so we set it to -1
         {
             auto cfg = _bus_instance.config();
@@ -81,7 +81,7 @@ class LGFX_ESP32_SPI_Small : public lgfx::LGFX_Device {
     lgfx::Bus_SPI _bus_instance;
 
 public:
-    LGFX_ESP32_SPI_Small(int cs_pin, int dc_pin) {
+    LGFX_ESP32_SPI_Small(int cs_pin, const int dc_pin) {
         // CS is controlled manually through MCP, so we set it to -1
         {
             auto cfg = _bus_instance.config();

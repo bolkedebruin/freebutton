@@ -1,6 +1,7 @@
 #include "LvglDisplay.h"
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -50,9 +51,9 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
         return false;
     }
 
-    // Allocate display buffer (10 lines buffer like reference implementation)
-    constexpr size_t buffer_size = 320 * 10 * sizeof(lv_color_t); // 10 lines buffer
-    buffer1_ = std::make_unique<uint8_t[]>(buffer_size);
+    // Allocate display buffer (20 lines)
+    constexpr size_t buffer_size = 320 * 20 * sizeof(lv_color_t);
+    buffer1_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(32, buffer_size, MALLOC_CAP_DMA));
 
     if (!buffer1_) {
         ESP_LOGE(TAG, "Failed to allocate LVGL buffer");
@@ -79,7 +80,7 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     lv_display_set_flush_cb(main_display_, flush_cb);
 
     // Set display buffer (single buffer only)
-    lv_display_set_buffers(main_display_, buffer1_.get(), nullptr,
+    lv_display_set_buffers(main_display_, buffer1_, nullptr,
                           buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     // Set default theme
@@ -91,7 +92,7 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     lv_display_set_theme(main_display_, theme);
 
     // Create and start LVGL tick timer
-    const esp_timer_create_args_t timer_args = {
+    constexpr esp_timer_create_args_t timer_args = {
         .callback = [](void* arg) { lv_tick_inc(1); },
         .name = "lvgl_tick"
     };
@@ -133,15 +134,18 @@ void LvglDisplay::flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* p
     g_display_mgr->selectMainDisplay();
 
     // Calculate area dimensions
-    uint32_t width = area->x2 - area->x1 + 1;
-    uint32_t height = area->y2 - area->y1 + 1;
+    const uint32_t width = area->x2 - area->x1 + 1;
+    const uint32_t height = area->y2 - area->y1 + 1;
 
     // Start write operation
     main_gfx->startWrite();
     main_gfx->setAddrWindow(area->x1, area->y1, width, height);
 
     // Push pixels to display
-    main_gfx->writePixels(reinterpret_cast<uint16_t*>(px_map), width * height);
+    while (main_gfx->dmaBusy()) {
+        vTaskDelay(1);
+    }
+    main_gfx->pushImageDMA(area->x1, area->y1, width, height, reinterpret_cast<uint16_t *>(px_map));
 
     // End write operation
     main_gfx->endWrite();
@@ -291,9 +295,11 @@ void LvglDisplay::initializeSmallDisplays(DisplayManager& displayManager) {
         return;
     }
 
-    // Allocate shared buffer for small displays (5 lines buffer like reference)
+    // Allocate shared buffer for small displays
     constexpr size_t small_buffer_size = 160 * 5 * sizeof(lv_color_t);
-    shared_small_buffer_ = std::make_unique<uint8_t[]>(small_buffer_size);
+    shared_small_buffer_ = static_cast<uint8_t*>(
+        heap_caps_aligned_alloc(32, small_buffer_size, MALLOC_CAP_DMA)
+    );
 
     if (!shared_small_buffer_) {
         ESP_LOGE(TAG, "Failed to allocate shared small display buffer");
@@ -361,8 +367,8 @@ void LvglDisplay::flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint
     g_display_mgr->selectSmallDisplay(connector, position);
 
     // Calculate area dimensions
-    uint32_t width = area->x2 - area->x1 + 1;
-    uint32_t height = area->y2 - area->y1 + 1;
+    const uint32_t width = area->x2 - area->x1 + 1;
+    const uint32_t height = area->y2 - area->y1 + 1;
 
     // Start write operation
     small_gfx->startWrite();
@@ -404,7 +410,7 @@ bool LvglDisplay::acquireSmallDisplayBuffer(int index) const {
     }
 
     constexpr size_t small_buffer_size = 160 * 5 * sizeof(lv_color_t);
-    lv_display_set_buffers(disp, shared_small_buffer_.get(), nullptr,
+    lv_display_set_buffers(disp, shared_small_buffer_, nullptr,
                           small_buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     // Enable invalidation now that buffer is properly set

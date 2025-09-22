@@ -11,9 +11,10 @@ namespace FreeButton {
 class LvglDisplay {
 private:
     lv_display_t* main_display_;
-    std::unique_ptr<uint8_t[]> buffer1_;
+    uint8_t* buffer1_;
+    uint8_t* buffer2_;
     std::vector<lv_display_t*> small_displays_;
-    std::unique_ptr<uint8_t[]> shared_small_buffer_;
+    uint8_t* shared_small_buffer_;
     SemaphoreHandle_t lvgl_mutex_;
     SemaphoreHandle_t small_buffer_mutex_;
     bool initialized_;
