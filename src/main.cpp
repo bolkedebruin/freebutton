@@ -138,7 +138,9 @@ void setup() {
     FreeButton::getLvglDisplay().updateProgress(100, "Ready!");
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
 
-    FreeButton::getLvglDisplay().hideProgressBar();
+    if (is_wifi_connected()) {
+        FreeButton::getLvglDisplay().hideProgressBar();
+    }
 
     log_free_heap();
 }

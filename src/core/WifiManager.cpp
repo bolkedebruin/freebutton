@@ -38,25 +38,37 @@ struct WiFiCredentials {
 WiFiCredentials savedCreds = {"", ""};
 
 // HTML for WiFi configuration portal
-static const char* wifiConfigHTML = R"rawliteral(
+static auto wifiConfigHTML = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
     <title>Button+ WiFi Setup</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f0f0f0; }
         .container { max-width: 400px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #333; }
         .form-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 5px; color: #555; }
-        input[type="text"], input[type="password"], select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        input[type="text"], input[type="password"], select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 16px; }
         button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; }
         button:hover { background-color: #0056b3; }
-        .network-list { margin-bottom: 20px; }
-        .network-item { padding: 8px; margin: 5px 0; background: #f8f9fa; border-radius: 4px; cursor: pointer; }
+        .network-list { margin-bottom: 20px; max-height: 200px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; }
+        .network-item { padding: 8px; margin: 5px 0; background: #f8f9fa; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
         .network-item:hover { background: #e9ecef; }
-        .signal-strength { float: right; color: #666; }
+        .network-ssid { flex-grow: 1; }
+        .signal-strength { display: flex; align-items: center; gap: 2px; }
+        .signal-bar { width: 3px; background: #ddd; border-radius: 1px; }
+        .signal-bar.active { background: #007bff; }
+        .signal-bar:nth-child(1) { height: 6px; }
+        .signal-bar:nth-child(2) { height: 10px; }
+        .signal-bar:nth-child(3) { height: 14px; }
+        .signal-bar:nth-child(4) { height: 18px; }
+        .signal-bar:nth-child(5) { height: 22px; }
+        .scanning { text-align: center; color: #666; padding: 10px; border-bottom: 1px solid #ddd; background: #f8f9fa; }
+        .scanning.empty { padding: 20px; border: none; }
+        .spinner { border: 2px solid #f3f3f3; border-top: 2px solid #007bff; border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; display: inline-block; margin-right: 8px; vertical-align: middle; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .status { text-align: center; margin-top: 15px; padding: 10px; border-radius: 4px; }
         .status.error { background-color: #f8d7da; color: #721c24; }
         .status.success { background-color: #d4edda; color: #155724; }
@@ -80,21 +92,97 @@ static const char* wifiConfigHTML = R"rawliteral(
         <div id="status" class="status" style="display: none;"></div>
     </div>
     <script>
+        function getSignalBars(rssi) {
+            let strength = 0;
+            if (rssi >= -50) strength = 5;
+            else if (rssi >= -60) strength = 4;
+            else if (rssi >= -70) strength = 3;
+            else if (rssi >= -80) strength = 2;
+            else if (rssi >= -90) strength = 1;
+
+            let bars = '';
+            for (let i = 1; i <= 5; i++) {
+                bars += `<div class="signal-bar ${i <= strength ? 'active' : ''}"></div>`;
+            }
+            return bars;
+        }
+
+        let isScanning = false;
+
+        function addScanningIndicator() {
+            const networkList = document.getElementById('networkList');
+            let scanIndicator = networkList.querySelector('.scanning-indicator');
+
+            if (!scanIndicator) {
+                scanIndicator = document.createElement('div');
+                scanIndicator.className = 'scanning scanning-indicator';
+                scanIndicator.innerHTML = '<div class="spinner"></div>Scanning...';
+
+                // Insert at the top if there are networks, or show as empty state
+                if (networkList.children.length > 0) {
+                    networkList.insertBefore(scanIndicator, networkList.firstChild);
+                } else {
+                    scanIndicator.className = 'scanning scanning-indicator empty';
+                    scanIndicator.innerHTML = '<div class="spinner"></div>Scanning for networks...';
+                    networkList.appendChild(scanIndicator);
+                }
+            }
+        }
+
+        function removeScanningIndicator() {
+            const networkList = document.getElementById('networkList');
+            const scanIndicator = networkList.querySelector('.scanning-indicator');
+            if (scanIndicator) {
+                scanIndicator.remove();
+            }
+        }
+
+        function updateNetworkList(networks) {
+            const networkList = document.getElementById('networkList');
+            removeScanningIndicator();
+
+            // Clear existing networks but preserve structure
+            const existingNetworks = networkList.querySelectorAll('.network-item');
+            existingNetworks.forEach(item => item.remove());
+
+            // Sort by signal strength and take top 5
+            networks.sort((a, b) => b.rssi - a.rssi);
+            const topNetworks = networks.slice(0, 5);
+
+            topNetworks.forEach(network => {
+                const div = document.createElement('div');
+                div.className = 'network-item';
+                div.innerHTML = `
+                    <span class="network-ssid">${network.ssid}</span>
+                    <div class="signal-strength">${getSignalBars(network.rssi)}</div>
+                `;
+                div.onclick = () => document.getElementById('ssid').value = network.ssid;
+                networkList.appendChild(div);
+            });
+        }
+
         function scanNetworks() {
+            if (isScanning) return;
+
+            isScanning = true;
+            addScanningIndicator();
+
             fetch('/scan')
                 .then(response => response.json())
                 .then(data => {
-                    const networkList = document.getElementById('networkList');
-                    networkList.innerHTML = '';
-                    data.networks.forEach(network => {
-                        const div = document.createElement('div');
-                        div.className = 'network-item';
-                        div.innerHTML = `${network.ssid} <span class="signal-strength">${network.rssi}dBm</span>`;
-                        div.onclick = () => document.getElementById('ssid').value = network.ssid;
-                        networkList.appendChild(div);
-                    });
+                    updateNetworkList(data.networks);
                 })
-                .catch(error => console.error('Error scanning networks:', error));
+                .catch(error => {
+                    console.error('Error scanning networks:', error);
+                    removeScanningIndicator();
+                    const networkList = document.getElementById('networkList');
+                    if (networkList.children.length === 0) {
+                        networkList.innerHTML = '<div class="scanning empty">Failed to scan networks</div>';
+                    }
+                })
+                .finally(() => {
+                    isScanning = false;
+                });
         }
 
         document.getElementById('wifiForm').addEventListener('submit', function(e) {
@@ -161,11 +249,13 @@ void saveWiFiCredentials(const char* ssid, const char* password) {
     savedCreds.password[sizeof(savedCreds.password) - 1] = '\0';
 }
 
+static bool qrModalPending = false;
+
 void start_wifimanager_portal() {
     ESP_LOGI(TAG, "Starting WiFi Configuration Portal");
 
-    // Show QR code modal for WiFi setup
-    show_wifi_qr_modal(lv_screen_active(), AP_SSID, AP_PASSWORD);
+    // Mark that QR modal should be shown (will be shown later after main screen loads)
+    qrModalPending = true;
 
     // Set up access point
     WiFi.mode(WIFI_AP_STA);
@@ -174,8 +264,9 @@ void start_wifimanager_portal() {
 
     // Start DNS server for captive portal
     if (!dnsServer) {
+        ESP_LOGI(TAG, "DNS Server started");
         dnsServer = new DNSServer();
-        dnsServer->start(53, "*", apIP);
+        dnsServer->start(53, "", apIP);
     }
 
     // Add portal routes to existing webserver
@@ -184,7 +275,7 @@ void start_wifimanager_portal() {
     });
 
     server.on("/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
-        int n = WiFi.scanNetworks();
+        const int n = WiFi.scanNetworks();
         String json = "{\"networks\":[";
         for (int i = 0; i < n; ++i) {
             if (i > 0) json += ",";
@@ -196,7 +287,7 @@ void start_wifimanager_portal() {
 
     server.on("/connect", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            String body = String((char*)data).substring(0, len);
+            const String body = String(reinterpret_cast<char *>(data)).substring(0, len);
 
             // Parse JSON manually for simplicity
             const int ssidStart = body.indexOf("\"ssid\":\"") + 8;
@@ -229,6 +320,7 @@ void start_wifimanager_portal() {
 
                     // Hide QR modal on successful connection
                     hide_wifi_qr_modal();
+                    qrModalPending = false;
 
                     // Clean up portal
                     if (dnsServer) {
@@ -261,12 +353,20 @@ void wifi_manager_monitor(void* parameter) {
             dnsServer->processNextRequest();
         }
 
+        // Show QR modal if pending and main screen is ready
+        if (qrModalPending && lv_screen_active()) {
+            ESP_LOGI(TAG, "Showing delayed WiFi QR modal");
+            show_wifi_qr_modal(lv_screen_active(), AP_SSID, AP_PASSWORD);
+            qrModalPending = false;
+        }
+
         // Check WiFi connection status
         if (WiFi.status() == WL_CONNECTED && !wifiConnected) {
             // Enable IPv6 if not already enabled
             WiFi.enableIPv6();
             
             wifiConnected = true;
+            qrModalPending = false; // Clear pending QR modal if WiFi connects
             ESP_LOGI(TAG, "WiFi Connected!");
             ESP_LOGI(TAG, "IPv4 Address: %s", WiFi.localIP().toString().c_str());
             ESP_LOGI(TAG, "IPv6 Address: %s", WiFi.globalIPv6().toString().c_str());
@@ -314,6 +414,7 @@ void start_wifi_manager() {
 
             wifiConnected = true;
             portalstarted = true;
+            qrModalPending = false; // No need for QR modal if already connected
 
             // Start background task for WiFi monitoring
             xTaskCreate(wifi_manager_monitor, "WiFiTask", 4096, nullptr, 1, &wifiTaskHandle);
@@ -435,3 +536,6 @@ void setup_wifi_event_handler() {
     WiFi.onEvent(wifi_event_handler);
     ESP_LOGI(TAG, "WiFi event handler registered");
 }
+
+bool is_wifi_connected() {return wifiConnected;}
+bool is_portal_started() {return portalstarted;}
