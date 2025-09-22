@@ -20,8 +20,15 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
 
 /**
  * @brief Hide the WiFi QR modal dialog
+ * Thread-safe: Can be called from any thread
  */
 void hide_wifi_qr_modal(void);
+
+/**
+ * @brief Process pending UI operations for WiFi QR modal
+ * Must be called from LVGL thread only
+ */
+void wifi_qr_modal_process_pending(void);
 
 #ifdef __cplusplus
 }

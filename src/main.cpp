@@ -109,6 +109,11 @@ void setup() {
     webserver_start();
     log_free_heap();
 
+    while (!is_wifi_connected()) {
+        ESP_LOGI(TAG, "Waiting for WiFi connection...");
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
     FreeButton::getLvglDisplay().updateProgress(70, "Configuring MQTT...");
 
     auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
@@ -138,9 +143,7 @@ void setup() {
     FreeButton::getLvglDisplay().updateProgress(100, "Ready!");
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
 
-    if (is_wifi_connected()) {
-        FreeButton::getLvglDisplay().hideProgressBar();
-    }
+    FreeButton::getLvglDisplay().hideProgressBar();
 
     log_free_heap();
 }

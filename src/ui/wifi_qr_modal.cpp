@@ -5,6 +5,7 @@
 #include "wifi_qr_modal.h"
 #include "wifi_qr.h"
 #include <esp_log.h>
+#include <atomic>
 
 static const char* TAG = "wifi_qr_modal";
 
@@ -12,6 +13,9 @@ static lv_obj_t* modal = nullptr;
 static lv_obj_t* qr_code = nullptr;
 static lv_style_t modal_style;
 static bool style_initialized = false;
+
+// Thread-safe flag for pending operations
+static std::atomic<bool> hide_pending{false};
 
 void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password) {
     if (!screen || !ssid) {
@@ -33,7 +37,7 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
     // Initialize modal style only once
     if (!style_initialized) {
         lv_style_init(&modal_style);
-        lv_style_set_bg_opa(&modal_style, LV_OPA_90);
+        lv_style_set_bg_opa(&modal_style, LV_OPA_COVER);
         lv_style_set_bg_color(&modal_style, lv_color_hex(0x000000));
         lv_style_set_border_width(&modal_style, 2);
         lv_style_set_border_color(&modal_style, lv_color_hex(0x666666));
@@ -118,7 +122,7 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
     ESP_LOGI(TAG, "WiFi QR modal displayed successfully");
 }
 
-void hide_wifi_qr_modal(void) {
+static void hide_wifi_qr_modal_internal(void) {
     if (modal && lv_obj_is_valid(modal)) {
         ESP_LOGI(TAG, "Hiding WiFi QR modal");
         lv_obj_delete(modal);
@@ -128,5 +132,19 @@ void hide_wifi_qr_modal(void) {
         ESP_LOGW(TAG, "Modal object exists but is invalid, clearing reference");
         modal = nullptr;
         qr_code = nullptr;
+    }
+}
+
+void hide_wifi_qr_modal(void) {
+    // Always use the flag-based approach for thread safety
+    // The LVGL task will process this in the next cycle
+    ESP_LOGI(TAG, "Scheduling WiFi QR modal hide");
+    hide_pending.store(true, std::memory_order_release);
+}
+
+void wifi_qr_modal_process_pending(void) {
+    if (hide_pending.load(std::memory_order_acquire)) {
+        hide_pending.store(false, std::memory_order_release);
+        hide_wifi_qr_modal_internal();
     }
 }

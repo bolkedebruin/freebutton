@@ -3,6 +3,7 @@
 //
 #include "config.h"
 #include "ESPAsyncWebServer.h"
+#include "WifiManager.h"
 
 static auto TAG = "webserver";
 
@@ -61,7 +62,11 @@ void handleHomepage(AsyncWebServerRequest *request) {
 
 void webserver_start(void) {
     server.on("/", HTTP_GET, handleHomepage);
-
+    server.on("/resetWifi", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "text/plain", "Resetting WiFi settings and rebooting...");
+        delay(1000);
+        reset_wifi_credentials();
+    });
     ESP_LOGI(TAG, "Starting webserver");
     server.begin();
 }

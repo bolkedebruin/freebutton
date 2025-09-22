@@ -36,12 +36,7 @@ std::string DeviceInfoCollector::getIPv4Address() {
 
 std::string DeviceInfoCollector::getIPv6Address() {
     // IPv6 support varies by ESP32 version, fallback to "Not available"
-    if (WiFi.status() == WL_CONNECTED) {
-        if (const IPAddress ipv6 = WiFi.globalIPv6()) {
-            return ipv6.toString().c_str();
-        }
-    }
-    return "Not available";
+    return WiFi.globalIPv6().toString().c_str();
 }
 
 size_t DeviceInfoCollector::getFreeMemory() {

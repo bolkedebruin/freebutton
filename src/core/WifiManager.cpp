@@ -333,8 +333,8 @@ void start_wifimanager_portal() {
                     WiFi.mode(WIFI_STA);
 
                     // Restart to apply changes
-                    delay(2000);
-                    ESP.restart();
+                    //delay(2000);
+                    //ESP.restart();
                 } else {
                     request->send(200, "application/json", "{\"success\":false,\"message\":\"Connection failed\"}");
                 }

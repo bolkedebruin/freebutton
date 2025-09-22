@@ -1,4 +1,5 @@
 #include "LvglDisplay.h"
+#include "../ui/wifi_qr_modal.h"
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
@@ -253,6 +254,10 @@ void LvglDisplay::task() {
 
     lock();
     lv_timer_handler();
+
+    // Process any pending WiFi QR modal operations
+    wifi_qr_modal_process_pending();
+
     unlock();
 }
 
