@@ -2,8 +2,8 @@
 // Created by Bolke de Bruin on 24/06/2024.
 //
 
-#include "ui.h"
 #include "fonts.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <misc/lv_utils.h>
@@ -69,6 +69,12 @@ static _Thread_local uint32_t current_unicode_letter = 0;
 #else
 static uint32_t current_unicode_letter = 0;
 #endif
+
+// Cache configuration - Ultra-minimal for ESP32 memory constraints
+#define FONT_CACHE_SIZE 4         // Only 4 cache entries (~256 bytes total)
+#define TEMP_BITMAP_BUFFER_SIZE 256  // 256 bytes temporary buffer
+
+// No hash function needed for direct array access
 
 
 static int32_t load_glyph_dsc(lv_fs_file_t * fp, lv_font_fmt_txt_dsc_t * font_dsc,
@@ -170,9 +176,8 @@ const void * streaming_font_get_glyph_bitmap(lv_font_glyph_dsc_t * g_dsc, lv_dra
     if(gsize == 0) return NULL;
 
     uint8_t * bitmap_in;
-    uint32_t bitmap_size;
 
-    bitmap_size = load_bitmap(fd, gid, &bitmap_in);
+    const uint32_t bitmap_size = load_bitmap(fd, gid, &bitmap_in);
     if (!bitmap_size) {
         // load_bitmap failed, bitmap_in is not valid - don't free it
         return NULL;
@@ -180,11 +185,11 @@ const void * streaming_font_get_glyph_bitmap(lv_font_glyph_dsc_t * g_dsc, lv_dra
     uint8_t * bitmap_in_ptr = bitmap_in;
 
     uint8_t * bitmap_out_tmp = bitmap_out;
-    int32_t i = 0;
-    int32_t x, y;
-    uint32_t stride = lv_draw_buf_width_to_stride(gdsc->box_w, LV_COLOR_FORMAT_A8);
+    const uint32_t stride = lv_draw_buf_width_to_stride(gdsc->box_w, LV_COLOR_FORMAT_A8);
 
     if(fd->font_dsc->bitmap_format == LV_FONT_FMT_TXT_PLAIN) {
+        int32_t x, y;
+        int32_t i = 0;
         if(fd->font_dsc->bpp == 1) {
             for(y = 0; y < gdsc->box_h; y ++) {
                 for(x = 0; x < gdsc->box_w; x++, i++) {
@@ -234,9 +239,8 @@ const void * streaming_font_get_glyph_bitmap(lv_font_glyph_dsc_t * g_dsc, lv_dra
                 bitmap_out_tmp += stride;
             }
         }
-        if (bitmap_size > 0) {
-            lv_free(bitmap_in_ptr);
-        }
+        lv_free(bitmap_in_ptr);
+
         return draw_buf;
     }
         /*Handle compressed bitmap*/
@@ -258,7 +262,7 @@ const void * streaming_font_get_glyph_bitmap(lv_font_glyph_dsc_t * g_dsc, lv_dra
     return NULL;
 }
 
-uint32_t load_bitmap(const streaming_font_t * fd, const uint32_t gid, uint32_t ** bitmap_out)
+uint32_t load_bitmap(streaming_font_t * fd, const uint32_t gid, uint8_t ** bitmap_out)
 {
     uint32_t start = fd->glyph_start;
     uint32_t glyph_offset = fd->glyph_offset[gid];
@@ -301,7 +305,6 @@ uint32_t load_bitmap(const streaming_font_t * fd, const uint32_t gid, uint32_t *
         }
     } else {
         uint8_t byte = 0;
-        uint8_t bit = 0;
         for (int k=0; k < bitmap_size - 1; k++) {
             byte = read_bits(&bit_it, 8, &res);
             if (res != LV_FS_RES_OK) {
@@ -445,7 +448,7 @@ static int8_t get_kern_value(streaming_font_t *fd, uint32_t gid_left, uint32_t g
     return value;
 }
 #else
-static int8_t get_kern_value(const lv_font_fmt_txt_dsc_t * fdsc, uint32_t gid_left, uint32_t gid_right)
+static int8_t get_kern_value(const lv_font_fmt_txt_dsc_t * fdsc, const uint32_t gid_left, const uint32_t gid_right)
 {
     int8_t value = 0;
 
@@ -456,8 +459,8 @@ static int8_t get_kern_value(const lv_font_fmt_txt_dsc_t * fdsc, uint32_t gid_le
             /*Use binary search to find the kern value.
              *The pairs are ordered left_id first, then right_id secondly.*/
             const uint16_t * g_ids = kdsc->glyph_ids;
-            kern_pair_ref_t g_id_both = {gid_left, gid_right};
-            uint16_t * kid_p = lv_utils_bsearch(&g_id_both, g_ids, kdsc->pair_cnt, 2, kern_pair_8_compare);
+            const kern_pair_ref_t g_id_both = {gid_left, gid_right};
+            const uint16_t * kid_p = lv_utils_bsearch(&g_id_both, g_ids, kdsc->pair_cnt, 2, kern_pair_8_compare);
 
             /*If the `g_id_both` were found get its index from the pointer*/
             if(kid_p) {
@@ -470,11 +473,11 @@ static int8_t get_kern_value(const lv_font_fmt_txt_dsc_t * fdsc, uint32_t gid_le
              *The pairs are ordered left_id first, then right_id secondly.*/
             const uint32_t * g_ids = kdsc->glyph_ids;
             kern_pair_ref_t g_id_both = {gid_left, gid_right};
-            uint32_t * kid_p = lv_utils_bsearch(&g_id_both, g_ids, kdsc->pair_cnt, 4, kern_pair_16_compare);
+            const uint32_t * kid_p = lv_utils_bsearch(&g_id_both, g_ids, kdsc->pair_cnt, 4, kern_pair_16_compare);
 
             /*If the `g_id_both` were found get its index from the pointer*/
             if(kid_p) {
-                lv_uintptr_t ofs = kid_p - g_ids;
+                const lv_uintptr_t ofs = kid_p - g_ids;
                 value = kdsc->values[ofs];
             }
 
@@ -486,8 +489,8 @@ static int8_t get_kern_value(const lv_font_fmt_txt_dsc_t * fdsc, uint32_t gid_le
     else {
         /*Kern classes*/
         const lv_font_fmt_txt_kern_classes_t * kdsc = fdsc->kern_dsc;
-        uint8_t left_class = kdsc->left_class_mapping[gid_left];
-        uint8_t right_class = kdsc->right_class_mapping[gid_right];
+        const uint8_t left_class = kdsc->left_class_mapping[gid_left];
+        const uint8_t right_class = kdsc->right_class_mapping[gid_right];
 
         /*If class = 0, kerning not exist for that glyph
          *else got the value form `class_pair_values` 2D array*/
@@ -500,60 +503,6 @@ static int8_t get_kern_value(const lv_font_fmt_txt_dsc_t * fdsc, uint32_t gid_le
 }
 #endif
 
-bool streaming_font_get_glyph_dsc(const lv_font_t * font, lv_font_glyph_dsc_t * dsc_out, uint32_t unicode_letter,
-                                  uint32_t unicode_letter_next)
-{
-    // Store unicode_letter in thread-local storage for LVGL 9.3 compatibility
-    current_unicode_letter = unicode_letter;
-    
-    /*It fixes a strange compiler optimization issue: https://github.com/lvgl/lvgl/issues/4370*/
-    bool is_tab = unicode_letter == '\t';
-    if(is_tab) {
-        unicode_letter = ' ';
-    }
-    streaming_font_t * fd = (streaming_font_t*)font->dsc;
-    uint32_t gid = get_glyph_dsc_id(fd->font_dsc, unicode_letter);
-    if(!gid) return false;
-
-    int8_t kvalue = 0;
-#ifdef BUTTONPLUS_ONDEMAND_KERN
-    if(unicode_letter_next) {
-        uint32_t gid_next = get_glyph_dsc_id(fd->font_dsc, unicode_letter_next);
-        if(gid_next) {
-            kvalue = get_kern_value((streaming_font_t*)font->dsc, gid, gid_next);
-        }
-    }
-#else
-    if(fd->font_dsc->kern_dsc) {
-        uint32_t gid_next = get_glyph_dsc_id(fd->font_dsc, unicode_letter_next);
-        if(gid_next) {
-            kvalue = get_kern_value(fd->font_dsc, gid, gid_next);
-        }
-    }
-#endif
-    /*Put together a glyph dsc*/
-    const lv_font_fmt_txt_glyph_dsc_t * gdsc = &fd->font_dsc->glyph_dsc[gid];
-
-    int32_t kv = ((int32_t)((int32_t)kvalue * fd->font_dsc->kern_scale) >> 4);
-
-    uint32_t adv_w = gdsc->adv_w;
-    if(is_tab) adv_w *= 2;
-
-    adv_w += kv;
-    adv_w  = (adv_w + (1 << 3)) >> 4;
-
-    dsc_out->adv_w = adv_w;
-    dsc_out->box_h = gdsc->box_h;
-    dsc_out->box_w = gdsc->box_w;
-    dsc_out->ofs_x = gdsc->ofs_x;
-    dsc_out->ofs_y = gdsc->ofs_y;
-    dsc_out->format = (uint8_t)fd->font_dsc->bpp;
-    dsc_out->is_placeholder = false;
-
-    if(is_tab) dsc_out->box_w = dsc_out->box_w * 2;
-
-    return true;
-}
 
 streaming_font_t* streaming_font_init(const char* font_file, uint32_t cache_size)
 {
@@ -581,7 +530,11 @@ streaming_font_t* streaming_font_init(const char* font_file, uint32_t cache_size
 
     fd->font.get_glyph_dsc = streaming_font_get_glyph_dsc;
     fd->font.get_glyph_bitmap = streaming_font_get_glyph_bitmap;
+    fd->font.release_glyph = streaming_font_release_glyph;
     fd->font.dsc = fd;
+
+    // Initialize the ultra-minimal cache
+    font_cache_init(fd);
 
     /*header*/
     int32_t header_length = read_label(&fd->file, 0, "head");
@@ -703,8 +656,8 @@ streaming_font_t* streaming_font_init(const char* font_file, uint32_t cache_size
 
 void destroy_streaming_font(streaming_font_t * fd) {
     if (fd != NULL) {
-        lv_free(fd->font_dsc->cmaps);
-        lv_free(fd->font_dsc->glyph_dsc);
+        lv_free((void*)fd->font_dsc->cmaps);
+        lv_free((void*)fd->font_dsc->glyph_dsc);
         lv_free(fd->font_dsc);
         lv_free(fd->glyph_offset);
         lv_fs_close(&fd->file);
@@ -944,7 +897,7 @@ static int32_t load_cmaps(lv_fs_file_t * fp, lv_font_fmt_txt_dsc_t * font_dsc, u
 
     cmap_table_bin_t * cmaps_tables = lv_malloc(sizeof(cmap_table_bin_t) * font_dsc->cmap_num);
 
-    bool success = load_cmaps_tables(fp, font_dsc, cmaps_start, cmaps_tables);
+    const bool success = load_cmaps_tables(fp, font_dsc, cmaps_start, cmaps_tables);
 
     lv_free(cmaps_tables);
 
@@ -955,25 +908,28 @@ static int32_t load_cmaps(lv_fs_file_t * fp, lv_font_fmt_txt_dsc_t * font_dsc, u
  *   STATIC FUNCTIONS FROM lv_binfont_loader.c
  *********************************************/
 
-static int32_t kern_pair_8_compare(const void * ref, const void * element)
+static int kern_pair_8_compare(const void * ref, const void * element)
 {
     const kern_pair_ref_t * ref8_p = ref;
     const uint8_t * element8_p = element;
 
     /*If the MSB is different it will matter. If not return the diff. of the LSB*/
-    if(ref8_p->gid_left != element8_p[0]) return (int32_t) ref8_p->gid_left - element8_p[0];
-    else return (int32_t) ref8_p->gid_right - element8_p[1];
+    if(ref8_p->gid_left != element8_p[0])
+        return (int) ref8_p->gid_left - element8_p[0];
 
+    return (int) ref8_p->gid_right - element8_p[1];
 }
 
-static int32_t kern_pair_16_compare(const void * ref, const void * element)
+static int kern_pair_16_compare(const void * ref, const void * element)
 {
     const kern_pair_ref_t * ref16_p = ref;
     const uint16_t * element16_p = element;
 
     /*If the MSB is different it will matter. If not return the diff. of the LSB*/
-    if(ref16_p->gid_left != element16_p[0]) return (int32_t) ref16_p->gid_left - element16_p[0];
-    else return (int32_t) ref16_p->gid_right - element16_p[1];
+    if(ref16_p->gid_left != element16_p[0])
+        return (int) ref16_p->gid_left - element16_p[0];
+
+    return (int) ref16_p->gid_right - element16_p[1];
 }
 
 #if LV_USE_FONT_COMPRESSED
@@ -1177,8 +1133,8 @@ static inline uint8_t rle_next(void)
  *
  *  Compares the value of both input arguments.
  *
- *  @param[in]  pRef        Pointer to the reference.
- *  @param[in]  pElement    Pointer to the element to compare.
+ *  @param[in]  ref        Pointer to the reference.
+ *  @param[in]  element    Pointer to the element to compare.
  *
  *  @return Result of comparison.
  *  @retval < 0   Reference is less than element.
@@ -1186,8 +1142,152 @@ static inline uint8_t rle_next(void)
  *  @retval > 0   Reference is greater than element.
  *
  */
-static int32_t unicode_list_compare(const void * ref, const void * element)
+static int unicode_list_compare(const void * ref, const void * element)
 {
-    return ((int32_t)(*(uint16_t *)ref)) - ((int32_t)(*(uint16_t *)element));
+    return ((int)(*(uint16_t *)ref)) - ((int)(*(uint16_t *)element));
+}
+
+//==============================================================================
+// LVGL 9.3 Ultra-Minimal Font Cache Implementation
+//==============================================================================
+
+void font_cache_init(streaming_font_t* font) {
+    if (!font) return;
+
+    font->timestamp_counter = 0;
+
+    // Initialize cache entries
+    for (int i = 0; i < FONT_CACHE_SIZE; i++) {
+        font->cache[i].valid = false;
+        font->cache[i].last_used = 0;
+    }
+
+    // Allocate temporary bitmap buffer
+    font->temp_bitmap_buffer = (uint8_t*)lv_malloc(TEMP_BITMAP_BUFFER_SIZE);
+    font->temp_buffer_size = TEMP_BITMAP_BUFFER_SIZE;
+}
+
+void font_cache_cleanup(streaming_font_t* font) {
+    if (!font) return;
+
+    // Free temporary buffer
+    if (font->temp_bitmap_buffer) {
+        lv_free(font->temp_bitmap_buffer);
+        font->temp_bitmap_buffer = NULL;
+    }
+}
+
+font_cache_entry_t* font_cache_get(streaming_font_t* font, uint32_t unicode) {
+    if (!font) return NULL;
+
+    // Linear search through cache
+    for (int i = 0; i < FONT_CACHE_SIZE; i++) {
+        if (font->cache[i].valid && font->cache[i].unicode == unicode) {
+            font->cache[i].last_used = ++font->timestamp_counter;
+            return &font->cache[i];
+        }
+    }
+
+    return NULL;
+}
+
+void font_cache_put(streaming_font_t* font, uint32_t unicode, const lv_font_glyph_dsc_t* glyph_dsc) {
+    if (!font || !glyph_dsc) return;
+
+    // Find LRU entry to replace
+    int lru_index = 0;
+    uint32_t oldest_time = font->cache[0].last_used;
+
+    for (int i = 1; i < FONT_CACHE_SIZE; i++) {
+        if (!font->cache[i].valid) {
+            lru_index = i;
+            break;
+        }
+        if (font->cache[i].last_used < oldest_time) {
+            oldest_time = font->cache[i].last_used;
+            lru_index = i;
+        }
+    }
+
+    // Store new entry
+    font->cache[lru_index].unicode = unicode;
+    font->cache[lru_index].glyph_dsc = *glyph_dsc;
+    font->cache[lru_index].last_used = ++font->timestamp_counter;
+    font->cache[lru_index].valid = true;
+}
+
+//==============================================================================
+// LVGL 9.3 Font Callback Implementation
+//==============================================================================
+
+bool streaming_font_get_glyph_dsc(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out,
+                                  uint32_t unicode_letter, uint32_t unicode_letter_next) {
+    if (!font || !dsc_out) return false;
+
+    streaming_font_t* fd = (streaming_font_t*)font->dsc;
+    if (!fd || !fd->font_dsc) return false;
+
+    // Store current unicode letter for get_glyph_bitmap function
+    current_unicode_letter = unicode_letter;
+
+    // Handle tab as space
+    if (unicode_letter == '\t') unicode_letter = ' ';
+
+    // Check cache first
+    const font_cache_entry_t* cached = font_cache_get(fd, unicode_letter);
+    if (cached) {
+        *dsc_out = cached->glyph_dsc;
+        return true;
+    }
+
+    // Get glyph ID from font
+    const uint32_t gid = get_glyph_dsc_id(fd->font_dsc, unicode_letter);
+    if (gid == 0) {
+        // Character not found, return invalid glyph
+        memset(dsc_out, 0, sizeof(lv_font_glyph_dsc_t));
+        return false;
+    }
+
+    // Get glyph descriptor from font data
+    const lv_font_fmt_txt_glyph_dsc_t* gdsc = &fd->font_dsc->glyph_dsc[gid];
+
+    // Fill LVGL 9.3 glyph descriptor
+    dsc_out->adv_w = gdsc->adv_w;
+    dsc_out->box_h = gdsc->box_h;
+    dsc_out->box_w = gdsc->box_w;
+    dsc_out->ofs_x = gdsc->ofs_x;
+    dsc_out->ofs_y = gdsc->ofs_y;
+    dsc_out->format = LV_FONT_GLYPH_FORMAT_A8; // Default to A8, adjust based on bpp
+    dsc_out->is_placeholder = (gid == 0);
+    dsc_out->resolved_font = font;
+
+    // Set format based on font bpp
+    switch (fd->font_dsc->bpp) {
+        case 1:
+            dsc_out->format = LV_FONT_GLYPH_FORMAT_A1;
+            break;
+        case 2:
+            dsc_out->format = LV_FONT_GLYPH_FORMAT_A2;
+            break;
+        case 4:
+            dsc_out->format = LV_FONT_GLYPH_FORMAT_A4;
+            break;
+        case 8:
+        default:
+            dsc_out->format = LV_FONT_GLYPH_FORMAT_A8;
+            break;
+    }
+
+    // Cache the glyph descriptor
+    font_cache_put(fd, unicode_letter, dsc_out);
+
+    return true;
+}
+
+void streaming_font_release_glyph(const lv_font_t* font, lv_font_glyph_dsc_t* g_dsc) {
+    // For streaming fonts, we don't need to do anything special here
+    // The cache manages memory automatically
+    (void)font;
+    (void)g_dsc;
 }
 
