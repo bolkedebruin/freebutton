@@ -1,0 +1,113 @@
+name: Build and Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for manual release'
+        required: true
+        type: string
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup UV
+        uses: yezz123/setup-uv@v4
+
+      - name: Create and activate virtual environment
+        run: |
+          uv venv .venv
+          echo "VIRTUAL_ENV=.venv" >> $GITHUB_ENV
+          echo "$PWD/.venv/bin" >> $GITHUB_PATH
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.npm
+          key: ${{ runner.os }}-deps-${{ hashFiles('platformio.ini', 'package*.json') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-
+
+      - name: Install PlatformIO Core
+        run: uv pip install --upgrade platformio setuptools
+
+      - name: Install lv_font_conv
+        run: npm install -g lv_font_conv
+
+      - name: Install jq (for font processing)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Extract version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+
+      - name: Update firmware version in config.h
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          python tools/scripts/update_version.py "${VERSION}"
+
+      - name: Generate fonts
+        run: |
+          cd tools/fonts
+          chmod +x generatefonts.sh
+          ./generatefonts.sh
+
+      - name: Build firmware
+        run: pio run -e esp32
+
+      - name: Create firmware package
+        run: |
+          mkdir -p release
+          cd .pio/build/esp32
+          cp firmware.bin ../../../release/freebutton_${{ steps.version.outputs.version }}.bin
+          cp bootloader.bin ../../../release/
+          cp partitions.bin ../../../release/
+          cd ../../../release
+
+          # Create archive
+          tar -czf freebutton_${{ steps.version.outputs.version }}_firmware.tar.gz *.bin
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: svenstaro/upload-release-action@v2
+        with:
+          file: release/freebutton_${{ steps.version.outputs.version }}_firmware.tar.gz
+          asset_name: freebutton_${{ steps.version.outputs.version }}_firmware.tar.gz
+          tag: ${{ github.event.release.tag_name }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: freebutton-firmware-${{ steps.version.outputs.version }}
+          path: release/
+          retention-days: 90
