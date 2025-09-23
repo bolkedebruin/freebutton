@@ -79,14 +79,14 @@ typedef struct {
     lv_font_fmt_txt_dsc_t *font_dsc; /* Pointer to font descriptor */
     uint32_t nbits;                /* Precalculated number of bits for faster access */
 
-    /* LVGL 9.3 ultra-minimal cache and memory management */
+    /* ultra-minimal cache and memory management */
     font_cache_entry_t cache[4]; /* Fixed-size cache array (4 entries) */
     uint32_t timestamp_counter;    /* Counter for LRU cache management */
     uint8_t* temp_bitmap_buffer;   /* Temporary buffer for bitmap decompression */
     uint32_t temp_buffer_size;     /* Size of temporary buffer */
 } streaming_font_t;
 
-/* LVGL 9.3 callback functions for streaming fonts */
+/* LVGL callback functions for streaming fonts */
 bool streaming_font_get_glyph_dsc(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out,
                                   uint32_t unicode_letter, uint32_t unicode_letter_next);
 const void* streaming_font_get_glyph_bitmap(lv_font_glyph_dsc_t* g_dsc,
