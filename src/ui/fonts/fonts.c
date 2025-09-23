@@ -62,13 +62,6 @@ static const uint8_t opa3_table[8] = {0, 36, 73, 109, 146, 182, 218, 255};
 
 static const uint8_t opa2_table[4] = {0, 85, 170, 255};
 
-// Thread-local storage for unicode letter (LVGL 9.3 compatibility)
-// Fallback to static if thread-local is not supported
-#ifdef _Thread_local
-static _Thread_local uint32_t current_unicode_letter = 0;
-#else
-static uint32_t current_unicode_letter = 0;
-#endif
 
 // Cache configuration - Ultra-minimal for ESP32 memory constraints
 #define FONT_CACHE_SIZE 4         // Only 4 cache entries (~256 bytes total)
@@ -160,15 +153,12 @@ const void * streaming_font_get_glyph_bitmap(lv_font_glyph_dsc_t * g_dsc, lv_dra
     const lv_font_t * font = g_dsc->resolved_font;
     uint8_t * bitmap_out = draw_buf->data;
 
-    // In LVGL 9.3, we get the unicode_letter from thread-local storage
-    // This is set by the get_glyph_dsc function
-    uint32_t unicode_letter = current_unicode_letter;
-    
-    if(unicode_letter == '\t') unicode_letter = ' ';
+    // In LVGL 9.3, we get the glyph ID from the glyph descriptor
+    // This was set by the get_glyph_dsc function
+    uint32_t gid = g_dsc->gid.index;
+    if(!gid) return NULL;
 
     streaming_font_t * fd = (streaming_font_t*)font->dsc;
-    uint32_t gid = get_glyph_dsc_id(fd->font_dsc, unicode_letter);
-    if(!gid) return NULL;
 
     const lv_font_fmt_txt_glyph_dsc_t * gdsc = &fd->font_dsc->glyph_dsc[gid];
 
@@ -522,7 +512,7 @@ streaming_font_t* streaming_font_init(const char* font_file, uint32_t cache_size
     fd->font_dsc = font_dsc;
 
     /* Open the file */
-    lv_fs_res_t res = lv_fs_open(&fd->file, font_file, LV_FS_MODE_RD);
+    const lv_fs_res_t res = lv_fs_open(&fd->file, font_file, LV_FS_MODE_RD);
     if (res != LV_FS_RES_OK) {
         lv_free(fd);
         return NULL;
@@ -561,16 +551,16 @@ streaming_font_t* streaming_font_init(const char* font_file, uint32_t cache_size
     fd->font_dsc->bitmap_format = font_header.compression_id;
 
     /*cmaps*/
-    uint32_t cmaps_start = header_length;
-    int32_t cmaps_length = load_cmaps(&fd->file, fd->font_dsc, cmaps_start);
+    const uint32_t cmaps_start = header_length;
+    const int32_t cmaps_length = load_cmaps(&fd->file, fd->font_dsc, cmaps_start);
     if(cmaps_length < 0) {
         return NULL;
     }
     fd->cmaps_start = cmaps_start;
 
     /*loca*/
-    uint32_t loca_start = cmaps_start + cmaps_length;
-    int32_t loca_length = read_label(&fd->file, loca_start, "loca");
+    const uint32_t loca_start = cmaps_start + cmaps_length;
+    const int32_t loca_length = read_label(&fd->file, loca_start, "loca");
     if(loca_length < 0) {
         return NULL;
     }
@@ -1216,10 +1206,6 @@ void font_cache_put(streaming_font_t* font, uint32_t unicode, const lv_font_glyp
     font->cache[lru_index].valid = true;
 }
 
-//==============================================================================
-// LVGL 9.3 Font Callback Implementation
-//==============================================================================
-
 bool streaming_font_get_glyph_dsc(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out,
                                   uint32_t unicode_letter, uint32_t unicode_letter_next) {
     if (!font || !dsc_out) return false;
@@ -1227,8 +1213,7 @@ bool streaming_font_get_glyph_dsc(const lv_font_t* font, lv_font_glyph_dsc_t* ds
     streaming_font_t* fd = (streaming_font_t*)font->dsc;
     if (!fd || !fd->font_dsc) return false;
 
-    // Store current unicode letter for get_glyph_bitmap function
-    current_unicode_letter = unicode_letter;
+
 
     // Handle tab as space
     if (unicode_letter == '\t') unicode_letter = ' ';
@@ -1251,15 +1236,34 @@ bool streaming_font_get_glyph_dsc(const lv_font_t* font, lv_font_glyph_dsc_t* ds
     // Get glyph descriptor from font data
     const lv_font_fmt_txt_glyph_dsc_t* gdsc = &fd->font_dsc->glyph_dsc[gid];
 
+    // Calculate kerning if next character is provided
+    int8_t kvalue = 0;
+    if (unicode_letter_next) {
+        const uint32_t gid_next = get_glyph_dsc_id(fd->font_dsc, unicode_letter_next);
+        if (gid_next) {
+            if (fd->font_dsc->kern_dsc) {
+                kvalue = get_kern_value(fd->font_dsc, gid, gid_next);
+            }
+        }
+    }
+
+    // Apply kerning to advance width
+    int32_t adv_w = gdsc->adv_w;
+    if (kvalue != 0) {
+        const int32_t kv = ((int32_t)((int32_t)kvalue * fd->font_dsc->kern_scale) >> 4);
+        adv_w += kv;
+    }
+
     // Fill LVGL 9.3 glyph descriptor
-    dsc_out->adv_w = gdsc->adv_w;
+    dsc_out->adv_w = (adv_w + (1 << 3)) >> 4;
     dsc_out->box_h = gdsc->box_h;
     dsc_out->box_w = gdsc->box_w;
     dsc_out->ofs_x = gdsc->ofs_x;
     dsc_out->ofs_y = gdsc->ofs_y;
     dsc_out->format = LV_FONT_GLYPH_FORMAT_A8; // Default to A8, adjust based on bpp
-    dsc_out->is_placeholder = (gid == 0);
+    dsc_out->is_placeholder = false; // Valid glyph found (gid != 0)
     dsc_out->resolved_font = font;
+    dsc_out->gid.index = gid; // Store glyph index for get_glyph_bitmap
 
     // Set format based on font bpp
     switch (fd->font_dsc->bpp) {
