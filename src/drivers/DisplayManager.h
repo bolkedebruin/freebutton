@@ -165,7 +165,7 @@ public:
     size_t getSmallDisplayCount() const { return smallDisplays_.size(); }
 
     // Bus-aware filesystem access
-    BusAwareFileSystem& getFileSystem();
+    BusAwareFileSystem& getFileSystem() const;
 
     // Display selection (public for LVGL integration)
     void selectMainDisplay() const;

@@ -62,7 +62,7 @@ private:
     int initializeButtons();
 
     static bool initializeSensors();
-    bool initializeDisplays();
+    bool initializeDisplays() const;
     static bool initializeDeviceInfoButton();
 
     static void onDeviceDetected(const I2CDevice& device);

@@ -93,7 +93,6 @@ void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23
 
     // Initialize the display
     if (smallDisplay->init()) {
-        //smallDisplay->setSwapBytes(true); // Important for proper color display
         smallDisplay->setBrightness(128);
         smallDisplay->fillScreen((0x0000FF)); // Black
 
@@ -178,9 +177,9 @@ void DisplayManager::showHelloWorld() const {
         mainDisplay_->setTextColor(0xFFFF, 0x001F); // White on blue
         mainDisplay_->setTextSize(4); // Larger text
         mainDisplay_->setCursor(60, 100);
-        mainDisplay_->print("HELLO");
+        mainDisplay_->print("Hello");
         mainDisplay_->setCursor(60, 140);
-        mainDisplay_->print("Bolke!");
+        mainDisplay_->print("World!");
 
         deselectAllDisplays();
 
@@ -284,7 +283,7 @@ void DisplayManager::setBacklight(const int displayIndex, const uint8_t brightne
     }
 }
 
-BusAwareFileSystem& DisplayManager::getFileSystem() {
+BusAwareFileSystem& DisplayManager::getFileSystem() const {
     // Initialize the bus-aware filesystem with the main display if not already done
     static bool initialized = false;
     if (!initialized && mainDisplay_) {

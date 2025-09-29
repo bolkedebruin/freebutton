@@ -211,7 +211,7 @@ int HardwareInitializer::initializeButtons() {
     return buttonCount;
 }
 
-bool HardwareInitializer::initializeDisplays() {
+bool HardwareInitializer::initializeDisplays() const {
     ESP_LOGI(TAG, "Initializing displays...");
 
     // Initialize display subsystem with detected hardware
@@ -219,10 +219,10 @@ bool HardwareInitializer::initializeDisplays() {
 
     if (success) {
         // Show hello world and display numbers
-        auto& displayManager = FreeButton::getDisplayManager();
+        //auto& displayManager = FreeButton::getDisplayManager();
         //displayManager.showHelloWorld();
         //displayManager.showDisplayNumbers();
-        displayManager.showRotationTestPattern();
+        //displayManager.showRotationTestPattern();
     }
 
     ESP_LOGI(TAG, "Display initialization completed");

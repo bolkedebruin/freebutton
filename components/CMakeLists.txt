@@ -1,0 +1,4 @@
+# Enable ESP-IDF BLE components
+set(BT_ENABLED 1)
+set(BT_BLE_ENABLED 1)
+set(BT_BLUEDROID_ENABLED 1)
