@@ -20,6 +20,7 @@ private:
     bool initialized_;
     lv_obj_t* progress_bar_;
     lv_obj_t* progress_label_;
+    bool create_hello_button_pending_;
 
 public:
     LvglDisplay();
@@ -52,6 +53,10 @@ public:
 
     // Utility
     bool isInitialized() const { return initialized_; }
+
+    // Example UI functions
+    void requestGoogleHelloButton();
+    void createGoogleHelloButton();
 
 private:
     static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);

@@ -7,9 +7,11 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 #include <esp_log.h>
+#include <esp_mac.h>
 
 #include "mdns.h"
 #include "../ui/wifi_qr_modal.h"
+#include "../utils/helpers.h"
 
 static auto TAG = "wifi";
 
@@ -23,8 +25,19 @@ bool wifiConnected = false;
 
 TaskHandle_t wifiTaskHandle = nullptr;
 
-static const char* AP_SSID = "Button+ AP";
-static const char* AP_PASSWORD = "";
+static auto AP_SSID = "FreeButton";
+static char AP_PASSWORD[9] = ""; // 8 chars + null terminator
+
+// Generate unique password based on MAC address (wrapper for ESP32)
+void generateMacBasedPasswordForWifi(char* buffer, size_t bufferSize) {
+    if (bufferSize < 9) return; // Ensure buffer is large enough
+
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA); // More efficient than WiFi.macAddress()
+
+    // Use the extracted function for testability
+    generateMacBasedPassword(buffer, bufferSize, mac);
+}
 
 static const IPAddress apIP(192, 168, 4, 1);
 static const IPAddress netMask(255, 255, 255, 0);
@@ -42,7 +55,7 @@ static auto wifiConfigHTML = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Button+ WiFi Setup</title>
+    <title>FreeButton WiFi Setup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f0f0f0; }
@@ -256,6 +269,12 @@ void start_wifimanager_portal() {
 
     // Mark that QR modal should be shown (will be shown later after main screen loads)
     qrModalPending = true;
+
+    // Generate unique password based on MAC address if not already set
+    if (AP_PASSWORD[0] == '\0') {
+        generateMacBasedPasswordForWifi(AP_PASSWORD, sizeof(AP_PASSWORD));
+        ESP_LOGI(TAG, "Generated MAC-based AP password: %s", AP_PASSWORD);
+    }
 
     // Set up access point
     WiFi.mode(WIFI_AP_STA);
