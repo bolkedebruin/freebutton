@@ -8,6 +8,14 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#define MAIN_DISPLAY_WIDTH 320
+#define MAIN_DISPLAY_HEIGHT 240
+#define MAIN_DISPLAY_BUFFER_SIZE 20
+
+#define SMALL_DISPLAY_WIDTH 160
+#define SMALL_DISPLAY_HEIGHT 80
+#define SMALL_DISPLAY_BUFFER_SIZE 5
+
 namespace FreeButton {
 
 static auto TAG = "LvglDisplay";
@@ -55,8 +63,8 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
         return false;
     }
 
-    // Allocate display buffer (20 lines)
-    constexpr size_t buffer_size = 320 * 20 * sizeof(lv_color_t);
+    // Allocate display buffer
+    constexpr size_t buffer_size = MAIN_DISPLAY_WIDTH * MAIN_DISPLAY_BUFFER_SIZE * sizeof(lv_color_t);
     buffer1_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(32, buffer_size, MALLOC_CAP_DMA));
 
     if (!buffer1_) {
@@ -74,7 +82,7 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     }
 
     // Create LVGL display
-    main_display_ = lv_display_create(320, 240);
+    main_display_ = lv_display_create(MAIN_DISPLAY_WIDTH, MAIN_DISPLAY_HEIGHT);
     if (!main_display_) {
         ESP_LOGE(TAG, "Failed to create LVGL display");
         return false;
@@ -316,7 +324,7 @@ void LvglDisplay::initializeSmallDisplays(DisplayManager& displayManager) {
     }
 
     // Allocate shared buffer for small displays
-    constexpr size_t small_buffer_size = 160 * 5 * sizeof(lv_color_t);
+    constexpr size_t small_buffer_size = SMALL_DISPLAY_WIDTH * SMALL_DISPLAY_BUFFER_SIZE * sizeof(lv_color_t);
     shared_small_buffer_ = static_cast<uint8_t*>(
         heap_caps_aligned_alloc(32, small_buffer_size, MALLOC_CAP_DMA)
     );
@@ -326,7 +334,7 @@ void LvglDisplay::initializeSmallDisplays(DisplayManager& displayManager) {
         return;
     }
 
-    ESP_LOGI(TAG, "Allocated shared small display buffer: %zu bytes", small_buffer_size);
+    ESP_LOGD(TAG, "Allocated shared small display buffer: %zu bytes", small_buffer_size);
 
     // Create LVGL displays for each small display
     size_t smallDisplayCount = displayManager.getSmallDisplayCount();
@@ -337,25 +345,22 @@ void LvglDisplay::initializeSmallDisplays(DisplayManager& displayManager) {
         if (!small_gfx) continue;
 
         // Create LVGL display
-        lv_display_t* small_disp = lv_display_create(160, 80);
+        lv_display_t* small_disp = lv_display_create(SMALL_DISPLAY_WIDTH, SMALL_DISPLAY_HEIGHT);
         if (!small_disp) {
             ESP_LOGE(TAG, "Failed to create LVGL display for small display %zu", i);
             continue;
         }
 
-        // Set flush callback
         lv_display_set_flush_cb(small_disp, flush_small_cb);
-
-        // Store the LVGL display object
         small_displays_.push_back(small_disp);
 
         // Set user data to the index for easy lookup in flush callback
         lv_display_set_user_data(small_disp, reinterpret_cast<void*>(i));
 
-        ESP_LOGI(TAG, "Small display %zu LVGL integration created", i);
+        ESP_LOGD(TAG, "Small display %zu LVGL initialized", i);
     }
 
-    ESP_LOGI(TAG, "Small display LVGL integration completed - %zu displays", small_displays_.size());
+    ESP_LOGI(TAG, "Small display LVGL initalization completed - %zu displays", small_displays_.size());
 
     // Clear all small displays to black background
     clearAllSmallDisplays();
@@ -390,20 +395,15 @@ void LvglDisplay::flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint
     const uint32_t width = area->x2 - area->x1 + 1;
     const uint32_t height = area->y2 - area->y1 + 1;
 
-    // Start write operation
     small_gfx->startWrite();
     small_gfx->setAddrWindow(area->x1, area->y1, width, height);
 
-    // Push pixels to display
+    // Push pixels to display - NO DMA for small displays for now
     small_gfx->writePixels(reinterpret_cast<uint16_t*>(px_map), width * height);
-
-    // End write operation
     small_gfx->endWrite();
 
-    // Deselect all displays after operation
     g_display_mgr->deselectAllDisplays();
 
-    // Signal LVGL that flushing is complete
     lv_display_flush_ready(disp);
 }
 
@@ -429,7 +429,7 @@ bool LvglDisplay::acquireSmallDisplayBuffer(int index) const {
         return false;
     }
 
-    constexpr size_t small_buffer_size = 160 * 5 * sizeof(lv_color_t);
+    constexpr size_t small_buffer_size = SMALL_DISPLAY_WIDTH * SMALL_DISPLAY_BUFFER_SIZE * sizeof(lv_color_t);
     lv_display_set_buffers(disp, shared_small_buffer_, nullptr,
                           small_buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
@@ -440,8 +440,17 @@ bool LvglDisplay::acquireSmallDisplayBuffer(int index) const {
     return true;
 }
 
-void LvglDisplay::releaseSmallDisplayBuffer() const {
+void LvglDisplay::releaseSmallDisplayBuffer(int index) const {
     if (small_buffer_mutex_) {
+        auto* disp = getSmallDisplay(index);
+        if (!disp) {
+            ESP_LOGW(TAG, "No small display found for index %d during buffer release", index);
+        } else {
+            // Disable invalidation before releasing buffer
+            lv_display_enable_invalidation(disp, false);
+            // Clear buffers
+            lv_display_set_buffers(disp, nullptr, nullptr, 0, LV_DISPLAY_RENDER_MODE_PARTIAL);
+        }
         xSemaphoreGive(small_buffer_mutex_);
         ESP_LOGD(TAG, "Small display buffer released");
     }
@@ -481,7 +490,7 @@ void LvglDisplay::clearAllSmallDisplays() const {
         ESP_LOGI(TAG, "Cleared small display %zu (connector %d, position %d)", i, connector, position);
     }
 
-    ESP_LOGI(TAG, "All small displays cleared to black");
+    ESP_LOGI(TAG, "All small displays cleared");
 }
 
 void LvglDisplay::requestGoogleHelloButton() {
