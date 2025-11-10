@@ -48,7 +48,7 @@ public:
 
     // Small display buffer management
     bool acquireSmallDisplayBuffer(int index) const;
-    void releaseSmallDisplayBuffer() const;
+    void releaseSmallDisplayBuffer(int index) const;
     void clearAllSmallDisplays() const;
 
     // Utility

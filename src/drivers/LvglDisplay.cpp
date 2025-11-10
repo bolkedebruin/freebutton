@@ -528,7 +528,7 @@ void LvglDisplay::createGoogleHelloButton() {
     lv_obj_t* hello_button = ui_button_create();
     if (!hello_button) {
         ESP_LOGE(TAG, "Failed to create Hello button");
-        releaseSmallDisplayBuffer();
+        releaseSmallDisplayBuffer(1);
         // Restore original default display before returning
         lv_display_set_default(original_default_disp);
         return;
@@ -575,7 +575,7 @@ void LvglDisplay::createGoogleHelloButton() {
     lv_obj_invalidate(small_scr);
 
     // Release the buffer after setting up the UI
-    releaseSmallDisplayBuffer();
+    releaseSmallDisplayBuffer(1);
 
     // Restore original default display to prevent affecting other UI elements (like modals)
     lv_display_set_default(original_default_disp);

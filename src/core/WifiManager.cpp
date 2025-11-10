@@ -12,6 +12,7 @@
 #include "mdns.h"
 #include "../ui/wifi_qr_modal.h"
 #include "../utils/helpers.h"
+#include "../drivers/LvglDisplay.h"
 
 static auto TAG = "wifi";
 
@@ -373,10 +374,13 @@ void wifi_manager_monitor(void* parameter) {
         }
 
         // Show QR modal if pending and main screen is ready
-        if (qrModalPending && lv_screen_active()) {
+        if (qrModalPending && FreeButton::getLvglDisplay().getMainDisplay()) {
             ESP_LOGI(TAG, "Showing delayed WiFi QR modal");
-            show_wifi_qr_modal(lv_screen_active(), AP_SSID, AP_PASSWORD);
-            qrModalPending = false;
+            lv_obj_t* main_screen = lv_display_get_screen_active(FreeButton::getLvglDisplay().getMainDisplay());
+            if (main_screen) {
+                show_wifi_qr_modal(main_screen, AP_SSID, AP_PASSWORD);
+                qrModalPending = false;
+            }
         }
 
         // Check WiFi connection status
