@@ -17,6 +17,9 @@ static bool style_initialized = false;
 // Thread-safe flag for pending operations
 static std::atomic<bool> hide_pending{false};
 
+// Forward declaration
+static void hide_wifi_qr_modal_internal(void);
+
 void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password) {
     if (!screen || !ssid) {
         ESP_LOGE(TAG, "Invalid parameters: screen=%p, ssid=%p", (void*)screen, (void*)ssid);
@@ -29,8 +32,9 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
         return;
     }
 
-    // Hide existing modal if any
-    hide_wifi_qr_modal();
+    // Clear any pending hide operations and hide existing modal directly
+    hide_pending.store(false, std::memory_order_release);
+    hide_wifi_qr_modal_internal();
 
     ESP_LOGI(TAG, "Showing WiFi QR modal for SSID: %s", ssid);
 
@@ -123,15 +127,20 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
 }
 
 static void hide_wifi_qr_modal_internal(void) {
-    if (modal && lv_obj_is_valid(modal)) {
-        ESP_LOGI(TAG, "Hiding WiFi QR modal");
-        lv_obj_delete(modal);
-        modal = nullptr;
-        qr_code = nullptr;
-    } else if (modal) {
-        ESP_LOGW(TAG, "Modal object exists but is invalid, clearing reference");
-        modal = nullptr;
-        qr_code = nullptr;
+    if (modal) {
+        if (lv_obj_is_valid(modal)) {
+            ESP_LOGI(TAG, "Hiding WiFi QR modal");
+            // Clear references first to prevent race conditions
+            lv_obj_t* modal_to_delete = modal;
+            modal = nullptr;
+            qr_code = nullptr;
+            // Now safely delete the modal
+            lv_obj_delete(modal_to_delete);
+        } else {
+            ESP_LOGW(TAG, "Modal object exists but is invalid, clearing reference");
+            modal = nullptr;
+            qr_code = nullptr;
+        }
     }
 }
 
