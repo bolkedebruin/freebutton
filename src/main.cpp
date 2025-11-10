@@ -16,6 +16,7 @@
 #include "utils/helpers.h"
 #include "drivers/Sensors.h"
 #include "drivers/LvglDisplay.h"
+#include "ui/ProgressBar.h"
 
 using namespace FreeButton;
 
@@ -58,6 +59,7 @@ void lvgl_task(void* pvParameter) {
 }
 
 std::unique_ptr<MyComponent> globalComponent;
+std::unique_ptr<UI::ProgressBar> progressBar;
 
 void log_free_heap() {
     ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
@@ -87,25 +89,35 @@ void setup() {
         return;
     }
 
-    // Initialize LVGL display with progress bar
+    // Initialize LVGL display
     if (FreeButton::initializeLvgl(FreeButton::getDisplayManager())) {
-        FreeButton::getLvglDisplay().showProgressBar("Starting WiFi...");
-
         // Start LVGL task
         xTaskCreatePinnedToCore(lvgl_task, "lvgl", 8192, nullptr, 5, nullptr, 1);
         ESP_LOGI(TAG, "LVGL initialized successfully");
+
+        // Give LVGL task time to start and complete any initial rendering
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+        if (auto* main_screen = FreeButton::getLvglDisplay().getMainScreen(); main_screen) {
+            progressBar = std::make_unique<UI::ProgressBar>(main_screen);
+            progressBar->show("Starting WiFi...");
+        }
     } else {
         ESP_LOGE(TAG, "LVGL initialization failed!");
     }
 
     // Update progress
-    FreeButton::getLvglDisplay().updateProgress(25, "WiFi starting...");
+    if (progressBar) {
+        progressBar->update(25, "WiFi starting...");
+    }
 
     setup_wifi_event_handler();
     start_wifi_manager();
 
     log_free_heap();
-    FreeButton::getLvglDisplay().updateProgress(50, "Starting web server...");
+    if (progressBar) {
+        progressBar->update(50, "Starting web server...");
+    }
     webserver_start();
     log_free_heap();
 
@@ -114,7 +126,9 @@ void setup() {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    FreeButton::getLvglDisplay().updateProgress(70, "Configuring MQTT...");
+    if (progressBar) {
+        progressBar->update(70, "Configuring MQTT...");
+    }
 
     auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
     
@@ -137,13 +151,41 @@ void setup() {
     // Register sensors with Home Assistant Discovery
     registerSensorsWithDiscovery(brokerId);
 
-    FreeButton::getLvglDisplay().updateProgress(90, "Finalizing setup...");
+    if (progressBar) {
+        progressBar->update(90, "Finalizing setup...");
+    }
     vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to show final progress
 
-    FreeButton::getLvglDisplay().updateProgress(100, "Ready!");
+    if (progressBar) {
+        progressBar->update(100, "Ready!");
+    }
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
 
-    FreeButton::getLvglDisplay().hideProgressBar();
+    // Hide progress bar and create main application screen
+    if (progressBar) {
+        progressBar->hide();
+
+        FreeButton::getLvglDisplay().lock();
+        // Create new main application screen
+        lv_obj_t* main_scr = lv_obj_create(nullptr);
+        lv_obj_set_style_bg_color(main_scr, lv_color_hex(0x000000), 0);
+
+        // Create welcome label
+        lv_obj_t* welcome_label = lv_label_create(main_scr);
+        lv_label_set_text(welcome_label, "FreeButton Ready");
+        lv_obj_set_style_text_color(welcome_label, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(welcome_label, &lv_font_montserrat_14, 0);
+        lv_obj_center(welcome_label);
+
+        // Load the new screen
+        lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_IN, 500, 0, false);
+        FreeButton::getLvglDisplay().unlock();
+
+        // Request creation of the Google Hello button
+        FreeButton::getLvglDisplay().requestGoogleHelloButton();
+
+        ESP_LOGI(TAG, "Progress bar hidden, main UI loaded");
+    }
 
     log_free_heap();
 }

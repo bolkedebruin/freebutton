@@ -18,8 +18,7 @@ private:
     SemaphoreHandle_t lvgl_mutex_;
     SemaphoreHandle_t small_buffer_mutex_;
     bool initialized_;
-    lv_obj_t* progress_bar_;
-    lv_obj_t* progress_label_;
+    lv_obj_t* main_screen_;
     bool create_hello_button_pending_;
 
 public:
@@ -29,20 +28,16 @@ public:
     // Initialize LVGL with LovyanGFX integration
     bool initialize(DisplayManager& displayManager);
 
-    // Progress bar functionality for startup
-    void showProgressBar(const char* message = "Initializing...");
-    void updateProgress(int percentage, const char* message = nullptr);
-    void hideProgressBar();
-
     // LVGL task management
     void task();
 
     // Lock/unlock for thread safety
-    void lock();
-    void unlock();
+    void lock() const;
+    void unlock() const;
 
     // Get display objects
     lv_display_t* getMainDisplay() const { return main_display_; }
+    lv_obj_t* getMainScreen() const { return main_screen_; }
     lv_display_t* getSmallDisplay(int index) const;
     size_t getSmallDisplayCount() const { return small_displays_.size(); }
 
@@ -61,7 +56,6 @@ public:
 private:
     static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
     static void flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
-    void setupProgressBar();
     void initializeSmallDisplays(DisplayManager& displayManager);
 };
 

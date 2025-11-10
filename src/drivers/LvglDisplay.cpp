@@ -28,15 +28,14 @@ static DisplayManager* g_display_mgr = nullptr;
 
 LvglDisplay::LvglDisplay()
     : main_display_(nullptr)
-    , buffer1_(nullptr)
-    , shared_small_buffer_(nullptr)
-    , lvgl_mutex_(nullptr)
-    , small_buffer_mutex_(nullptr)
-    , initialized_(false)
-    , progress_bar_(nullptr)
-    , progress_label_(nullptr)
-    , create_hello_button_pending_(false)
-{
+      , buffer1_(nullptr)
+      , buffer2_(nullptr)
+      , shared_small_buffer_(nullptr)
+      , lvgl_mutex_(nullptr)
+      , small_buffer_mutex_(nullptr)
+      , initialized_(false)
+      , main_screen_(nullptr)
+      , create_hello_button_pending_(false) {
 }
 
 LvglDisplay::~LvglDisplay() {
@@ -118,11 +117,22 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
         return false;
     }
 
-    // Setup progress bar for startup
-    setupProgressBar();
-
     // Initialize small displays
     initializeSmallDisplays(displayManager);
+
+    // Create main screen
+    if (g_display_mgr) {
+        g_display_mgr->selectMainDisplay();
+        auto* main_gfx = g_display_mgr->getMainDisplay();
+        if (main_gfx) {
+            main_gfx->fillScreen(0x0000); // Clear to black
+        }
+        g_display_mgr->deselectAllDisplays();
+    }
+
+    main_screen_ = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(main_screen_, lv_color_hex(0x000000), 0);
+    lv_scr_load(main_screen_);
 
     initialized_ = true;
     ESP_LOGI(TAG, "LVGL display initialization completed successfully");
@@ -169,99 +179,7 @@ void LvglDisplay::flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* p
     lv_display_flush_ready(disp);
 }
 
-void LvglDisplay::setupProgressBar() {
-    if (!main_display_) return;
 
-    // Select main display and clear it first
-    if (g_display_mgr) {
-        g_display_mgr->selectMainDisplay();
-        auto* main_gfx = g_display_mgr->getMainDisplay();
-        if (main_gfx) {
-            main_gfx->fillScreen(0x0000); // Clear to black
-        }
-        g_display_mgr->deselectAllDisplays();
-    }
-
-    // Create main screen
-    lv_obj_t* scr = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
-    lv_scr_load(scr);
-
-    // Create progress label (centered above progress bar)
-    progress_label_ = lv_label_create(scr);
-    lv_label_set_text(progress_label_, "Initializing...");
-    lv_obj_set_style_text_color(progress_label_, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(progress_label_, &lv_font_montserrat_14, 0);
-    lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, -30);
-
-    // Create iPhone-style progress bar (thin, rounded, centered)
-    progress_bar_ = lv_bar_create(scr);
-    lv_obj_set_size(progress_bar_, 200, 3);
-    lv_obj_align(progress_bar_, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(progress_bar_, lv_color_hex(0x3a3a3c), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(progress_bar_, lv_color_hex(0xffffff), LV_PART_INDICATOR);
-    lv_obj_set_style_radius(progress_bar_, 2, LV_PART_MAIN);
-    lv_obj_set_style_radius(progress_bar_, 2, LV_PART_INDICATOR);
-    lv_obj_set_style_border_width(progress_bar_, 0, LV_PART_MAIN);
-    lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
-
-    ESP_LOGI(TAG, "Progress bar setup completed");
-}
-
-void LvglDisplay::showProgressBar(const char* message) {
-    if (!initialized_ || !progress_label_) return;
-
-    lock();
-    lv_label_set_text(progress_label_, message);
-    lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
-    unlock();
-}
-
-void LvglDisplay::updateProgress(int percentage, const char* message) {
-    if (!initialized_ || !progress_bar_) return;
-
-    lock();
-
-    // Update progress bar
-    lv_bar_set_value(progress_bar_, percentage, LV_ANIM_ON);
-
-    // Update message if provided
-    if (message && progress_label_) {
-        lv_label_set_text(progress_label_, message);
-    }
-
-
-    unlock();
-
-    ESP_LOGD(TAG, "Progress updated: %d%% - %s", percentage, message ? message : "");
-}
-
-void LvglDisplay::hideProgressBar() {
-    if (!initialized_ || !progress_bar_) return;
-
-    lock();
-
-    // Create new main application screen
-    lv_obj_t* main_scr = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(main_scr, lv_color_hex(0x000000), 0);
-
-    // Create welcome label
-    lv_obj_t* welcome_label = lv_label_create(main_scr);
-    lv_label_set_text(welcome_label, "FreeButton Ready");
-    lv_obj_set_style_text_color(welcome_label, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(welcome_label, &lv_font_montserrat_14, 0);
-    lv_obj_center(welcome_label);
-
-    // Load the new screen
-    lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_IN, 500, 0, false);
-
-    unlock();
-
-    // Request creation of the Google Hello button (will be handled in LVGL task)
-    requestGoogleHelloButton();
-
-    ESP_LOGI(TAG, "Progress bar hidden, main UI loaded");
-}
 
 void LvglDisplay::task() {
     if (!initialized_) return;
@@ -284,13 +202,13 @@ void LvglDisplay::task() {
     unlock();
 }
 
-void LvglDisplay::lock() {
+void LvglDisplay::lock() const {
     if (lvgl_mutex_) {
         xSemaphoreTake(lvgl_mutex_, portMAX_DELAY);
     }
 }
 
-void LvglDisplay::unlock() {
+void LvglDisplay::unlock() const {
     if (lvgl_mutex_) {
         xSemaphoreGive(lvgl_mutex_);
     }
@@ -446,10 +364,7 @@ void LvglDisplay::releaseSmallDisplayBuffer(int index) const {
         if (!disp) {
             ESP_LOGW(TAG, "No small display found for index %d during buffer release", index);
         } else {
-            // Disable invalidation before releasing buffer
             lv_display_enable_invalidation(disp, false);
-            // Clear buffers
-            lv_display_set_buffers(disp, nullptr, nullptr, 0, LV_DISPLAY_RENDER_MODE_PARTIAL);
         }
         xSemaphoreGive(small_buffer_mutex_);
         ESP_LOGD(TAG, "Small display buffer released");
