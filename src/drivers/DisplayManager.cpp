@@ -244,7 +244,7 @@ void DisplayManager::showDisplayNumbers() const {
 
         if (display) {
             // Calculate which connector and position this display is on
-            int connector = (static_cast<int>(i) / 2) + 1; // Skip connector 0 (main display)
+            int connector;
             if (mainDisplayConnector_ == 0) {
                 connector = (static_cast<int>(i) / 2) + 1;
             } else {
@@ -283,15 +283,6 @@ void DisplayManager::setBacklight(const int displayIndex, const uint8_t brightne
     }
 }
 
-BusAwareFileSystem& DisplayManager::getFileSystem() const {
-    // Initialize the bus-aware filesystem with the main display if not already done
-    static bool initialized = false;
-    if (!initialized && mainDisplay_) {
-        initializeBusAwareFileSystem(mainDisplay_.get());
-        initialized = true;
-    }
-    return getBusAwareFileSystem();
-}
 
 // Global convenience functions
 bool initializeDisplays(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, const int mainDisplayConnector) {

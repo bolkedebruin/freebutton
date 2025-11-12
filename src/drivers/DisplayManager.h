@@ -146,7 +146,7 @@ public:
     bool initialize(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, int mainDisplayConnector);
 
     // Get main display (320x240)
-    LGFX_ESP32_SPI* getMainDisplay() { return mainDisplay_.get(); }
+    LGFX_ESP32_SPI* getMainDisplay() const { return mainDisplay_.get(); }
 
     // Get small display by index
     LGFX_ESP32_SPI_Small* getSmallDisplay(int index) const;
@@ -163,9 +163,6 @@ public:
     // Utility
     size_t getDisplayCount() const { return smallDisplays_.size() + (mainDisplay_ ? 1 : 0); }
     size_t getSmallDisplayCount() const { return smallDisplays_.size(); }
-
-    // Bus-aware filesystem access
-    BusAwareFileSystem& getFileSystem() const;
 
     // Display selection (public for LVGL integration)
     void selectMainDisplay() const;

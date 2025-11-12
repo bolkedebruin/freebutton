@@ -5,6 +5,6 @@
 #ifndef FILESYSTEM_H
 #define FILESYSTEM_H
 
-void init_littlefs(void);
+void lv_fs_if_init(void);
 
 #endif //FILESYSTEM_H

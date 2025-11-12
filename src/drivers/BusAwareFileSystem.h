@@ -61,11 +61,11 @@ private:
     template<typename Func>
     auto withBusManagement(Func&& func) -> decltype(func()) {
         if (needsBusManagement()) {
-            releaseBus();
+            acquireBus();
         }
         auto result = func();
         if (needsBusManagement()) {
-            acquireBus();
+            releaseBus();
         }
         return result;
     }
@@ -113,33 +113,32 @@ public:
     void end();
 
     // Get underlying LittleFS reference for compatibility
-    fs::LittleFSFS& getLittleFS() { return LittleFS; }
+    static fs::LittleFSFS& getLittleFS() { return LittleFS; }
 
 private:
     LGFX_ESP32_SPI* display_;
     bool busShared_;
 
-    void acquireBus();
-    void releaseBus();
+    void acquireBus() const;
+    void releaseBus() const;
     bool needsBusManagement() const;
 
     template<typename Func>
     auto withBusManagement(Func&& func) -> decltype(func()) {
         if (needsBusManagement()) {
-            releaseBus();
+            acquireBus();
         }
         auto result = func();
         if (needsBusManagement()) {
-            acquireBus();
+            releaseBus();
         }
         return result;
     }
 };
 
 // Global functions
+BusAwareFileSystem& initBusAwareFileSystem(LGFX_ESP32_SPI* display, bool formatOnFail, const char* basePath, uint8_t maxOpenFiles,  const char* partitionLabel);
 BusAwareFileSystem& getBusAwareFileSystem();
-bool initializeBusAwareFileSystem(LGFX_ESP32_SPI* display);
-
 } // namespace FreeButton
 
 #endif // BUSAWAREFILESYSTEM_H

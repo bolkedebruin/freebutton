@@ -8,6 +8,7 @@
 #include "core/WebServer.h"
 #include "core/WifiManager.h"
 #include "core/HardwareInitializer.h"
+#include "drivers/BusAwareFileSystem.h"
 #include "drivers/NeoPixel.h"
 #include "mqtt/Broker.h"
 #include "mqtt/Registry.h"
@@ -68,8 +69,6 @@ void log_free_heap() {
 void setup() {
     ESP_LOGI(TAG, "FreeButton Firmware: %s  Id: %s starting!", FIRMWARE, deviceId.c_str());
 
-    init_littlefs();
-
     // set log levels
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
     esp_log_level_set("broker", ESP_LOG_DEBUG);
@@ -89,21 +88,28 @@ void setup() {
         return;
     }
 
+    auto &displayManager = FreeButton::getDisplayManager();
+    initBusAwareFileSystem(displayManager.getMainDisplay(), true, "", 10, "data");
+
     // Initialize LVGL display
-    if (FreeButton::initializeLvgl(FreeButton::getDisplayManager())) {
+    if (FreeButton::initializeLvgl(displayManager)) {
         // Start LVGL task
         xTaskCreatePinnedToCore(lvgl_task, "lvgl", 8192, nullptr, 5, nullptr, 1);
         ESP_LOGI(TAG, "LVGL initialized successfully");
-
-        // Give LVGL task time to start and complete any initial rendering
-        vTaskDelay(pdMS_TO_TICKS(50));
-
-        if (auto* main_screen = FreeButton::getLvglDisplay().getMainScreen(); main_screen) {
-            progressBar = std::make_unique<UI::ProgressBar>(main_screen);
-            progressBar->show("Starting WiFi...");
-        }
     } else {
         ESP_LOGE(TAG, "LVGL initialization failed!");
+    }
+
+    if (auto* main_screen = FreeButton::getLvglDisplay().getMainScreen(); main_screen) {
+        progressBar = std::make_unique<UI::ProgressBar>(main_screen);
+        progressBar->show("Starting...");
+    } else {
+        ESP_LOGE(TAG, "Main screen initialization failed!");
+    }
+
+    // Update progress
+    if (progressBar) {
+        progressBar->update(10, "Mounting file system..");
     }
 
     // Update progress

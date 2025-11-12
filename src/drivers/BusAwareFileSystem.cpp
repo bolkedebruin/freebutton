@@ -3,7 +3,7 @@
 
 namespace FreeButton {
 
-static const char* TAG = "BusAwareFS";
+static auto TAG = "BusAwareFS";
 
 // Global instance
 static std::unique_ptr<BusAwareFileSystem> g_busAwareFS;
@@ -183,22 +183,27 @@ void BusAwareFile::rewindDirectory() {
 
 BusAwareFileSystem::BusAwareFileSystem(LGFX_ESP32_SPI* display)
     : display_(display), busShared_(false) {
-    if (display_ && display_->panel()) {
-        busShared_ = display_->panel()->config().bus_shared;
-    }
+    // Defer bus_shared check until needed to avoid early access to panel config
 }
 
 bool BusAwareFileSystem::needsBusManagement() const {
+    if (!display_) return false;
+
+    // Check bus_shared on-demand to avoid early access to panel config
+    if (display_->panel()) {
+        const_cast<BusAwareFileSystem*>(this)->busShared_ = display_->panel()->config().bus_shared;
+    }
+
     return display_ && busShared_;
 }
 
-void BusAwareFileSystem::acquireBus() {
+void BusAwareFileSystem::acquireBus() const {
     if (display_) {
         display_->beginTransaction();
     }
 }
 
-void BusAwareFileSystem::releaseBus() {
+void BusAwareFileSystem::releaseBus() const {
     if (display_) {
         display_->endTransaction();
     }
@@ -282,8 +287,8 @@ size_t BusAwareFileSystem::freeBytes() {
     return totalBytes() - usedBytes();
 }
 
-bool BusAwareFileSystem::begin(bool formatOnFail, const char* basePath,
-                               uint8_t maxOpenFiles, const char* partitionLabel) {
+bool BusAwareFileSystem::begin(const bool formatOnFail, const char* basePath,
+                               const uint8_t maxOpenFiles, const char* partitionLabel) {
     return withBusManagement([&]() {
         bool result = LittleFS.begin(formatOnFail, basePath, maxOpenFiles, partitionLabel);
         if (result) {
@@ -309,27 +314,22 @@ void BusAwareFileSystem::end() {
 // Global functions
 // =============================================================================
 
-BusAwareFileSystem& getBusAwareFileSystem() {
+BusAwareFileSystem& initBusAwareFileSystem(LGFX_ESP32_SPI* display,
+    bool formatOnFail, const char* basePath, uint8_t maxOpenFiles,  const char* partitionLabel) {
     if (!g_busAwareFS) {
-        // Create with null display - will be set later via initializeBusAwareFileSystem
-        g_busAwareFS = std::make_unique<BusAwareFileSystem>(nullptr);
+        g_busAwareFS = std::make_unique<BusAwareFileSystem>(display);
+
+        if (bool result = g_busAwareFS->begin(formatOnFail, basePath, maxOpenFiles, partitionLabel); !result) {
+            ESP_LOGE(TAG, "Failed to initialize bus-aware filesystem");
+        } else {
+            ESP_LOGI(TAG, "Bus-aware filesystem initialized successfully");
+        }
     }
     return *g_busAwareFS;
 }
 
-bool initializeBusAwareFileSystem(LGFX_ESP32_SPI* display) {
-    g_busAwareFS = std::make_unique<BusAwareFileSystem>(display);
-
-    // Initialize LittleFS if not already done
-    bool result = g_busAwareFS->begin(true); // Format on fail = true
-
-    if (result) {
-        ESP_LOGI(TAG, "Bus-aware filesystem initialized successfully");
-    } else {
-        ESP_LOGE(TAG, "Failed to initialize bus-aware filesystem");
-    }
-
-    return result;
+BusAwareFileSystem& getBusAwareFileSystem() {
+    return *g_busAwareFS;
 }
 
 } // namespace FreeButton

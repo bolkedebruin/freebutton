@@ -1,6 +1,7 @@
 #include "LvglDisplay.h"
 #include "../ui/wifi_qr_modal.h"
 #include "../ui/ui_button.h"
+#include "../core/FileSystem.h"
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
@@ -133,6 +134,11 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     main_screen_ = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(main_screen_, lv_color_hex(0x000000), 0);
     lv_scr_load(main_screen_);
+
+    // Initialize LVGL filesystem interface
+    lv_fs_if_init();
+
+    ESP_LOGI(TAG, "LVGL filesystem interface initialized");
 
     initialized_ = true;
     ESP_LOGI(TAG, "LVGL display initialization completed successfully");
