@@ -33,6 +33,8 @@ public:
 
     int page = 1;
 
+    DisplayItem() : DisplayItem(0, 0, 100, 0, 14, 0, "default", "", 0, 1, {}) {}
+
     DisplayItem(int x, int y, int width, int boxtype, int fontSize, int alignment,
                 std::string  label, std::string  unit, int round, int page,
                 std::vector<Topic> topicConfigs);
@@ -40,7 +42,17 @@ public:
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
     const std::string getComponentType() const override;
 
-    void fromJson(const JsonObject &data) {
+    static std::unique_ptr<DisplayItem> fromJson(const JsonObject& config) {
+        auto displayItem = std::make_unique<DisplayItem>();
+        displayItem->configure(config);
+        return displayItem;
+    }
+
+private:
+    static constexpr auto TAG = "DisplayItem";
+    std::vector<Topic> topics;
+
+    void configure(const JsonObject &data) {
         x = data["x"].isNull() ? x : data["x"].as<int>();
         y = data["y"].isNull() ? y : data["y"].as<int>();
 
@@ -62,11 +74,6 @@ public:
             ESP_LOGW(TAG, "No topics in DisplayItem JSON");
         }
     }
-
-private:
-    static constexpr auto TAG = "DisplayItem";
-    std::vector<Topic> topics;
-
 public:
     // CRTP interface for TopicHandler
     const char* getComponentName() const { return "DisplayItem"; }

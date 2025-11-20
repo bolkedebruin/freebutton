@@ -3,9 +3,8 @@
 
 #include "rapidjson/reader.h"
 #include "rapidjson/writer.h"
-#include "rapidjson/error/en.h"
-#include <Arduino.h>
-#include "LittleFS.h"
+
+#include "FS.h"
 #include <string>
 #include <vector>
 #include <functional>

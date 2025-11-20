@@ -12,7 +12,7 @@ static auto TAG = "filesystem";
 
 using namespace FreeButton;
 
-static void * fs_open(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode) {
+static void * fs_open(lv_fs_drv_t *drv, const char *path, const lv_fs_mode_t mode) {
     auto mode_str = "r"; // Default to read mode
     if (mode == LV_FS_MODE_WR)
         mode_str = "w";
@@ -37,19 +37,19 @@ static lv_fs_res_t fs_close(lv_fs_drv_t *drv, void *file_p) {
     return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t fs_read(lv_fs_drv_t *drv, void *file_p, void *buf, uint32_t btr, uint32_t *br) {
+static lv_fs_res_t fs_read(lv_fs_drv_t *drv, void *file_p, void *buf, const uint32_t btr, uint32_t *br) {
     const auto file = static_cast<BusAwareFile *>(file_p);
     *br = file->read(static_cast<uint8_t *>(buf), btr);
     return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t fs_write(lv_fs_drv_t *drv, void *file_p, const void *buf, uint32_t btw, uint32_t *bw) {
+static lv_fs_res_t fs_write(lv_fs_drv_t *drv, void *file_p, const void *buf, const uint32_t btw, uint32_t *bw) {
     const auto file = static_cast<BusAwareFile *>(file_p);
     *bw = file->write(static_cast<const uint8_t *>(buf), btw);
     return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t fs_seek(lv_fs_drv_t *drv, void *file_p, uint32_t pos, lv_fs_whence_t whence) {
+static lv_fs_res_t fs_seek(lv_fs_drv_t *drv, void *file_p, const uint32_t pos, const lv_fs_whence_t whence) {
     auto *file = static_cast<BusAwareFile *>(file_p);
     bool result = false;
 

@@ -26,6 +26,8 @@ public:
     uint32_t ledColorFront;
     uint32_t ledColorWall;
 
+    Button() : Button("default", "", 0, 0, {}) {}
+
     Button(std::string  label, std::string  topLabel,
            uint32_t ledColorFront, uint32_t ledColorWall,
            std::vector<Topic> topicConfigs);
@@ -39,8 +41,20 @@ public:
     void longPress() const;
     void release() const;
 
+    static std::unique_ptr<Button> fromJson(const JsonObject& config) {
+        auto button = std::make_unique<Button>();
+        button->configure(config);
+        return button;
+    }
+
+private:
+    static constexpr auto TAG = "Button";
+    std::vector<Topic> topics;
+
+    void publishToTopic(EventType eventType, const std::string& payload) const;
+
     // Configuration from JSON
-    void fromJson(const ArduinoJson::JsonObject& data) {
+    void configure(const ArduinoJson::JsonObject& data) {
         label = data["label"].isNull() ? label : data["label"].as<std::string>();
         topLabel = data["toplabel"].isNull() ? topLabel : data["toplabel"].as<std::string>();
         ledColorFront = data["ledcolorfront"].isNull() ? ledColorFront : data["ledcolorfront"].as<uint32_t>();
@@ -52,12 +66,6 @@ public:
             ESP_LOGW(TAG, "No topics in Button JSON");
         }
     }
-
-private:
-    static constexpr auto TAG = "Button";
-    std::vector<Topic> topics;
-
-    void publishToTopic(EventType eventType, const std::string& payload) const;
 
 public:
     // CRTP interface for TopicHandler

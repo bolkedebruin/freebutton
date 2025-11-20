@@ -15,7 +15,7 @@ namespace FreeButton {
  * arbitration when the display and filesystem share the same SPI bus. It uses
  * the same mechanism as LovyanGFX's drawJpgFile function.
  */
-class BusAwareFile : public Stream {
+class BusAwareFile : public fs::File {
 public:
     BusAwareFile(fs::File file = fs::File(), LGFX_ESP32_SPI* display = nullptr);
     ~BusAwareFile();
@@ -50,7 +50,6 @@ public:
     void rewindDirectory();
 
 private:
-    fs::File file_;
     LGFX_ESP32_SPI* display_;
     bool busShared_;
 

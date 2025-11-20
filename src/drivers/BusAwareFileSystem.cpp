@@ -13,7 +13,7 @@ static std::unique_ptr<BusAwareFileSystem> g_busAwareFS;
 // =============================================================================
 
 BusAwareFile::BusAwareFile(fs::File file, LGFX_ESP32_SPI* display)
-    : file_(file), display_(display), busShared_(false) {
+    : fs::File(file), display_(display), busShared_(false) {
     if (display_ && display_->panel()) {
         busShared_ = display_->panel()->config().bus_shared;
     }
@@ -24,7 +24,7 @@ BusAwareFile::~BusAwareFile() {
 }
 
 bool BusAwareFile::needsBusManagement() const {
-    return display_ && busShared_ && file_;
+    return display_ && busShared_ && *this;
 }
 
 void BusAwareFile::acquireBus() const {
@@ -41,138 +41,138 @@ void BusAwareFile::releaseBus() const {
 
 size_t BusAwareFile::write(const uint8_t data) {
     return withBusManagement([&]() {
-        return file_.write(data);
+        return fs::File::write(data);
     });
 }
 
 size_t BusAwareFile::write(const uint8_t *buf, const size_t size) {
     return withBusManagement([&]() {
-        return file_.write(buf, size);
+        return fs::File::write(buf, size);
     });
 }
 
 int BusAwareFile::available() {
     return withBusManagement([&]() {
-        return file_.available();
+        return fs::File::available();
     });
 }
 
 int BusAwareFile::read() {
     return withBusManagement([&]() {
-        return file_.read();
+        return fs::File::read();
     });
 }
 
 int BusAwareFile::peek() {
     return withBusManagement([&]() {
-        return file_.peek();
+        return fs::File::peek();
     });
 }
 
 void BusAwareFile::flush() {
     withBusManagement([&]() {
-        file_.flush();
+        fs::File::flush();
         return 0; // void function, return dummy value for template
     });
 }
 
 size_t BusAwareFile::read(uint8_t *buf, size_t size) {
     return withBusManagement([&]() {
-        return file_.read(buf, size);
+        return fs::File::read(buf, size);
     });
 }
 
 size_t BusAwareFile::readBytes(char *buffer, size_t length) {
     return withBusManagement([&]() {
-        return file_.readBytes(buffer, length);
+        return fs::File::readBytes(buffer, length);
     });
 }
 
 bool BusAwareFile::seek(uint32_t pos, fs::SeekMode mode) {
     return withBusManagement([&]() {
-        return file_.seek(pos, mode);
+        return fs::File::seek(pos, mode);
     });
 }
 
 size_t BusAwareFile::position() const {
     return const_cast<BusAwareFile*>(this)->withBusManagement([&]() {
-        return file_.position();
+        return fs::File::position();
     });
 }
 
 size_t BusAwareFile::size() const {
     return const_cast<BusAwareFile*>(this)->withBusManagement([&]() {
-        return file_.size();
+        return fs::File::size();
     });
 }
 
 bool BusAwareFile::setBufferSize(size_t size) {
     return withBusManagement([&]() {
-        return file_.setBufferSize(size);
+        return fs::File::setBufferSize(size);
     });
 }
 
 void BusAwareFile::close() {
     withBusManagement([&]() {
-        file_.close();
+        fs::File::close();
         return 0; // void function, return dummy value for template
     });
 }
 
 BusAwareFile::operator bool() const {
     return const_cast<BusAwareFile*>(this)->withBusManagement([&]() {
-        return static_cast<bool>(file_);
+        return fs::File::operator bool();
     });
 }
 
 time_t BusAwareFile::getLastWrite() {
     return withBusManagement([&]() {
-        return file_.getLastWrite();
+        return fs::File::getLastWrite();
     });
 }
 
 const char* BusAwareFile::path() const {
-    return file_.path();
+    return fs::File::path();
 }
 
 const char* BusAwareFile::name() const {
-    return file_.name();
+    return fs::File::name();
 }
 
 boolean BusAwareFile::isDirectory() {
     return withBusManagement([&]() {
-        return file_.isDirectory();
+        return fs::File::isDirectory();
     });
 }
 
 boolean BusAwareFile::seekDir(long position) {
     return withBusManagement([&]() {
-        return file_.seekDir(position);
+        return fs::File::seekDir(position);
     });
 }
 
 BusAwareFile BusAwareFile::openNextFile(const char* mode) {
     return withBusManagement([&]() {
-        fs::File nextFile = file_.openNextFile(mode);
+        fs::File nextFile = fs::File::openNextFile(mode);
         return BusAwareFile(nextFile, display_);
     });
 }
 
 String BusAwareFile::getNextFileName() {
     return withBusManagement([&]() {
-        return file_.getNextFileName();
+        return fs::File::getNextFileName();
     });
 }
 
 String BusAwareFile::getNextFileName(boolean* isDir) {
     return withBusManagement([&]() {
-        return file_.getNextFileName(isDir);
+        return fs::File::getNextFileName(isDir);
     });
 }
 
 void BusAwareFile::rewindDirectory() {
     withBusManagement([&]() {
-        file_.rewindDirectory();
+        fs::File::rewindDirectory();
         return 0; // void function, return dummy value for template
     });
 }
