@@ -12,7 +12,7 @@ struct TopicSubscription {
     std::string topic;
     int qos = 0;
 
-    TopicSubscription(uint8_t brokerId, const std::string &topic, int qos = 0) :
+    TopicSubscription(const uint8_t brokerId, const std::string &topic, const int qos = 0) :
         brokerId(brokerId), topic(topic), qos(qos) {}
 };
 
@@ -51,7 +51,7 @@ struct TopicPublication {
     int qos = 0;
     bool retain = false;
 
-    TopicPublication(uint8_t brokerId, const std::string &topic, int qos = 0, bool retain = false) :
+    TopicPublication(const uint8_t brokerId, const std::string &topic, const int qos = 0, const bool retain = false) :
         brokerId(brokerId), topic(topic), qos(qos), retain(retain) {}
 };
 

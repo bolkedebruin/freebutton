@@ -1,0 +1,76 @@
+//
+// Button - Example button component using TopicHandler
+// Created by Bolke de Bruin on 19/11/2025.
+//
+
+#ifndef FREEBUTTON_BUTTON_H
+#define FREEBUTTON_BUTTON_H
+
+#include "mqtt/Component.h"
+#include "types.h"
+#include "TopicHandler.h"
+#include <string>
+#include <vector>
+#include <unordered_map>
+
+#include "ArduinoJson/Object/JsonObject.hpp"
+
+namespace freebutton {
+
+class Button final : public MqttSubscriber, public MqttPublisher, public TopicHandler<Button> {
+public:
+    static unsigned long next_id;
+
+    unsigned long id;
+    std::string label;
+    std::string topLabel;
+    uint32_t ledColorFront;
+    uint32_t ledColorWall;
+
+    Button(const std::string& label, const std::string& topLabel,
+           uint32_t ledColorFront, uint32_t ledColorWall,
+           const std::vector<Topic>& topicConfigs);
+
+    // MqttComponent interface
+    void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
+    const std::string getComponentType() const override;
+
+    // Button-specific methods
+    void click();
+    void longPress();
+    void release();
+
+    // Configuration from JSON
+    void fromJson(const ArduinoJson::JsonObject& data) {
+        label = data["label"].isNull() ? label : data["label"].as<std::string>();
+        topLabel = data["toplabel"].isNull() ? topLabel : data["toplabel"].as<std::string>();
+        ledColorFront = data["ledcolorfront"].isNull() ? ledColorFront : data["ledcolorfront"].as<uint32_t>();
+        ledColorWall = data["ledcolorwall"].isNull() ? ledColorWall : data["ledcolorwall"].as<uint32_t>();
+
+        if (data["topics"].is<ArduinoJson::JsonArray>()) {
+            handleTopics(data["topics"].as<ArduinoJson::JsonArray>());
+        } else {
+            ESP_LOGW(TAG, "No topics in Button JSON");
+        }
+    }
+
+private:
+    static constexpr const char* TAG = "Button";
+
+    std::vector<Topic> topics;
+    std::unordered_map<EventType, std::string> currentValues;
+
+    void publishToTopic(EventType eventType, const std::string& payload);
+
+public:
+    // CRTP interface for TopicHandler
+    const char* getComponentName() const { return "Button"; }
+    std::vector<Topic>& getTopicsRef() { return topics; }
+    void registerTopics();
+
+private:
+};
+
+} // namespace freebutton
+
+#endif //FREEBUTTON_BUTTON_H

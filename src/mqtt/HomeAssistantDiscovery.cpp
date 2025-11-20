@@ -4,6 +4,9 @@
 //
 
 #include "HomeAssistantDiscovery.h"
+
+#include <ranges>
+
 #include "Registry.h"
 #include "Component.h"
 #include "esp_log.h"
@@ -23,7 +26,7 @@ void HomeAssistantDiscovery::configureBroker(const uint8_t brokerId, const bool 
              brokerId, enabled ? "enabled" : "disabled", discovery_prefix.c_str());
 }
 
-bool HomeAssistantDiscovery::isDiscoveryEnabled(uint8_t brokerId) {
+bool HomeAssistantDiscovery::isDiscoveryEnabled(const uint8_t brokerId) {
     const auto it = broker_configs_.find(brokerId);
     return it != broker_configs_.end() && it->second.enabled;
 }
@@ -84,14 +87,14 @@ void HomeAssistantDiscovery::publishAllDiscovery(const uint8_t brokerId) {
     ESP_LOGI(TAG, "Publishing all discovery configs for broker %d (%zu components)", 
              brokerId, it->second.components.size());
 
-    for (const auto& [component_id, config] : it->second.components) {
+    for (const auto &config: it->second.components | std::views::values) {
         if (config.enabled) {
             publishDiscovery(brokerId, config);
         }
     }
 }
 
-uint16_t HomeAssistantDiscovery::registerComponent(uint8_t brokerId, const HomeAssistantDiscoveryConfig& config) {
+uint16_t HomeAssistantDiscovery::registerComponent(const uint8_t brokerId, const HomeAssistantDiscoveryConfig& config) {
     auto& broker_config = broker_configs_[brokerId];
     const uint16_t component_id = broker_config.next_component_id++;
     
