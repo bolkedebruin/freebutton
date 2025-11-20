@@ -7,7 +7,7 @@
 
 namespace freebutton {
 
-std::vector<Topic> TopicParser::parseTopics(const ArduinoJson::JsonArray& topicsArray,
+std::vector<Topic> TopicParser::parseTopics(const JsonArray& topicsArray,
                                             const char* componentName) {
     std::vector<Topic> topics;
     topics.reserve(topicsArray.size());
@@ -55,7 +55,6 @@ bool TopicParser::isValidTopic(const Topic& topic) {
     }
 
     // EventType validation - ensure it's within reasonable bounds
-    // Note: EventType is an enum with specific values defined in types.h
     if (topic.eventType > LED_BRIGHTNESS_SET) {
         ESP_LOGW(TAG, "Topic has invalid event type: %d", static_cast<int>(topic.eventType));
         return false;

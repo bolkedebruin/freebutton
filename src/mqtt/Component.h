@@ -36,6 +36,7 @@ public:
 
     void addSubscription(uint8_t brokerId, const std::string &topic, int qos = 0);
     void removeSubscription(uint8_t brokerId, const std::string &topic);
+    void clearSubscriptions();
     
     // Override base class method for HA discovery
     std::vector<std::string> getSubscriptionTopics(uint8_t brokerId) const override;
@@ -59,6 +60,7 @@ class MqttPublisher : public virtual MqttComponent {
 public:
     void addPublication(uint8_t brokerId, const std::string &topic, int qos = 0, bool retain = false);
     void removePublication(uint8_t brokerId, const std::string &topic);
+    void clearPublications();
     
     // Override base class method for HA discovery
     std::vector<std::string> getPublicationTopics(uint8_t brokerId) const override;

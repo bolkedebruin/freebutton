@@ -25,7 +25,7 @@ public:
      * @param componentName Name for logging (e.g., "DisplayItem", "Button")
      * @return Vector of successfully parsed topics
      */
-    static std::vector<Topic> parseTopics(const ArduinoJson::JsonArray& topicsArray,
+    static std::vector<Topic> parseTopics(const JsonArray& topicsArray,
                                          const char* componentName = "Component");
 
     /**
@@ -50,21 +50,20 @@ public:
      * Handle topics array from JSON - provides default implementation
      * @param topicsArray ArduinoJson array containing topic objects
      */
-    void handleTopics(const ArduinoJson::JsonArray& topicsArray) {
+    void handleTopics(const JsonArray& topicsArray) {
         auto* derived = static_cast<Derived*>(this);
 
-        // Parse topics using the static utility method
+        // 1. Unregister all current topics first
+        derived->unregisterTopics();
+
+        // 2. Parse new topics using the static utility method
         auto parsedTopics = TopicParser::parseTopics(topicsArray, derived->getComponentName());
 
-        // Clear existing topics and copy parsed topics directly
+        // 3. Update topics vector
         auto& topics = derived->getTopicsRef();
-        topics.clear();
-        topics.reserve(parsedTopics.size());
-
-        // Copy topics directly (no conversion needed since we all use Topic now)
         topics = std::move(parsedTopics);
 
-        // Re-register topics after updating
+        // 4. Register new topics
         derived->registerTopics();
     }
 };

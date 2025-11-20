@@ -6,22 +6,13 @@
 #define FREEBUTTON_DISPLAYITEM_H
 
 #include "mqtt/Component.h"
-#include "types.h"
 #include "TopicHandler.h"
 #include <string>
 #include <vector>
-#include <unordered_map>
 
 #include "ArduinoJson/Object/JsonObject.hpp"
 
 namespace freebutton {
-
-struct DisplayTopicConfig {
-    std::string brokerId;
-    std::string topic;
-    std::string payload;
-    EventType eventType;
-};
 
 class DisplayItem final : public MqttSubscriber, public TopicHandler<DisplayItem> {
 public:
@@ -43,16 +34,13 @@ public:
     int page = 1;
 
     DisplayItem(int x, int y, int width, int boxtype, int fontSize, int alignment,
-                const std::string& label, const std::string& unit, int round, int page,
-                const std::vector<DisplayTopicConfig>& topicConfigs);
+                std::string  label, std::string  unit, int round, int page,
+                std::vector<Topic> topicConfigs);
 
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
     const std::string getComponentType() const override;
 
-    std::string getDisplayText() const;
-    const std::unordered_map<EventType, std::string>& getCurrentValues() const { return currentValues; }
-
-    void fromJson(const ArduinoJson::JsonObject &data) {
+    void fromJson(const JsonObject &data) {
         x = data["x"].isNull() ? x : data["x"].as<int>();
         y = data["y"].isNull() ? y : data["y"].as<int>();
 
@@ -76,18 +64,16 @@ public:
     }
 
 private:
-    static constexpr const char* TAG = "DisplayItem";
-
+    static constexpr auto TAG = "DisplayItem";
     std::vector<Topic> topics;
-    std::unordered_map<EventType, std::string> currentValues;
 
 public:
     // CRTP interface for TopicHandler
     const char* getComponentName() const { return "DisplayItem"; }
     std::vector<Topic>& getTopicsRef() { return topics; }
     void registerTopics();
+    void unregisterTopics();
 
-private:
 };
 
 } // freebutton

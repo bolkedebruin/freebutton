@@ -7,22 +7,20 @@
 #include "mqtt/Registry.h"
 #include <esp_log.h>
 
+#include <utility>
+
 namespace freebutton {
 
 unsigned long Button::next_id = 1;
 
-Button::Button(const std::string& label, const std::string& topLabel,
-               uint32_t ledColorFront, uint32_t ledColorWall,
-               const std::vector<Topic>& topicConfigs)
+Button::Button(std::string  label, std::string  topLabel,
+               const uint32_t ledColorFront, const uint32_t ledColorWall,
+               std::vector<Topic> topicConfigs)
     : id(next_id++)
-    , label(label), topLabel(topLabel)
+    , label(std::move(label)), topLabel(std::move(topLabel))
     , ledColorFront(ledColorFront), ledColorWall(ledColorWall)
 {
-    topics.reserve(topicConfigs.size());
-    currentValues.reserve(topicConfigs.size());
-
-    // Topics are already in the right format, just copy them
-    topics = topicConfigs;
+    topics = std::move(topicConfigs);
 
     registerTopics();
 }
@@ -58,17 +56,15 @@ void Button::registerTopics() {
 void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) {
     for (const auto& topicConfig : topics) {
         if (brokerId == topicConfig.brokerId && topic == topicConfig.topic) {
-            currentValues[topicConfig.eventType] = data;
-
             // Handle specific message types
             switch (topicConfig.eventType) {
                 case LABEL:
-                    label = std::string(data);
+                    label.assign(data.data(), data.size());
                     ESP_LOGI(TAG, "Button %lu label updated to: %s", id, label.c_str());
                     break;
 
                 case TOP_LABEL:
-                    topLabel = std::string(data);
+                    topLabel.assign(data.data(), data.size());
                     ESP_LOGI(TAG, "Button %lu top label updated to: %s", id, topLabel.c_str());
                     break;
 
@@ -96,24 +92,30 @@ const std::string Button::getComponentType() const {
     return "button";
 }
 
-void Button::click() {
+void Button::click() const {
     publishToTopic(CLICK, CLICK_PAYLOAD);
     ESP_LOGI(TAG, "Button %lu clicked", id);
 }
 
-void Button::longPress() {
+void Button::longPress() const {
     publishToTopic(LONG_PRESS, LONG_PRESS_PAYLOAD);
     ESP_LOGI(TAG, "Button %lu long pressed", id);
 }
 
-void Button::release() {
+void Button::release() const {
     publishToTopic(RELEASE, RELEASE_PAYLOAD);
     ESP_LOGI(TAG, "Button %lu released", id);
 }
 
+void Button::unregisterTopics() {
+    // Clear all current subscriptions and publications using the new clear methods
+    clearSubscriptions();
+    clearPublications();
+}
+
 // handleTopics is now automatically provided by TopicHandler template
 
-void Button::publishToTopic(EventType eventType, const std::string& payload) {
+void Button::publishToTopic(EventType eventType, const std::string& payload) const {
     for (const auto& topic : topics) {
         if (topic.eventType == eventType) {
             const std::string& actualPayload = topic.payload.empty() ? payload : topic.payload;

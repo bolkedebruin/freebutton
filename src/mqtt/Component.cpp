@@ -26,9 +26,7 @@ void MqttSubscriber::addSubscription(uint8_t brokerId, const std::string &topic,
     subscriptions.emplace_back(brokerId, topic, qos);
     ESP_LOGI(TAG, "Added subscription to topic %s on broker %d", topic.c_str(), brokerId);
 
-    auto &registry = MqttBrokerRegistry::instance();
-    auto* broker = registry.getBroker(brokerId);
-    if (broker) {
+    if (auto* broker = MqttBrokerRegistry::getBroker(brokerId)) {
         broker->subscribe(topic, qos, this);
     } else {
         ESP_LOGE(TAG, "Broker with ID %d not found, cannot subscribe to topic %s", brokerId, topic.c_str());
@@ -42,10 +40,10 @@ void MqttSubscriber::removeSubscription(uint8_t brokerId, const std::string &top
     }
 
     // Find and remove the subscription
-    auto it = std::find_if(subscriptions.begin(), subscriptions.end(),
-                           [brokerId, &topic](const TopicSubscription& sub) {
-                               return sub.brokerId == brokerId && sub.topic == topic;
-                           });
+    auto it = std::ranges::find_if(subscriptions,
+                                   [brokerId, &topic](const TopicSubscription& sub) {
+                                       return sub.brokerId == brokerId && sub.topic == topic;
+                                   });
 
     if (it != subscriptions.end()) {
         subscriptions.erase(it);
@@ -53,14 +51,22 @@ void MqttSubscriber::removeSubscription(uint8_t brokerId, const std::string &top
 
         // Always inform the broker to remove this subscriber from the topic
         // The broker will handle cleanup if this was the last subscriber
-        auto &registry = MqttBrokerRegistry::instance();
-        if (auto* broker = registry.getBroker(brokerId)) {
+        if (auto* broker = MqttBrokerRegistry::getBroker(brokerId)) {
             broker->unsubscribe(this);
         }
     } else {
         ESP_LOGW(TAG, "Subscription to topic %s on broker %d not found", topic.c_str(), brokerId);
     }
 };
+
+void MqttSubscriber::clearSubscriptions() {
+    // Make a copy to avoid iterator invalidation during removal
+    auto currentSubscriptions = subscriptions;
+    for (const auto& sub : currentSubscriptions) {
+        removeSubscription(sub.brokerId, sub.topic);
+    }
+    ESP_LOGI(TAG, "Cleared all subscriptions");
+}
 
 std::vector<std::string> MqttSubscriber::getSubscriptionTopics(uint8_t brokerId) const {
     std::vector<std::string> topics;
@@ -95,10 +101,10 @@ void MqttPublisher::removePublication(uint8_t brokerId, const std::string &topic
         return;
     }
 
-    auto it = std::find_if(publications.begin(), publications.end(),
-                           [brokerId, &topic](const TopicPublication& pub) {
-                               return pub.brokerId == brokerId && pub.topic == topic;
-                           });
+    auto it = std::ranges::find_if(publications,
+                                   [brokerId, &topic](const TopicPublication& pub) {
+                                       return pub.brokerId == brokerId && pub.topic == topic;
+                                   });
 
     if (it != publications.end()) {
         publications.erase(it);
@@ -106,6 +112,15 @@ void MqttPublisher::removePublication(uint8_t brokerId, const std::string &topic
     } else {
         ESP_LOGW(TAG, "Publication to topic %s on broker %d not found", topic.c_str(), brokerId);
     }
+}
+
+void MqttPublisher::clearPublications() {
+    // Make a copy to avoid iterator invalidation during removal
+    auto currentPublications = publications;
+    for (const auto& pub : currentPublications) {
+        removePublication(pub.brokerId, pub.topic);
+    }
+    ESP_LOGI(TAG, "Cleared all publications");
 }
 
 std::vector<std::string> MqttPublisher::getPublicationTopics(uint8_t brokerId) const {
@@ -121,8 +136,7 @@ std::vector<std::string> MqttPublisher::getPublicationTopics(uint8_t brokerId) c
 void MqttPublisher::publish(const std::string &data, int qos, bool retain_override) const {
     // Publish to all registered publications
     for (const auto& pub : publications) {
-        auto &registry = MqttBrokerRegistry::instance();
-        if (auto* broker = registry.getBroker(pub.brokerId)) {
+        if (auto* broker = MqttBrokerRegistry::getBroker(pub.brokerId)) {
             int actual_qos = (qos == -1) ? pub.qos : qos;
             bool actual_retain = retain_override ? true : pub.retain;
             broker->publish(pub.topic, data, actual_qos, actual_retain ? 1 : 0);
@@ -139,8 +153,7 @@ void MqttPublisher::publish(uint8_t brokerId, const std::string &topic, const st
         return;
     }
 
-    auto &registry = MqttBrokerRegistry::instance();
-    if (auto* broker = registry.getBroker(brokerId)) {
+    if (auto* broker = MqttBrokerRegistry::getBroker(brokerId)) {
         broker->publish(topic, data, qos, retain ? 1 : 0);
         ESP_LOGD(TAG, "Published to topic %s on broker %d", topic.c_str(), brokerId);
     } else {

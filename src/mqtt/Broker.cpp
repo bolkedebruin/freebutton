@@ -102,7 +102,7 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
     
     if (it != subscriptions_.end()) {
         // Topic already exists, add subscriber if not already present
-        if (std::find(it->subscribers.begin(), it->subscribers.end(), subscriber) == it->subscribers.end()) {
+        if (std::ranges::find(it->subscribers, subscriber) == it->subscribers.end()) {
             it->subscribers.push_back(subscriber);
         } else {
             ESP_LOGW(TAG, "Subscriber already registered for topic: %s", topic.data());
@@ -140,8 +140,8 @@ void MqttBroker::unsubscribe(std::string_view topic) {
     ESP_LOGD(TAG, "Unsubscribing from topic: %.*s", topic.length(), topic.data());
 
     // Remove from internal subscription list
-    auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(),
-                           [topic](const SubscriptionEntry& entry) { return entry.topic == topic; });
+    auto it = std::ranges::find_if(subscriptions_,
+                                   [topic](const SubscriptionEntry& entry) { return entry.topic == topic; });
     
     if (it != subscriptions_.end()) {
         subscriptions_.erase(it);

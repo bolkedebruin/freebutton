@@ -11,7 +11,6 @@
 #include "TopicHandler.h"
 #include <string>
 #include <vector>
-#include <unordered_map>
 
 #include "ArduinoJson/Object/JsonObject.hpp"
 
@@ -27,18 +26,18 @@ public:
     uint32_t ledColorFront;
     uint32_t ledColorWall;
 
-    Button(const std::string& label, const std::string& topLabel,
+    Button(std::string  label, std::string  topLabel,
            uint32_t ledColorFront, uint32_t ledColorWall,
-           const std::vector<Topic>& topicConfigs);
+           std::vector<Topic> topicConfigs);
 
     // MqttComponent interface
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
     const std::string getComponentType() const override;
 
     // Button-specific methods
-    void click();
-    void longPress();
-    void release();
+    void click() const;
+    void longPress() const;
+    void release() const;
 
     // Configuration from JSON
     void fromJson(const ArduinoJson::JsonObject& data) {
@@ -55,20 +54,18 @@ public:
     }
 
 private:
-    static constexpr const char* TAG = "Button";
-
+    static constexpr auto TAG = "Button";
     std::vector<Topic> topics;
-    std::unordered_map<EventType, std::string> currentValues;
 
-    void publishToTopic(EventType eventType, const std::string& payload);
+    void publishToTopic(EventType eventType, const std::string& payload) const;
 
 public:
     // CRTP interface for TopicHandler
     const char* getComponentName() const { return "Button"; }
     std::vector<Topic>& getTopicsRef() { return topics; }
     void registerTopics();
+    void unregisterTopics();
 
-private:
 };
 
 } // namespace freebutton
