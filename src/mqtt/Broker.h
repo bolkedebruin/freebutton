@@ -13,8 +13,8 @@
 
 class MqttBroker {
 public:
-    MqttBroker(const std::string& name, const std::string& url) : brokerId(0), name(std::move(name)),
-                                                                  url(std::move(url)) {
+    MqttBroker(const std::string& name, const std::string& url, const bool autoDiscovery) : brokerId(0), name(std::move(name)),
+                                                                  url(std::move(url)), autoDiscovery_(autoDiscovery) {
         port = 0;
         wsPort = 0;
         client = nullptr;
@@ -26,9 +26,9 @@ public:
 
     // Constructor for full broker configuration from JSON
     MqttBroker(const std::string& name, const std::string& url, uint32_t port, uint32_t wsPort,
-               const std::string& username, const std::string& password)
+               const std::string& username, const std::string& password, const bool autoDiscovery)
         : brokerId(0), name(name), url(url), port(port), wsPort(wsPort),
-          username(username), password(password), client(nullptr) {
+          username(username), password(password), autoDiscovery_(autoDiscovery), client(nullptr) {
         deviceTopic = BASE_TOPIC + deviceId;
     }
 
@@ -55,7 +55,7 @@ public:
     void handleMqttEvent(esp_mqtt_event_handle_t event) const;
     
     // Resubscribe to all existing subscriptions (called on reconnect)
-    void resubscribeAll();
+    void resubscribeAll() const;
 
     void setBrokerId(const uint8_t id) { brokerId = id; }
     uint8_t getBrokerId() const { return brokerId; }
@@ -64,10 +64,12 @@ public:
 
     // Update broker configuration (for auto-registered placeholders)
     void updateConfig(const std::string& newUrl, uint32_t newPort = 0, uint32_t newWsPort = 0,
-                     const std::string& newUsername = "", const std::string& newPassword = "");
+                     const std::string& newUsername = "", const std::string& newPassword = "",
+                     const bool newAutoDiscovery = true);
 
     // Check if broker is configured (has valid URL)
     bool isConfigured() const { return !url.empty(); }
+    bool hasAutoDiscovery() const { return autoDiscovery_; }
 
 private:
     uint8_t brokerId;
@@ -86,6 +88,7 @@ private:
 
     bool enabled = false;
     bool connected_ = false;
+    bool autoDiscovery_ = false;
 
     // Event callbacks
     std::function<void(uint8_t)> on_connected_callback_;

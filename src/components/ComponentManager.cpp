@@ -204,6 +204,8 @@ void ComponentManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {
         const char* username = brokerObj["username"] | "";
         const char* password = brokerObj["password"] | "";
 
+        bool autoDiscovery = brokerObj["autoDiscovery"] | true;
+
         // Check if broker already exists (auto-registered by components)
         uint8_t existingId = MqttBrokerRegistry::getBrokerId(brokerId);
         if (existingId != 255) {
@@ -211,7 +213,7 @@ void ComponentManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {
             // Update existing broker configuration
             ESP_LOGI(TAG, "Updating existing broker '%s' with configuration", brokerId);
             existingBroker->updateConfig(std::string(url), port, wsPort,
-                                       std::string(username), std::string(password));
+                                       std::string(username), std::string(password), autoDiscovery);
         } else {
             // Create new broker with full configuration
             auto broker = std::make_unique<MqttBroker>(
@@ -220,7 +222,8 @@ void ComponentManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {
                 port,
                 wsPort,
                 std::string(username),
-                std::string(password)
+                std::string(password),
+                autoDiscovery
             );
 
             uint8_t id = registry.addBroker(std::move(broker));

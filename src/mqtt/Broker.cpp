@@ -226,13 +226,13 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
             }
             break;
         case MQTT_EVENT_SUBSCRIBED:
-            ESP_LOGI(TAG, "Subscribed to topic (msg_id: %d)", event->msg_id);
+            ESP_LOGD(TAG, "Subscribed to topic (msg_id: %d)", event->msg_id);
             break;
         case MQTT_EVENT_UNSUBSCRIBED:
-            ESP_LOGI(TAG, "Unsubscribed from topic (msg_id: %d)", event->msg_id);
+            ESP_LOGD(TAG, "Unsubscribed from topic (msg_id: %d)", event->msg_id);
             break;
         case MQTT_EVENT_PUBLISHED:
-            ESP_LOGI(TAG, "Message published (msg_id: %d)", event->msg_id);
+            ESP_LOGD(TAG, "Message published (msg_id: %d)", event->msg_id);
             break;
         case MQTT_EVENT_DATA:
             {
@@ -286,7 +286,7 @@ void MqttBroker::setOnErrorCallback(std::function<void(uint8_t, esp_mqtt_error_c
     on_error_callback_ = callback;
 }
 
-void MqttBroker::resubscribeAll() {
+void MqttBroker::resubscribeAll() const {
     if (!enabled || !client) {
         ESP_LOGW(TAG, "Cannot resubscribe: broker not enabled or client not initialized");
         return;
@@ -308,7 +308,8 @@ void MqttBroker::resubscribeAll() {
 }
 
 void MqttBroker::updateConfig(const std::string& newUrl, uint32_t newPort, uint32_t newWsPort,
-                             const std::string& newUsername, const std::string& newPassword) {
+                             const std::string& newUsername, const std::string& newPassword,
+                             const bool newAutoDiscovery) {
     ESP_LOGI(TAG, "Updating configuration for broker '%.*s'", (int)name.length(), name.data());
 
     url = newUrl;
@@ -316,6 +317,7 @@ void MqttBroker::updateConfig(const std::string& newUrl, uint32_t newPort, uint3
     wsPort = newWsPort;
     username = newUsername;
     password = newPassword;
+    autoDiscovery_ = newAutoDiscovery;
 
     ESP_LOGI(TAG, "Broker '%.*s' configured with URL: %s", (int)name.length(), name.data(), url.c_str());
 }

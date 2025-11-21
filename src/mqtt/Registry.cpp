@@ -95,7 +95,7 @@ uint8_t MqttBrokerRegistry::getOrCreateBrokerId(std::string_view name) {
 
     // Auto-register placeholder broker (will be configured later)
     ESP_LOGI(TAG, "Auto-registering placeholder broker: %.*s", (int)name.length(), name.data());
-    auto broker = std::make_unique<MqttBroker>(std::string(name), "");
+    auto broker = std::make_unique<MqttBroker>(std::string(name), "", false);
     return instance().addBroker(std::move(broker));
 }
 

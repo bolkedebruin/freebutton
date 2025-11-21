@@ -36,6 +36,9 @@ const std::map<std::string_view, std::string_view> deviceInfo = {
 NeoPixelController neopixels(NEOPIN);
 auto& registry = MqttBrokerRegistry::instance();
 
+// Global ComponentManager
+freebutton::ComponentManager componentManager;
+
 // LVGL task for UI updates
 void lvgl_task(void* pvParameter) {
     while (true) {
@@ -43,8 +46,6 @@ void lvgl_task(void* pvParameter) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
-
-std::unique_ptr<UI::ProgressBar> progressBar;
 
 void log_free_heap() {
     ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
@@ -84,6 +85,7 @@ void setup() {
         ESP_LOGE(TAG, "LVGL initialization failed!");
     }
 
+    std::unique_ptr<UI::ProgressBar> progressBar;
     if (auto* main_screen = getLvglDisplay().getMainScreen(); main_screen) {
         progressBar = std::make_unique<UI::ProgressBar>(main_screen);
         progressBar->show("Starting...");
@@ -120,7 +122,6 @@ void setup() {
         progressBar->update(70, "Loading configuration...");
     }
 
-    auto componentManager = freebutton::ComponentManager();
     componentManager.loadFromFile("/config.json");
 
     if (progressBar) {
@@ -131,10 +132,9 @@ void setup() {
     componentManager.startBrokers(deviceId);
 
     // Register sensors with Home Assistant Discovery (using first configured broker)
-    MqttBrokerRegistry::forEachBroker([](uint8_t brokerId, MqttBroker* broker) {
-        if (broker && broker->isConfigured()) {
+    MqttBrokerRegistry::forEachBroker([](const uint8_t brokerId, const MqttBroker* broker) {
+        if (broker && broker->isConfigured() && broker->hasAutoDiscovery()) {
             registerSensorsWithDiscovery(brokerId);
-            return; // Only register with first broker
         }
     });
 
@@ -152,7 +152,7 @@ void setup() {
     if (progressBar) {
         progressBar->hide();
 
-        FreeButton::getLvglDisplay().lock();
+        getLvglDisplay().lock();
         // Create new main application screen
         lv_obj_t* main_scr = lv_obj_create(nullptr);
         lv_obj_set_style_bg_color(main_scr, lv_color_hex(0x000000), 0);
