@@ -30,6 +30,9 @@ public:
 
     uint8_t addBroker(std::unique_ptr<MqttBroker> broker);
 
+    // Auto-register broker if it doesn't exist (returns existing ID if found)
+    static uint8_t getOrCreateBrokerId(std::string_view name);
+
     static uint8_t getBrokerId(std::string_view name);
     static MqttBroker* getBroker(std::string_view name);
     static MqttBroker* getBroker(uint8_t brokerId);

@@ -65,7 +65,7 @@ void MqttSubscriber::clearSubscriptions() {
     for (const auto& sub : currentSubscriptions) {
         removeSubscription(sub.brokerId, sub.topic);
     }
-    ESP_LOGI(TAG, "Cleared all subscriptions");
+    ESP_LOGD(TAG, "Cleared all subscriptions");
 }
 
 std::vector<std::string> MqttSubscriber::getSubscriptionTopics(uint8_t brokerId) const {
@@ -120,7 +120,7 @@ void MqttPublisher::clearPublications() {
     for (const auto& pub : currentPublications) {
         removePublication(pub.brokerId, pub.topic);
     }
-    ESP_LOGI(TAG, "Cleared all publications");
+    ESP_LOGD(TAG, "Cleared all publications");
 }
 
 std::vector<std::string> MqttPublisher::getPublicationTopics(uint8_t brokerId) const {

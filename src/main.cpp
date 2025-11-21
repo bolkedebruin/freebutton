@@ -4,6 +4,7 @@
 
 #include "config.h"
 #include "pins.h"
+#include "components/ComponentManager.h"
 #include "core/FileSystem.h"
 #include "core/WebServer.h"
 #include "core/WifiManager.h"
@@ -23,22 +24,6 @@ using namespace FreeButton;
 
 static const auto TAG = "main";
 
-class MyComponent : public MqttSubscriber {
-public:
-    void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override {
-        printf("Received message on broker %d, topic: %.*s, data: %.*s\n",
-               brokerId,
-               static_cast<int>(topic.length()), topic.data(),
-               static_cast<int>(data.length()), data.data());
-    }
-
-    [[nodiscard]] const std::string getComponentType() const override {
-        return "MyComponent";
-    }
-};
-
-
-
 const std::string deviceId(platform_create_id_string());
 
 const std::map<std::string_view, std::string_view> deviceInfo = {
@@ -54,12 +39,11 @@ auto& registry = MqttBrokerRegistry::instance();
 // LVGL task for UI updates
 void lvgl_task(void* pvParameter) {
     while (true) {
-        FreeButton::getLvglDisplay().task();
+        getLvglDisplay().task();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
-std::unique_ptr<MyComponent> globalComponent;
 std::unique_ptr<UI::ProgressBar> progressBar;
 
 void log_free_heap() {
@@ -88,11 +72,11 @@ void setup() {
         return;
     }
 
-    auto &displayManager = FreeButton::getDisplayManager();
+    auto &displayManager = getDisplayManager();
     initBusAwareFileSystem(displayManager.getMainDisplay(), true, "", 10, "data");
 
     // Initialize LVGL display
-    if (FreeButton::initializeLvgl(displayManager)) {
+    if (initializeLvgl(displayManager)) {
         // Start LVGL task
         xTaskCreatePinnedToCore(lvgl_task, "lvgl", 8192, nullptr, 5, nullptr, 1);
         ESP_LOGI(TAG, "LVGL initialized successfully");
@@ -100,7 +84,7 @@ void setup() {
         ESP_LOGE(TAG, "LVGL initialization failed!");
     }
 
-    if (auto* main_screen = FreeButton::getLvglDisplay().getMainScreen(); main_screen) {
+    if (auto* main_screen = getLvglDisplay().getMainScreen(); main_screen) {
         progressBar = std::make_unique<UI::ProgressBar>(main_screen);
         progressBar->show("Starting...");
     } else {
@@ -147,12 +131,10 @@ void setup() {
     registry.addBroker(std::move(broker));
     registry.connectAll();
 
-    globalComponent = std::make_unique<MyComponent>();
     const uint8_t brokerId = MqttBrokerRegistry::getBrokerId("homeserver");
-    globalComponent->addSubscription(brokerId, "test/topic", 1);
 
     HomeAssistantDiscovery::configureBroker(brokerId);
-    HomeAssistantDiscovery::registerComponent(brokerId, globalComponent.get(), "sensor", "my_component_1", "My Component 1", "temperature");
+    //HomeAssistantDiscovery::registerComponent(brokerId, globalComponent.get(), "sensor", "my_component_1", "My Component 1", "temperature");
     
     // Register sensors with Home Assistant Discovery
     registerSensorsWithDiscovery(brokerId);
@@ -166,6 +148,9 @@ void setup() {
         progressBar->update(100, "Ready!");
     }
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
+
+    auto componentManager = freebutton::ComponentManager();
+    componentManager.loadFromFile("/config.json");
 
     // Hide progress bar and create main application screen
     if (progressBar) {

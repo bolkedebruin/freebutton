@@ -83,10 +83,7 @@ void MqttBroker::publish(std::string_view topic, std::string_view data, const in
 }
 
 void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber *subscriber) {
-    if (!client) {
-        ESP_LOGE(TAG, "MQTT client not initialized, cannot subscribe to topic: %s", topic.data());
-        return;
-    }
+    // Always store subscription regardless of client state - will subscribe when client is ready
 
     if (topic.empty()) {
         ESP_LOGE(TAG, "Empty topic for subscription");
@@ -116,13 +113,13 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
         needsBrokerSubscription = true;
     }
     
-    // Only subscribe to broker if this is the first subscriber to this topic and broker is connected
-    if (enabled && needsBrokerSubscription) {
+    // Only subscribe to broker if this is the first subscriber to this topic and broker is ready
+    if (enabled && client && needsBrokerSubscription) {
         if (int msg_id = esp_mqtt_client_subscribe(client, topic.data(), qos); msg_id < 0) {
             ESP_LOGD(TAG, "Failed to subscribe to topic: %s, error: %d (will retry on reconnect)", topic.data(), msg_id);
         }
-    } else if (!enabled && needsBrokerSubscription) {
-        ESP_LOGI(TAG, "Broker not connected yet, topic %.*s will be subscribed when connection is established", (int)topic.length(), topic.data());
+    } else if (needsBrokerSubscription) {
+        ESP_LOGD(TAG, "Broker not ready yet, topic %.*s will be subscribed when connection is established", (int)topic.length(), topic.data());
     }
 }
 
@@ -286,4 +283,17 @@ void MqttBroker::resubscribeAll() {
             }
         }
     }
+}
+
+void MqttBroker::updateConfig(const std::string& newUrl, uint32_t newPort, uint32_t newWsPort,
+                             const std::string& newUsername, const std::string& newPassword) {
+    ESP_LOGI(TAG, "Updating configuration for broker '%.*s'", (int)name.length(), name.data());
+
+    url = newUrl;
+    port = newPort;
+    wsPort = newWsPort;
+    username = newUsername;
+    password = newPassword;
+
+    ESP_LOGI(TAG, "Broker '%.*s' configured with URL: %s", (int)name.length(), name.data(), url.c_str());
 }

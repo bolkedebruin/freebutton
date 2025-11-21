@@ -20,7 +20,7 @@ struct Topic {
     EventType eventType;
 
     void fromJson(const ArduinoJson::JsonObject &data) {
-        brokerId = data["brokerid"].isNull() ? brokerId : MqttBrokerRegistry::getBrokerId(data["brokerid"].as<std::string>());
+        brokerId = data["brokerid"].isNull() ? brokerId : MqttBrokerRegistry::getOrCreateBrokerId(data["brokerid"].as<std::string>());
         topic = data["topic"].isNull() ? topic : data["topic"].as<std::string>();
         payload = data["payload"].isNull() ? payload : data["payload"].as<std::string>();
 

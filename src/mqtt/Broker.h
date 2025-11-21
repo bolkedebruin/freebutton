@@ -24,6 +24,14 @@ public:
         deviceTopic = BASE_TOPIC + deviceId;
     }
 
+    // Constructor for full broker configuration from JSON
+    MqttBroker(const std::string& name, const std::string& url, uint32_t port, uint32_t wsPort,
+               const std::string& username, const std::string& password)
+        : brokerId(0), name(name), url(url), port(port), wsPort(wsPort),
+          username(username), password(password), client(nullptr) {
+        deviceTopic = BASE_TOPIC + deviceId;
+    }
+
     void start();
     void stop();
 
@@ -53,6 +61,13 @@ public:
     uint8_t getBrokerId() const { return brokerId; }
 
     std::string_view getName() const { return name; }
+
+    // Update broker configuration (for auto-registered placeholders)
+    void updateConfig(const std::string& newUrl, uint32_t newPort = 0, uint32_t newWsPort = 0,
+                     const std::string& newUsername = "", const std::string& newPassword = "");
+
+    // Check if broker is configured (has valid URL)
+    bool isConfigured() const { return !url.empty(); }
 
 private:
     uint8_t brokerId;

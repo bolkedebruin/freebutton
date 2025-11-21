@@ -20,8 +20,7 @@ DisplayItem::DisplayItem(const int x, const int y, const int width, const int bo
     , label(std::move(label)), unit(std::move(unit)), round(round), page(page)
 {
     topics = std::move(topicConfigs);
-
-    registerTopics();
+    // Topics will be registered later via ComponentManager::registerAllSubscriptions()
 }
 
 void DisplayItem::registerTopics() {

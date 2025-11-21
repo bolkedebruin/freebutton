@@ -24,7 +24,7 @@ BusAwareFile::~BusAwareFile() {
 }
 
 bool BusAwareFile::needsBusManagement() const {
-    return display_ && busShared_ && *this;
+    return display_ && busShared_ && fs::File::operator bool();
 }
 
 void BusAwareFile::acquireBus() const {

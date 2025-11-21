@@ -68,8 +68,8 @@ private:
         unit = data["unit"].isNull() ? unit : data["unit"].as<std::string>();
         page = data["page"].isNull() ? page : data["page"].as<int>();
 
-        if (data["topics"].is<ArduinoJson::JsonArray>()) {
-            handleTopics(data["topics"].as<ArduinoJson::JsonArray>());
+        if (data["topics"].is<JsonArray>()) {
+            handleTopics(data["topics"].as<JsonArray>());
         } else {
             ESP_LOGW(TAG, "No topics in DisplayItem JSON");
         }

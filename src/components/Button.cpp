@@ -21,8 +21,7 @@ Button::Button(std::string  label, std::string  topLabel,
     , ledColorFront(ledColorFront), ledColorWall(ledColorWall)
 {
     topics = std::move(topicConfigs);
-
-    registerTopics();
+    // Topics will be registered later via ComponentManager::registerAllSubscriptions()
 }
 
 void Button::registerTopics() {

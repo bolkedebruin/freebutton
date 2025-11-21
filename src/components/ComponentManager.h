@@ -11,6 +11,7 @@
 #include <functional>
 #include "DisplayItem.h"
 #include "Button.h"
+#include "mqtt/Registry.h"
 
 namespace freebutton {
 
@@ -96,7 +97,7 @@ public:
      * @param index Index of display item
      * @return Reference to DisplayItem or nullptr if index invalid
      */
-    DisplayItem* getDisplayItem(size_t index) {
+    DisplayItem* getDisplayItem(const size_t index) const {
         return index < displayItems.size() ? displayItems[index].get() : nullptr;
     }
 
@@ -105,7 +106,7 @@ public:
      * @param index Index of button
      * @return Reference to Button or nullptr if index invalid
      */
-    Button* getButton(size_t index) {
+    Button* getButton(const size_t index) const {
         return index < buttons.size() ? buttons[index].get() : nullptr;
     }
 
@@ -114,7 +115,7 @@ public:
      * @param page Page number to filter by
      * @return Vector of DisplayItem pointers on the specified page
      */
-    std::vector<DisplayItem*> getDisplayItemsByPage(int page);
+    std::vector<DisplayItem*> getDisplayItemsByPage(int page) const;
 
     /**
      * Get memory usage statistics
@@ -128,7 +129,7 @@ public:
     MemoryStats getMemoryStats() const;
 
 private:
-    static constexpr const char* TAG = "ComponentManager";
+    static constexpr auto TAG = "ComponentManager";
 
     std::vector<std::unique_ptr<DisplayItem>> displayItems;
     std::vector<std::unique_ptr<Button>> buttons;
@@ -136,12 +137,23 @@ private:
     /**
      * Load display items from JSON array
      */
-    void loadDisplayItems(const ArduinoJson::JsonArray& itemsArray);
+    void loadDisplayItems(const JsonArray& itemsArray);
 
     /**
      * Load buttons from JSON array
      */
-    void loadButtons(const ArduinoJson::JsonArray& buttonsArray);
+    void loadButtons(const JsonArray& buttonsArray);
+
+    /**
+     * Load MQTT brokers from JSON array
+     */
+    void loadBrokers(const JsonArray& brokersArray);
+
+    /**
+     * Register all component subscriptions with their brokers
+     * Call this after brokers are fully configured
+     */
+    void registerAllSubscriptions();
 };
 
 } // namespace freebutton

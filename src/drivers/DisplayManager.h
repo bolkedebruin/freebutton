@@ -55,7 +55,7 @@ public:
             cfg.invert = false;  // ST7789 typically needs inversion ON
             cfg.rgb_order = false;  // BGR order like working implementation
             cfg.dlen_16bit = false;
-            cfg.bus_shared = true;
+            cfg.bus_shared = false;
             // CRITICAL: ST7789 memory dimensions - controller has 240x320 internal memory
             cfg.memory_width = 320;   // ST7789 internal memory width
             cfg.memory_height = 240;  // ST7789 internal memory height
@@ -113,7 +113,7 @@ public:
             cfg.invert = false;
             cfg.rgb_order = false;
             cfg.dlen_16bit = false;
-            cfg.bus_shared = true;
+            cfg.bus_shared = false;
             _panel_instance.config(cfg);
         }
 

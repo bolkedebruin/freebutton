@@ -54,7 +54,6 @@ MqttBroker* MqttBrokerRegistry::getBroker(const uint8_t brokerId) {
 
 uint8_t MqttBrokerRegistry::getBrokerId(std::string_view name) {
     if (name.empty()) {
-        ESP_LOGW(TAG, "Cannot get ID for empty name");
         return 255;
     }
 
@@ -64,13 +63,11 @@ uint8_t MqttBrokerRegistry::getBrokerId(std::string_view name) {
         }
     }
 
-    ESP_LOGW(TAG, "Broker with name '%.*s' not found", (int)name.length(), name.data());
-    return 255;
+    return 255; // Not found - calling function can log warning if needed
 }
 
 MqttBroker* MqttBrokerRegistry::getBroker(std::string_view name) {
     if (name.empty()) {
-        ESP_LOGW(TAG, "Cannot lookup broker with empty name");
         return nullptr;
     }
 
@@ -80,9 +77,28 @@ MqttBroker* MqttBrokerRegistry::getBroker(std::string_view name) {
         }
     }
 
-    ESP_LOGW(TAG, "Broker with name '%.*s' not found", (int)name.length(), name.data());
-    return nullptr;
+    return nullptr; // Not found - calling function can log warning if needed
 }
+
+uint8_t MqttBrokerRegistry::getOrCreateBrokerId(std::string_view name) {
+    if (name.empty()) {
+        ESP_LOGW(TAG, "Cannot get or create ID for empty name");
+        return 255;
+    }
+
+    // Silent lookup - don't log warnings for missing brokers during auto-registration
+    for (size_t i = 0; i < brokers.size(); ++i) {
+        if (namesMatch(brokers[i]->getName(), name)) {
+            return static_cast<uint8_t>(i);
+        }
+    }
+
+    // Auto-register placeholder broker (will be configured later)
+    ESP_LOGI(TAG, "Auto-registering placeholder broker: %.*s", (int)name.length(), name.data());
+    auto broker = std::make_unique<MqttBroker>(std::string(name), "");
+    return instance().addBroker(std::move(broker));
+}
+
 
 void MqttBrokerRegistry::connectAll() {
     ESP_LOGI(TAG, "Connecting to all %d brokers", brokers.size());
