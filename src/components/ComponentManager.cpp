@@ -8,6 +8,7 @@
 #include <esp_log.h>
 #include "LittleFS.h"
 #include "drivers/BusAwareFileSystem.h"
+#include "mqtt/HomeAssistantDiscovery.h"
 
 namespace freebutton {
 
@@ -252,6 +253,39 @@ void ComponentManager::registerAllSubscriptions() {
     });
 
     ESP_LOGI(TAG, "Registered subscriptions for %zu components", totalSubscriptions);
+}
+
+void ComponentManager::startBrokers(const std::string& deviceId) {
+    ESP_LOGI(TAG, "Starting all brokers and configuring Home Assistant discovery");
+
+    auto& registry = MqttBrokerRegistry::instance();
+
+    // Set up Home Assistant device info
+    HomeAssistantDiscovery::setDeviceInfo({.identifiers = deviceId});
+
+    // Configure each broker with Home Assistant discovery
+    MqttBrokerRegistry::forEachBroker([](uint8_t brokerId, MqttBroker* broker) {
+        if (broker && broker->isConfigured()) {
+            // Set up connection callback for HomeAssistant discovery
+            broker->setOnConnectedCallback([brokerId](uint8_t connectedBrokerId) {
+                ESP_LOGI(TAG, "Broker %d connected, triggering Home Assistant discovery", connectedBrokerId);
+                HomeAssistantDiscovery::onBrokerConnected(connectedBrokerId);
+            });
+
+            // Configure Home Assistant discovery for this broker
+            HomeAssistantDiscovery::configureBroker(brokerId);
+
+            ESP_LOGI(TAG, "Configured broker %d: %.*s for Home Assistant discovery", brokerId,
+                    (int)broker->getName().length(), broker->getName().data());
+        } else {
+            ESP_LOGW(TAG, "Skipping unconfigured broker at ID %d", brokerId);
+        }
+    });
+
+    // Start all configured brokers
+    registry.connectAll();
+
+    ESP_LOGI(TAG, "All brokers started and Home Assistant discovery configured");
 }
 
 } // namespace freebutton

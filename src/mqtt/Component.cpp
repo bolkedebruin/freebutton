@@ -15,6 +15,11 @@ void MqttSubscriber::addSubscription(uint8_t brokerId, const std::string &topic,
         return;
     }
 
+    if (brokerId == 255) {
+        ESP_LOGW(TAG, "Skipping subscription to topic %s - invalid broker ID 255", topic.c_str());
+        return;
+    }
+
     // check for existing subscription
     for (const auto &sub : subscriptions) {
         if (sub.brokerId == brokerId && sub.topic == topic) {
@@ -136,6 +141,11 @@ std::vector<std::string> MqttPublisher::getPublicationTopics(uint8_t brokerId) c
 void MqttPublisher::publish(const std::string &data, int qos, bool retain_override) const {
     // Publish to all registered publications
     for (const auto& pub : publications) {
+        if (pub.brokerId == 255) {
+            ESP_LOGW(TAG, "Skipping publish to topic %s - invalid broker ID 255", pub.topic.c_str());
+            continue;
+        }
+
         if (auto* broker = MqttBrokerRegistry::getBroker(pub.brokerId)) {
             int actual_qos = (qos == -1) ? pub.qos : qos;
             bool actual_retain = retain_override ? true : pub.retain;
@@ -150,6 +160,11 @@ void MqttPublisher::publish(const std::string &data, int qos, bool retain_overri
 void MqttPublisher::publish(uint8_t brokerId, const std::string &topic, const std::string &data, int qos, bool retain) {
     if (topic.empty()) {
         ESP_LOGE(TAG, "Cannot publish to empty topic");
+        return;
+    }
+
+    if (brokerId == 255) {
+        ESP_LOGW(TAG, "Skipping publish to topic %s - invalid broker ID 255", topic.c_str());
         return;
     }
 

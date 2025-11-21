@@ -117,27 +117,26 @@ void setup() {
     }
 
     if (progressBar) {
-        progressBar->update(70, "Configuring MQTT...");
+        progressBar->update(70, "Loading configuration...");
     }
 
-    auto broker = std::make_unique<MqttBroker>("homeserver", "mqtt://192.168.1.10");
-    
-    // Set up connection callback for HomeAssistant discovery
-    broker->setOnConnectedCallback([](const uint8_t brokerId) {
-        HomeAssistantDiscovery::onBrokerConnected(brokerId);
+    auto componentManager = freebutton::ComponentManager();
+    componentManager.loadFromFile("/config.json");
+
+    if (progressBar) {
+        progressBar->update(85, "Starting MQTT brokers...");
+    }
+
+    // Start brokers and configure Home Assistant auto-discovery
+    componentManager.startBrokers(deviceId);
+
+    // Register sensors with Home Assistant Discovery (using first configured broker)
+    MqttBrokerRegistry::forEachBroker([](uint8_t brokerId, MqttBroker* broker) {
+        if (broker && broker->isConfigured()) {
+            registerSensorsWithDiscovery(brokerId);
+            return; // Only register with first broker
+        }
     });
-    HomeAssistantDiscovery::setDeviceInfo({.identifiers = deviceId});
-
-    registry.addBroker(std::move(broker));
-    registry.connectAll();
-
-    const uint8_t brokerId = MqttBrokerRegistry::getBrokerId("homeserver");
-
-    HomeAssistantDiscovery::configureBroker(brokerId);
-    //HomeAssistantDiscovery::registerComponent(brokerId, globalComponent.get(), "sensor", "my_component_1", "My Component 1", "temperature");
-    
-    // Register sensors with Home Assistant Discovery
-    registerSensorsWithDiscovery(brokerId);
 
     if (progressBar) {
         progressBar->update(90, "Finalizing setup...");
@@ -148,9 +147,6 @@ void setup() {
         progressBar->update(100, "Ready!");
     }
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
-
-    auto componentManager = freebutton::ComponentManager();
-    componentManager.loadFromFile("/config.json");
 
     // Hide progress bar and create main application screen
     if (progressBar) {
@@ -170,10 +166,10 @@ void setup() {
 
         // Load the new screen
         lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_IN, 500, 0, false);
-        FreeButton::getLvglDisplay().unlock();
+        getLvglDisplay().unlock();
 
         // Request creation of the Google Hello button
-        FreeButton::getLvglDisplay().requestGoogleHelloButton();
+        getLvglDisplay().requestGoogleHelloButton();
 
         ESP_LOGI(TAG, "Progress bar hidden, main UI loaded");
     }

@@ -104,7 +104,12 @@ void MqttBrokerRegistry::connectAll() {
     ESP_LOGI(TAG, "Connecting to all %d brokers", brokers.size());
 
     for (auto& broker : brokers) {
-        broker->start();
+        if (broker->isConfigured()) {
+            broker->start();
+        } else {
+            ESP_LOGW(TAG, "Skipping unconfigured broker: %.*s",
+                    (int)broker->getName().length(), broker->getName().data());
+        }
     }
 }
 

@@ -39,6 +39,8 @@ public:
                 std::string  label, std::string  unit, int round, int page,
                 std::vector<Topic> topicConfigs);
 
+    ~DisplayItem();
+
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
     const std::string getComponentType() const override;
 

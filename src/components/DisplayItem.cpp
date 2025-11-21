@@ -23,6 +23,11 @@ DisplayItem::DisplayItem(const int x, const int y, const int width, const int bo
     // Topics will be registered later via ComponentManager::registerAllSubscriptions()
 }
 
+DisplayItem::~DisplayItem() {
+    // Unregister all subscriptions when the component is destroyed
+    unregisterTopics();
+}
+
 void DisplayItem::registerTopics() {
     for (const auto& topic : topics) {
         addSubscription(topic.brokerId, topic.topic);
@@ -32,7 +37,7 @@ void DisplayItem::registerTopics() {
 void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic, const std::string_view data) {
     for (const auto& topicConfig : topics) {
         if (brokerId == topicConfig.brokerId && topic == topicConfig.topic) {
-            ESP_LOGI(TAG, "topic=%s value=%s", topic.data(), data.data());
+            ESP_LOGI(TAG, "topic=%.*s value=%.*s", (int)topic.length(), topic.data(), (int)data.length(), data.data());
             break;
         }
     }

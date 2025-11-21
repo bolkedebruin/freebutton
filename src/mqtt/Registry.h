@@ -39,6 +39,14 @@ public:
 
     void connectAll();
     void disconnectAll();
+
+    // Iterate over all brokers
+    template<typename Func>
+    static void forEachBroker(Func&& func) {
+        for (size_t i = 0; i < brokers.size(); ++i) {
+            func(static_cast<uint8_t>(i), brokers[i].get());
+        }
+    }
 };
 
 #endif //FREEBUTTON_REGISTRY_H

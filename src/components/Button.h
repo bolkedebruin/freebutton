@@ -32,6 +32,8 @@ public:
            uint32_t ledColorFront, uint32_t ledColorWall,
            std::vector<Topic> topicConfigs);
 
+    ~Button();
+
     // MqttComponent interface
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
     const std::string getComponentType() const override;

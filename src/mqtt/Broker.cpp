@@ -2,6 +2,7 @@
 // Created by Bolke de Bruin on 10/08/2025.
 //
 #include "Broker.h"
+#include "Registry.h"
 
 #include <algorithm>
 #include <cstring>
@@ -15,6 +16,7 @@ void MqttBroker::start() {
 
     if (url.empty()) {
         ESP_LOGE(TAG, "MQTT URL is empty, cannot start broker");
+        return;
     }
 
     std::ranges::transform(url, url.begin(), ::tolower);
@@ -33,7 +35,8 @@ void MqttBroker::start() {
         mqtt_cfg.session.last_will.retain = 1;
 
         client = esp_mqtt_client_init(&mqtt_cfg);
-        esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqtt_event_handler, this);
+        ESP_LOGI(TAG, "Registering MQTT event handler for broker '%.*s' with ID %d", (int)name.length(), name.data(), brokerId);
+        esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqtt_event_handler, reinterpret_cast<void*>(static_cast<uintptr_t>(brokerId)));
         if (esp_mqtt_client_start(client) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to start MQTT client");
             esp_mqtt_client_destroy(client);
@@ -46,10 +49,13 @@ void MqttBroker::start() {
 
 void MqttBroker::stop() {
     if (client) {
+        // Unregister event handler first to prevent callbacks after destruction
+        esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, nullptr, nullptr);
         esp_mqtt_client_stop(client);
         esp_mqtt_client_destroy(client);
         client = nullptr;
         enabled = false;
+        connected_ = false;
     }
 }
 
@@ -102,7 +108,7 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
         if (std::ranges::find(it->subscribers, subscriber) == it->subscribers.end()) {
             it->subscribers.push_back(subscriber);
         } else {
-            ESP_LOGW(TAG, "Subscriber already registered for topic: %s", topic.data());
+            ESP_LOGW(TAG, "Subscriber already registered for topic: %.*s", (int)topic.length(), topic.data());
         }
     } else {
         // New topic, create entry and mark for broker subscription
@@ -116,7 +122,7 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
     // Only subscribe to broker if this is the first subscriber to this topic and broker is ready
     if (enabled && client && needsBrokerSubscription) {
         if (int msg_id = esp_mqtt_client_subscribe(client, topic.data(), qos); msg_id < 0) {
-            ESP_LOGD(TAG, "Failed to subscribe to topic: %s, error: %d (will retry on reconnect)", topic.data(), msg_id);
+            ESP_LOGD(TAG, "Failed to subscribe to topic: %.*s, error: %d (will retry on reconnect)", (int)topic.length(), topic.data(), msg_id);
         }
     } else if (needsBrokerSubscription) {
         ESP_LOGD(TAG, "Broker not ready yet, topic %.*s will be subscribed when connection is established", (int)topic.length(), topic.data());
@@ -125,7 +131,7 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
 
 void MqttBroker::unsubscribe(std::string_view topic) {
     if (!client) {
-        ESP_LOGD(TAG, "MQTT client not initialized, cannot unsubscribe from topic: %s", topic.data());
+        ESP_LOGD(TAG, "MQTT client not initialized, cannot unsubscribe from topic: %.*s", (int)topic.length(), topic.data());
         return;
     }
 
@@ -146,7 +152,7 @@ void MqttBroker::unsubscribe(std::string_view topic) {
 
     if (enabled) {
         if (int msg_id = esp_mqtt_client_unsubscribe(client, topic.data()); msg_id < 0) {
-            ESP_LOGW(TAG, "Failed to unsubscribe from topic: %s, error: %d", topic.data(), msg_id);
+            ESP_LOGW(TAG, "Failed to unsubscribe from topic: %.*s, error: %d", (int)topic.length(), topic.data(), msg_id);
         }
     }
 }
@@ -177,8 +183,24 @@ void MqttBroker::unsubscribe(MqttSubscriber* subscriber) {
 }
 
 void MqttBroker::mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data) {
-    const auto* broker = static_cast<MqttBroker*>(handler_args);
+    const auto brokerId = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(handler_args));
+
     auto* event = static_cast<esp_mqtt_event_handle_t>(event_data);
+    if (!event) {
+        ESP_LOGE(TAG, "NULL event data in event handler");
+        return;
+    }
+
+    ESP_LOGD(TAG, "Event handler called for broker ID %d, event type %d", brokerId, event_id);
+
+    // Get broker from registry using the broker ID
+    MqttBroker* broker = MqttBrokerRegistry::getBroker(brokerId);
+    if (!broker) {
+        ESP_LOGE(TAG, "Broker with ID %d not found in registry", brokerId);
+        return;
+    }
+
+    ESP_LOGD(TAG, "Found broker %p for ID %d, calling handleMqttEvent", (void*)broker, brokerId);
     broker->handleMqttEvent(event);
 }
 

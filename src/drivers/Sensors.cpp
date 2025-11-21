@@ -200,7 +200,18 @@ void addSensor(int address) {
 void sampleSensors() {
     // For now, we'll use a hardcoded broker ID since we only have one broker
     // In the future, this could be made more dynamic
-    const uint8_t brokerId = MqttBrokerRegistry::getBrokerId("homeserver");
+    // Find the first configured broker to publish sensor data
+    uint8_t brokerId = 255;
+    MqttBrokerRegistry::forEachBroker([&brokerId](uint8_t id, MqttBroker* broker) {
+        if (broker && broker->isConfigured() && brokerId == 255) {
+            brokerId = id;
+        }
+    });
+
+    // Skip if no configured broker found
+    if (brokerId == 255) {
+        return;
+    }
 
     for (auto& [id, sensor] : sensorDevices) {
         if (sensor && sensor->online) {

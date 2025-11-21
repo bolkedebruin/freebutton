@@ -24,6 +24,11 @@ Button::Button(std::string  label, std::string  topLabel,
     // Topics will be registered later via ComponentManager::registerAllSubscriptions()
 }
 
+Button::~Button() {
+    // Unregister all subscriptions when the component is destroyed
+    unregisterTopics();
+}
+
 void Button::registerTopics() {
     for (const auto& topic : topics) {
         // Determine if this is a subscription (incoming) or publication (outgoing) topic

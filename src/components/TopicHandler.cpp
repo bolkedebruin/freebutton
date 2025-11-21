@@ -42,9 +42,9 @@ std::vector<Topic> TopicParser::parseTopics(const JsonArray& topicsArray,
 }
 
 bool TopicParser::isValidTopic(const Topic& topic) {
-    // Check if broker ID is valid (non-zero means broker was found)
-    if (topic.brokerId == 0) {
-        ESP_LOGW(TAG, "Topic has invalid broker ID: 0");
+    // Check if broker ID is valid (255 means broker not found)
+    if (topic.brokerId == 255) {
+        ESP_LOGW(TAG, "Topic has invalid broker ID: 255");
         return false;
     }
 

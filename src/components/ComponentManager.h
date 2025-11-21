@@ -128,6 +128,18 @@ public:
 
     MemoryStats getMemoryStats() const;
 
+    /**
+     * Register all component subscriptions with their brokers
+     * Call this after brokers are fully configured
+     */
+    void registerAllSubscriptions();
+
+    /**
+     * Start all brokers and configure Home Assistant auto-discovery
+     * Call this after brokers are configured and subscriptions registered
+     */
+    void startBrokers(const std::string& deviceId);
+
 private:
     static constexpr auto TAG = "ComponentManager";
 
@@ -148,12 +160,6 @@ private:
      * Load MQTT brokers from JSON array
      */
     void loadBrokers(const JsonArray& brokersArray);
-
-    /**
-     * Register all component subscriptions with their brokers
-     * Call this after brokers are fully configured
-     */
-    void registerAllSubscriptions();
 };
 
 } // namespace freebutton
