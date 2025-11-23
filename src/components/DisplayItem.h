@@ -12,6 +12,10 @@
 
 #include "ArduinoJson/Object/JsonObject.hpp"
 
+extern "C" {
+#include "ui/ui.h"
+}
+
 namespace freebutton {
 
 class DisplayItem final : public MqttSubscriber, public TopicHandler<DisplayItem> {
@@ -33,7 +37,12 @@ public:
 
     int page = 1;
 
-    DisplayItem() : DisplayItem(0, 0, 100, 0, 14, 0, "default", "", 0, 1, {}) {}
+    DisplayItem() : DisplayItem(0, 0, 100, 0, 14, 0, "", "", 0, 1, {}) {}
+
+private:
+    lv_obj_t* box = nullptr;  // UI box element
+
+public:
 
     DisplayItem(int x, int y, int width, int boxtype, int fontSize, int alignment,
                 std::string  label, std::string  unit, int round, int page,
@@ -47,6 +56,7 @@ public:
     static std::unique_ptr<DisplayItem> fromJson(const JsonObject& config) {
         auto displayItem = std::make_unique<DisplayItem>();
         displayItem->configure(config);
+        displayItem->createBox();  // Create UI box after configuration
         return displayItem;
     }
 
@@ -82,6 +92,10 @@ public:
     std::vector<Topic>& getTopicsRef() { return topics; }
     void registerTopics();
     void unregisterTopics();
+
+    // UI methods
+    void createBox();
+    void destroyBox();
 
 };
 

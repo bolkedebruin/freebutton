@@ -9,6 +9,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "ui/fonts/fonts.h"
+
 #define MAIN_DISPLAY_WIDTH 320
 #define MAIN_DISPLAY_HEIGHT 240
 #define MAIN_DISPLAY_BUFFER_SIZE 20
@@ -139,6 +141,8 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     lv_fs_if_init();
 
     ESP_LOGI(TAG, "LVGL filesystem interface initialized");
+
+    init_fonts();
 
     initialized_ = true;
     ESP_LOGI(TAG, "LVGL display initialization completed successfully");

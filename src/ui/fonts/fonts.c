@@ -19,7 +19,7 @@ LV_FONT_DECLARE(mnt_semibold_14);
 LV_FONT_DECLARE(mnt_semibold_18);
 
 LV_FONT_DECLARE(mnt_medium_14);
-//LV_FONT_DECLARE(mnt_medium_24);
+LV_FONT_DECLARE(mnt_medium_24);
 LV_FONT_DECLARE(mnt_medium_32);
 LV_FONT_DECLARE(mnt_medium_48);
 LV_FONT_DECLARE(mnt_medium_72);
@@ -670,7 +670,7 @@ void destroy_fonts() {
     fnt_semibold_18 = &mnt_semibold_18;
 
     fnt_medium_14 = &mnt_medium_14;
-    //fnt_medium_24 = &mnt_medium_24;
+    fnt_medium_24 = &mnt_medium_24;
     fnt_medium_32 = &mnt_medium_32;
     fnt_medium_48 = &mnt_medium_48;
     fnt_medium_72 = &mnt_medium_72;
@@ -697,7 +697,7 @@ void init_fonts() {
     font24 = streaming_font_init("S:/fonts/mnt_medium_24.bin", 0);
     if (font24 == NULL) {
         LV_LOG_WARN("Failed to create font. Loading built-in");
-        //fnt_medium_24 = &mnt_medium_24;
+        fnt_medium_24 = &mnt_medium_24;
     } else {
         fnt_medium_24 = &font24->font;
     }

@@ -148,27 +148,11 @@ void setup() {
     }
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
 
-    // Hide progress bar and create main application screen
+    // Hide progress bar and show main application screen with DisplayItems
     if (progressBar) {
         progressBar->hide();
 
-        getLvglDisplay().lock();
-        // Create new main application screen
-        lv_obj_t* main_scr = lv_obj_create(nullptr);
-        lv_obj_set_style_bg_color(main_scr, lv_color_hex(0x000000), 0);
-
-        // Create welcome label
-        lv_obj_t* welcome_label = lv_label_create(main_scr);
-        lv_label_set_text(welcome_label, "FreeButton Ready");
-        lv_obj_set_style_text_color(welcome_label, lv_color_hex(0xffffff), 0);
-        lv_obj_set_style_text_font(welcome_label, &lv_font_montserrat_14, 0);
-        lv_obj_center(welcome_label);
-
-        // Load the new screen
-        lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_IN, 500, 0, false);
-        getLvglDisplay().unlock();
-
-        // Request creation of the Google Hello button
+        // Request creation of the Google Hello button on the main screen (where DisplayItems are)
         getLvglDisplay().requestGoogleHelloButton();
 
         ESP_LOGI(TAG, "Progress bar hidden, main UI loaded");
