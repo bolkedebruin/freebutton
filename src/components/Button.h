@@ -14,6 +14,10 @@
 
 #include "ArduinoJson/Object/JsonObject.hpp"
 
+extern "C" {
+#include "ui/ui_button.h"
+}
+
 namespace freebutton {
 
 class Button final : public MqttSubscriber, public MqttPublisher, public TopicHandler<Button> {
@@ -34,6 +38,11 @@ public:
 
     ~Button();
 
+private:
+    lv_obj_t* button = nullptr;  // UI button element
+
+public:
+
     // MqttComponent interface
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
     const std::string getComponentType() const override;
@@ -46,6 +55,7 @@ public:
     static std::unique_ptr<Button> fromJson(const JsonObject& config) {
         auto button = std::make_unique<Button>();
         button->configure(config);
+        button->createButton();  // Create UI button after configuration
         return button;
     }
 
@@ -56,14 +66,18 @@ private:
     void publishToTopic(EventType eventType, const std::string& payload) const;
 
     // Configuration from JSON
-    void configure(const ArduinoJson::JsonObject& data) {
+    void configure(const JsonObject& data) {
+        if (!data["id"].isNull()) {
+            id = data["id"].as<unsigned long>();
+        }
+
         label = data["label"].isNull() ? label : data["label"].as<std::string>();
         topLabel = data["toplabel"].isNull() ? topLabel : data["toplabel"].as<std::string>();
         ledColorFront = data["ledcolorfront"].isNull() ? ledColorFront : data["ledcolorfront"].as<uint32_t>();
         ledColorWall = data["ledcolorwall"].isNull() ? ledColorWall : data["ledcolorwall"].as<uint32_t>();
 
-        if (data["topics"].is<ArduinoJson::JsonArray>()) {
-            handleTopics(data["topics"].as<ArduinoJson::JsonArray>());
+        if (data["topics"].is<JsonArray>()) {
+            handleTopics(data["topics"].as<JsonArray>());
         } else {
             ESP_LOGW(TAG, "No topics in Button JSON");
         }
@@ -75,6 +89,10 @@ public:
     std::vector<Topic>& getTopicsRef() { return topics; }
     void registerTopics();
     void unregisterTopics();
+
+    // UI methods
+    void createButton();
+    void destroyButton();
 
 };
 

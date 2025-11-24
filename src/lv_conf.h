@@ -11,7 +11,7 @@
    MEMORY SETTINGS
  *====================*/
 #define LV_MEM_CUSTOM 0
-#define LV_MEM_SIZE (40960U)    /* 32 KB */
+#define LV_MEM_SIZE (61440U)    /* 64 KB */
 
 /*====================
    HAL SETTINGS

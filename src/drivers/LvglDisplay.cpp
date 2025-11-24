@@ -450,7 +450,7 @@ void LvglDisplay::createGoogleHelloButton() {
     lv_scr_load_anim(small_scr, LV_SCR_LOAD_ANIM_NONE, 0, 0, false);
 
     // Create the button using our ui_button
-    lv_obj_t* hello_button = ui_button_create();
+    lv_obj_t* hello_button = ui_button_create(small_scr);
     if (!hello_button) {
         ESP_LOGE(TAG, "Failed to create Hello button");
         releaseSmallDisplayBuffer(1);

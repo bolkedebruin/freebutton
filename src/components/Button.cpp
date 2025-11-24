@@ -5,6 +5,8 @@
 
 #include "Button.h"
 #include "mqtt/Registry.h"
+#include "drivers/LvglDisplay.h"
+#include "types.h"
 #include <esp_log.h>
 
 #include <utility>
@@ -25,7 +27,8 @@ Button::Button(std::string  label, std::string  topLabel,
 }
 
 Button::~Button() {
-    // Unregister all subscriptions when the component is destroyed
+    // Destroy UI button first, then unregister subscriptions
+    destroyButton();
     unregisterTopics();
 }
 
@@ -58,17 +61,34 @@ void Button::registerTopics() {
 }
 
 void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) {
+    if (!button) {
+        ESP_LOGD(TAG, "No UI button for Button %lu (no display available), ignoring UI message", id);
+        return;
+    }
+
     for (const auto& topicConfig : topics) {
         if (brokerId == topicConfig.brokerId && topic == topicConfig.topic) {
-            // Handle specific message types
+            ESP_LOGI(TAG, "Button %lu: topic=%.*s value=%.*s eventType=%d",
+                     id, (int)topic.length(), topic.data(), (int)data.length(), data.data(), topicConfig.eventType);
+
+            // Convert data to string for UI functions
+            std::string value(data.data(), data.length());
+
+            // Lock screen access for thread safety
+            auto& lvglDisplay = FreeButton::getLvglDisplay();
+            lvglDisplay.lock();
+
+            // Handle specific message types and update UI
             switch (topicConfig.eventType) {
                 case LABEL:
                     label.assign(data.data(), data.size());
+                    ui_button_set_text(button, label.c_str());
                     ESP_LOGI(TAG, "Button %lu label updated to: %s", id, label.c_str());
                     break;
 
                 case TOP_LABEL:
                     topLabel.assign(data.data(), data.size());
+                    ui_button_set_title(button, topLabel.c_str());
                     ESP_LOGI(TAG, "Button %lu top label updated to: %s", id, topLabel.c_str());
                     break;
 
@@ -83,10 +103,11 @@ void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_vie
                     break;
 
                 default:
-                    ESP_LOGD(TAG, "Button %lu received message for event type %d: %s",
-                            id, static_cast<int>(topicConfig.eventType), std::string(data).c_str());
+                    ESP_LOGW(TAG, "Button %lu: Unknown event type: %d", id, static_cast<int>(topicConfig.eventType));
                     break;
             }
+
+            lvglDisplay.unlock();
             break;
         }
     }
@@ -130,6 +151,100 @@ void Button::publishToTopic(EventType eventType, const std::string& payload) con
             break;
         }
     }
+}
+
+void Button::createButton() {
+    // Get the appropriate small display for this button
+    // Button ID maps to small display index
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lv_display_t* smallDisplay = lvglDisplay.getSmallDisplay(id);
+
+    if (!smallDisplay) {
+        ESP_LOGD(TAG, "Small display %lu not available for Button %lu, skipping UI creation", id, id);
+        return;
+    }
+
+    // Acquire buffer for the small display
+    if (!lvglDisplay.acquireSmallDisplayBuffer(id)) {
+        ESP_LOGW(TAG, "Failed to acquire buffer for small display %lu, Button %lu", id, id);
+        return;
+    }
+
+    // Save current default display and temporarily set to small display
+    lv_display_t* original_default_disp = lv_display_get_default();
+    lv_display_set_default(smallDisplay);
+
+    // Get the screen from the small display
+    lv_obj_t* parent = lv_display_get_screen_active(smallDisplay);
+
+    if (!parent) {
+        ESP_LOGE(TAG, "Screen not available for Button %lu on small display %lu", id, id);
+        lv_display_set_default(original_default_disp);
+        lvglDisplay.releaseSmallDisplayBuffer(id);
+        return;
+    }
+
+    // Lock screen access for thread safety
+    lvglDisplay.lock();
+
+    // If button already exists, just redraw it with new configuration
+    if (button != nullptr) {
+        ESP_LOGI(TAG, "Redrawing existing button for Button %lu", id);
+        ui_button_set_title(button, topLabel.c_str());
+        ui_button_set_text(button, label.c_str());
+        lvglDisplay.unlock();
+        return;
+    }
+
+    // Initialize button styles if not already done (should be done once globally)
+    static bool styles_initialized = false;
+    if (!styles_initialized) {
+        ui_button_styles();
+        styles_initialized = true;
+    }
+
+    // Create the button with the correct small display parent
+    button = ui_button_create(parent);
+    if (!button) {
+        ESP_LOGE(TAG, "Failed to create UI button for Button %lu", id);
+        lvglDisplay.unlock();
+        lvglDisplay.releaseSmallDisplayBuffer(id);
+        lv_display_set_default(original_default_disp);
+        return;
+    }
+
+    // Apply the initial configuration
+    ui_button_set_title(button, topLabel.c_str());
+    ui_button_set_text(button, label.c_str());
+
+    // Force refresh the small display
+    lv_obj_invalidate(parent);
+
+    ESP_LOGI(TAG, "Created UI button for Button %lu on small display %lu", id, id);
+
+    lvglDisplay.unlock();
+
+    // Release the buffer after setting up the UI
+    lvglDisplay.releaseSmallDisplayBuffer(id);
+
+    // Restore original default display
+    lv_display_set_default(original_default_disp);
+}
+
+void Button::destroyButton() {
+    if (button == nullptr) {
+        return;
+    }
+
+    // Lock screen access for thread safety
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lvglDisplay.lock();
+
+    lv_obj_del(button);
+    button = nullptr;
+    ESP_LOGI(TAG, "Destroyed UI button for Button %lu", id);
+
+    lvglDisplay.unlock();
 }
 
 } // namespace freebutton

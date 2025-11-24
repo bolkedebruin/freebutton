@@ -30,9 +30,10 @@ void ui_button_set_default_title_color(long color);
 
 /**
  * @brief Create a new button widget
+ * @param parent Parent object to attach the button to
  * @return Pointer to the created button object, or NULL on failure
  */
-lv_obj_t *ui_button_create(void);
+lv_obj_t *ui_button_create(lv_obj_t *parent);
 
 /**
  * @brief Set the title text of a button

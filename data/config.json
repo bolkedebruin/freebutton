@@ -67,72 +67,6 @@
   "mqttbuttons": [
     {
       "id": 0,
-      "label": "Btn 0",
-      "toplabel": "Label",
-      "ledcolorfront": 0,
-      "ledcolorwall": 0,
-      "topics": [
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/button/0/click",
-          "payload": "press",
-          "eventtype": 0
-        },
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/button/0/long_press",
-          "payload": "press",
-          "eventtype": 1
-        },
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/button/0/label",
-          "payload": "",
-          "eventtype": 11
-        },
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/button/0/top_label",
-          "payload": "",
-          "eventtype": 12
-        }
-      ]
-    },
-    {
-      "id": 1,
-      "label": "Btn 1",
-      "toplabel": "Label",
-      "ledcolorfront": 0,
-      "ledcolorwall": 0,
-      "topics": [
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/button/1/click",
-          "payload": "press",
-          "eventtype": 0
-        },
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/button/1/long_press",
-          "payload": "press",
-          "eventtype": 1
-        },
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/button/1/label",
-          "payload": "",
-          "eventtype": 11
-        },
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/button/1/top_label",
-          "payload": "",
-          "eventtype": 12
-        }
-      ]
-    },
-    {
-      "id": 2,
       "label": "󰝞",
       "toplabel": "Volume",
       "ledcolorfront": 0,
@@ -165,7 +99,7 @@
       ]
     },
     {
-      "id": 3,
+      "id": 1,
       "label": "󰝝",
       "toplabel": "Volume",
       "ledcolorfront": 0,
@@ -198,7 +132,7 @@
       ]
     },
     {
-      "id": 4,
+      "id": 2,
       "label": "Open",
       "toplabel": "Raam",
       "ledcolorfront": 6117088,
@@ -231,7 +165,7 @@
       ]
     },
     {
-      "id": 5,
+      "id": 3,
       "label": "Dicht",
       "toplabel": "Raam",
       "ledcolorfront": 0,
@@ -264,7 +198,7 @@
       ]
     },
     {
-      "id": 6,
+      "id": 4,
       "label": "󰔶",
       "toplabel": "Scherm",
       "ledcolorfront": 0,
@@ -297,7 +231,7 @@
       ]
     },
     {
-      "id": 7,
+      "id": 5,
       "label": "󱱖",
       "toplabel": "Scherm",
       "ledcolorfront": 0,

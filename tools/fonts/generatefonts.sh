@@ -14,6 +14,7 @@ ICON_NAMES=(
     "exit-to-app"
     "lightbulb-*"
     "lightbulb"
+    "leaf"
     "blinds"
     "blinds-*"
     "window-shutter"

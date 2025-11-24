@@ -11,7 +11,8 @@ static lv_style_t style_mini_bottom;
 static lv_style_t style_icon;
 
 extern lv_font_t *fnt_semibold_18;
-extern lv_font_t * fnt_medium_24;
+extern lv_font_t *fnt_medium_24;
+extern lv_font_t *fnt_medium_32;
 
 void ui_button_styles(void)
 {
@@ -34,14 +35,12 @@ void ui_button_styles(void)
 	lv_style_set_pad_row(&style_mini, 8);
 
 	lv_style_init(&style_mini_top);
-	if (fnt_semibold_18) {
-		lv_style_set_text_font(&style_mini_top, fnt_semibold_18);
-	}
+	lv_style_set_text_font(&style_mini_top, fnt_semibold_18);
+	lv_style_set_text_color(&style_mini_top, lv_color_hex(0xFFD700)); // Gold yellow
 
 	lv_style_init(&style_mini_bottom);
-	if (fnt_medium_24) {
-		lv_style_set_text_font(&style_mini_bottom, fnt_medium_24);
-	}
+	lv_style_set_text_font(&style_mini_bottom, fnt_medium_32);
+	lv_style_set_text_color(&style_mini_bottom, lv_color_hex(0xFFFFFF)); // White
 
 	lv_style_init(&style_icon);
 }
@@ -51,7 +50,7 @@ void ui_button_set_default_title_color(long color)
 	lv_style_set_text_color(&style_mini_top, lv_color_hex(color));
 }
  
-lv_obj_t *ui_button_create(void) {
+lv_obj_t *ui_button_create(lv_obj_t* parent) {
     static bool button_style_initialized = false;
     static lv_style_t button_style;
 
@@ -64,10 +63,13 @@ lv_obj_t *ui_button_create(void) {
         lv_style_set_pad_row(&button_style, 0);
         lv_style_set_bg_color(&button_style, lv_color_hex(0x000000));
         lv_style_set_bg_opa(&button_style, LV_OPA_100);
+        // Remove rounded corners
+        lv_style_set_radius(&button_style, 0);
+        lv_style_set_border_width(&button_style, 0);
         button_style_initialized = true;
     }
 
-    lv_obj_t *cont = lv_obj_create(lv_scr_act());
+    lv_obj_t *cont = lv_obj_create(parent);
     if (!cont) {
         return NULL;
     }
@@ -96,12 +98,10 @@ lv_obj_t *ui_button_create(void) {
 	// CONTENT => TOP => LABEL
 	lv_obj_t * toplabel = lv_label_create(topobj);
 	b->title = toplabel;
-	//lv_style_set_border_width(&style_mini_top, 2);
-	//lv_style_set_border_color(&style_mini_top, lv_palette_main(LV_PALETTE_BLUE));
 	lv_obj_add_style(toplabel, &style_mini_top, 0);
-	//lv_label_set_text_fmt(topLabel, "Light scene");
-	lv_obj_center(toplabel);
-	//lv_obj_set_width(label, LV_LABEL_LONG_WRAP);
+	lv_obj_set_width(toplabel, lv_pct(100));
+	lv_obj_set_style_text_align(toplabel, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_align(toplabel, LV_ALIGN_CENTER, 0, 0);
 
 	// CONTENT => BOTTOM
 	lv_obj_t * botobj = lv_obj_create(cont);
@@ -118,7 +118,7 @@ lv_obj_t *ui_button_create(void) {
     lv_label_set_text(botlabel, ""); //Remove default text
 	lv_obj_add_style(botlabel, &style_mini_bottom, 0);
     lv_obj_set_style_text_align(botlabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(botlabel);
+    lv_obj_align(botlabel, LV_ALIGN_CENTER, 0, 0);
 
 
     // CONTENT => BOTTOM => ICON
@@ -145,7 +145,7 @@ void ui_button_set_title(lv_obj_t * button, const char * title)
 	if (strlen(title) == 0)
 		lv_obj_set_size(b->title, lv_pct(100), 0);
     else
-		lv_obj_set_size(b->title, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+		lv_obj_set_size(b->title, lv_pct(100), LV_SIZE_CONTENT);
 }
 
 void ui_button_set_text(lv_obj_t * button, const char * text)

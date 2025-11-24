@@ -153,7 +153,7 @@ void setup() {
         progressBar->hide();
 
         // Request creation of the Google Hello button on the main screen (where DisplayItems are)
-        getLvglDisplay().requestGoogleHelloButton();
+        //getLvglDisplay().requestGoogleHelloButton();
 
         ESP_LOGI(TAG, "Progress bar hidden, main UI loaded");
     }
