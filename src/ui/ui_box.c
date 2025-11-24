@@ -51,6 +51,8 @@ void ui_box_create_styles(void)
 
 	lv_style_init(&style_title);
     lv_style_set_text_font(&style_title, fnt_semibold_14);
+	lv_style_set_text_color(&style_title, lv_color_hex(0xffd700));
+	//lv_style_set_text_color(&style_title, lv_color_hex(0xffffff));
 
 	lv_style_init(&style_text);
 	lv_style_set_text_color(&style_text, lv_color_hex(0xffffff));
@@ -60,7 +62,7 @@ void ui_box_create_styles(void)
 	lv_style_set_text_font(&style_hint, fnt_medium_14);
 }
 
-void ui_box_set_default_title_color(long color)
+void ui_box_set_default_title_color(const long color)
 {
 	lv_style_set_text_color(&style_title, lv_color_hex(color));
 }
@@ -104,6 +106,7 @@ lv_obj_t* ui_box_create(lv_obj_t* parent)
     b->text = ui_create_text_container(box);
     lv_obj_add_flag(b->text, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
     lv_obj_set_flex_grow(b->text, 1);
+	lv_obj_add_style(b->text, &style_text, 0);
 
     /* create the hint container */
 	b->hint = ui_create_text_container(box);

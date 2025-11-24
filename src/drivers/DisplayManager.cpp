@@ -93,8 +93,8 @@ void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23
 
     // Initialize the display
     if (smallDisplay->init()) {
-        smallDisplay->setBrightness(128);
-        smallDisplay->fillScreen((0x0000FF)); // Black
+        smallDisplay->setBrightness(64);
+        smallDisplay->fillScreen((0x000000)); // Black
 
         SmallDisplayEntry entry;
         entry.display = std::move(smallDisplay);

@@ -53,7 +53,7 @@ public:
             cfg.dummy_read_bits = 1;
             cfg.readable = true;
             cfg.invert = false;  // ST7789 typically needs inversion ON
-            cfg.rgb_order = false;  // BGR order like working implementation
+            cfg.rgb_order = true;   // RGB order to fix inverted colors
             cfg.dlen_16bit = false;
             cfg.bus_shared = false;
             // CRITICAL: ST7789 memory dimensions - controller has 240x320 internal memory

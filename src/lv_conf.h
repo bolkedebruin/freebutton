@@ -11,7 +11,7 @@
    MEMORY SETTINGS
  *====================*/
 #define LV_MEM_CUSTOM 0
-#define LV_MEM_SIZE (32768U)    /* 32 KB */
+#define LV_MEM_SIZE (40960U)    /* 32 KB */
 
 /*====================
    HAL SETTINGS
@@ -104,7 +104,7 @@
 #define LV_FONT_FMT_TXT_LARGE 0
 #define LV_USE_FONT_COMPRESSED 1
 #define LV_USE_FONT_SUBPX 1
-#define LV_USE_FONT_PLACEHOLDER 0
+#define LV_USE_FONT_PLACEHOLDER 1
 
 /*=================
  *  TEXT SETTINGS

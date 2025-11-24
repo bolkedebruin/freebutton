@@ -35,6 +35,10 @@ ICON_NAMES=(
     "play*"
     "pause*"
     "stop*"
+    "water*"
+    "molecule-co2"
+    "air-filter"
+    "lightning-bolt"
 )
 
 # Convert array to space-separated string
