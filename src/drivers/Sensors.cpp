@@ -1,9 +1,12 @@
 #include "Sensors.h"
-#include <esp_heap_caps.h>
 #include <string_view>
 #include <lvgl.h>
 #include "../mqtt/Registry.h"
 #include "../mqtt/HomeAssistantDiscovery.h"
+
+#include "../../lib/vendored/stscommon/sensirion_arch_config.h"
+#include "../../lib/vendored/stscommon/sensirion_i2c.h"
+#include "../../lib/vendored/sts3x/sts3x.h" // Vendored library
 
 using namespace std::string_view_literals;
 
@@ -76,7 +79,7 @@ float STS35Sensor::sample() {
     
     // Convert from (temperature * 1000) to actual temperature
     const float temperatureFloat = static_cast<float>(temperature) / 1000.0f;
-    movingAvg_.addSample(static_cast<double>(temperatureFloat));
+    movingAvg_.addSample(temperatureFloat);
     online = true;
     
     ESP_LOGD(TAG, "STS35 (0x%02X): %.2f°C", address_, movingAvg_.getAverage());

@@ -10,20 +10,20 @@
 
 class NeoPixelController {
 public:
-    static const int NUMBER_OF_LEDS = 12;
-    static const int MAX_BRIGHTNESS = 255;
+    static constexpr int NUMBER_OF_LEDS = 12;
+    static constexpr int MAX_BRIGHTNESS = 255;
 
     explicit NeoPixelController(int pin);
     void begin();
 
-    void setBrightness(uint8_t brightness);
+    static void setBrightness(uint8_t brightness);
     void setPixel(int index, CRGB color);
     void setAllPixels(CRGB color);
-    void show();
+    static void show();
 
-    int pixelIndex(int row, bool isRight, bool isWall);
-    CRGB colorFromHex(uint32_t hexColor);
-    CRGB colorFromRGB(uint8_t red, uint8_t green, uint8_t blue);
+    static int pixelIndex(int row, bool isRight, bool isWall);
+    static CRGB colorFromHex(uint32_t hexColor);
+    static CRGB colorFromRGB(uint8_t red, uint8_t green, uint8_t blue);
     static CRGB colorFromString(std::string_view colorString);
 
     void runTestPattern();

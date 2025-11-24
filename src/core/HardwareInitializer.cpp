@@ -5,6 +5,10 @@
 #include "HardwareInitializer.h"
 #include <Wire.h>
 
+#include "pins.h"
+#include "drivers/DeviceInfoManager.h"
+#include "drivers/Sensors.h"
+
 namespace FreeButton {
 
 // Global instance
@@ -191,13 +195,13 @@ int HardwareInitializer::initializeButtons() {
             if (mcp) {
                 // Left button (even ID)
                 const int leftId = connector * 2;
-                auto leftButton = std::make_unique<LedButton>(leftId, MCP_SWITCH_LEFT, mcp);
+                auto leftButton = std::make_unique<PushButton>(leftId, MCP_SWITCH_LEFT, mcp);
                 buttonManager_.addButton(std::move(leftButton));
                 buttonCount++;
                 
                 // Right button (odd ID)  
                 const int rightId = connector * 2 + 1;
-                auto rightButton = std::make_unique<LedButton>(rightId, MCP_SWITCH_RIGHT, mcp);
+                auto rightButton = std::make_unique<PushButton>(rightId, MCP_SWITCH_RIGHT, mcp);
                 buttonManager_.addButton(std::move(rightButton));
                 buttonCount++;
                 

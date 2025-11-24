@@ -25,7 +25,7 @@ LedButtonManager::LedButtonManager(std::shared_ptr<NeoPixelController> neopixel,
     ESP_LOGI(TAG, "Created LedButtonManager for device: %s, broker: %d", deviceId_.c_str(), brokerId_);
 }
 
-void LedButtonManager::addButton(std::shared_ptr<LedButton> button) {
+void LedButtonManager::addButton(std::shared_ptr<PushButton> button) {
     if (!button) {
         ESP_LOGE(TAG, "Cannot add null button");
         return;

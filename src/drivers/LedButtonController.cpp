@@ -11,7 +11,7 @@
 
 namespace FreeButton {
 
-LedButtonController::LedButtonController(std::shared_ptr<LedButton> button, 
+LedButtonController::LedButtonController(std::shared_ptr<PushButton> button,
                                        std::shared_ptr<NeoPixelController> neopixel,
                                        uint8_t brokerId,
                                        const std::string& deviceId)

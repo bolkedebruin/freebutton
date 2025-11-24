@@ -5,15 +5,11 @@
 #pragma once
 
 #include "../drivers/HardwareScanner.h"
-#include "../drivers/LedButton.h"
-#include "../drivers/Sensors.h"
+#include "../drivers/PushButton.h"
 #include "../drivers/DisplayManager.h"
-#include "../drivers/DeviceInfoManager.h"
 #include "Adafruit_MCP23008.h"
-#include "pins.h"
 #include <memory>
 #include <functional>
-#include <esp_log.h>
 
 namespace FreeButton {
 

@@ -2,15 +2,14 @@
 // Created by Bolke de Bruin on 31/08/2025.
 //
 
-#include "LedButton.h"
-#include "pins.h"
+#include "PushButton.h"
 #include "config.h"
 #include <algorithm>
 
 namespace FreeButton {
 
-// LedButton Implementation
-LedButton::LedButton(const int id, const int pin, std::shared_ptr<Adafruit_MCP23008> mcp)
+// PushButton Implementation
+PushButton::PushButton(const int id, const int pin, std::shared_ptr<Adafruit_MCP23008> mcp)
     : id_(id)
     , pin_(pin)
     , mcp_(std::move(mcp))
@@ -22,24 +21,24 @@ LedButton::LedButton(const int id, const int pin, std::shared_ptr<Adafruit_MCP23
     ESP_LOGD(TAG, "Created button %d on pin %d", id_, pin_);
 }
 
-bool LedButton::clicked() const {
+bool PushButton::clicked() const {
     return (history_ & 0b0000000000000111) == 0b0000000000000110;
 }
 
-bool LedButton::buttonDown() const {
+bool PushButton::buttonDown() const {
     return (history_ & 1) == 0;
 }
 
-bool LedButton::released() const {
+bool PushButton::released() const {
     return (history_ & 0b000000000000011) == 1;
 }
 
-void LedButton::updateState(const uint8_t gpioState) {
+void PushButton::updateState(const uint8_t gpioState) {
     const uint8_t buttonState = (gpioState >> pin_) & 0x1;
     history_ = (history_ << 1) | buttonState;
 }
 
-void LedButton::processEvents() {
+void PushButton::processEvents() {
     if (clicked()) {
         handleClick();
     }
@@ -60,37 +59,15 @@ void LedButton::processEvents() {
     }
 }
 
-void LedButton::onButtonEvent(ButtonCallback callback) {
+void PushButton::onButtonEvent(ButtonCallback callback) {
     buttonCallback_ = std::move(callback);
 }
 
-void LedButton::onLongPress(LongPressCallback callback) {
+void PushButton::onLongPress(LongPressCallback callback) {
     longPressCallback_ = std::move(callback);
 }
 
-void LedButton::setLedState(const bool on) const {
-    if (mcp_) {
-        // LED control implementation would go here
-        // This depends on the specific LED pin configuration
-        ESP_LOGD(TAG, "Button %d LED set to %s", position(), on ? "ON" : "OFF");
-    }
-}
-
-void LedButton::setLedBrightness(const uint8_t brightness) const {
-    if (mcp_) {
-        // LED brightness control would go here
-        ESP_LOGD(TAG, "Button %d LED brightness set to %d", position(), brightness);
-    }
-}
-
-void LedButton::setLedColor(const uint8_t red, const uint8_t green, const uint8_t blue) const {
-    if (mcp_) {
-        // LED color control would go here  
-        ESP_LOGD(TAG, "Button %d LED color set to RGB(%d,%d,%d)", position(), red, green, blue);
-    }
-}
-
-void LedButton::handleClick() {
+void PushButton::handleClick() {
     ESP_LOGI(TAG, "Button %d clicked", position());
     
     longPressTicks_ = longPressDelay_;
@@ -100,7 +77,7 @@ void LedButton::handleClick() {
     }
 }
 
-void LedButton::handleRelease() {
+void PushButton::handleRelease() {
     ESP_LOGI(TAG, "Button %d released", position());
     
     longPressTicks_ = 0;
@@ -110,7 +87,7 @@ void LedButton::handleRelease() {
     }
 }
 
-void LedButton::handleLongPress() {
+void PushButton::handleLongPress() {
     ESP_LOGI(TAG, "Button %d long pressed", position());
     
     longPressTicks_ = longPressRepeat_;
@@ -130,7 +107,7 @@ ButtonManager::ButtonManager()
     buttons_.reserve(BUTTON_COUNT);
 }
 
-void ButtonManager::addButton(std::unique_ptr<LedButton> button) {
+void ButtonManager::addButton(std::unique_ptr<PushButton> button) {
     if (!button) {
         ESP_LOGE(TAG, "Cannot add null button");
         return;
@@ -166,7 +143,7 @@ void ButtonManager::removeButton(const int position) {
     ESP_LOGI(TAG, "Removed button at position %d", position);
 }
 
-LedButton* ButtonManager::getButton(const int position) const {
+PushButton* ButtonManager::getButton(const int position) const {
     if (const auto it = std::ranges::find_if(buttons_, [position](const auto& btn) {
         return btn->position() == position;
     }); it != buttons_.end()) {
@@ -230,7 +207,7 @@ void ButtonManager::buttonTaskWrapper(void* parameter) {
     manager->buttonTask();
 }
 
-void ButtonManager::buttonTask() {
+void ButtonManager::buttonTask() const {
     ESP_LOGI(TAG, "Button monitoring task started");
     
     while (monitoring_) {
@@ -258,7 +235,7 @@ void ButtonManager::buttonTask() {
 
 void ButtonManager::updateAllButtons() const {
     // Group buttons by their shared MCP
-    std::unordered_map<Adafruit_MCP23008*, std::vector<LedButton*>> mcpGroups;
+    std::unordered_map<Adafruit_MCP23008*, std::vector<PushButton*>> mcpGroups;
     
     for (const auto& button : buttons_) {
         // Get MCP from button itself

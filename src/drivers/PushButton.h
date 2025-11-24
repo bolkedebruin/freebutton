@@ -8,23 +8,22 @@
 #include "types.h"
 #include <functional>
 #include <memory>
-#include <esp_log.h>
 
 namespace FreeButton {
 
-class LedButton {
+class PushButton {
 public:
     using ButtonCallback = std::function<void(int position, EventType event)>;
     using LongPressCallback = std::function<void(int position, int ticksRemaining)>;
 
-    explicit LedButton(int id, int pin, std::shared_ptr<Adafruit_MCP23008> mcp);
-    ~LedButton() = default;
+    explicit PushButton(int id, int pin, std::shared_ptr<Adafruit_MCP23008> mcp);
+    ~PushButton() = default;
 
     // Non-copyable, movable
-    LedButton(const LedButton&) = delete;
-    LedButton& operator=(const LedButton&) = delete;
-    LedButton(LedButton&&) = default;
-    LedButton& operator=(LedButton&&) = default;
+    PushButton(const PushButton&) = delete;
+    PushButton& operator=(const PushButton&) = delete;
+    PushButton(PushButton&&) = default;
+    PushButton& operator=(PushButton&&) = default;
 
     // Button state queries
     [[nodiscard]] bool clicked() const;
@@ -50,16 +49,11 @@ public:
     void setLongPressDelay(uint8_t delay) { longPressDelay_ = delay; }
     void setLongPressRepeat(uint8_t repeat) { longPressRepeat_ = repeat; }
 
-    // LED control (delegated to controller)
-    void setLedState(bool on) const;
-    void setLedBrightness(uint8_t brightness) const;
-    void setLedColor(uint8_t red, uint8_t green, uint8_t blue) const;
-
     // MCP access
     [[nodiscard]] std::shared_ptr<Adafruit_MCP23008> getMCP() const { return mcp_; }
 
 private:
-    static constexpr const char* TAG = "LedButton";
+    static constexpr auto TAG = "PushButton";
     static constexpr uint8_t DEFAULT_LONG_PRESS_DELAY = 40;
     static constexpr uint8_t DEFAULT_LONG_PRESS_REPEAT = 25;
 
@@ -95,11 +89,11 @@ public:
     ButtonManager& operator=(ButtonManager&&) = default;
 
     // Button management
-    void addButton(std::unique_ptr<LedButton> button);
+    void addButton(std::unique_ptr<PushButton> button);
     void removeButton(int position);
     
     // Get button by position (1-based)
-    [[nodiscard]] LedButton* getButton(int position) const;
+    [[nodiscard]] PushButton* getButton(int position) const;
     
     // Start/stop button monitoring task
     void startMonitoring();
@@ -115,7 +109,7 @@ private:
     static constexpr const char* TAG = "ButtonManager";
     static constexpr uint32_t DEFAULT_UPDATE_INTERVAL = 20; // ms
 
-    std::vector<std::unique_ptr<LedButton>> buttons_;
+    std::vector<std::unique_ptr<PushButton>> buttons_;
     
     GlobalButtonCallback globalCallback_;
     TaskHandle_t taskHandle_;
@@ -124,7 +118,7 @@ private:
     bool monitoring_;
 
     static void buttonTaskWrapper(void* parameter);
-    void buttonTask();
+    void buttonTask() const;
     void updateAllButtons() const;
 };
 

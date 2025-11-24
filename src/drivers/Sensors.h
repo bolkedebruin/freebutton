@@ -10,11 +10,6 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 
-#include "../../lib/vendored/stscommon/sensirion_arch_config.h"
-#include "../../lib/vendored/stscommon/sensirion_i2c.h"
-#include "../../lib/vendored/stscommon/sensirion_common.h"
-#include "../../lib/vendored/sts3x/sts3x.h" // Vendored library
-
 namespace FreeButton {
 
 // Forward declarations

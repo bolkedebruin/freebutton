@@ -10,7 +10,7 @@
 #define EFFECT_TASK_STACK_SIZE 2000
 #define EFFECT_TASK_PRIORITY 5
 
-NeoPixelController::NeoPixelController(int pin) : pin(pin), effectTaskHandle(nullptr) {}
+NeoPixelController::NeoPixelController(const int pin) : pin(pin), effectTaskHandle(nullptr) {}
 
 /**
  * Initializes the NeoPixelController by setting up the specified number of LEDS (configured by NUMBER_OF_LEDS)
@@ -30,7 +30,7 @@ void NeoPixelController::begin() {
  */
 void NeoPixelController::setBrightness(uint8_t brightness) {
     brightness = constrain(brightness, 0, 100);
-    int scaledBrightness = map(brightness, 0, 100, 0, MAX_BRIGHTNESS);
+    const int scaledBrightness = map(brightness, 0, 100, 0, MAX_BRIGHTNESS);
     FastLED.setBrightness(scaledBrightness);
     FastLED.show();
 }
@@ -44,13 +44,13 @@ void NeoPixelController::setBrightness(uint8_t brightness) {
  * @param index The index of the LED to set, must be within the range [0, NUMBER_OF_LEDS-1].
  * @param color The CRGB color value to set the LED to.
  */
-void NeoPixelController::setPixel(int index, CRGB color) {
+void NeoPixelController::setPixel(const int index, const CRGB color) {
     if (index >= 0 && index < NUMBER_OF_LEDS) {
         leds[index] = color;
     }
 }
 
-void NeoPixelController::setAllPixels(CRGB color) {
+void NeoPixelController::setAllPixels(const CRGB color) {
     fill_solid(leds, NUMBER_OF_LEDS, color);
 }
 
@@ -72,8 +72,8 @@ void NeoPixelController::show() {
  * @param isWall A boolean flag indicating whether the pixel is on the wall.
  * @return The calculated index of the pixel.
  */
-int NeoPixelController::pixelIndex(int row, bool isRight, bool isWall) {
-    int start = row * 4;
+int NeoPixelController::pixelIndex(const int row, const bool isRight, const bool isWall) {
+    const int start = row * 4;
     return start + (isRight ? 2 : 0) + (isWall ? 1 : 0);
 }
 
@@ -84,7 +84,7 @@ int NeoPixelController::pixelIndex(int row, bool isRight, bool isWall) {
  * @return A CRGB object representing the color corresponding to the hexadecimal value.
  */
 CRGB NeoPixelController::colorFromHex(uint32_t hexColor) {
-    return CRGB(hexColor);
+    return {hexColor};
 }
 
 /**
@@ -96,7 +96,7 @@ CRGB NeoPixelController::colorFromHex(uint32_t hexColor) {
  * @return A CRGB object representing the combined RGB color.
  */
 CRGB NeoPixelController::colorFromRGB(uint8_t red, uint8_t green, uint8_t blue) {
-    return CRGB(red, green, blue);
+    return {red, green, blue};
 }
 
 /**
@@ -230,9 +230,9 @@ void NeoPixelController::startEffect(const char* effectName, const char* paramet
  * @brief Stops any currently running LED effect and resets the NeoPixel strip.
  */
 void NeoPixelController::stopEffect() {
-    if (effectTaskHandle != NULL) {
+    if (effectTaskHandle != nullptr) {
         vTaskDelete(effectTaskHandle);
-        effectTaskHandle = NULL;
+        effectTaskHandle = nullptr;
     }
     setAllPixels(CRGB::Black);
     show();

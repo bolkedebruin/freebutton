@@ -6,7 +6,7 @@
 #pragma once
 
 #include "LedButtonController.h"
-#include "LedButton.h"
+#include "PushButton.h"
 #include "NeoPixel.h"
 #include <vector>
 #include <memory>
@@ -27,7 +27,7 @@ public:
     LedButtonManager& operator=(LedButtonManager&&) = default;
 
     // Add a button with LED controller
-    void addButton(std::shared_ptr<LedButton> button);
+    void addButton(std::shared_ptr<PushButton> button);
     
     // Remove a button
     void removeButton(int position);

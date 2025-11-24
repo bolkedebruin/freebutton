@@ -1,11 +1,11 @@
 //
-// LedButtonController - Integrates LedButton with NeoPixel LEDs and MQTT control
+// LedButtonController - Integrates PushButton with NeoPixel LEDs and MQTT control
 // Created by Bolke de Bruin on 31/08/2025.
 //
 
 #pragma once
 
-#include "LedButton.h"
+#include "PushButton.h"
 #include "NeoPixel.h"
 #include "mqtt/Component.h"
 #include <memory>
@@ -24,7 +24,7 @@ public:
         std::string effect = "none";  // "none", "glow", "flash"
     };
 
-    explicit LedButtonController(std::shared_ptr<LedButton> button, 
+    explicit LedButtonController(std::shared_ptr<PushButton> button,
                                 std::shared_ptr<NeoPixelController> neopixel,
                                 uint8_t brokerId,
                                 const std::string& deviceId);
@@ -64,7 +64,7 @@ public:
 private:
     static constexpr const char* TAG = "LedButtonController";
     
-    std::shared_ptr<LedButton> button_;
+    std::shared_ptr<PushButton> button_;
     std::shared_ptr<NeoPixelController> neopixel_;
     uint8_t brokerId_;
     std::string deviceId_;
