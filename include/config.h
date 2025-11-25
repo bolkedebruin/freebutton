@@ -20,13 +20,9 @@
 #define PUBLICMQTT "mqtt://mqtt.button.plus"
 
 #include <string>
-#include <unordered_map>
 
 constexpr unsigned long SENSOR_UPDATE_INTERVAL = 1000;
 
 extern const std::string deviceId;
-
-// helpers for backwards compatibility
-extern std::unordered_map<uint8_t, std::string> idToBrokerName;
 
 #endif //CONFIG_H

@@ -44,4 +44,7 @@ private:
     static void effectTask(void* pvParameters);
 };
 
+// Global neopixels instance (defined in main.cpp)
+extern NeoPixelController neopixels;
+
 #endif //NEOPIXEL_H

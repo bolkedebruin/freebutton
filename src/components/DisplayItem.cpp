@@ -58,13 +58,13 @@ void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic
 
             // Handle different event types as specified in the requirements
             switch(topicConfig.eventType) {
-                case EventType::DISPLAY_LABEL:
+                case DISPLAY_LABEL:
                     ui_box_set_caption(box, value.c_str());
                     break;
-                case EventType::DISPLAY_VALUE:
+                case DISPLAY_VALUE:
                     ui_box_set_text(box, value.c_str());
                     break;
-                case EventType::DISPLAY_UNIT:
+                case DISPLAY_UNIT:
                     ui_box_set_hint(box, value.c_str());
                     break;
                 default:
@@ -128,8 +128,6 @@ void DisplayItem::createBox() {
     const int adjustedWidth = width == 0 ? 45 : width;
     draw_box(box, label.c_str(), "", unit.c_str(), x, y, fontSize, adjustedWidth, alignment, boxType);
 
-    ESP_LOGI(TAG, "Created UI box for DisplayItem %lu at (%d,%d)", id, x, y);
-
     lvglDisplay.unlock();
 }
 
@@ -144,7 +142,7 @@ void DisplayItem::destroyBox() {
 
     lv_obj_del(box);
     box = nullptr;
-    ESP_LOGI(TAG, "Destroyed UI box for DisplayItem %lu", id);
+    ESP_LOGD(TAG, "Destroyed UI box for DisplayItem %lu", id);
 
     lvglDisplay.unlock();
 }

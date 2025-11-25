@@ -11,6 +11,9 @@
 
 #include <utility>
 
+// External device ID from main.cpp
+extern const std::string deviceId;
+
 namespace freebutton {
 
 unsigned long Button::next_id = 1;
@@ -23,7 +26,14 @@ Button::Button(std::string  label, std::string  topLabel,
     , ledColorFront(ledColorFront), ledColorWall(ledColorWall)
 {
     topics = std::move(topicConfigs);
-    // Topics will be registered later via ComponentManager::registerAllSubscriptions()
+
+    // Set default values for manual button creation
+    buttonId_ = std::to_string(id);
+    position_ = id;
+    page_ = 1;
+    deviceId_ = deviceId;  // Use external deviceId from main.cpp
+    brokerId_ = 0;
+
 }
 
 Button::~Button() {
@@ -34,21 +44,18 @@ Button::~Button() {
 
 void Button::registerTopics() {
     for (const auto& topic : topics) {
-        // Determine if this is a subscription (incoming) or publication (outgoing) topic
         switch (topic.eventType) {
             case LABEL:
             case TOP_LABEL:
             case LED_RGB:
             case LED_FRONT_RGB:
             case LED_WALL_RGB:
-                // These are typically incoming messages to update the button
                 addSubscription(topic.brokerId, topic.topic);
                 break;
 
             case CLICK:
             case LONG_PRESS:
             case RELEASE:
-                // These are typically outgoing messages when button is pressed
                 addPublication(topic.brokerId, topic.topic, 0, false);
                 break;
 
@@ -93,13 +100,9 @@ void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_vie
                     break;
 
                 case LED_FRONT_RGB:
-                    // Parse RGB color value (assuming JSON format)
-                    ESP_LOGI(TAG, "Button %lu front LED color updated: %s", id, std::string(data).c_str());
-                    break;
-
                 case LED_WALL_RGB:
-                    // Parse RGB color value (assuming JSON format)
-                    ESP_LOGI(TAG, "Button %lu wall LED color updated: %s", id, std::string(data).c_str());
+                    // LED messages will be handled by physical LEDs managed by ButtonManager
+                    ESP_LOGD(TAG, "Button %lu: LED message ignored (handled by ButtonManager): %s", id, std::string(data).c_str());
                     break;
 
                 default:
@@ -246,5 +249,6 @@ void Button::destroyButton() {
 
     lvglDisplay.unlock();
 }
+
 
 } // namespace freebutton

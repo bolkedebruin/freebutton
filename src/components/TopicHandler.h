@@ -10,7 +10,6 @@
 #include "ArduinoJson.h"
 #include "Topics.h"
 #include "mqtt/Registry.h"
-#include <esp_log.h>
 
 namespace freebutton {
 
@@ -36,7 +35,7 @@ public:
     static bool isValidTopic(const Topic& topic);
 
 private:
-    static constexpr const char* TAG = "TopicParser";
+    static constexpr auto TAG = "TopicParser";
 };
 
 /**

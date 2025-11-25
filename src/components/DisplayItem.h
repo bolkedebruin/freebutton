@@ -88,7 +88,7 @@ private:
     }
 public:
     // CRTP interface for TopicHandler
-    const char* getComponentName() const { return "DisplayItem"; }
+    static const char* getComponentName() { return "DisplayItem"; }
     std::vector<Topic>& getTopicsRef() { return topics; }
     void registerTopics();
     void unregisterTopics();

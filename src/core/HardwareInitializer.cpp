@@ -6,6 +6,7 @@
 #include <Wire.h>
 
 #include "pins.h"
+#include "config.h"
 #include "drivers/DeviceInfoManager.h"
 #include "drivers/Sensors.h"
 
@@ -77,13 +78,21 @@ bool HardwareInitializer::initializeHardware() {
         // Sensor failure is not fatal for the overall system
     }
 
-    // Step 7: Initialize device info button
+    // Step 7: Initialize LEDs for all detected buttons
+    if (success && buttonCount > 0) {
+        if (!initializeLEDs()) {
+            ESP_LOGW(TAG, "LED initialization had issues (non-fatal)");
+            // LED failure is not fatal for the overall system
+        }
+    }
+
+    // Step 8: Initialize device info button
     if (success && !initializeDeviceInfoButton()) {
         ESP_LOGW(TAG, "Device info button initialization had issues (non-fatal)");
         // Device info button failure is not fatal for the overall system
     }
 
-    // Step 8: Start button monitoring
+    // Step 9: Start button monitoring
     if (success && buttonCount > 0) {
         buttonManager_.startMonitoring();
         ESP_LOGI(TAG, "Button monitoring started");
@@ -262,6 +271,19 @@ std::shared_ptr<Adafruit_MCP23008> HardwareInitializer::getMCPForConnector(const
         return mcps_[connector];
     }
     return nullptr;
+}
+
+bool HardwareInitializer::initializeLEDs() {
+    ESP_LOGI(TAG, "Initializing LEDs for detected buttons...");
+
+    // Create LEDs for all detected physical buttons
+    buttonManager_.createLEDsForAllButtons(deviceId, 0); // Default broker ID 0
+
+    // Register all LEDs with Home Assistant
+    buttonManager_.registerAllLEDsWithHomeAssistant();
+
+    ESP_LOGI(TAG, "LED initialization completed successfully");
+    return true;
 }
 
 bool HardwareInitializer::initializeDeviceInfoButton() {

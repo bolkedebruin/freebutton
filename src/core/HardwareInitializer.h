@@ -6,6 +6,7 @@
 
 #include "../drivers/HardwareScanner.h"
 #include "../drivers/PushButton.h"
+#include "../drivers/ButtonManager.h"
 #include "../drivers/DisplayManager.h"
 #include "Adafruit_MCP23008.h"
 #include <memory>
@@ -60,6 +61,7 @@ private:
     static bool initializeSensors();
     bool initializeDisplays() const;
     static bool initializeDeviceInfoButton();
+    bool initializeLEDs();
 
     static void onDeviceDetected(const I2CDevice& device);
     void onConnectorDetected(int connector, ConnectorType type);
