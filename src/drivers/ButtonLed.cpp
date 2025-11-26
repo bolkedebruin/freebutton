@@ -14,7 +14,7 @@
 // Access global neopixels (declared in main.cpp)
 extern NeoPixelController neopixels;
 
-static const char* TAG = "ButtonLed";
+static auto TAG = "ButtonLed";
 
 void ButtonLed::updateDisplay() const noexcept {
     if (state_.on) {
@@ -114,38 +114,45 @@ std::string ButtonLed::colorToJson() const {
 }
 
 void ButtonLed::registerWithHomeAssistant() const {
-    HomeAssistantDiscoveryConfig config;
-    config.component_type = "light";
-    config.object_id = getUniqueId();        // "freebutton01_7_1"
-    config.name = getEntityName();           // "Button 7 Wall LED"
+    // Convert to callback-based registration for memory efficiency
+    auto generator = [this](uint8_t broker_id) -> HomeAssistantDiscoveryConfig {
+        HomeAssistantDiscoveryConfig config;
+        config.component_type = "light";
+        config.default_entity_id = getObjectId();  // "freebutton01_7_1"
+        config.name = getEntityName();           // "Button 7 Wall LED"
 
-    // Core light functionality - runtime topic generation
-    config.state_topic = getStateTopic();
-    config.command_topic = getCommandTopic();
-    config.additional_config["schema"] = "json";
-    config.additional_config["retain"] = "true";
+        // Core light functionality - runtime topic generation
+        config.state_topic = getStateTopic();
+        config.command_topic = getCommandTopic();
+        config.additional_config["schema"] = "json";
+        config.additional_config["retain"] = "true";
 
-    // RGB color support - runtime topic generation
-    config.additional_config["rgb_state_topic"] = getColorStateTopic();
-    config.additional_config["rgb_command_topic"] = getColorCommandTopic();
-    config.additional_config["rgb_command_template"] =
-        "{{ {\"r\": red, \"g\": green, \"b\": blue} | tojson }}";
-    config.additional_config["rgb_value_template"] =
-        "{{ value_json.r }},{{ value_json.g }},{{ value_json.b }}";
+        // RGB color support - runtime topic generation
+        config.additional_config["rgb_state_topic"] = getColorStateTopic();
+        config.additional_config["rgb_command_topic"] = getColorCommandTopic();
+        config.additional_config["rgb_command_template"] =
+            "{{ {\"r\": red, \"g\": green, \"b\": blue} | tojson }}";
+        config.additional_config["rgb_value_template"] =
+            "{{ value_json.r }},{{ value_json.g }},{{ value_json.b }}";
 
-    // Brightness support (0-255 scale) - runtime topic generation
-    config.additional_config["brightness_state_topic"] = getBrightnessStateTopic();
-    config.additional_config["brightness_command_topic"] = getBrightnessCommandTopic();
-    config.additional_config["brightness_scale"] = "255";
+        // Brightness support (0-255 scale) - runtime topic generation
+        config.additional_config["brightness_state_topic"] = getBrightnessStateTopic();
+        config.additional_config["brightness_command_topic"] = getBrightnessCommandTopic();
+        config.additional_config["brightness_scale"] = "255";
 
-    // Effect support - runtime topic generation
-    config.additional_config["effect_state_topic"] = getEffectStateTopic();
-    config.additional_config["effect_command_topic"] = getEffectCommandTopic();
-    config.additional_config["effect_list"] = "[\"none\",\"glow\",\"flash\"]";
+        // Effect support - runtime topic generation
+        config.additional_config["effect_state_topic"] = getEffectStateTopic();
+        config.additional_config["effect_command_topic"] = getEffectCommandTopic();
+        config.additional_config["effect_list"] = "[\"none\",\"glow\",\"flash\"]";
 
-    HomeAssistantDiscovery::registerComponent(brokerId_, config);
+        config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
+        config.enabled = true;
+        return config;
+    };
 
-    ESP_LOGI(TAG, "Registered %s with Home Assistant", getEntityName().c_str());
+    HomeAssistantDiscovery::registerComponent(brokerId_, std::move(generator));
+
+    ESP_LOGI(TAG, "Registered %s with Home Assistant (callback)", getEntityName().c_str());
 }
 
 bool ButtonLed::matchesTopic(std::string_view topic) const noexcept {

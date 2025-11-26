@@ -109,7 +109,7 @@ public:
 
     // Getters for integration and identification
     [[nodiscard]] const auto& getState() const noexcept { return state_; }
-    [[nodiscard]] std::string getUniqueId() const noexcept;
+    [[nodiscard]] std::string getObjectId() const noexcept;
     [[nodiscard]] std::string getEntityName() const noexcept;
     [[nodiscard]] constexpr uint8_t getButtonPosition() const noexcept { return buttonPosition_; }
     [[nodiscard]] constexpr LedPosition getLedPosition() const noexcept { return ledPosition_; }
@@ -163,9 +163,8 @@ private:
 };
 
 // Implementation of key methods
-inline std::string ButtonLed::getUniqueId() const noexcept {
-    // Device ID: deviceId_buttonPos_ledNum (e.g., "freebutton01_7_1" for button 7, LED 1)
-    return deviceId_ + "_" + std::to_string(buttonPosition_) + "_" + std::to_string(ledNumber_);
+inline std::string ButtonLed::getObjectId() const noexcept {
+    return  "led_" + std::to_string(buttonPosition_) + "_" + std::to_string(ledNumber_);
 }
 
 inline std::string ButtonLed::getEntityName() const noexcept {

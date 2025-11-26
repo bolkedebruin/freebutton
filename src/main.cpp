@@ -5,7 +5,6 @@
 #include "config.h"
 #include "pins.h"
 #include "components/ComponentManager.h"
-#include "core/FileSystem.h"
 #include "core/WebServer.h"
 #include "core/WifiManager.h"
 #include "core/HardwareInitializer.h"
@@ -13,7 +12,6 @@
 #include "drivers/NeoPixel.h"
 #include "mqtt/Broker.h"
 #include "mqtt/Registry.h"
-#include "mqtt/Component.h"
 #include "mqtt/HomeAssistantDiscovery.h"
 #include "utils/helpers.h"
 #include "drivers/Sensors.h"
@@ -29,7 +27,7 @@ const std::string deviceId(platform_create_id_string());
 const std::map<std::string_view, std::string_view> deviceInfo = {
     {"name", "Button+ Base"},
     {"manufacturer", "ButtonPlus"},
-    {"model", "Button+ " MACRO_TO_STRING(HW)},
+    {"model", "Button+ " MACRO_TO_STRING(MODEL)},
     {"sw_version", MACRO_TO_STRING(FIRMWARE)},
 };
 
@@ -53,6 +51,8 @@ void log_free_heap() {
 
 void setup() {
     ESP_LOGI(TAG, "FreeButton Firmware: %s  Id: %s starting!", FIRMWARE, deviceId.c_str());
+
+    HomeAssistantDiscovery::setDeviceInfo({"test", "ButtonPlus", MODEL, FIRMWARE, deviceId});
 
     // set log levels
     esp_log_level_set(TAG, ESP_LOG_DEBUG);

@@ -8,7 +8,6 @@
 #include <ranges>
 
 #include "Registry.h"
-#include "Component.h"
 #include "esp_log.h"
 
 static auto TAG = "ha_discovery";
@@ -29,31 +28,6 @@ void HomeAssistantDiscovery::configureBroker(const uint8_t brokerId, const bool 
 bool HomeAssistantDiscovery::isDiscoveryEnabled(const uint8_t brokerId) {
     const auto it = broker_configs_.find(brokerId);
     return it != broker_configs_.end() && it->second.enabled;
-}
-
-void HomeAssistantDiscovery::publishDiscovery(uint8_t brokerId, const HomeAssistantDiscoveryConfig& config) {
-    if (!isDiscoveryEnabled(brokerId)) {
-        return;
-    }
-
-    auto* broker = MqttBrokerRegistry::getBroker(brokerId);
-    if (!broker) {
-        ESP_LOGE(TAG, "Broker %d not found", brokerId);
-        return;
-    }
-
-    // Only publish if broker is connected
-    if (!broker->isConnected()) {
-        ESP_LOGD(TAG, "Broker %d not connected, discovery will be published on connection", brokerId);
-        return;
-    }
-
-    const auto& broker_config = broker_configs_[brokerId];
-    const std::string topic = generateDiscoveryTopic(broker_config.discovery_prefix, config.component_type, config.object_id);
-    const std::string json_payload = configToJson(config);
-
-    ESP_LOGD(TAG, "Publishing discovery to %s", topic.c_str());
-    broker->publish(topic, json_payload, 1, true);
 }
 
 void HomeAssistantDiscovery::removeDiscovery(uint8_t brokerId, const std::string& component_type, const std::string& object_id) {
@@ -84,88 +58,62 @@ void HomeAssistantDiscovery::publishAllDiscovery(const uint8_t brokerId) {
         return;
     }
 
-    ESP_LOGI(TAG, "Publishing all discovery configs for broker %d (%zu components)", 
-             brokerId, it->second.components.size());
+    ESP_LOGI(TAG, "Publishing all callback discovery configs for broker %d (%zu components)",
+             brokerId, it->second.callbacks.size());
 
-    for (const auto &config: it->second.components | std::views::values) {
-        if (config.enabled) {
-            publishDiscovery(brokerId, config);
+    for (const auto &callback_info: it->second.callbacks | std::views::values) {
+        if (callback_info.enabled) {
+            publishCallbackDiscovery(brokerId, callback_info);
         }
     }
 }
 
-uint16_t HomeAssistantDiscovery::registerComponent(const uint8_t brokerId, const HomeAssistantDiscoveryConfig& config) {
+uint16_t HomeAssistantDiscovery::registerComponent(uint8_t brokerId, DiscoveryConfigGenerator generator) {
     auto& broker_config = broker_configs_[brokerId];
     const uint16_t component_id = broker_config.next_component_id++;
-    
-    // Store the config
-    broker_config.components[component_id] = config;
-    
-    ESP_LOGD(TAG, "Registered component %d (%s) for broker %d", 
-             component_id, config.object_id.c_str(), brokerId);
-    
-    // Auto-publish if broker is enabled and component is enabled
-    if (broker_config.enabled && config.enabled) {
-        publishDiscovery(brokerId, config);
+
+    // Store the callback - much more memory efficient
+    DiscoveryCallbackInfo callback_info;
+    callback_info.generator = std::move(generator);
+    callback_info.enabled = true;
+
+    broker_config.callbacks[component_id] = std::move(callback_info);
+
+    // Generate config once to get default_entity_id for logging
+    auto config = broker_config.callbacks[component_id].generator(brokerId);
+    ESP_LOGD(TAG, "Registered callback component %d (%s) for broker %d",
+             component_id, config.default_entity_id.c_str(), brokerId);
+
+    // Auto-publish if broker is enabled
+    if (broker_config.enabled) {
+        publishCallbackDiscovery(brokerId, broker_config.callbacks[component_id]);
     }
-    
+
     return component_id;
 }
 
-uint16_t HomeAssistantDiscovery::registerComponent(uint8_t brokerId, MqttComponent* component, 
-                                                  const std::string& component_type,
-                                                  const std::string& object_id,
-                                                  const std::string& name,
-                                                  const std::string& device_class) {
-    if (!component) {
-        ESP_LOGE(TAG, "Cannot register null component");
-        return 0; // Invalid component ID
-    }
-
-    HomeAssistantDiscoveryConfig config;
-    config.component_type = component_type;
-    config.object_id = object_id;
-    config.name = name;
-    config.device_class = device_class;
-
-    // Auto-detect topics using virtual methods (no RTTI required)
-    auto command_topics = component->getSubscriptionTopics(brokerId);
-    auto state_topics = component->getPublicationTopics(brokerId);
-
-    // Set command topic if component has subscriptions
-    if (!command_topics.empty()) {
-        config.command_topic = command_topics[0]; // Use first topic
-    }
-
-    // Set state topic if component has publications  
-    if (!state_topics.empty()) {
-        config.state_topic = state_topics[0]; // Use first topic
-    }
-
-    // Components can have both subscription and publication topics
-    // This is common for switches, lights, etc.
-
-    ESP_LOGD(TAG, "Auto-registered component %s: state_topic=%s, command_topic=%s", 
-             object_id.c_str(), config.state_topic.c_str(), config.command_topic.c_str());
-
-    return registerComponent(brokerId, config);
-}
-
-void HomeAssistantDiscovery::unregisterComponent(uint8_t brokerId, uint16_t component_id) {
+void HomeAssistantDiscovery::unregisterComponent(const uint8_t brokerId, const uint16_t component_id) {
     auto& broker_config = broker_configs_[brokerId];
-    const auto it = broker_config.components.find(component_id);
-    
-    if (it != broker_config.components.end()) {
+    const auto it = broker_config.callbacks.find(component_id);
+
+    if (it != broker_config.callbacks.end()) {
+        // Generate config to get component_type and default_entity_id for removal
+        auto config = it->second.generator(brokerId);
+
         // Remove discovery from HA before unregistering
-        removeDiscovery(brokerId, it->second.component_type, it->second.object_id);
-        broker_config.components.erase(it);
-        ESP_LOGD(TAG, "Unregistered component %d from broker %d", component_id, brokerId);
+        removeDiscovery(brokerId, config.component_type, config.default_entity_id);
+        broker_config.callbacks.erase(it);
+        ESP_LOGD(TAG, "Unregistered callback component %d from broker %d", component_id, brokerId);
     }
 }
 
 void HomeAssistantDiscovery::setDeviceInfo(const HomeAssistantDevice& device) {
     global_device_info_ = device;
-    ESP_LOGI(TAG, "Set global device info: %s (%s)", device.name.c_str(), device.identifiers.c_str());
+    ESP_LOGI(TAG, "Set global device info: %s (%s)", device.name.c_str(), device.identifier.c_str());
+}
+
+const HomeAssistantDevice& HomeAssistantDiscovery::getGlobalDeviceInfo() {
+    return global_device_info_;
 }
 
 void HomeAssistantDiscovery::onBrokerConnected(uint8_t brokerId) {
@@ -174,12 +122,12 @@ void HomeAssistantDiscovery::onBrokerConnected(uint8_t brokerId) {
 }
 
 std::string HomeAssistantDiscovery::generateDiscoveryTopic(const std::string& discovery_prefix, const std::string& component_type, const std::string& object_id) {
-    if (global_device_info_.identifiers.empty()) {
+    if (global_device_info_.identifier.empty()) {
         ESP_LOGW(TAG, "Global device identifier(s) not set, cannot generate discovery topic");
         return "";
     }
 
-    return discovery_prefix + "/" + component_type + "/" + global_device_info_.identifiers + "/" + object_id + "/config";
+    return discovery_prefix + "/" + component_type + "/" + global_device_info_.identifier + "/" + object_id + "/config";
 }
 
 std::string HomeAssistantDiscovery::configToJson(const HomeAssistantDiscoveryConfig& config) {
@@ -187,8 +135,10 @@ std::string HomeAssistantDiscovery::configToJson(const HomeAssistantDiscoveryCon
     
     // Required fields
     doc["name"] = config.name;
-    doc["object_id"] = config.object_id;
-    
+    if (!config.default_entity_id.empty()) {
+        doc["default_entity_id"] = config.default_entity_id;
+    }
+
     // State topic (for publishers/sensors)
     if (!config.state_topic.empty()) {
         doc["state_topic"] = config.state_topic;
@@ -219,28 +169,59 @@ std::string HomeAssistantDiscovery::configToJson(const HomeAssistantDiscoveryCon
     
     // Device information - use per-component device info if provided, otherwise global
     const HomeAssistantDevice& device = config.device.name.empty() ? global_device_info_ : config.device;
-    
-    if (!device.name.empty()) {
-        const JsonObject deviceObj = doc["device"].to<JsonObject>();
-        deviceObj["name"] = device.name;
-        
-        if (!device.manufacturer.empty()) {
-            deviceObj["manufacturer"] = device.manufacturer;
-        }
-        if (!device.model.empty()) {
-            deviceObj["model"] = device.model;
-        }
-        if (!device.sw_version.empty()) {
-            deviceObj["sw_version"] = device.sw_version;
-        }
-        if (!device.identifiers.empty()) {
-            const auto identifiers = deviceObj["identifiers"].to<JsonArray>();
-            identifiers.add(device.identifiers);
-        }
+
+    // set unique id
+    doc["unique_id"] = std::format("{}_{}", device.identifier, config.default_entity_id);
+
+    const auto name = !device.name.empty() ? device.name : device.identifier;;
+
+    const JsonObject deviceObj = doc["device"].to<JsonObject>();
+    deviceObj["name"] = name;
+
+    if (!device.manufacturer.empty()) {
+        deviceObj["manufacturer"] = device.manufacturer;
     }
-    
+    if (!device.model.empty()) {
+        deviceObj["model"] = device.model;
+    }
+    if (!device.sw_version.empty()) {
+        deviceObj["sw_version"] = device.sw_version;
+    }
+    if (!device.identifier.empty()) {
+        const auto identifiers = deviceObj["identifiers"].to<JsonArray>();
+        identifiers.add(device.identifier);
+    }
+
     // Serialize to string
     std::string output;
     serializeJson(doc, output);
     return output;
+}
+
+void HomeAssistantDiscovery::publishCallbackDiscovery(uint8_t brokerId, const DiscoveryCallbackInfo &callback_info) {
+    if (!isDiscoveryEnabled(brokerId) || !callback_info.enabled) {
+        return;
+    }
+
+    auto* broker = MqttBrokerRegistry::getBroker(brokerId);
+    if (!broker) {
+        ESP_LOGE(TAG, "Broker %d not found", brokerId);
+        return;
+    }
+
+    // Only publish if broker is connected
+    if (!broker->isConnected()) {
+        ESP_LOGD(TAG, "Broker %d not connected, discovery will be published on connection", brokerId);
+        return;
+    }
+
+    // Generate config on-demand
+    auto config = callback_info.generator(brokerId);
+
+    const auto& broker_config = broker_configs_[brokerId];
+    const std::string topic = generateDiscoveryTopic(broker_config.discovery_prefix, config.component_type, config.default_entity_id);
+    const std::string json_payload = configToJson(config);
+
+    ESP_LOGD(TAG, "Publishing callback discovery to %s", topic.c_str());
+    broker->publish(topic, json_payload, 1, true);
 }

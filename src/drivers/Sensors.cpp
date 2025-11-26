@@ -228,8 +228,8 @@ void initializeSensors() {
     const auto freeMem = std::make_shared<VirtualSensor>(
         VirtualSensorIds::FREE_HEAP_ID,
         "Free Memory"sv,
-        "memory"sv,
-        "bytes"sv,
+        "data_size"sv,
+        "B"sv,
         []() {
             return static_cast<float>(esp_get_free_heap_size());
         }
@@ -249,8 +249,8 @@ void initializeSensors() {
     const auto lvglUsedMem = std::make_shared<VirtualSensor>(
         VirtualSensorIds::LV_USED_MEM_ID,
         "LVGL Used Memory"sv,
-        "memory"sv,
-        "bytes"sv,
+        "data_size"sv,
+        "B"sv,
         []() {
             lv_mem_monitor_t mon;
             lv_mem_monitor(&mon);
@@ -271,8 +271,8 @@ void initializeSensors() {
     const auto lvglFreeMem = std::make_shared<VirtualSensor>(
         VirtualSensorIds::LV_FREE_MEM_ID,
         "LVGL Free Memory"sv,
-        "memory"sv,
-        "bytes"sv,
+        "data_size"sv,
+        "B"sv,
         []() {
             lv_mem_monitor_t mon;
             lv_mem_monitor(&mon);
@@ -293,63 +293,68 @@ void initializeSensors() {
 void registerSensorsWithDiscovery(const uint8_t brokerId) {
     for (auto& [id, sensor] : sensorDevices) {
         if (sensor && sensorComponents[id]) {
-            // Generate appropriate object_id based on sensor type
-            std::string objectId;
+            // Generate appropriate default_entity_id based on sensor type
+            std::string defaultEntityId;
             std::string stateTopic;
             
             switch (sensor->type) {
                 case SensorType::STS35:
-                    objectId = "sts35_1_" + std::to_string(id);
+                    defaultEntityId = "sts35_1_" + std::to_string(id);
                     stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/sts35_1/state";
                     break;
                 case SensorType::STS35_2:
-                    objectId = "sts35_2_" + std::to_string(id);
+                    defaultEntityId = "sts35_2_" + std::to_string(id);
                     stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/sts35_2/state";
                     break;
                 case SensorType::BME280_TEMPERATURE:
-                    objectId = "bme280_temperature_" + std::to_string(id);
+                    defaultEntityId = "bme280_temperature_" + std::to_string(id);
                     stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/bme280_temperature/state";
                     break;
                 case SensorType::BME280_PRESSURE:
-                    objectId = "bme280_pressure_" + std::to_string(id);
+                    defaultEntityId = "bme280_pressure_" + std::to_string(id);
                     stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/bme280_pressure/state";
                     break;
                 case SensorType::BME280_HUMIDITY:
-                    objectId = "bme280_humidity_" + std::to_string(id);
+                    defaultEntityId = "bme280_humidity_" + std::to_string(id);
                     stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/bme280_humidity/state";
                     break;
                 case SensorType::VIRTUAL:
                     if (id == VirtualSensorIds::FREE_HEAP_ID) {
-                        objectId = "free_memory_" + std::to_string(id);
+                        defaultEntityId = "free_memory_" + std::to_string(id);
                         stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/free_memory/state";
                     } else if (id == VirtualSensorIds::LV_USED_MEM_ID) {
-                        objectId = "lvgl_used_memory_" + std::to_string(id);
+                        defaultEntityId = "lvgl_used_memory_" + std::to_string(id);
                         stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/lvgl_used_memory/state";
                     } else if (id == VirtualSensorIds::LV_FREE_MEM_ID) {
-                        objectId = "lvgl_free_memory_" + std::to_string(id);
+                        defaultEntityId = "lvgl_free_memory_" + std::to_string(id);
                         stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/lvgl_free_memory/state";
                     } else {
-                        objectId = "virtual_" + std::to_string(id);
+                        defaultEntityId = "virtual_" + std::to_string(id);
                         stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/virtual_" + std::to_string(id) + "/state";
                     }
                     break;
                 default:
-                    objectId = "sensor_" + std::to_string(id);
+                    defaultEntityId = "sensor_" + std::to_string(id);
                     stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/unknown/state";
                     break;
             }
             
-            HomeAssistantDiscoveryConfig config;
-            config.component_type = "sensor";
-            config.object_id = objectId;
-            config.name = std::string(sensor->name);
-            config.device_class = std::string(sensor->deviceClass);
-            config.unit_of_measurement = std::string(sensor->unitOfMeasurement);
-            config.state_topic = stateTopic;
-            config.enabled = true;
-            
-            ESP_LOGI("Sensors", "Registering sensor '%s' with Home Assistant", config.name.c_str());
-            HomeAssistantDiscovery::registerComponent(brokerId, config);
+            // Convert to callback-based registration for memory efficiency
+            auto generator = [sensor, defaultEntityId, stateTopic](uint8_t broker_id) -> HomeAssistantDiscoveryConfig {
+                HomeAssistantDiscoveryConfig config;
+                config.component_type = "sensor";
+                config.default_entity_id = defaultEntityId;
+                config.name = std::string(sensor->name);
+                config.device_class = std::string(sensor->deviceClass);
+                config.unit_of_measurement = std::string(sensor->unitOfMeasurement);
+                config.state_topic = stateTopic;
+                config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
+                config.enabled = true;
+                return config;
+            };
+
+            ESP_LOGI("Sensors", "Registering sensor '%s' with Home Assistant (callback)", std::string(sensor->name).c_str());
+            HomeAssistantDiscovery::registerComponent(brokerId, std::move(generator));
         }
     }
 }

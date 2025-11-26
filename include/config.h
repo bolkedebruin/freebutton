@@ -9,7 +9,8 @@
 #define MACRO_TO_STRING(x) MACRO_TO_STRING_HELPER(x)
 
 #define BUTTON_COUNT 8
-#define FIRMWARE "3.1.alpha1"
+#define MODEL "Model 1 Version 9"
+#define FIRMWARE "FreeButton 3.1.alpha1"
 #define CDN "1.8"
 #define GAMMA (2.2)
 #define BASE_TOPIC "buttonplus/"

@@ -263,9 +263,6 @@ void ComponentManager::startBrokers(const std::string& deviceId) {
 
     auto& registry = MqttBrokerRegistry::instance();
 
-    // Set up Home Assistant device info
-    HomeAssistantDiscovery::setDeviceInfo({.identifiers = deviceId});
-
     // Configure each broker with Home Assistant discovery
     MqttBrokerRegistry::forEachBroker([](uint8_t brokerId, MqttBroker* broker) {
         if (broker && broker->isConfigured()) {
