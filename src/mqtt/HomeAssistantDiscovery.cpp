@@ -225,3 +225,7 @@ void HomeAssistantDiscovery::publishCallbackDiscovery(uint8_t brokerId, const Di
     ESP_LOGD(TAG, "Publishing callback discovery to %s", topic.c_str());
     broker->publish(topic, json_payload, 1, true);
 }
+
+void HomeAssistantDiscovery::setDeviceName(std::string name) {
+    global_device_info_.name = std::move(name);
+}

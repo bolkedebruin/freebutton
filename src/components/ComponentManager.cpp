@@ -21,6 +21,20 @@ void ComponentManager::loadFromFile(const std::string& filename) {
     // Use FilteredReaderHandler for memory-efficient streaming processing
     json::FilteredReaderHandler handler;
 
+    handler.addFilter({"core"}, [this](const std::vector<std::string>& path, const std::string& json) {
+        JsonDocument doc;
+        auto error= deserializeJson(doc, json);
+
+        if (error) {
+            ESP_LOGE(TAG, "Failed to parse core JSON: %s", error.c_str());
+            return;
+        }
+
+        if (!doc["location"].isNull()) {
+            HomeAssistantDiscovery::setDeviceName(doc["location"].as<std::string>());
+        }
+    });
+
     // Stream process MQTT brokers FIRST (order matters!)
     handler.addFilter({"mqttbrokers"}, [this](const std::vector<std::string>& path, const std::string& json) {
         JsonDocument doc;

@@ -98,9 +98,14 @@ void setup() {
         progressBar->update(10, "Mounting file system..");
     }
 
+    if (progressBar) {
+        progressBar->update(20, "Loading configuration...");
+    }
+    componentManager.loadFromFile("/config.json");
+
     // Update progress
     if (progressBar) {
-        progressBar->update(25, "WiFi starting...");
+        progressBar->update(40, "WiFi starting...");
     }
 
     setup_wifi_event_handler();
@@ -108,7 +113,7 @@ void setup() {
 
     log_free_heap();
     if (progressBar) {
-        progressBar->update(50, "Starting web server...");
+        progressBar->update(60, "Starting web server...");
     }
     webserver_start();
     log_free_heap();
@@ -117,12 +122,6 @@ void setup() {
         ESP_LOGI(TAG, "Waiting for WiFi connection...");
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-
-    if (progressBar) {
-        progressBar->update(70, "Loading configuration...");
-    }
-
-    componentManager.loadFromFile("/config.json");
 
     if (progressBar) {
         progressBar->update(85, "Starting MQTT brokers...");

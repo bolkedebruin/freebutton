@@ -81,6 +81,8 @@ public:
     // Callback for when a broker connects (auto-publishes discovery if enabled)
     static void onBrokerConnected(uint8_t brokerId);
 
+    static void setDeviceName(const std::string name);
+
 private:
     struct BrokerDiscoveryConfig {
         bool enabled = false;
