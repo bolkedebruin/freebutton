@@ -9,6 +9,7 @@
 #include "LittleFS.h"
 #include "drivers/BusAwareFileSystem.h"
 #include "mqtt/HomeAssistantDiscovery.h"
+#include "Clock.h"
 
 namespace freebutton {
 
@@ -80,6 +81,21 @@ void ComponentManager::loadFromFile(const std::string& filename) {
         }
     });
 
+    // Stream process clocks (no MQTT dependencies)
+    handler.addFilter({"clocks"}, [this](const std::vector<std::string>& path, const std::string& json) {
+        JsonDocument doc;
+        auto error = deserializeJson(doc, json);
+
+        if (error) {
+            ESP_LOGE(TAG, "Failed to parse clocks JSON: %s", error.c_str());
+            return;
+        }
+
+        if (doc.is<JsonArray>()) {
+            loadClocks(doc.as<JsonArray>());
+        }
+    });
+
     // Process the file once
     FreeButton::BusAwareFile file = FreeButton::getBusAwareFileSystem().open(filename.c_str(), "r");
     if (!file) {
@@ -97,8 +113,8 @@ void ComponentManager::loadFromFile(const std::string& filename) {
     // Register all component subscriptions now that brokers are configured
     registerAllSubscriptions();
 
-    ESP_LOGI(TAG, "Loaded %zu display items and %zu buttons from file",
-             displayItems.size(), buttons.size());
+    ESP_LOGI(TAG, "Loaded %zu display items, %zu buttons, and %zu clocks from file",
+             displayItems.size(), buttons.size(), clocks.size());
 }
 
 void ComponentManager::clear() {
@@ -107,10 +123,12 @@ void ComponentManager::clear() {
     // Clear vectors - this will automatically call destructors and free memory
     displayItems.clear();
     buttons.clear();
+    clocks.clear();
 
     // Shrink capacity to free memory
     displayItems.shrink_to_fit();
     buttons.shrink_to_fit();
+    clocks.shrink_to_fit();
 }
 
 std::vector<DisplayItem*> ComponentManager::getDisplayItemsByPage(const int page) const {
@@ -125,17 +143,32 @@ std::vector<DisplayItem*> ComponentManager::getDisplayItemsByPage(const int page
     return pageItems;
 }
 
+std::vector<Clock*> ComponentManager::getClocksByPage(const int page) const {
+    std::vector<Clock*> pageClocks;
+
+    for (auto& clock : clocks) {
+        if (clock->getPage() == page) {
+            pageClocks.push_back(clock.get());
+        }
+    }
+
+    return pageClocks;
+}
+
 ComponentManager::MemoryStats ComponentManager::getMemoryStats() const {
     MemoryStats stats{};
     stats.displayItemCount = displayItems.size();
     stats.buttonCount = buttons.size();
+    stats.clockCount = clocks.size();
 
     // Rough estimation of memory usage
     stats.estimatedMemoryBytes =
         (displayItems.size() * sizeof(DisplayItem)) +
         (buttons.size() * sizeof(Button)) +
+        (clocks.size() * sizeof(Clock)) +
         (displayItems.capacity() * sizeof(std::unique_ptr<DisplayItem>)) +
-        (buttons.capacity() * sizeof(std::unique_ptr<Button>));
+        (buttons.capacity() * sizeof(std::unique_ptr<Button>)) +
+        (clocks.capacity() * sizeof(std::unique_ptr<Clock>));
 
     return stats;
 }
@@ -188,6 +221,31 @@ void ComponentManager::loadButtons(const ArduinoJson::JsonArray& buttonsArray) {
     }
 
     ESP_LOGI(TAG, "Successfully loaded %zu buttons", buttons.size());
+}
+
+void ComponentManager::loadClocks(const JsonArray& clocksArray) {
+    ESP_LOGI(TAG, "Loading %zu clocks", clocksArray.size());
+
+    // Reserve capacity for efficiency
+    clocks.reserve(clocksArray.size());
+
+    for (const auto& clockElement : clocksArray) {
+        if (!clockElement.is<JsonObject>()) {
+            ESP_LOGW(TAG, "Clock element is not a JSON object, skipping");
+            continue;
+        }
+
+        auto clock = Clock::fromJson(clockElement.as<ArduinoJson::JsonObject>());
+        if (clock) {
+            ESP_LOGD(TAG, "Created Clock: id=%lu, x=%d, y=%d, page=%d",
+                    clock->id, clock->getX(), clock->getY(), clock->getPage());
+            clocks.emplace_back(std::move(clock));
+        } else {
+            ESP_LOGW(TAG, "Failed to create Clock from JSON");
+        }
+    }
+
+    ESP_LOGI(TAG, "Successfully loaded %zu clocks", clocks.size());
 }
 
 void ComponentManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {

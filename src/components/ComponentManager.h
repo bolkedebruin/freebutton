@@ -11,6 +11,7 @@
 #include <functional>
 #include "DisplayItem.h"
 #include "Button.h"
+#include "Clock.h"
 #include "mqtt/Registry.h"
 
 namespace freebutton {
@@ -49,6 +50,11 @@ public:
      * Get number of buttons
      */
     size_t getButtonCount() const { return buttons.size(); }
+
+    /**
+     * Get number of clocks
+     */
+    size_t getClockCount() const { return clocks.size(); }
 
     /**
      * Iterate over all display items
@@ -93,6 +99,27 @@ public:
     }
 
     /**
+     * Iterate over all clocks
+     * @param func Function to call for each Clock
+     */
+    template<typename Func>
+    void forEachClock(Func&& func) {
+        for (auto& clock : clocks) {
+            func(*clock);
+        }
+    }
+
+    /**
+     * Iterate over all clocks (const version)
+     */
+    template<typename Func>
+    void forEachClock(Func&& func) const {
+        for (const auto& clock : clocks) {
+            func(*clock);
+        }
+    }
+
+    /**
      * Get display item by index
      * @param index Index of display item
      * @return Reference to DisplayItem or nullptr if index invalid
@@ -111,6 +138,15 @@ public:
     }
 
     /**
+     * Get clock by index
+     * @param index Index of clock
+     * @return Reference to Clock or nullptr if index invalid
+     */
+    Clock* getClock(const size_t index) const {
+        return index < clocks.size() ? clocks[index].get() : nullptr;
+    }
+
+    /**
      * Find display items by page
      * @param page Page number to filter by
      * @return Vector of DisplayItem pointers on the specified page
@@ -118,11 +154,19 @@ public:
     std::vector<DisplayItem*> getDisplayItemsByPage(int page) const;
 
     /**
+     * Find clocks by page
+     * @param page Page number to filter by
+     * @return Vector of Clock pointers on the specified page
+     */
+    std::vector<Clock*> getClocksByPage(int page) const;
+
+    /**
      * Get memory usage statistics
      */
     struct MemoryStats {
         size_t displayItemCount;
         size_t buttonCount;
+        size_t clockCount;
         size_t estimatedMemoryBytes;
     };
 
@@ -145,6 +189,7 @@ private:
 
     std::vector<std::unique_ptr<DisplayItem>> displayItems;
     std::vector<std::unique_ptr<Button>> buttons;
+    std::vector<std::unique_ptr<Clock>> clocks;
 
     /**
      * Load display items from JSON array
@@ -160,6 +205,11 @@ private:
      * Load MQTT brokers from JSON array
      */
     void loadBrokers(const JsonArray& brokersArray);
+
+    /**
+     * Load clocks from JSON array
+     */
+    void loadClocks(const JsonArray& clocksArray);
 };
 
 } // namespace freebutton
