@@ -40,7 +40,7 @@ const std::string Clock::getComponentType() const {
     return "Clock";
 }
 
-void Clock::createClock() {
+void Clock::createClock() const {
     if (clock_widget) {
         ESP_LOGW(TAG, "Clock %lu already created", id);
         return;
@@ -69,8 +69,6 @@ void Clock::createClock() {
 }
 
 void Clock::destroyClock() {
-    // Stop update task first
-    stopUpdateTask();
 
     if (clock_widget) {
         const auto& lvglDisplay = FreeButton::getLvglDisplay();
@@ -86,53 +84,5 @@ void Clock::destroyClock() {
     }
 }
 
-void Clock::startUpdateTask() {
-    if (updateTask) {
-        ESP_LOGW(TAG, "Clock update task already running");
-        return;
-    }
-
-    shouldStop = false;
-    xTaskCreate(updateTaskFunction, "clock_update", 4096, this, 5, &updateTask);
-    ESP_LOGI(TAG, "Clock update task started");
-}
-
-void Clock::stopUpdateTask() {
-    if (updateTask) {
-        shouldStop = true;
-        vTaskDelay(pdMS_TO_TICKS(100)); // Allow task to see the flag
-        if (updateTask) {
-            vTaskDelete(updateTask);
-            updateTask = nullptr;
-        }
-        ESP_LOGI(TAG, "Clock update task stopped");
-    }
-}
-
-void Clock::updateTaskFunction(void* parameter) {
-    Clock* clock = static_cast<Clock*>(parameter);
-
-    while (!clock->shouldStop) {
-        if (clock->clock_widget) {
-            // Use the exact same locking pattern as DisplayItem::onMessage
-            auto& lvglDisplay = FreeButton::getLvglDisplay();
-            lvglDisplay.lock();
-
-            // Call the clock update function with caching
-            clock_update(clock->clock_widget);
-
-            lvglDisplay.unlock();
-        }
-
-        // Update every second
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    // Clean up task handle
-    if (clock->updateTask) {
-        clock->updateTask = nullptr;
-    }
-    vTaskDelete(NULL);
-}
 
 } // namespace freebutton

@@ -22,11 +22,6 @@ static void update_clock_hands(analog_clock_t* clock, uint8_t hour, uint8_t minu
 static void update_time_labels(analog_clock_t* clock);
 void clock_timer_cb(lv_timer_t* timer);
 static void get_current_time(int* hour, int* minute, int* second);
-static void set_needle_value_no_alloc(analog_clock_t* clock, lv_obj_t* needle_line, lv_point_precise_t* points, int32_t needle_length, int32_t value);
-
-//static uint8_t hour;
-//static uint8_t minute;
-//static uint8_t second;
 
 void clock_init(lv_obj_t* parent, int x, int y)
 {

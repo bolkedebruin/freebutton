@@ -58,15 +58,9 @@ private:
         page = data["page"].isNull() ? page : data["page"].as<int>();
     }
 
-private:
-    // Task management
-    void startUpdateTask();
-    void stopUpdateTask();
-    static void updateTaskFunction(void* parameter);
-
 public:
     // UI methods
-    void createClock();
+    void createClock() const;
     void destroyClock();
 
     // Getters for ComponentManager
