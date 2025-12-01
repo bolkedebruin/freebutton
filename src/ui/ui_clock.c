@@ -55,8 +55,8 @@ analog_clock_t* clock_create(lv_obj_t* parent, lv_coord_t x, lv_coord_t y)
     clock->scale = lv_scale_create(clock->container);
     lv_scale_set_mode(clock->scale, LV_SCALE_MODE_ROUND_INNER);
     lv_obj_set_size(clock->scale, 150, 150);
-    lv_obj_set_style_bg_opa(clock->scale, LV_OPA_60, 0);
-    lv_obj_set_style_bg_color(clock->scale, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(clock->scale, LV_OPA_100, 0);
+    lv_obj_set_style_bg_color(clock->scale, lv_color_white(), 0);  // NS white background
     lv_obj_set_style_radius(clock->scale, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_clip_corner(clock->scale, true, 0);
     // Remove all padding and margins from scale
@@ -76,27 +76,27 @@ analog_clock_t* clock_create(lv_obj_t* parent, lv_coord_t x, lv_coord_t y)
 
     /* Label style properties */
     lv_style_set_text_font(&indicator_style, LV_FONT_DEFAULT);
-    lv_style_set_text_color(&indicator_style, lv_palette_main(LV_PALETTE_YELLOW));
+    lv_style_set_text_color(&indicator_style, lv_color_hex(0x0d2034));  // Light blue-gray
 
     /* Major tick properties */
-    lv_style_set_line_color(&indicator_style, lv_palette_main(LV_PALETTE_YELLOW));
-    lv_style_set_length(&indicator_style, 8); /* tick length */
-    lv_style_set_line_width(&indicator_style, 2); /* tick width */
+    lv_style_set_line_color(&indicator_style, lv_color_hex(0x0d2034));  // Light blue-gray
+    lv_style_set_length(&indicator_style, 12); /* tick length */
+    lv_style_set_line_width(&indicator_style, 3); /* tick width */
     lv_obj_add_style(clock->scale, &indicator_style, LV_PART_INDICATOR);
 
     /* Minor tick properties */
     static lv_style_t minor_ticks_style;
     lv_style_init(&minor_ticks_style);
-    lv_style_set_line_color(&minor_ticks_style, lv_palette_main(LV_PALETTE_YELLOW));
+    lv_style_set_line_color(&minor_ticks_style, lv_color_hex(0x0d2034));  // Light blue-gray
     lv_style_set_length(&minor_ticks_style, 6); /* tick length */
-    lv_style_set_line_width(&minor_ticks_style, 2); /* tick width */
+    lv_style_set_line_width(&minor_ticks_style, 1); /* tick width */
     lv_obj_add_style(clock->scale, &minor_ticks_style, LV_PART_ITEMS);
 
     /* Main line properties */
     static lv_style_t main_line_style;
     lv_style_init(&main_line_style);
-    lv_style_set_arc_color(&main_line_style, lv_color_black());
-    lv_style_set_arc_width(&main_line_style, 5);
+    lv_style_set_arc_color(&main_line_style, lv_color_hex(0x0d2034));  // Light blue-gray border
+    lv_style_set_arc_width(&main_line_style, 2);
     lv_obj_add_style(clock->scale, &main_line_style, LV_PART_MAIN);
 
     lv_scale_set_range(clock->scale, 0, 60);
@@ -111,21 +111,21 @@ analog_clock_t* clock_create(lv_obj_t* parent, lv_coord_t x, lv_coord_t y)
 
     clock->minute_hand = lv_line_create(clock->container);
     lv_line_set_points_mutable(clock->minute_hand, clock->minute_hand_points, 2);
-    lv_obj_set_style_line_width(clock->minute_hand, 3, 0);
+    lv_obj_set_style_line_width(clock->minute_hand, 4, 0);
     lv_obj_set_style_line_rounded(clock->minute_hand, true, 0);
-    lv_obj_set_style_line_color(clock->minute_hand, lv_color_white(), 0);
+    lv_obj_set_style_line_color(clock->minute_hand, lv_color_hex(0x02060a), 0);  // NS blue
     lv_obj_center(clock->minute_hand);
 
     clock->hour_hand = lv_line_create(clock->container);
-    lv_obj_set_style_line_width(clock->hour_hand, 5, 0);
+    lv_obj_set_style_line_width(clock->hour_hand, 6, 0);
     lv_obj_set_style_line_rounded(clock->hour_hand, true, 0);
-    lv_obj_set_style_line_color(clock->hour_hand, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_line_color(clock->hour_hand, lv_color_hex(0x02060a), 0);  // NS blue
     lv_obj_center(clock->hour_hand);
 
     clock->second_hand = lv_line_create(clock->container);
-    lv_obj_set_style_line_width(clock->second_hand, 3, 0);
+    lv_obj_set_style_line_width(clock->second_hand, 2, 0);
     lv_obj_set_style_line_rounded(clock->second_hand, true, 0);
-    lv_obj_set_style_line_color(clock->second_hand, lv_color_white(), 0);
+    lv_obj_set_style_line_color(clock->second_hand, lv_color_hex(0xE30613), 0);  // NS red
     lv_obj_center(clock->second_hand);
 
     // Initial needle positions will be set by clock_update() - don't set during creation
@@ -196,9 +196,9 @@ void clock_update(analog_clock_t* clock)
     int hour_position = hour_12 * 5 + (minute / 12);
     ESP_LOGI(TAG, "Hour hand: hour_12=%d, minute=%d, position=%d", hour_12, minute, hour_position);
 
-    lv_scale_set_line_needle_value(clock->scale, clock->second_hand, 60, second);
-    lv_scale_set_line_needle_value(clock->scale, clock->minute_hand, 60, minute);
-    lv_scale_set_line_needle_value(clock->scale, clock->hour_hand, 40, hour_position);
+    lv_scale_set_line_needle_value(clock->scale, clock->second_hand, 65, second);  // Long second hand
+    lv_scale_set_line_needle_value(clock->scale, clock->minute_hand, 55, minute);  // Medium minute hand
+    lv_scale_set_line_needle_value(clock->scale, clock->hour_hand, 35, hour_position);  // Short hour hand
 
     // Debug: Log coordinates after update
     ESP_LOGI(TAG, "After update - minute_hand_points[0]: (%ld, %ld), minute_hand_points[1]: (%ld, %ld)",

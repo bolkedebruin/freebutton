@@ -276,26 +276,6 @@
   "mqttdisplays": [
     {
       "x": 0,
-      "y": 0,
-      "boxtype": 1,
-      "fontsize": 4,
-      "align": 1,
-      "width": 50,
-      "label": "Home",
-      "unit": "",
-      "round": 0,
-      "page": 0,
-      "topics": [
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/display/time",
-          "payload": "",
-          "eventtype": 15
-        }
-      ]
-    },
-    {
-      "x": 0,
       "y": 60,
       "boxtype": 1,
       "fontsize": 1,
@@ -315,7 +295,7 @@
     },
     {
       "x": 0,
-      "y": "52",
+      "y": 70,
       "boxtype": 1,
       "fontsize": 1,
       "align": 1,
@@ -384,8 +364,8 @@
       ]
     },
     {
-      "x": 0,
-      "y": 30,
+      "x": 73,
+      "y": 70,
       "boxtype": 1,
       "fontsize": 1,
       "align": 1,
@@ -404,7 +384,7 @@
     },
     {
       "x": "0",
-      "y": "40",
+      "y": "5",
       "boxtype": 1,
       "fontsize": 2,
       "align": 1,
@@ -423,7 +403,7 @@
     },
     {
       "x": 8,
-      "y": 40,
+      "y": 5,
       "boxtype": 1,
       "fontsize": 2,
       "align": 1,
@@ -442,7 +422,7 @@
     },
     {
       "x": "16",
-      "y": "40",
+      "y": "5",
       "boxtype": 1,
       "fontsize": 2,
       "align": 1,

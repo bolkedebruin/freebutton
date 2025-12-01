@@ -34,6 +34,14 @@ void ComponentManager::loadFromFile(const std::string& filename) {
         if (!doc["location"].isNull()) {
             HomeAssistantDiscovery::setDeviceName(doc["location"].as<std::string>());
         }
+
+        if (!doc["ntpserver"].isNull()) {
+            ntpServer = doc["ntpserver"].as<std::string>();
+        }
+
+        if (!doc["timezone"].isNull()) {
+            timezone = doc["timezone"].as<std::string>();
+        }
     });
 
     // Stream process MQTT brokers FIRST (order matters!)

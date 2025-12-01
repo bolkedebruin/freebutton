@@ -184,12 +184,25 @@ public:
      */
     void startBrokers(const std::string& deviceId);
 
+    /**
+     * Get NTP server from configuration
+     */
+    const std::string& getNtpServer() const { return ntpServer; }
+
+    /**
+     * Get timezone from configuration
+     */
+    const std::string& getTimezone() const { return timezone; }
+
 private:
     static constexpr auto TAG = "ComponentManager";
 
     std::vector<std::unique_ptr<DisplayItem>> displayItems;
     std::vector<std::unique_ptr<Button>> buttons;
     std::vector<std::unique_ptr<Clock>> clocks;
+
+    std::string ntpServer;
+    std::string timezone;
 
     /**
      * Load display items from JSON array

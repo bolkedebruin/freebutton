@@ -8,6 +8,7 @@
 #include "core/WebServer.h"
 #include "core/WifiManager.h"
 #include "core/HardwareInitializer.h"
+#include "core/NtpClient.h"
 #include "drivers/BusAwareFileSystem.h"
 #include "drivers/NeoPixel.h"
 #include "mqtt/Broker.h"
@@ -122,6 +123,17 @@ void setup() {
         ESP_LOGI(TAG, "Waiting for WiFi connection...");
         vTaskDelay(pdMS_TO_TICKS(500));
     }
+
+    if (progressBar) {
+        progressBar->update(75, "Synchronizing time...");
+    }
+
+    // Initialize and synchronize NTP time
+    const std::string ntpServer = componentManager.getNtpServer().empty() ? "pool.ntp.org" : componentManager.getNtpServer();
+    const std::string timezone = componentManager.getTimezone().empty() ? "Europe/Amsterdam" : componentManager.getTimezone();
+
+    NtpClient::initialize(ntpServer, timezone);
+    NtpClient::syncTime();
 
     if (progressBar) {
         progressBar->update(85, "Starting MQTT brokers...");
