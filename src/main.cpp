@@ -130,7 +130,7 @@ void setup() {
 
     // Initialize and synchronize NTP time
     const std::string ntpServer = componentManager.getNtpServer().empty() ? "pool.ntp.org" : componentManager.getNtpServer();
-    const std::string timezone = componentManager.getTimezone().empty() ? "Europe/Amsterdam" : componentManager.getTimezone();
+    const std::string timezone = componentManager.getTimezone().empty() ? "CET-1CEST,M3.5.0,M10.5.0/3" : componentManager.getTimezone();
 
     NtpClient::initialize(ntpServer, timezone);
     NtpClient::syncTime();
