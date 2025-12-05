@@ -17,7 +17,7 @@ extern "C" {
 
 namespace freebutton {
 
-class Clock final : public MqttSubscriber {
+class Clock final {
 public:
     static unsigned long next_id;
 
@@ -25,20 +25,12 @@ public:
     int x, y;
     int width, height;
     int page = 1;
+    lv_align_t align = LV_ALIGN_TOP_LEFT;
 
-private:
-    analog_clock_t* clock_widget = nullptr;  // Clock UI element
-    TaskHandle_t updateTask = nullptr;       // FreeRTOS task for updates
-    volatile bool shouldStop = false;       // Task control flag
-
-public:
     Clock() : Clock(0, 0, 260, 260, 1) {}
 
     Clock(int x, int y, int width, int height, int page);
     ~Clock();
-
-    void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
-    const std::string getComponentType() const override;
 
     static std::unique_ptr<Clock> fromJson(const ArduinoJson::JsonObject& config) {
         auto clock = std::make_unique<Clock>();
@@ -50,12 +42,13 @@ public:
 private:
     static constexpr auto TAG = "Clock";
 
-    void configure(const ArduinoJson::JsonObject &data) {
+    void configure(const JsonObject &data) {
         x = data["x"].isNull() ? x : data["x"].as<int>();
         y = data["y"].isNull() ? y : data["y"].as<int>();
         width = data["width"].isNull() ? width : data["width"].as<int>();
         height = data["height"].isNull() ? height : data["height"].as<int>();
         page = data["page"].isNull() ? page : data["page"].as<int>();
+        align = data["align"].isNull() ? LV_ALIGN_TOP_LEFT : static_cast<lv_align_t>(data["align"].as<int>());
     }
 
 public:

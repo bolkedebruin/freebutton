@@ -49,7 +49,8 @@ void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic
             ESP_LOGI(TAG, "DisplayItem %lu: topic=%.*s value=%.*s eventType=%d",
                      id, (int)topic.length(), topic.data(), (int)data.length(), data.data(), topicConfig.eventType);
 
-            // Convert data to string for UI functions
+            // No need to assign labels / top labels as these are copied by lvgl
+            // and no need to spend the memory
             std::string value(data.data(), data.length());
 
             // Lock screen access for thread safety

@@ -32,7 +32,7 @@
   },
   "core": {
     "name": "buttonplus_one",
-    "location": "Keuken",
+    "location": "Garage",
     "autobackup": true,
     "brightness": 80,
     "color": 16765791,
@@ -64,15 +64,6 @@
       }
     ]
   },
-  "clocks": [
-    {
-      "x": 0,
-      "y": 0,
-      "width": 200,
-      "height": 200,
-      "page": 1
-    }
-  ],
   "mqttbuttons": [
     {
       "id": 0,

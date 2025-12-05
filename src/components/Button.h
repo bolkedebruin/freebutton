@@ -130,7 +130,7 @@ private:
 
 public:
     // CRTP interface for TopicHandler
-    const char* getComponentName() const { return "Button"; }
+    static const char* getComponentName() { return "Button"; }
     std::vector<Topic>& getTopicsRef() { return topics; }
     void registerTopics();
     void unregisterTopics();

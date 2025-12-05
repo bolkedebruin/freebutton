@@ -78,31 +78,30 @@ void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_vie
             ESP_LOGI(TAG, "Button %lu: topic=%.*s value=%.*s eventType=%d",
                      id, (int)topic.length(), topic.data(), (int)data.length(), data.data(), topicConfig.eventType);
 
-            // Convert data to string for UI functions
-            std::string value(data.data(), data.length());
-
             // Lock screen access for thread safety
             auto& lvglDisplay = FreeButton::getLvglDisplay();
             lvglDisplay.lock();
 
+            // No need to assign labels / top labels as these are copied by lvgl
+            // and no need to spend the memory
+            std::string value(data.data(), data.size());
+
             // Handle specific message types and update UI
             switch (topicConfig.eventType) {
                 case LABEL:
-                    label.assign(data.data(), data.size());
-                    ui_button_set_text(button, label.c_str());
+                    ui_button_set_text(button, value.c_str());
                     ESP_LOGI(TAG, "Button %lu label updated to: %s", id, label.c_str());
                     break;
 
                 case TOP_LABEL:
-                    topLabel.assign(data.data(), data.size());
-                    ui_button_set_title(button, topLabel.c_str());
+                    ui_button_set_title(button, value.c_str());
                     ESP_LOGI(TAG, "Button %lu top label updated to: %s", id, topLabel.c_str());
                     break;
 
                 case LED_FRONT_RGB:
                 case LED_WALL_RGB:
                     // LED messages will be handled by physical LEDs managed by ButtonManager
-                    ESP_LOGD(TAG, "Button %lu: LED message ignored (handled by ButtonManager): %s", id, std::string(data).c_str());
+                    ESP_LOGD(TAG, "Button %lu: LED message ignored (handled by ButtonManager): %s", id, value.c_str());
                     break;
 
                 default:

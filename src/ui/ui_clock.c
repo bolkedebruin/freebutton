@@ -11,60 +11,55 @@
 
 static const char* TAG = "clock";
 
-#define CLOCK_SIZE 200
-#define CLOCK_CONTAINER_SIZE 260
-#define CLOCK_CENTER (CLOCK_SIZE / 2)
-
 static analog_clock_t* g_clock = NULL;
 lv_timer_t* g_timer = NULL;
 
-static void update_clock_hands(analog_clock_t* clock, uint8_t hour, uint8_t minute, uint8_t second);
-static void update_time_labels(analog_clock_t* clock);
 void clock_timer_cb(lv_timer_t* timer);
 static void get_current_time(int* hour, int* minute, int* second);
 
-void clock_init(lv_obj_t* parent, int x, int y)
+void clock_init(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, const lv_align_t align)
 {
     if (g_clock != NULL) {
         return;
     }
 
-    g_clock = clock_create(parent, x, y);
-    if (g_clock != NULL) {
-        // Create timer after lock is released
-        g_timer = lv_timer_create(clock_timer_cb, 250, g_clock);
-    }
+    g_clock = clock_create(parent, x, y, width, height, align);
+    g_timer = lv_timer_create(clock_timer_cb, 250, g_clock);
 }
 
-analog_clock_t* clock_create(lv_obj_t* parent, lv_coord_t x, lv_coord_t y)
+analog_clock_t* clock_create(lv_obj_t* parent, const lv_coord_t x, const lv_coord_t y, const lv_coord_t width, const lv_coord_t height, const lv_align_t align)
 {
     static analog_clock_t clock_instance;
     analog_clock_t* clock = &clock_instance;
 
     clock->container = lv_obj_create(parent);
-    lv_obj_set_size(clock->container, 150, 150);
+    lv_obj_set_size(clock->container, width, height);
     lv_obj_set_style_bg_opa(clock->container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(clock->container, 0, 0);
     lv_obj_set_style_clip_corner(clock->container, false, 0);  // Disable clipping to prevent border clipping
     lv_obj_set_scrollbar_mode(clock->container, LV_SCROLLBAR_MODE_OFF);
-    // Remove all padding and margins
     lv_obj_set_style_pad_all(clock->container, 0, 0);
-    lv_obj_center(clock->container);
+
+    if (align == LV_ALIGN_CENTER) {
+        lv_obj_center(clock->container);
+    } else {
+        lv_obj_set_pos(clock->container, x, y);
+    }
 
     // Create scale
     clock->scale = lv_scale_create(clock->container);
     lv_scale_set_mode(clock->scale, LV_SCALE_MODE_ROUND_INNER);
-    lv_obj_set_size(clock->scale, 150, 150);
+    lv_obj_set_size(clock->scale, width, height);
     lv_obj_set_style_bg_opa(clock->scale, LV_OPA_100, 0);
     lv_obj_set_style_bg_color(clock->scale, lv_color_white(), 0);  // NS white background
     lv_obj_set_style_radius(clock->scale, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_clip_corner(clock->scale, true, 0);
-    // Remove all padding and margins from scale
     lv_obj_set_style_pad_all(clock->scale, 0, 0);
+
     // Position scale at container origin (0,0) since they're the same size
     lv_obj_set_pos(clock->scale, 0, 0);
 
-    lv_scale_set_label_show(clock->scale, true);
+    lv_scale_set_label_show(clock->scale, false);
     lv_scale_set_total_tick_count(clock->scale, 61);
     lv_scale_set_major_tick_every(clock->scale, 5);
 
@@ -146,23 +141,13 @@ analog_clock_t* clock_create(lv_obj_t* parent, lv_coord_t x, lv_coord_t y)
     lv_obj_align(clock->am_pm_label, LV_ALIGN_TOP_RIGHT, -10, 70);
     lv_label_set_text(clock->am_pm_label, "");
     */
-    // Debug: Log container and scale positions and sizes
-    ESP_LOGI(TAG, "Container size: %dx%d, pos: (%d,%d)",
-             lv_obj_get_width(clock->container), lv_obj_get_height(clock->container),
-             lv_obj_get_x(clock->container), lv_obj_get_y(clock->container));
-    ESP_LOGI(TAG, "Scale size: %dx%d, pos: (%d,%d)",
-             lv_obj_get_width(clock->scale), lv_obj_get_height(clock->scale),
-             lv_obj_get_x(clock->scale), lv_obj_get_y(clock->scale));
-    lv_area_t content_area;
-    lv_obj_get_content_coords(clock->container, &content_area);
-    ESP_LOGI(TAG, "Container content area: (%d,%d) to (%d,%d)",
-             content_area.x1, content_area.y1, content_area.x2, content_area.y2);
 
     ESP_LOGI(TAG, "Clock created successfully at (%d, %d)", x, y);
+
     return clock;
 }
 
-void clock_update(analog_clock_t* clock)
+void clock_update(const analog_clock_t* clock)
 {
     if (clock == NULL) {
         ESP_LOGW(TAG, "Clock update called with null pointer");
@@ -176,6 +161,7 @@ void clock_update(analog_clock_t* clock)
     static int last_hour = -1;
     static int last_minute = -1;
     static int last_second = -1;
+
     // Only update if minute or hour changed
     if (hour == last_hour && minute == last_minute && last_second == second) {
         return;  // No change, skip expensive drawing
@@ -188,34 +174,28 @@ void clock_update(analog_clock_t* clock)
     int hour_12 = hour % 12;
     if (hour_12 == 0) hour_12 = 12; // 0 becomes 12, 12 stays 12
 
-    // Debug: Log current point coordinates before update
-    ESP_LOGI(TAG, "Before update - minute_hand_points[0]: (%ld, %ld), minute_hand_points[1]: (%ld, %ld)",
-             clock->minute_hand_points[0].x, clock->minute_hand_points[0].y,
-             clock->minute_hand_points[1].x, clock->minute_hand_points[1].y);
+    const int hour_position = hour_12 * 5 + (minute / 12);
 
-    int hour_position = hour_12 * 5 + (minute / 12);
-    ESP_LOGI(TAG, "Hour hand: hour_12=%d, minute=%d, position=%d", hour_12, minute, hour_position);
-
-    lv_scale_set_line_needle_value(clock->scale, clock->second_hand, 65, second);  // Long second hand
-    lv_scale_set_line_needle_value(clock->scale, clock->minute_hand, 55, minute);  // Medium minute hand
-    lv_scale_set_line_needle_value(clock->scale, clock->hour_hand, 35, hour_position);  // Short hour hand
+    lv_scale_set_line_needle_value(clock->scale, clock->second_hand, 65, second);
+    lv_scale_set_line_needle_value(clock->scale, clock->minute_hand, 55, minute);
+    lv_scale_set_line_needle_value(clock->scale, clock->hour_hand, 35, hour_position);
 
     // Debug: Log coordinates after update
     ESP_LOGI(TAG, "After update - minute_hand_points[0]: (%ld, %ld), minute_hand_points[1]: (%ld, %ld)",
              clock->minute_hand_points[0].x, clock->minute_hand_points[0].y,
              clock->minute_hand_points[1].x, clock->minute_hand_points[1].y);
 
-    ESP_LOGI(TAG, "Updating clock with time %02d:%02d:%02d", hour, minute, second);
-
-    //update_clock_hands(clock, hour, minute, second);
-    //update_time_labels(clock);
+    ESP_LOGD(TAG, "Updating clock with time %02d:%02d:%02d", hour, minute, second);
 }
 
 void clock_destroy(analog_clock_t* clock)
 {
     if (!clock) return;
 
-    // Delete LVGL objects (scale automatically deletes child hands)
+    if (g_timer != NULL) {
+        lv_timer_del(g_timer);
+    }
+
     if (clock->scale) {
         lv_obj_del(clock->scale);
     }
@@ -224,29 +204,14 @@ void clock_destroy(analog_clock_t* clock)
     free(clock);
 }
 
-void clock_cleanup(void)
-{
-    if (g_timer != NULL) {
-        lv_timer_del(g_timer);
-        g_timer = NULL;
-    }
-
-    if (g_clock != NULL) {
-        clock_destroy(g_clock);
-        g_clock = NULL;
-    }
-}
-
-
 static void update_time_labels(analog_clock_t* clock)
 {
     time_t now;
-    struct tm* timeinfo;
     char date_str[32];
     char am_pm_str[8];
 
     time(&now);
-    timeinfo = localtime(&now);
+    struct tm *timeinfo = localtime(&now);
 
     strftime(date_str, sizeof(date_str), "%m/%d", timeinfo);
     strftime(am_pm_str, sizeof(am_pm_str), "%p", timeinfo);
@@ -258,9 +223,8 @@ static void update_time_labels(analog_clock_t* clock)
 void clock_timer_cb(lv_timer_t* timer)
 {
     ESP_LOGD(TAG, "Timer callback triggered");
-    analog_clock_t* clock = (analog_clock_t*)lv_timer_get_user_data(timer);
+    analog_clock_t* clock = lv_timer_get_user_data(timer);
     if (clock) {
-        // Use standard update - locking should be handled at a higher level
         clock_update(clock);
     } else {
         ESP_LOGW(TAG, "Clock pointer is null in timer callback");

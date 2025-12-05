@@ -70,6 +70,7 @@
       "y": 0,
       "width": 200,
       "height": 200,
+      "align": 9,
       "page": 1
     }
   ],
@@ -275,82 +276,12 @@
   ],
   "mqttdisplays": [
     {
-      "x": 0,
-      "y": 60,
-      "boxtype": 1,
-      "fontsize": 1,
-      "align": 1,
-      "width": 35,
-      "unit": "",
-      "round": 1,
-      "page": 0,
-      "topics": [
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/display/temperature",
-          "payload": "",
-          "eventtype": 15
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 70,
-      "boxtype": 1,
-      "fontsize": 1,
-      "align": 1,
-      "width": 36,
-      "unit": "",
-      "round": 2,
-      "page": 0,
-      "topics": [
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/display/power",
-          "payload": "",
-          "eventtype": 15
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 80,
-      "boxtype": 1,
-      "fontsize": 1,
-      "align": 1,
-      "width": 100,
-      "label": "Sonos",
-      "unit": "",
-      "round": 0,
-      "page": 0,
-      "topics": [
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/display/media_title",
-          "payload": "",
-          "eventtype": 15
-        },
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/display/media_artist",
-          "payload": "",
-          "eventtype": 16
-        },
-        {
-          "brokerid": "ha-button-plus",
-          "topic": "buttonplus/btn_a00001/display/volume_level_percent",
-          "payload": "",
-          "eventtype": 17
-        }
-      ]
-    },
-    {
-      "x": 75,
+      "x": 83,
       "y": 5,
       "boxtype": 1,
       "fontsize": 3,
       "align": 1,
-      "width": 20,
+      "width": 17,
       "unit": "",
       "round": 0,
       "page": 0,
@@ -364,8 +295,8 @@
       ]
     },
     {
-      "x": 73,
-      "y": 70,
+      "x": 2,
+      "y": 5,
       "boxtype": 1,
       "fontsize": 1,
       "align": 1,
@@ -383,8 +314,8 @@
       ]
     },
     {
-      "x": "0",
-      "y": "5",
+      "x": 0,
+      "y": 80,
       "boxtype": 1,
       "fontsize": 2,
       "align": 1,
@@ -403,7 +334,7 @@
     },
     {
       "x": 8,
-      "y": 5,
+      "y": 80,
       "boxtype": 1,
       "fontsize": 2,
       "align": 1,
@@ -421,8 +352,8 @@
       ]
     },
     {
-      "x": "16",
-      "y": "5",
+      "x": 16,
+      "y": 80,
       "boxtype": 1,
       "fontsize": 2,
       "align": 1,
@@ -440,7 +371,7 @@
       ]
     },
     {
-      "x": 60,
+      "x": 69,
       "y": 0,
       "boxtype": 1,
       "fontsize": 4,
@@ -459,12 +390,12 @@
       ]
     },
     {
-      "x": 70,
+      "x": 81,
       "y": 20,
       "boxtype": 1,
       "fontsize": 3,
       "align": 1,
-      "width": 30,
+      "width": 18,
       "unit": "",
       "round": 0,
       "page": 0,
