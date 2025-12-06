@@ -66,7 +66,7 @@ private:
     bool monitoring_;
 
     static void buttonTaskWrapper(void* parameter);
-    void buttonTask() const;
+    void buttonTask();
     void updateAllButtons() const;
 
     // LED creation helpers

@@ -92,12 +92,13 @@ void ButtonManager::startMonitoring() {
 
     ESP_LOGI(TAG, "Starting button monitoring task");
 
+    monitoring_ = true;
+
     if (xTaskCreate(buttonTaskWrapper, "button_monitor", 4096, this, 5, &taskHandle_) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create button monitoring task");
+        monitoring_ = false;
         return;
     }
-
-    monitoring_ = true;
 }
 
 void ButtonManager::stopMonitoring() {
@@ -119,13 +120,13 @@ void ButtonManager::onGlobalButtonEvent(GlobalButtonCallback callback) {
 }
 
 void ButtonManager::buttonTaskWrapper(void* parameter) {
-    if (const auto* manager = static_cast<ButtonManager*>(parameter)) {
+    if (auto* manager = static_cast<ButtonManager*>(parameter)) {
         manager->buttonTask();
     }
     vTaskDelete(nullptr);
 }
 
-void ButtonManager::buttonTask() const {
+void ButtonManager::buttonTask() {
     ESP_LOGI(TAG, "Button monitoring task started with %zu buttons", buttons_.size());
 
     while (monitoring_) {
