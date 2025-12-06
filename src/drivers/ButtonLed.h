@@ -34,15 +34,12 @@ private:
     const uint8_t brokerId_;
     const int ledIndex_;           // Physical LED strip index
 
-    // LED state - using C++23 aggregate initialization
     struct LedState {
         bool on{false};
         uint8_t brightness{255};
         uint8_t red{255}, green{255}, blue{255};
         std::string effect{"none"};
     } state_;
-
-    // Use the BASE_TOPIC from config.h where needed in topic generation
 
 public:
     explicit ButtonLed(uint8_t buttonPosition, LedPosition ledPosition,
@@ -72,14 +69,14 @@ public:
         }
     }
 
-    void setState(bool on) noexcept {
+    void setState(const bool on) noexcept {
         if (state_.on != on) {
             state_.on = on;
             updateDisplay();
         }
     }
 
-    void setBrightness(uint8_t brightness) noexcept {
+    void setBrightness(const uint8_t brightness) noexcept {
         if (state_.brightness != brightness) {
             state_.brightness = brightness;
             updateDisplay();

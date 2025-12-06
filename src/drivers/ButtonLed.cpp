@@ -157,7 +157,7 @@ bool ButtonLed::matchesTopic(std::string_view topic) const noexcept {
     return topic.find(baseTopic) == 0;
 }
 
-void ButtonLed::handleMqttMessage(std::string_view topic, std::string_view data) {
+void ButtonLed::handleMqttMessage(const std::string_view topic, std::string_view data) {
     const std::string topicStr(topic);
 
     if (topicStr == getCommandTopic()) {

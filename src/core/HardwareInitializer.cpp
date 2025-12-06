@@ -199,9 +199,7 @@ int HardwareInitializer::initializeButtons() {
         const auto connectorType = scanner_.getConnectorType(connector);
         
         if (connectorType && *connectorType != ConnectorType::EMPTY) {
-            const auto mcp = getMCPForConnector(connector);
-            
-            if (mcp) {
+            if (const auto mcp = getMCPForConnector(connector)) {
                 // Left button (even ID)
                 const int leftId = connector * 2;
                 auto leftButton = std::make_unique<PushButton>(leftId, MCP_SWITCH_LEFT, mcp);
@@ -219,7 +217,9 @@ int HardwareInitializer::initializeButtons() {
             }
         }
     }
-    
+
+    buttonManager_.registerButtonsWithHomeAssistant(0);
+
     ESP_LOGI(TAG, "Button initialization completed. Created %d buttons", buttonCount);
     return buttonCount;
 }
@@ -280,7 +280,7 @@ bool HardwareInitializer::initializeLEDs() {
     buttonManager_.createLEDsForAllButtons(deviceId, 0); // Default broker ID 0
 
     // Register all LEDs with Home Assistant
-    buttonManager_.registerAllLEDsWithHomeAssistant();
+    buttonManager_.registerLEDsWithHomeAssistant();
 
     ESP_LOGI(TAG, "LED initialization completed successfully");
     return true;

@@ -30,6 +30,7 @@ public:
     // Button management
     void addButton(std::unique_ptr<PushButton> button);
     void removeButton(int position);
+    void registerButtonsWithHomeAssistant(uint8_t brokerId) const;
 
     // Get button by position (1-based)
     [[nodiscard]] PushButton* getButton(int position) const;
@@ -42,11 +43,11 @@ public:
     void onGlobalButtonEvent(GlobalButtonCallback callback);
 
     // Configuration
-    void setUpdateInterval(uint32_t intervalMs) { updateInterval_ = intervalMs; }
+    void setUpdateInterval(const uint32_t intervalMs) { updateInterval_ = intervalMs; }
 
     // LED management for all detected physical buttons
     void createLEDsForAllButtons(const std::string& deviceId, uint8_t brokerId = 0);
-    void registerAllLEDsWithHomeAssistant();
+    void registerLEDsWithHomeAssistant() const;
 
     // Get LEDs for a specific button position
     std::vector<ButtonLed*> getLEDsForButton(int position) const;

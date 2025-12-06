@@ -46,8 +46,8 @@ public:
     void onLongPress(LongPressCallback callback);
 
     // Long press configuration
-    void setLongPressDelay(uint8_t delay) { longPressDelay_ = delay; }
-    void setLongPressRepeat(uint8_t repeat) { longPressRepeat_ = repeat; }
+    void setLongPressDelay(const uint8_t delay) { longPressDelay_ = delay; }
+    void setLongPressRepeat(const uint8_t repeat) { longPressRepeat_ = repeat; }
 
     // MCP access
     [[nodiscard]] std::shared_ptr<Adafruit_MCP23008> getMCP() const { return mcp_; }

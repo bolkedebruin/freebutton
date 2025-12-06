@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <map>
 
+#include "mqtt/HomeAssistantDiscovery.h"
+
 namespace FreeButton {
 
 ButtonManager::ButtonManager()
@@ -31,7 +33,8 @@ void ButtonManager::addButton(std::unique_ptr<PushButton> button) {
     ESP_LOGI(TAG, "Adding button at position %d", position);
 
     // Set up button event callback to forward to global callback
-    button->onButtonEvent([this](int pos, EventType event) {
+    button->onButtonEvent([this](const int pos, const EventType event) {
+        ESP_LOGI(TAG, "Button at position %d with event %d", pos, event);
         if (globalCallback_) {
             globalCallback_(pos, event);
         }
@@ -61,6 +64,24 @@ PushButton* ButtonManager::getButton(int position) const {
                                    });
 
     return it != buttons_.end() ? it->get() : nullptr;
+}
+
+void ButtonManager::registerButtonsWithHomeAssistant(const uint8_t brokerId) const {
+    for (const auto& button : buttons_) {
+        auto generator = [&button](uint8_t broker_id) -> HomeAssistantDiscoveryConfig {
+            HomeAssistantDiscoveryConfig config;
+            config.component_type = "button";
+            config.default_entity_id = "button_" + std::to_string(button->position());
+            config.name = "Button " + std::to_string(button->position());
+            config.state_topic = std::string(PUBLICMQTTID) + "/" + deviceId + "/" + "button_" + std::to_string(button->position()) + "/state";
+            config.command_topic = std::string(PUBLICMQTTID) + "/" + deviceId + "/" + "button_" + std::to_string(button->position()) + "/set";
+            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
+
+            config.enabled = true;
+            return config;
+        };
+        HomeAssistantDiscovery::registerComponent(brokerId, std::move(generator));
+    }
 }
 
 void ButtonManager::startMonitoring() {
@@ -98,8 +119,7 @@ void ButtonManager::onGlobalButtonEvent(GlobalButtonCallback callback) {
 }
 
 void ButtonManager::buttonTaskWrapper(void* parameter) {
-    auto* manager = static_cast<ButtonManager*>(parameter);
-    if (manager) {
+    if (const auto* manager = static_cast<ButtonManager*>(parameter)) {
         manager->buttonTask();
     }
     vTaskDelete(nullptr);
@@ -182,7 +202,7 @@ void ButtonManager::createLEDsForButton(int position, const std::string& deviceI
     leds_.push_back(std::move(wallLed));
 }
 
-void ButtonManager::registerAllLEDsWithHomeAssistant() {
+void ButtonManager::registerLEDsWithHomeAssistant() const {
     ESP_LOGI(TAG, "Registering %zu LEDs with Home Assistant", leds_.size());
 
     for (const auto& led : leds_) {
