@@ -55,7 +55,7 @@ void ButtonManager::removeButton(int position) {
 }
 
 PushButton* ButtonManager::getButton(int position) const {
-    auto it = std::ranges::find_if(buttons_,
+    const auto it = std::ranges::find_if(buttons_,
                                    [position](const auto& button) {
                                        return button->position() == position;
                                    });

@@ -11,10 +11,7 @@
 #include <esp_log.h>
 #include "config.h"
 
-// Access global neopixels (declared in main.cpp)
-extern NeoPixelController neopixels;
-
-static auto TAG = "ButtonLed";
+static auto TAG = "led";
 
 void ButtonLed::updateDisplay() const noexcept {
     if (state_.on) {
@@ -23,11 +20,11 @@ void ButtonLed::updateDisplay() const noexcept {
         const uint8_t scaledB = (state_.blue * state_.brightness) / 255;
 
         neopixels.setPixel(ledIndex_,
-                          neopixels.colorFromRGB(scaledR, scaledG, scaledB));
+                          NeoPixelController::colorFromRGB(scaledR, scaledG, scaledB));
     } else {
         neopixels.setPixel(ledIndex_, CRGB::Black);
     }
-    neopixels.show();
+    NeoPixelController::show();
 }
 
 // Public methods for state retrieval (used by Button component for publishing)
@@ -53,7 +50,7 @@ std::string ButtonLed::generateBaseTopic() const noexcept {
         ("_" + std::to_string(ledNumber_)) :
         ("_" + std::string(positionToString()));
 
-    return deviceId_ + "/button" + buttonId + ledSuffix;
+    return std::string(PUBLICMQTTID) + "/" + deviceId_ + "/button" + buttonId + ledSuffix;
 }
 
 std::string ButtonLed::getStateTopic() const noexcept {
@@ -131,7 +128,7 @@ void ButtonLed::registerWithHomeAssistant() const {
         config.additional_config["rgb_state_topic"] = getColorStateTopic();
         config.additional_config["rgb_command_topic"] = getColorCommandTopic();
         config.additional_config["rgb_command_template"] =
-            "{{ {\"r\": red, \"g\": green, \"b\": blue} | tojson }}";
+            R"({{ {"r": red, "g": green, "b": blue} | tojson }})";
         config.additional_config["rgb_value_template"] =
             "{{ value_json.r }},{{ value_json.g }},{{ value_json.b }}";
 
@@ -143,7 +140,7 @@ void ButtonLed::registerWithHomeAssistant() const {
         // Effect support - runtime topic generation
         config.additional_config["effect_state_topic"] = getEffectStateTopic();
         config.additional_config["effect_command_topic"] = getEffectCommandTopic();
-        config.additional_config["effect_list"] = "[\"none\",\"glow\",\"flash\"]";
+        config.additional_config["effect_list"] = R"(["none","glow","flash"])";
 
         config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
         config.enabled = true;

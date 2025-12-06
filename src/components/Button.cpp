@@ -11,9 +11,6 @@
 
 #include <utility>
 
-// External device ID from main.cpp
-extern const std::string deviceId;
-
 namespace freebutton {
 
 unsigned long Button::next_id = 1;
@@ -142,7 +139,7 @@ void Button::unregisterTopics() {
 
 // handleTopics is now automatically provided by TopicHandler template
 
-void Button::publishToTopic(EventType eventType, const std::string& payload) const {
+void Button::publishToTopic(const EventType eventType, const std::string& payload) const {
     for (const auto& topic : topics) {
         if (topic.eventType == eventType) {
             const std::string& actualPayload = topic.payload.empty() ? payload : topic.payload;
