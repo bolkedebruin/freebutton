@@ -171,10 +171,11 @@ void clock_update(const analog_clock_t* clock)
     last_minute = minute;
     last_second = second;
 
-    int hour_12 = hour % 12;
-    if (hour_12 == 0) hour_12 = 12; // 0 becomes 12, 12 stays 12
+    int hour_12 = hour % 12;  // Keep in 0-11 range (0=12 o'clock, 1=1 o'clock, etc)
 
-    const int hour_position = hour_12 * 5 + (minute / 12);
+    // Calculate hour hand position with smooth movement
+    // Each hour = 5 scale units, add fractional position based on minutes with rounding
+    const int hour_position = hour_12 * 5 + (minute * 5 + 30) / 60;
 
     lv_scale_set_line_needle_value(clock->scale, clock->second_hand, 65, second);
     lv_scale_set_line_needle_value(clock->scale, clock->minute_hand, 55, minute);
