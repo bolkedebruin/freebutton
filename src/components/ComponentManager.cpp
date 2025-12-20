@@ -163,6 +163,15 @@ std::vector<Clock*> ComponentManager::getClocksByPage(const int page) const {
     return pageClocks;
 }
 
+Button* ComponentManager::getButtonByPosition(const int position) const {
+    for (auto& button : buttons) {
+        if (button->getPosition() == position) {
+            return button.get();
+        }
+    }
+    return nullptr;
+}
+
 ComponentManager::MemoryStats ComponentManager::getMemoryStats() const {
     MemoryStats stats{};
     stats.displayItemCount = displayItems.size();

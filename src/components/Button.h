@@ -42,12 +42,10 @@ public:
 private:
     lv_obj_t* button = nullptr;  // UI button element
 
-
     // Button position and device information
     uint32_t position_{0};
     uint8_t page_{1};
     std::string buttonId_;
-    std::string deviceId_;
     uint8_t brokerId_{0};
 
 public:
@@ -60,6 +58,10 @@ public:
     void click() const;
     void longPress() const;
     void release() const;
+
+    // Position and event handling
+    uint32_t getPosition() const { return position_; }
+    void handlePhysicalEvent(EventType event);
 
     static std::unique_ptr<Button> fromJson(const JsonObject& config) {
         auto button = std::make_unique<Button>();
@@ -105,7 +107,6 @@ private:
         ledColorWall = data["ledcolorwall"].isNull() ? ledColorWall : data["ledcolorwall"].as<uint32_t>();
 
         // Set device ID and broker ID - use external deviceId from main.cpp
-        deviceId_ = deviceId;
         brokerId_ = 0; // Default broker ID
 
         // Parse LED topics for backwards compatibility (but don't create LEDs here)

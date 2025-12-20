@@ -26,4 +26,12 @@ constexpr unsigned long SENSOR_UPDATE_INTERVAL = 1000;
 
 extern const std::string deviceId;
 
+// Forward declarations
+namespace freebutton {
+    class ComponentManager;
+}
+
+// Global component manager
+extern freebutton::ComponentManager componentManager;
+
 #endif //CONFIG_H

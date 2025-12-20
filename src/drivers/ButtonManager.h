@@ -6,9 +6,7 @@
 
 #include "PushButton.h"
 #include "ButtonLed.h"
-#include "types.h"
 #include <memory>
-#include <functional>
 #include <vector>
 
 namespace FreeButton {
@@ -16,8 +14,6 @@ namespace FreeButton {
 // Button Manager class to handle all physical buttons and LEDs
 class ButtonManager {
 public:
-    using GlobalButtonCallback = std::function<void(int position, EventType event)>;
-
     ButtonManager();
     ~ButtonManager() = default;
 
@@ -39,9 +35,6 @@ public:
     void startMonitoring();
     void stopMonitoring();
 
-    // Global callback for all button events
-    void onGlobalButtonEvent(GlobalButtonCallback callback);
-
     // Configuration
     void setUpdateInterval(const uint32_t intervalMs) { updateInterval_ = intervalMs; }
 
@@ -59,11 +52,10 @@ private:
     std::vector<std::unique_ptr<PushButton>> buttons_;
     std::vector<std::unique_ptr<ButtonLed>> leds_;  // All physical button LEDs
 
-    GlobalButtonCallback globalCallback_;
     TaskHandle_t taskHandle_;
     SemaphoreHandle_t mcpMutex_;
     uint32_t updateInterval_;
-    bool monitoring_;
+    bool mutable monitoring_;
 
     static void buttonTaskWrapper(void* parameter);
     void buttonTask();

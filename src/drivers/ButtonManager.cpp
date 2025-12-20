@@ -12,12 +12,12 @@
 #include <map>
 
 #include "mqtt/HomeAssistantDiscovery.h"
+#include "components/ComponentManager.h"
 
 namespace FreeButton {
 
 ButtonManager::ButtonManager()
-    : globalCallback_(nullptr)
-    , taskHandle_(nullptr)
+    : taskHandle_(nullptr)
     , mcpMutex_(xSemaphoreCreateMutex())
     , updateInterval_(DEFAULT_UPDATE_INTERVAL)
     , monitoring_(false) {
@@ -32,11 +32,17 @@ void ButtonManager::addButton(std::unique_ptr<PushButton> button) {
     const int position = button->position();
     ESP_LOGI(TAG, "Adding button at position %d", position);
 
-    // Set up button event callback to forward to global callback
-    button->onButtonEvent([this](const int pos, const EventType event) {
+    // Set up button event callback to forward to display components
+    button->onButtonEvent([](const int pos, const EventType event) {
         ESP_LOGI(TAG, "Button at position %d with event %d", pos, event);
-        if (globalCallback_) {
-            globalCallback_(pos, event);
+
+        // Find and trigger corresponding display button
+        auto* displayButton = componentManager.getButtonByPosition(pos);
+        if (displayButton) {
+            ESP_LOGI(TAG, "Found display button for position %d, triggering event", pos);
+            displayButton->handlePhysicalEvent(event);
+        } else {
+            ESP_LOGI(TAG, "No display button found for position %d", pos);
         }
     });
 
@@ -115,10 +121,6 @@ void ButtonManager::stopMonitoring() {
     }
 }
 
-void ButtonManager::onGlobalButtonEvent(GlobalButtonCallback callback) {
-    globalCallback_ = std::move(callback);
-}
-
 void ButtonManager::buttonTaskWrapper(void* parameter) {
     if (auto* manager = static_cast<ButtonManager*>(parameter)) {
         manager->buttonTask();
@@ -126,6 +128,7 @@ void ButtonManager::buttonTaskWrapper(void* parameter) {
     vTaskDelete(nullptr);
 }
 
+/* do NOT make this const */
 void ButtonManager::buttonTask() {
     ESP_LOGI(TAG, "Button monitoring task started with %zu buttons", buttons_.size());
 

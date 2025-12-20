@@ -15,7 +15,7 @@ namespace freebutton {
 
 unsigned long Button::next_id = 1;
 
-Button::Button(std::string  label, std::string  topLabel,
+Button::Button(std::string label, std::string  topLabel,
                const uint32_t ledColorFront, const uint32_t ledColorWall,
                std::vector<Topic> topicConfigs)
     : id(next_id++)
@@ -28,7 +28,6 @@ Button::Button(std::string  label, std::string  topLabel,
     buttonId_ = std::to_string(id);
     position_ = id;
     page_ = 1;
-    deviceId_ = deviceId;  // Use external deviceId from main.cpp
     brokerId_ = 0;
 
 }
@@ -129,6 +128,25 @@ void Button::longPress() const {
 void Button::release() const {
     publishToTopic(RELEASE, RELEASE_PAYLOAD);
     ESP_LOGI(TAG, "Button %lu released", id);
+}
+
+void Button::handlePhysicalEvent(EventType event) {
+    ESP_LOGI(TAG, "Button %lu handling physical event: %d", id, static_cast<int>(event));
+
+    switch (event) {
+        case CLICK:
+            click();
+            break;
+        case LONG_PRESS:
+            longPress();
+            break;
+        case RELEASE:
+            release();
+            break;
+        default:
+            ESP_LOGW(TAG, "Button %lu: Unknown physical event: %d", id, static_cast<int>(event));
+            break;
+    }
 }
 
 void Button::unregisterTopics() {

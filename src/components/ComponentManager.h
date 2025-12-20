@@ -138,6 +138,13 @@ public:
     }
 
     /**
+     * Get button by position
+     * @param position Position of button
+     * @return Reference to Button or nullptr if position not found
+     */
+    Button* getButtonByPosition(const int position) const;
+
+    /**
      * Get clock by index
      * @param index Index of clock
      * @return Reference to Clock or nullptr if index invalid
