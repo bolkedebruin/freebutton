@@ -16,6 +16,9 @@ lv_timer_t* g_timer = NULL;
 
 void clock_timer_cb(lv_timer_t* timer);
 static void get_current_time(int* hour, int* minute, int* second);
+static void lv_scale_set_line_needle_value_with_tail(lv_obj_t * scale, lv_obj_t * needle_line,
+                                                      int32_t needle_length, int32_t tail_length,
+                                                      int32_t value);
 
 void clock_init(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, const lv_align_t align)
 {
@@ -104,6 +107,15 @@ analog_clock_t* clock_create(lv_obj_t* parent, const lv_coord_t x, const lv_coor
     int hour, minute, second;
     get_current_time(&hour, &minute, &second);
 
+    // Create hour hand with mutable points
+    clock->hour_hand = lv_line_create(clock->container);
+    lv_line_set_points_mutable(clock->hour_hand, clock->hour_hand_points, 2);
+    lv_obj_set_style_line_width(clock->hour_hand, 6, 0);
+    lv_obj_set_style_line_rounded(clock->hour_hand, true, 0);
+    lv_obj_set_style_line_color(clock->hour_hand, lv_color_hex(0x02060a), 0);  // NS blue
+    lv_obj_center(clock->hour_hand);
+
+    // Create minute hand with mutable points
     clock->minute_hand = lv_line_create(clock->container);
     lv_line_set_points_mutable(clock->minute_hand, clock->minute_hand_points, 2);
     lv_obj_set_style_line_width(clock->minute_hand, 4, 0);
@@ -111,13 +123,9 @@ analog_clock_t* clock_create(lv_obj_t* parent, const lv_coord_t x, const lv_coor
     lv_obj_set_style_line_color(clock->minute_hand, lv_color_hex(0x02060a), 0);  // NS blue
     lv_obj_center(clock->minute_hand);
 
-    clock->hour_hand = lv_line_create(clock->container);
-    lv_obj_set_style_line_width(clock->hour_hand, 6, 0);
-    lv_obj_set_style_line_rounded(clock->hour_hand, true, 0);
-    lv_obj_set_style_line_color(clock->hour_hand, lv_color_hex(0x02060a), 0);  // NS blue
-    lv_obj_center(clock->hour_hand);
-
+    // Create second hand with mutable points
     clock->second_hand = lv_line_create(clock->container);
+    lv_line_set_points_mutable(clock->second_hand, clock->second_hand_points, 2);
     lv_obj_set_style_line_width(clock->second_hand, 2, 0);
     lv_obj_set_style_line_rounded(clock->second_hand, true, 0);
     lv_obj_set_style_line_color(clock->second_hand, lv_color_hex(0xE30613), 0);  // NS red
@@ -147,7 +155,7 @@ analog_clock_t* clock_create(lv_obj_t* parent, const lv_coord_t x, const lv_coor
     return clock;
 }
 
-void clock_update(const analog_clock_t* clock)
+void clock_update(analog_clock_t* clock)
 {
     if (clock == NULL) {
         ESP_LOGW(TAG, "Clock update called with null pointer");
@@ -177,14 +185,10 @@ void clock_update(const analog_clock_t* clock)
     // Each hour = 5 scale units, add fractional position based on minutes with rounding
     const int hour_position = hour_12 * 5 + (minute * 5 + 30) / 60;
 
-    lv_scale_set_line_needle_value(clock->scale, clock->second_hand, 65, second);
-    lv_scale_set_line_needle_value(clock->scale, clock->minute_hand, 55, minute);
-    lv_scale_set_line_needle_value(clock->scale, clock->hour_hand, 35, hour_position);
-
-    // Debug: Log coordinates after update
-    ESP_LOGI(TAG, "After update - minute_hand_points[0]: (%ld, %ld), minute_hand_points[1]: (%ld, %ld)",
-             clock->minute_hand_points[0].x, clock->minute_hand_points[0].y,
-             clock->minute_hand_points[1].x, clock->minute_hand_points[1].y);
+    // Use LVGL-based needle positioning with tail support
+    lv_scale_set_line_needle_value_with_tail(clock->scale, clock->second_hand, 65, 15, second);      // 65px forward, 15px tail
+    lv_scale_set_line_needle_value_with_tail(clock->scale, clock->minute_hand, 55, 12, minute);      // 55px forward, 12px tail
+    lv_scale_set_line_needle_value_with_tail(clock->scale, clock->hour_hand, 35, 8, hour_position);  // 35px forward, 8px tail
 
     ESP_LOGD(TAG, "Updating clock with time %02d:%02d:%02d", hour, minute, second);
 }
@@ -242,4 +246,89 @@ static void get_current_time(int* hour, int* minute, int* second)
     *hour = timeinfo->tm_hour;
     *minute = timeinfo->tm_min;
     *second = timeinfo->tm_sec;
+}
+
+/**
+ * Extended version of lv_scale_set_line_needle_value that adds tail/counterweight support
+ * Based on LVGL's lv_scale_set_line_needle_value implementation
+ * @param scale The scale object
+ * @param needle_line The line object representing the needle
+ * @param needle_length Length of needle extending forward from center
+ * @param tail_length Length of tail extending backward from center
+ * @param value The value to display on the scale
+ */
+static void lv_scale_set_line_needle_value_with_tail(lv_obj_t * scale, lv_obj_t * needle_line,
+                                                      int32_t needle_length, int32_t tail_length,
+                                                      int32_t value)
+{
+    // Get scale properties using public API
+    int32_t scale_width = lv_obj_get_style_width(scale, LV_PART_MAIN);
+    int32_t scale_height = lv_obj_get_style_height(scale, LV_PART_MAIN);
+    int32_t rotation = lv_scale_get_rotation(scale);
+    uint32_t angle_range = lv_scale_get_angle_range(scale);
+    int32_t range_min = lv_scale_get_range_min_value(scale);
+    int32_t range_max = lv_scale_get_range_max_value(scale);
+
+    // Position the needle line
+    lv_obj_align(needle_line, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // Calculate actual needle length (clamp to scale radius)
+    int32_t actual_needle_length;
+    if(needle_length >= scale_width / 2) {
+        actual_needle_length = scale_width / 2;
+    }
+    else if(needle_length >= 0) {
+        actual_needle_length = needle_length;
+    }
+    else if(needle_length + scale_width / 2 < 0) {
+        actual_needle_length = 0;
+    }
+    else {
+        actual_needle_length = scale_width / 2 + needle_length;
+    }
+
+    // Calculate actual tail length (clamp if needed)
+    int32_t actual_tail_length;
+    if(tail_length >= scale_width / 2) {
+        actual_tail_length = scale_width / 2;
+    }
+    else if(tail_length >= 0) {
+        actual_tail_length = tail_length;
+    }
+    else {
+        actual_tail_length = 0;
+    }
+
+    // Calculate angle based on value and scale range
+    int32_t angle;
+    if(value < range_min) {
+        angle = 0;
+    }
+    else if(value > range_max) {
+        angle = angle_range;
+    }
+    else {
+        angle = angle_range * (value - range_min) / (range_max - range_min);
+    }
+
+    // Calculate needle endpoint using LVGL's trigonometry functions
+    // LVGL uses fixed-point math with LV_TRIGO_SHIFT
+    int32_t needle_length_x = (actual_needle_length * lv_trigo_cos(rotation + angle)) >> LV_TRIGO_SHIFT;
+    int32_t needle_length_y = (actual_needle_length * lv_trigo_sin(rotation + angle)) >> LV_TRIGO_SHIFT;
+
+    // Calculate tail endpoint (opposite direction)
+    int32_t tail_length_x = (actual_tail_length * lv_trigo_cos(rotation + angle + 180)) >> LV_TRIGO_SHIFT;
+    int32_t tail_length_y = (actual_tail_length * lv_trigo_sin(rotation + angle + 180)) >> LV_TRIGO_SHIFT;
+
+    // Get or allocate mutable points array
+    lv_point_precise_t * needle_line_points = lv_line_get_points_mutable(needle_line);
+
+    // Set the points: [0] = tail end, [1] = needle tip
+    needle_line_points[0].x = scale_width / 2 + tail_length_x;
+    needle_line_points[0].y = scale_height / 2 + tail_length_y;
+    needle_line_points[1].x = scale_width / 2 + needle_length_x;
+    needle_line_points[1].y = scale_height / 2 + needle_length_y;
+
+    // Refresh the line
+    lv_line_set_points_mutable(needle_line, needle_line_points, 2);
 }

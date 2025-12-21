@@ -18,7 +18,10 @@ typedef struct {
     lv_obj_t* minute_hand;
     lv_obj_t* second_hand;
 
-    lv_point_precise_t minute_hand_points[2];  // Only minute hand uses mutable points
+    // Mutable points for all hands (point[0] = tail, point[1] = tip)
+    lv_point_precise_t hour_hand_points[2];
+    lv_point_precise_t minute_hand_points[2];
+    lv_point_precise_t second_hand_points[2];
 } analog_clock_t;
 
 
