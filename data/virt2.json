@@ -1,0 +1,275 @@
+{
+  "info": {
+    "id": "btn_fab028",
+    "mac": "00:00:00:00:00:00",
+    "firmware": "3.0.alpha1",
+    "connectors": [
+      {
+        "id": 0,
+        "connector": 1,
+        "type": 0
+      },
+      {
+        "id": 1,
+        "connector": 2,
+        "type": 2
+      },
+      {
+        "id": 2,
+        "connector": 3,
+        "type": 1
+      },
+      {
+        "id": 3,
+        "connector": 4,
+        "type": 1
+      }
+    ],
+    "sensors": [
+      {
+        "sensorid": 1,
+        "description": "Sensirion STS35 Temperature Sensor"
+      }
+    ]
+  },
+  "core": {
+    "deviceid": "btn_fab028",
+    "location": "Room 12",
+    "autobackup": true,
+    "brightness": 80,
+    "color": 16765791,
+    "statusbar": 2,
+    "topics": []
+  },
+  "buttons": [
+    {
+      "buttonid": "7-1",
+      "position": 7,
+      "page": 1,
+      "label": "Like!",
+      "toplabel": "Button+",
+      "leds": [],
+      "topics": [
+        {
+          "brokerid": "buttonplus",
+          "topic": "buttonplus/like",
+          "payload": "click",
+          "eventtype": 0
+        }
+      ]
+    },
+    {
+      "buttonid": "8-1",
+      "position": 8,
+      "page": 1,
+      "label": "Kantoor",
+      "toplabel": "",
+      "leds": [
+        {
+          "buttonuid": "8-1",
+          "frontwall": "front",
+          "onrgb": 0,
+          "topics": [
+            {
+              "brokerid": "local",
+              "topic": "knx/1/2/9",
+              "payload": "true",
+              "eventtype": 8
+            }
+          ]
+        },
+        {
+          "buttonuid": "8-1",
+          "frontwall": "both",
+          "onrgb": 0,
+          "topics": []
+        }
+      ],
+      "topics": [
+        {
+          "brokerid": "local",
+          "topic": "knxtoggle/1/2/9",
+          "payload": "",
+          "eventtype": 0
+        }
+      ]
+    },
+    {
+      "buttonid": "7-1",
+      "position": 5,
+      "page": 1,
+      "label": "Tolomeo",
+      "leds": [
+        {
+          "buttonuid": "5-1",
+          "frontwall": "both",
+          "topics": [
+            {
+              "brokerid": "buttonplus",
+              "topic": "buttonplus/demo/tolomeo",
+              "payload": "ON",
+              "eventtype": 9
+            }
+          ]
+        }
+      ],
+      "topics": [
+        {
+          "brokerid": "buttonplus",
+          "topic": "buttonplus/demo/tolomeo/toggle",
+          "payload": "",
+          "eventtype": 0
+        }
+      ]
+    },
+    {
+      "buttonid": "7-2",
+      "position": 6,
+      "page": 1,
+      "label": "Green Lamp",
+      "toplabel": "Virtual",
+      "leds": [
+        {
+          "buttonuid": "6-1",
+          "frontwall": "both",
+          "onrgb": 0,
+          "topics": [
+            {
+              "brokerid": "buttonplus",
+              "topic": "virtual/2",
+              "payload": "true",
+              "eventtype": 10
+            }
+          ]
+        }
+      ],
+      "topics": [
+        {
+          "brokerid": "buttonplus",
+          "topic": "virtual",
+          "payload": "2",
+          "eventtype": 0
+        }
+      ]
+    },
+    {
+      "buttonid": "4-1",
+      "position": 4,
+      "page": 1,
+      "toplabel": "",
+      "leds": [
+        {
+          "buttonuid": "4-1",
+          "frontwall": "front",
+          "onrgb": 0,
+          "topics": []
+        }
+      ],
+      "topics": []
+    },
+    {
+      "buttonid": "3-1",
+      "position": 3,
+      "page": 1,
+      "toplabel": "",
+      "leds": [
+        {
+          "buttonuid": "3-1",
+          "frontwall": "front",
+          "onrgb": 0,
+          "topics": []
+        }
+      ],
+      "topics": []
+    }
+  ],
+  "displayitems": [
+    {
+      "displayitemid": "0",
+      "x": 0,
+      "y": 0,
+      "page": 1,
+      "boxtype": 0,
+      "fontsize": 4,
+      "align": 1,
+      "width": 50,
+      "label": "Amsterdam",
+      "unit": "",
+      "round": 0,
+      "topics": [
+        {
+          "brokerid": "buttonplus",
+          "topic": "system/datetime/amsterdam",
+          "payload": "",
+          "eventtype": 15
+        }
+      ]
+    },
+    {
+      "displayitemid": "1",
+      "x": 0,
+      "y": 50,
+      "page": 1,
+      "boxtype": 0,
+      "fontsize": 2,
+      "align": 1,
+      "width": 50,
+      "label": "Button+ Likes",
+      "unit": "",
+      "round": 0,
+      "topics": [
+        {
+          "brokerid": "buttonplus",
+          "topic": "buttonplus/likes",
+          "payload": "",
+          "eventtype": 15
+        }
+      ]
+    },
+    {
+      "displayitemid": "2",
+      "x": 0,
+      "y": 0,
+      "page": 2,
+      "boxtype": 0,
+      "fontsize": 4,
+      "align": 1,
+      "width": 50,
+      "label": "SVGtje",
+      "unit": "",
+      "round": 0,
+      "topics": []
+    }
+  ],
+  "brokers": [
+    {
+      "brokerid": "buttonplus",
+      "url": "mqtt://mqtt.button.plus",
+      "port": 0,
+      "wsport": 0,
+      "username": "",
+      "password": "",
+      "defaultschema": false,
+      "defaultschemalocalstate": false,
+      "hassdiscovery": false
+    },
+    {
+      "brokerid": "local",
+      "url": "mqtt://10.0.0.4",
+      "port": 0,
+      "wsport": 0,
+      "username": "",
+      "password": "",
+      "defaultschema": true,
+      "defaultschemalocalstate": true,
+      "hassdiscovery": false
+    }
+  ],
+  "sensors": [
+    {
+      "sensorid": 1,
+      "interval": 10,
+      "topics": []
+    }
+  ]
+}

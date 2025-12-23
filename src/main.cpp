@@ -46,10 +46,6 @@ void lvgl_task(void* pvParameter) {
     }
 }
 
-void log_free_heap() {
-    ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
-}
-
 void setup() {
     ESP_LOGI(TAG, "FreeButton Firmware: %s  Id: %s starting!", FIRMWARE, deviceId.c_str());
 
@@ -112,12 +108,10 @@ void setup() {
     setup_wifi_event_handler();
     start_wifi_manager();
 
-    log_free_heap();
     if (progressBar) {
         progressBar->update(60, "Starting web server...");
     }
     webserver_start();
-    log_free_heap();
 
     while (!is_wifi_connected()) {
         ESP_LOGI(TAG, "Waiting for WiFi connection...");
@@ -162,14 +156,9 @@ void setup() {
     // Hide progress bar and show main application screen with DisplayItems
     if (progressBar) {
         progressBar->hide();
-
-        // Request creation of the Google Hello button on the main screen (where DisplayItems are)
-        //getLvglDisplay().requestGoogleHelloButton();
-
-        ESP_LOGI(TAG, "Progress bar hidden, main UI loaded");
     }
 
-    log_free_heap();
+    ESP_LOGI(TAG, "main UI loaded");
 }
 
 void loop() {
@@ -177,8 +166,6 @@ void loop() {
 
     if (const unsigned long currentTime = millis(); currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
         lastSensorUpdateTime = currentTime;
-        //ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
-
         sampleSensors();
     }
 

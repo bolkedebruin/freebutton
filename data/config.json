@@ -74,9 +74,11 @@
       "page": 1
     }
   ],
-  "mqttbuttons": [
+  "buttons": [
     {
       "id": 0,
+      "position": 2,
+      "page": 1,
       "label": "󰝞",
       "toplabel": "Volume",
       "ledcolorfront": 0,
@@ -110,6 +112,8 @@
     },
     {
       "id": 1,
+      "position": 3,
+      "page": 1,
       "label": "󰝝",
       "toplabel": "Volume",
       "ledcolorfront": 0,
@@ -143,6 +147,8 @@
     },
     {
       "id": 2,
+      "position": 4,
+      "page": 1,
       "label": "Open",
       "toplabel": "Raam",
       "ledcolorfront": 6117088,
@@ -176,6 +182,8 @@
     },
     {
       "id": 3,
+      "position": 5,
+      "page": 1,
       "label": "Dicht",
       "toplabel": "Raam",
       "ledcolorfront": 0,
@@ -209,6 +217,8 @@
     },
     {
       "id": 4,
+      "position": 6,
+      "page": 1,
       "label": "󰔶",
       "toplabel": "Scherm",
       "ledcolorfront": 0,
@@ -242,6 +252,8 @@
     },
     {
       "id": 5,
+      "position": 7,
+      "page": 1,
       "label": "󱱖",
       "toplabel": "Scherm",
       "ledcolorfront": 0,

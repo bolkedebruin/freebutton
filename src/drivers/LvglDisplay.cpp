@@ -335,7 +335,7 @@ void LvglDisplay::flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint
     lv_display_flush_ready(disp);
 }
 
-lv_display_t* LvglDisplay::getSmallDisplay(int index) const {
+lv_display_t* LvglDisplay::getSmallDisplay(const int index) const {
     if (index >= 0 && index < static_cast<int>(small_displays_.size())) {
         return small_displays_[index];
     }

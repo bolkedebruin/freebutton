@@ -25,7 +25,6 @@ Button::Button(std::string label, std::string  topLabel,
     topics = std::move(topicConfigs);
 
     // Set default values for manual button creation
-    buttonId_ = std::to_string(id);
     position_ = id;
     page_ = 1;
     brokerId_ = 0;

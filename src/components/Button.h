@@ -24,14 +24,14 @@ namespace freebutton {
 class Button final : public MqttSubscriber, public MqttPublisher, public TopicHandler<Button> {
 public:
     static unsigned long next_id;
+    unsigned long id = 0;
 
-    unsigned long id;
     std::string label;
     std::string topLabel;
     uint32_t ledColorFront;
     uint32_t ledColorWall;
 
-    Button() : Button("default", "", 0, 0, {}) {}
+    Button() : Button("", "", 0, 0, {}) {}
 
     Button(std::string  label, std::string  topLabel,
            uint32_t ledColorFront, uint32_t ledColorWall,
@@ -45,7 +45,6 @@ private:
     // Button position and device information
     uint32_t position_{0};
     uint8_t page_{1};
-    std::string buttonId_;
     uint8_t brokerId_{0};
 
 public:
@@ -83,23 +82,9 @@ private:
             id = data["id"].as<unsigned long>();
         }
 
-        // Parse basic button properties (support both old and new format)
-        if (!data["buttonid"].isNull()) {
-            // New format: buttonid, position, page
-            buttonId_ = data["buttonid"].as<std::string>();
-            position_ = data["position"].as<uint32_t>();
-            page_ = data["page"].as<uint32_t>();
-        } else if (!data["id"].isNull()) {
-            // Legacy format: use id as both buttonId and position
-            buttonId_ = std::to_string(data["id"].as<uint32_t>());
-            position_ = data["id"].as<uint32_t>();
-            page_ = 1; // Default page for legacy format
-        } else {
-            // Fallback
-            buttonId_ = "unknown";
-            position_ = 0;
-            page_ = 1;
-        }
+        // ignoring buttonid not used in freebutton
+        data["position"].isNull() ? position_ = id : position_ = data["position"].as<uint32_t>();
+        data["page"].isNull() ? page_ = 1 : page_ = data["page"].as<uint32_t>();
 
         label = data["label"].isNull() ? label : data["label"].as<std::string>();
         topLabel = data["toplabel"].isNull() ? topLabel : data["toplabel"].as<std::string>();
@@ -126,7 +111,7 @@ private:
             ESP_LOGW(TAG, "No topics in Button JSON");
         }
 
-        ESP_LOGI(TAG, "Configured Button %s at position %d", buttonId_.c_str(), position_);
+        ESP_LOGI(TAG, "Configured Button %d at position %d", id, position_);
     }
 
 public:

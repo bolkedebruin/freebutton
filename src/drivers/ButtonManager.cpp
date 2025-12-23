@@ -30,10 +30,10 @@ void ButtonManager::addButton(std::unique_ptr<PushButton> button) {
     }
 
     const int position = button->position();
-    ESP_LOGI(TAG, "Adding button at position %d", position);
+    ESP_LOGI(TAG, "Adding push button at position %d", position);
 
     // Set up button event callback to forward to display components
-    button->onButtonEvent([](const int pos, const EventType event) {
+    button->onButtonEvent([this](const int pos, const EventType event) {
         ESP_LOGI(TAG, "Button at position %d with event %d", pos, event);
 
         // Find and trigger corresponding display button
@@ -216,7 +216,7 @@ void ButtonManager::registerLEDsWithHomeAssistant() const {
     ESP_LOGI(TAG, "Home Assistant registration completed for all LEDs");
 }
 
-std::vector<ButtonLed*> ButtonManager::getLEDsForButton(int position) const {
+std::vector<ButtonLed*> ButtonManager::getLEDsForButton(const int position) const {
     std::vector<ButtonLed*> buttonLeds;
 
     for (const auto& led : leds_) {
@@ -228,4 +228,13 @@ std::vector<ButtonLed*> ButtonManager::getLEDsForButton(int position) const {
     return buttonLeds;
 }
 
+uint8_t ButtonManager::getBaseButtonPosition() const {
+    uint8_t pos = 255;
+    for (const auto& button : buttons_) {
+        if (button->position() < pos) {
+            pos = button->position();
+        }
+    }
+    return pos;
+}
 } // namespace FreeButton

@@ -75,7 +75,7 @@ void ComponentManager::loadFromFile(const std::string& filename) {
     });
 
     // Stream process buttons (after brokers)
-    handler.addFilter({"mqttbuttons"}, [this](const std::vector<std::string>& path, const std::string& json) {
+    handler.addFilter({"buttons"}, [this](const std::vector<std::string>& path, const std::string& json) {
         JsonDocument doc;
         auto error = deserializeJson(doc, json);
 

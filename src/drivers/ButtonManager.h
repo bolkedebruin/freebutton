@@ -63,6 +63,9 @@ private:
 
     // LED creation helpers
     void createLEDsForButton(int position, const std::string& deviceId, uint8_t brokerId);
+
+    // find lowest position of the button
+    uint8_t getBaseButtonPosition() const;
 };
 
 } // namespace FreeButton
