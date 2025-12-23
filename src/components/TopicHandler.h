@@ -62,7 +62,7 @@ public:
         auto& topics = derived->getTopicsRef();
         topics = std::move(parsedTopics);
 
-        // 4. Topics will be registered later via ComponentManager::registerAllSubscriptions()
+        // 4. Topics will be registered later via ConfigManager::registerAllSubscriptions()
     }
 };
 

@@ -10,6 +10,7 @@
 #include "types.h"
 #include "ArduinoJson/Object/JsonObject.hpp"
 #include "mqtt/Registry.h"
+#include "json/JsonWriter.h"
 
 struct Topic {
     uint8_t brokerId;
@@ -25,6 +26,18 @@ struct Topic {
         payload = data["payload"].isNull() ? payload : data["payload"].as<std::string>();
 
         eventType = static_cast<EventType>(data["eventtype"].as<int>());
+    }
+
+    template<typename OutputStream>
+    void toJson(json::JsonWriter<OutputStream>::ScopedObject &obj) const {
+        // Get broker name from ID
+        auto* broker = MqttBrokerRegistry::getBroker(brokerId);
+        if (broker) {
+            obj.Add("brokerid", std::string(broker->getName()));
+        }
+        obj.Add("topic", topic);
+        obj.Add("payload", payload);
+        obj.Add("eventtype", static_cast<int>(eventType));
     }
 };
 

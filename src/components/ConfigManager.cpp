@@ -1,9 +1,9 @@
 //
-// ComponentManager - Efficient management of multiple buttons and display items
+// ConfigManager - Efficient management of multiple buttons and display items
 // Created by Bolke de Bruin on 19/11/2025.
 //
 
-#include "ComponentManager.h"
+#include "ConfigManager.h"
 #include "json/FilteredReaderHandler.h"
 #include <esp_log.h>
 #include "LittleFS.h"
@@ -13,7 +13,7 @@
 
 namespace freebutton {
 
-void ComponentManager::loadFromFile(const std::string& filename) {
+void ConfigManager::loadFromFile(const std::string& filename) {
     ESP_LOGI(TAG, "Loading components from file: %s", filename.c_str());
 
     // Clear existing components
@@ -22,87 +22,43 @@ void ComponentManager::loadFromFile(const std::string& filename) {
     // Use FilteredReaderHandler for memory-efficient streaming processing
     json::FilteredReaderHandler handler;
 
-    handler.addFilter({"core"}, [this](const std::vector<std::string>& path, const std::string& json) {
-        JsonDocument doc;
-        auto error= deserializeJson(doc, json);
+    // Register filter callbacks
+    handler.addFilter({"core"},
+        [this](const std::vector<std::string>& path, const std::string& json) {
+            processCoreFilter(path, json);
+        });
 
-        if (error) {
-            ESP_LOGE(TAG, "Failed to parse core JSON: %s", error.c_str());
-            return;
-        }
-
-        if (!doc["location"].isNull()) {
-            HomeAssistantDiscovery::setDeviceName(doc["location"].as<std::string>());
-        }
-
-        if (!doc["ntpserver"].isNull()) {
-            ntpServer = doc["ntpserver"].as<std::string>();
-        }
-
-        if (!doc["timezone"].isNull()) {
-            timezone = doc["timezone"].as<std::string>();
-        }
+    handler.addFilter({"mqttbrokers"},
+        [this](const std::vector<std::string>& path, const std::string& json) {
+            processMqttBrokersFilter(path, json);
+        });
+    handler.addFilter({"brokers"},
+    [this](const std::vector<std::string>& path, const std::string& json) {
+        processMqttBrokersFilter(path, json);
     });
 
-    // Stream process MQTT brokers FIRST (order matters!)
-    handler.addFilter({"mqttbrokers"}, [this](const std::vector<std::string>& path, const std::string& json) {
-        JsonDocument doc;
-        auto error = deserializeJson(doc, json);
-
-        if (error) {
-            ESP_LOGE(TAG, "Failed to parse brokers JSON: %s", error.c_str());
-            return;
-        }
-
-        if (doc.is<JsonArray>()) {
-            loadBrokers(doc.as<JsonArray>());
-        }
+    handler.addFilter({"mqttdisplays"},
+        [this](const std::vector<std::string>& path, const std::string& json) {
+            processDisplayItemsFilter(path, json);
+        });
+    handler.addFilter({"displayitems"},
+    [this](const std::vector<std::string>& path, const std::string& json) {
+        processDisplayItemsFilter(path, json);
     });
 
-    // Stream process display items (after brokers)
-    handler.addFilter({"mqttdisplays"}, [this](const std::vector<std::string>& path, const std::string& json) {
-        JsonDocument doc;
-        auto error = deserializeJson(doc, json);
+    handler.addFilter({"mqttbuttons"},
+        [this](const std::vector<std::string>& path, const std::string& json) {
+            processButtonsFilter(path, json);
+        });
+    handler.addFilter({"buttons"},
+        [this](const std::vector<std::string>& path, const std::string& json) {
+            processButtonsFilter(path, json);
+        });
 
-        if (error) {
-            ESP_LOGE(TAG, "Failed to parse displayitems JSON: %s", error.c_str());
-            return;
-        }
-
-        if (doc.is<JsonArray>()) {
-            loadDisplayItems(doc.as<JsonArray>());
-        }
-    });
-
-    // Stream process buttons (after brokers)
-    handler.addFilter({"buttons"}, [this](const std::vector<std::string>& path, const std::string& json) {
-        JsonDocument doc;
-        auto error = deserializeJson(doc, json);
-
-        if (error) {
-            ESP_LOGE(TAG, "Failed to parse buttons JSON: %s", error.c_str());
-            return;
-        }
-
-        if (doc.is<JsonArray>()) {
-            loadButtons(doc.as<JsonArray>());
-        }
-    });
-
-    // Stream process clocks (no MQTT dependencies)
-    handler.addFilter({"clocks"}, [this](const std::vector<std::string>& path, const std::string& json) {
-        JsonDocument doc;
-        auto error = deserializeJson(doc, json);
-
-        if (error) {
-            ESP_LOGE(TAG, "Failed to parse clocks JSON: %s", error.c_str());
-            return;
-        }
-
-        if (doc.is<JsonArray>()) {
-            loadClocks(doc.as<JsonArray>());
-        }
-    });
+    handler.addFilter({"clocks"},
+        [this](const std::vector<std::string>& path, const std::string& json) {
+            processClocksFilter(path, json);
+        });
 
     // Process the file once
     FreeButton::BusAwareFile file = FreeButton::getBusAwareFileSystem().open(filename.c_str(), "r");
@@ -125,7 +81,7 @@ void ComponentManager::loadFromFile(const std::string& filename) {
              displayItems.size(), buttons.size(), clocks.size());
 }
 
-void ComponentManager::clear() {
+void ConfigManager::clear() {
     ESP_LOGI(TAG, "Clearing all components");
 
     // Clear vectors - this will automatically call destructors and free memory
@@ -139,7 +95,7 @@ void ComponentManager::clear() {
     clocks.shrink_to_fit();
 }
 
-std::vector<DisplayItem*> ComponentManager::getDisplayItemsByPage(const int page) const {
+std::vector<DisplayItem*> ConfigManager::getDisplayItemsByPage(const int page) const {
     std::vector<DisplayItem*> pageItems;
 
     for (auto& item : displayItems) {
@@ -151,7 +107,7 @@ std::vector<DisplayItem*> ComponentManager::getDisplayItemsByPage(const int page
     return pageItems;
 }
 
-std::vector<Clock*> ComponentManager::getClocksByPage(const int page) const {
+std::vector<Clock*> ConfigManager::getClocksByPage(const int page) const {
     std::vector<Clock*> pageClocks;
 
     for (auto& clock : clocks) {
@@ -163,7 +119,7 @@ std::vector<Clock*> ComponentManager::getClocksByPage(const int page) const {
     return pageClocks;
 }
 
-Button* ComponentManager::getButtonByPosition(const int position) const {
+Button* ConfigManager::getButtonByPosition(const int position) const {
     for (auto& button : buttons) {
         if (button->getPosition() == position) {
             return button.get();
@@ -172,7 +128,7 @@ Button* ComponentManager::getButtonByPosition(const int position) const {
     return nullptr;
 }
 
-ComponentManager::MemoryStats ComponentManager::getMemoryStats() const {
+ConfigManager::MemoryStats ConfigManager::getMemoryStats() const {
     MemoryStats stats{};
     stats.displayItemCount = displayItems.size();
     stats.buttonCount = buttons.size();
@@ -190,7 +146,7 @@ ComponentManager::MemoryStats ComponentManager::getMemoryStats() const {
     return stats;
 }
 
-void ComponentManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
+void ConfigManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
     ESP_LOGI(TAG, "Loading %zu display items", itemsArray.size());
 
     // Reserve capacity for efficiency
@@ -215,7 +171,7 @@ void ComponentManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray
     ESP_LOGI(TAG, "Successfully loaded %zu display items", displayItems.size());
 }
 
-void ComponentManager::loadButtons(const ArduinoJson::JsonArray& buttonsArray) {
+void ConfigManager::loadButtons(const ArduinoJson::JsonArray& buttonsArray) {
     ESP_LOGI(TAG, "Loading %zu buttons", buttonsArray.size());
 
     // Reserve capacity for efficiency
@@ -240,7 +196,7 @@ void ComponentManager::loadButtons(const ArduinoJson::JsonArray& buttonsArray) {
     ESP_LOGI(TAG, "Successfully loaded %zu buttons", buttons.size());
 }
 
-void ComponentManager::loadClocks(const JsonArray& clocksArray) {
+void ConfigManager::loadClocks(const JsonArray& clocksArray) {
     ESP_LOGI(TAG, "Loading %zu clocks", clocksArray.size());
 
     // Reserve capacity for efficiency
@@ -265,7 +221,7 @@ void ComponentManager::loadClocks(const JsonArray& clocksArray) {
     ESP_LOGI(TAG, "Successfully loaded %zu clocks", clocks.size());
 }
 
-void ComponentManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {
+void ConfigManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {
     ESP_LOGI(TAG, "Loading %zu MQTT brokers", brokersArray.size());
 
     auto& registry = MqttBrokerRegistry::instance();
@@ -327,7 +283,7 @@ void ComponentManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {
     ESP_LOGI(TAG, "Successfully processed %zu MQTT brokers", brokersArray.size());
 }
 
-void ComponentManager::registerAllSubscriptions() {
+void ConfigManager::registerAllSubscriptions() {
     ESP_LOGI(TAG, "Registering subscriptions for all components");
 
     size_t totalSubscriptions = 0;
@@ -347,7 +303,7 @@ void ComponentManager::registerAllSubscriptions() {
     ESP_LOGI(TAG, "Registered subscriptions for %zu components", totalSubscriptions);
 }
 
-void ComponentManager::startBrokers(const std::string& deviceId) {
+void ConfigManager::startBrokers(const std::string& deviceId) {
     ESP_LOGI(TAG, "Starting all brokers and configuring Home Assistant discovery");
 
     auto& registry = MqttBrokerRegistry::instance();
@@ -375,6 +331,84 @@ void ComponentManager::startBrokers(const std::string& deviceId) {
     registry.connectAll();
 
     ESP_LOGI(TAG, "All brokers started and Home Assistant discovery configured");
+}
+
+void ConfigManager::processCoreFilter(const std::vector<std::string>& path, const std::string& json) {
+    JsonDocument doc;
+    auto error = deserializeJson(doc, json);
+
+    if (error) {
+        ESP_LOGE(TAG, "Failed to parse core JSON: %s", error.c_str());
+        return;
+    }
+
+    if (!doc["location"].isNull()) {
+        HomeAssistantDiscovery::setDeviceName(doc["location"].as<std::string>());
+    }
+
+    if (!doc["ntpserver"].isNull()) {
+        ntpServer = doc["ntpserver"].as<std::string>();
+    }
+
+    if (!doc["timezone"].isNull()) {
+        timezone = doc["timezone"].as<std::string>();
+    }
+}
+
+void ConfigManager::processMqttBrokersFilter(const std::vector<std::string>& path, const std::string& json) {
+    JsonDocument doc;
+    auto error = deserializeJson(doc, json);
+
+    if (error) {
+        ESP_LOGE(TAG, "Failed to parse brokers JSON: %s", error.c_str());
+        return;
+    }
+
+    if (doc.is<JsonArray>()) {
+        loadBrokers(doc.as<JsonArray>());
+    }
+}
+
+void ConfigManager::processDisplayItemsFilter(const std::vector<std::string>& path, const std::string& json) {
+    JsonDocument doc;
+    auto error = deserializeJson(doc, json);
+
+    if (error) {
+        ESP_LOGE(TAG, "Failed to parse displayitems JSON: %s", error.c_str());
+        return;
+    }
+
+    if (doc.is<JsonArray>()) {
+        loadDisplayItems(doc.as<JsonArray>());
+    }
+}
+
+void ConfigManager::processButtonsFilter(const std::vector<std::string>& path, const std::string& json) {
+    JsonDocument doc;
+    auto error = deserializeJson(doc, json);
+
+    if (error) {
+        ESP_LOGE(TAG, "Failed to parse buttons JSON: %s", error.c_str());
+        return;
+    }
+
+    if (doc.is<JsonArray>()) {
+        loadButtons(doc.as<JsonArray>());
+    }
+}
+
+void ConfigManager::processClocksFilter(const std::vector<std::string>& path, const std::string& json) {
+    JsonDocument doc;
+    auto error = deserializeJson(doc, json);
+
+    if (error) {
+        ESP_LOGE(TAG, "Failed to parse clocks JSON: %s", error.c_str());
+        return;
+    }
+
+    if (doc.is<JsonArray>()) {
+        loadClocks(doc.as<JsonArray>());
+    }
 }
 
 } // namespace freebutton

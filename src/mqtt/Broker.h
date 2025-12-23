@@ -10,6 +10,7 @@
 
 #include "Component.h"
 #include "config.h"
+#include "json/JsonWriter.h"
 
 class MqttBroker {
 public:
@@ -70,6 +71,18 @@ public:
     // Check if broker is configured (has valid URL)
     bool isConfigured() const { return !url.empty(); }
     bool hasAutoDiscovery() const { return autoDiscovery_; }
+
+    // Serialize broker configuration to JSON
+    template<typename OutputStream>
+    void toJson(json::JsonWriter<OutputStream>::ScopedObject &obj) const {
+        obj.Add("brokerid", name);
+        obj.Add("url", url);
+        obj.Add("port", static_cast<int>(port));
+        obj.Add("wsport", static_cast<int>(wsPort));
+        obj.Add("username", username);
+        obj.Add("password", password);
+        obj.Add("hassdiscovery", autoDiscovery_);
+    }
 
 private:
     uint8_t brokerId;

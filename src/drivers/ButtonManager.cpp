@@ -12,7 +12,7 @@
 #include <map>
 
 #include "mqtt/HomeAssistantDiscovery.h"
-#include "components/ComponentManager.h"
+#include "components/ConfigManager.h"
 
 namespace FreeButton {
 

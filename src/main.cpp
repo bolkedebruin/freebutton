@@ -4,7 +4,7 @@
 
 #include "config.h"
 #include "pins.h"
-#include "components/ComponentManager.h"
+#include "components/ConfigManager.h"
 #include "core/WebServer.h"
 #include "core/WifiManager.h"
 #include "core/HardwareInitializer.h"
@@ -35,8 +35,8 @@ const std::map<std::string_view, std::string_view> deviceInfo = {
 NeoPixelController neopixels(NEOPIN);
 auto& registry = MqttBrokerRegistry::instance();
 
-// Global ComponentManager
-freebutton::ComponentManager componentManager;
+// Global ConfigManager
+freebutton::ConfigManager componentManager;
 
 // LVGL task for UI updates
 void lvgl_task(void* pvParameter) {

@@ -28,10 +28,10 @@ extern const std::string deviceId;
 
 // Forward declarations
 namespace freebutton {
-    class ComponentManager;
+    class ConfigManager;
 }
 
 // Global component manager
-extern freebutton::ComponentManager componentManager;
+extern freebutton::ConfigManager componentManager;
 
 #endif //CONFIG_H

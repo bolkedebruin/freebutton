@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ArduinoJson/Object/JsonObject.hpp"
+#include "json/JsonWriter.h"
 
 extern "C" {
 #include "ui/ui.h"
@@ -58,6 +59,30 @@ public:
         displayItem->configure(config);
         displayItem->createBox();  // Create UI box after configuration
         return displayItem;
+    }
+
+    template<typename OutputStream>
+    void toJson(json::JsonWriter<OutputStream>::ScopedObject &obj) {
+        obj.Add("displayitemid", std::to_string(id));
+        obj.Add("x", x);
+        obj.Add("y", y);
+        obj.Add("page", page);
+        obj.Add("boxtype", boxType);
+        obj.Add("fontsize", fontSize);
+        obj.Add("align", alignment);
+        obj.Add("width", width);
+        obj.Add("label", label);
+        obj.Add("unit", unit);
+        obj.Add("round", round);
+
+        // Serialize topics array
+        {
+            auto arr = obj.Array("topics");
+            for (auto &topic: topics) {
+                auto item = arr.Object();
+                topic.toJson<OutputStream>(item);
+            }
+        }
     }
 
 private:

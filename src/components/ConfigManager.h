@@ -1,5 +1,5 @@
 //
-// ComponentManager - Efficient management of multiple buttons and display items
+// ConfigManager - Efficient management of multiple buttons and display items
 // Created by Bolke de Bruin on 19/11/2025.
 //
 
@@ -13,22 +13,26 @@
 #include "Button.h"
 #include "Clock.h"
 #include "mqtt/Registry.h"
+#include "json/JsonWriter.h"
+#include "config.h"
+#include "drivers/Sensors.h"
+#include <rapidjson/writer.h>
 
 namespace freebutton {
 
 /**
  * Manages collections of DisplayItems and Buttons with memory-efficient loading
  */
-class ComponentManager {
+class ConfigManager {
 public:
-    ComponentManager() = default;
-    ~ComponentManager() = default;
+    ConfigManager() = default;
+    ~ConfigManager() = default;
 
     // Non-copyable, movable
-    ComponentManager(const ComponentManager&) = delete;
-    ComponentManager& operator=(const ComponentManager&) = delete;
-    ComponentManager(ComponentManager&&) = default;
-    ComponentManager& operator=(ComponentManager&&) = default;
+    ConfigManager(const ConfigManager&) = delete;
+    ConfigManager& operator=(const ConfigManager&) = delete;
+    ConfigManager(ConfigManager&&) = default;
+    ConfigManager& operator=(ConfigManager&&) = default;
 
     /**
      * Load components from JSON file using streaming parser for memory efficiency
@@ -202,7 +206,7 @@ public:
     const std::string& getTimezone() const { return timezone; }
 
 private:
-    static constexpr auto TAG = "ComponentManager";
+    static constexpr auto TAG = "ConfigManager";
 
     std::vector<std::unique_ptr<DisplayItem>> displayItems;
     std::vector<std::unique_ptr<Button>> buttons;
@@ -230,7 +234,116 @@ private:
      * Load clocks from JSON array
      */
     void loadClocks(const JsonArray& clocksArray);
+
+    /**
+     * Filter callback for processing core configuration
+     */
+    void processCoreFilter(const std::vector<std::string>& path, const std::string& json);
+
+    /**
+     * Filter callback for processing MQTT brokers
+     */
+    void processMqttBrokersFilter(const std::vector<std::string>& path, const std::string& json);
+
+    /**
+     * Filter callback for processing display items
+     */
+    void processDisplayItemsFilter(const std::vector<std::string>& path, const std::string& json);
+
+    /**
+     * Filter callback for processing buttons
+     */
+    void processButtonsFilter(const std::vector<std::string>& path, const std::string& json);
+
+    /**
+     * Filter callback for processing clocks
+     */
+    void processClocksFilter(const std::vector<std::string>& path, const std::string& json);
+
+    template<class OutputStream>
+    void write(OutputStream &stream);
 };
+
+// Template method implementation must be in header
+template<typename OutputStream>
+void ConfigManager::write(OutputStream &stream) {
+    rapidjson::Writer<OutputStream> writer(stream);
+    json::JsonWriter<OutputStream> jsonWriter(writer);
+
+    auto doc = jsonWriter.Object();
+
+    // info
+    {
+        auto info = doc.Object("info");
+        info.Add("id", deviceId);
+        info.Add("firmware", FIRMWARE);
+
+        // connectors - placeholder for now
+        {
+            auto connectors = info.Array("connectors");
+            // TODO: add connectors when connector system is implemented
+        }
+
+        // sensors info
+        {
+            auto sensors = info.Array("sensors");
+            for (auto& [id, dev] : FreeButton::sensorDevices) {
+                auto s = sensors.Object();
+                s.Add("sensorid", id);
+                s.Add("description", dev->description);
+            }
+        }
+    }
+
+    // core
+    {
+        auto core = doc.Object("core");
+        core.Add("ntpserver", ntpServer);
+        core.Add("timezone", timezone);
+    }
+
+    // buttons array
+    {
+        auto btns = doc.Array("buttons");
+        for (auto& button : buttons) {
+            auto jbutton = btns.Object();
+            button->toJson(jbutton);
+        }
+    }
+
+    // display items array
+    {
+        auto items = doc.Array("displayitems");
+        for (auto& item : displayItems) {
+            auto jitem = items.Object();
+            item->toJson(jitem);
+        }
+    }
+
+    // clocks array
+    {
+        auto clocksArr = doc.Array("clocks");
+        for (auto& clock : clocks) {
+            auto jclock = clocksArr.Object();
+            clock->toJson(jclock);
+        }
+    }
+
+    // brokers array
+    {
+        auto brkrs = doc.Array("brokers");
+        MqttBrokerRegistry::forEachBroker([&brkrs](uint8_t broker_id, MqttBroker* broker) {
+            auto jbroker = brkrs.Object();
+            broker->toJson(jbroker);
+        });
+    }
+
+    // sensors configuration array - placeholder for now
+    {
+        auto sensors = doc.Array("sensors");
+        // TODO: add sensor configuration when sensor config system is implemented
+    }
+}
 
 } // namespace freebutton
 

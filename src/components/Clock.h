@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "ArduinoJson.h"
+#include "json/JsonWriter.h"
 
 extern "C" {
 #include "ui/ui_clock.h"
@@ -39,6 +40,17 @@ public:
         return clock;
     }
 
+    template<typename OutputStream>
+    void toJson(json::JsonWriter<OutputStream>::ScopedObject &obj) {
+        obj.Add("clockid", std::to_string(id));
+        obj.Add("x", x);
+        obj.Add("y", y);
+        obj.Add("width", width);
+        obj.Add("height", height);
+        obj.Add("page", page);
+        obj.Add("align", static_cast<int>(align));
+    }
+
 private:
     static constexpr auto TAG = "Clock";
 
@@ -56,7 +68,7 @@ public:
     void createClock() const;
     void destroyClock();
 
-    // Getters for ComponentManager
+    // Getters for ConfigManager
     int getPage() const { return page; }
     int getX() const { return x; }
     int getY() const { return y; }

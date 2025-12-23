@@ -14,6 +14,7 @@
 #include <memory>
 
 #include "ArduinoJson/Object/JsonObject.hpp"
+#include "json/JsonWriter.h"
 
 extern "C" {
 #include "ui/ui_button.h"
@@ -67,6 +68,25 @@ public:
         button->configure(config);
         button->createButton();   // Create UI button after configuration
         return button;
+    }
+
+    template<typename OutputStream>
+    void toJson(json::JsonWriter<OutputStream>::ScopedObject &obj) {
+        obj.Add("id", id);
+        obj.Add("position", position_);
+        obj.Add("page", page_);
+        obj.Add("label", label);
+        obj.Add("topLabel", topLabel);
+
+        // topics array
+        {
+            auto arr = obj.Array("topics");
+            for (auto &topic: topics) {
+                auto item = arr.Object();
+                // tp.second.eventType = tp.first;
+                topic.toJson<OutputStream>(item);
+            }
+        }
     }
 
 private:
