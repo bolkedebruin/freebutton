@@ -4,8 +4,13 @@
 #include "config.h"
 #include "ESPAsyncWebServer.h"
 #include "WifiManager.h"
+#include "components/ConfigManager.h"
+#include "json/StreamWrappers.h"
 
 static auto TAG = "webserver";
+
+// External reference to global ConfigManager
+extern freebutton::ConfigManager componentManager;
 
 AsyncWebServer server(80);
 
@@ -60,8 +65,19 @@ void handleHomepage(AsyncWebServerRequest *request) {
     request->send(200, "text/html", content.c_str());
 }
 
+void handleConfig(AsyncWebServerRequest *request) {
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    AsyncJsonOutputStream stream(response);
+
+    // Write the configuration using ConfigManager's write method
+    componentManager.write(stream);
+
+    request->send(response);
+}
+
 void webserver_start(void) {
     server.on("/", HTTP_GET, handleHomepage);
+    server.on("/config", HTTP_GET, handleConfig);
     server.on("/resetWifi", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "text/plain", "Resetting WiFi settings and rebooting...");
         delay(1000);

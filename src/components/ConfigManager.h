@@ -16,6 +16,7 @@
 #include "json/JsonWriter.h"
 #include "config.h"
 #include "drivers/Sensors.h"
+#include "core/HardwareInitializer.h"
 #include <rapidjson/writer.h>
 
 namespace freebutton {
@@ -205,6 +206,13 @@ public:
      */
     const std::string& getTimezone() const { return timezone; }
 
+    /**
+     * Write configuration to an output stream as JSON
+     * @param stream Output stream to write to (e.g., AsyncJsonOutputStream, FileOutputStream)
+     */
+    template<class OutputStream>
+    void write(OutputStream &stream);
+
 private:
     static constexpr auto TAG = "ConfigManager";
 
@@ -259,9 +267,6 @@ private:
      * Filter callback for processing clocks
      */
     void processClocksFilter(const std::vector<std::string>& path, const std::string& json);
-
-    template<class OutputStream>
-    void write(OutputStream &stream);
 };
 
 // Template method implementation must be in header
@@ -278,10 +283,20 @@ void ConfigManager::write(OutputStream &stream) {
         info.Add("id", deviceId);
         info.Add("firmware", FIRMWARE);
 
-        // connectors - placeholder for now
+        // connectors - hardware detected connectors
         {
             auto connectors = info.Array("connectors");
-            // TODO: add connectors when connector system is implemented
+            if (FreeButton::g_hardwareInitializer) {
+                const auto& scanner = FreeButton::g_hardwareInitializer->getScanner();
+                for (const auto& [connectorNum, connectorType] : scanner.getConnectors()) {
+                    if (connectorType == FreeButton::ConnectorType::EMPTY) continue;
+
+                    auto conn = connectors.Object();
+                    conn.Add("id", connectorNum);
+                    conn.Add("connector", connectorNum + 1); // backwards compatibility
+                    conn.Add("type", static_cast<uint8_t>(connectorType));
+                }
+            }
         }
 
         // sensors info
@@ -307,7 +322,7 @@ void ConfigManager::write(OutputStream &stream) {
         auto btns = doc.Array("buttons");
         for (auto& button : buttons) {
             auto jbutton = btns.Object();
-            button->toJson(jbutton);
+            button->toJson<OutputStream>(jbutton);
         }
     }
 
@@ -316,7 +331,7 @@ void ConfigManager::write(OutputStream &stream) {
         auto items = doc.Array("displayitems");
         for (auto& item : displayItems) {
             auto jitem = items.Object();
-            item->toJson(jitem);
+            item->toJson<OutputStream>(jitem);
         }
     }
 
@@ -325,7 +340,7 @@ void ConfigManager::write(OutputStream &stream) {
         auto clocksArr = doc.Array("clocks");
         for (auto& clock : clocks) {
             auto jclock = clocksArr.Object();
-            clock->toJson(jclock);
+            clock->toJson<OutputStream>(jclock);
         }
     }
 
@@ -334,14 +349,24 @@ void ConfigManager::write(OutputStream &stream) {
         auto brkrs = doc.Array("brokers");
         MqttBrokerRegistry::forEachBroker([&brkrs](uint8_t broker_id, MqttBroker* broker) {
             auto jbroker = brkrs.Object();
-            broker->toJson(jbroker);
+            broker->toJson<OutputStream>(jbroker);
         });
     }
 
-    // sensors configuration array - placeholder for now
+    // sensors configuration array
     {
         auto sensors = doc.Array("sensors");
-        // TODO: add sensor configuration when sensor config system is implemented
+        for (const auto& [sensorId, device] : FreeButton::sensorDevices) {
+            // Only include physical sensors (not virtual ones)
+            if (device->type != FreeButton::SensorType::VIRTUAL) {
+                auto s = sensors.Object();
+                s.Add("sensorid", sensorId);
+                s.Add("interval", 10); // Default interval
+
+                // topics array (empty for now - will be populated when sensor topic system is implemented)
+                auto topics = s.Array("topics");
+            }
+        }
     }
 }
 

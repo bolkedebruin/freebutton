@@ -74,6 +74,7 @@ public:
     void toJson(json::JsonWriter<OutputStream>::ScopedObject &obj) {
         obj.Add("id", id);
         obj.Add("position", position_);
+        obj.Add("buttonuid", std::to_string(position_) + "-" + std::to_string(page_)); // not used
         obj.Add("page", page_);
         obj.Add("label", label);
         obj.Add("topLabel", topLabel);
