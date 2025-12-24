@@ -1,5 +1,6 @@
 #include "LvglDisplay.h"
 #include "../ui/wifi_qr_modal.h"
+#include "../ui/ota_modal.h"
 #include "../ui/ui_button.h"
 #include "../core/FileSystem.h"
 #include <esp_log.h>
@@ -208,6 +209,9 @@ void LvglDisplay::task() {
 
     // Process any pending WiFi QR modal operations
     wifi_qr_modal_process_pending();
+
+    // Process any pending OTA modal operations
+    ota_modal_process_pending();
 
     unlock();
 }
