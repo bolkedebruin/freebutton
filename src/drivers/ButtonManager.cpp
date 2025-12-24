@@ -37,7 +37,7 @@ void ButtonManager::addButton(std::unique_ptr<PushButton> button) {
         ESP_LOGI(TAG, "Button at position %d with event %d", pos, event);
 
         // Find and trigger corresponding display button
-        auto* displayButton = componentManager.getButtonByPosition(pos);
+        auto* displayButton = configManager.getButtonByPosition(pos);
         if (displayButton) {
             ESP_LOGI(TAG, "Found display button for position %d, triggering event", pos);
             displayButton->handlePhysicalEvent(event);

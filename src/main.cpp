@@ -36,7 +36,7 @@ NeoPixelController neopixels(NEOPIN);
 auto& registry = MqttBrokerRegistry::instance();
 
 // Global ConfigManager
-freebutton::ConfigManager componentManager;
+freebutton::ConfigManager configManager;
 
 // LVGL task for UI updates
 void lvgl_task(void* pvParameter) {
@@ -98,7 +98,7 @@ void setup() {
     if (progressBar) {
         progressBar->update(20, "Loading configuration...");
     }
-    componentManager.loadFromFile("/config.json");
+    configManager.loadFromFile("/config.json");
 
     // Update progress
     if (progressBar) {
@@ -123,8 +123,8 @@ void setup() {
     }
 
     // Initialize and synchronize NTP time
-    const std::string ntpServer = componentManager.getNtpServer().empty() ? "pool.ntp.org" : componentManager.getNtpServer();
-    const std::string timezone = componentManager.getTimezone().empty() ? "CET-1CEST,M3.5.0,M10.5.0/3" : componentManager.getTimezone();
+    const std::string ntpServer = configManager.getNtpServer().empty() ? "pool.ntp.org" : configManager.getNtpServer();
+    const std::string timezone = configManager.getTimezone().empty() ? "CET-1CEST,M3.5.0,M10.5.0/3" : configManager.getTimezone();
 
     NtpClient::initialize(ntpServer, timezone);
     NtpClient::syncTime();
@@ -134,7 +134,7 @@ void setup() {
     }
 
     // Start brokers and configure Home Assistant auto-discovery
-    componentManager.startBrokers(deviceId);
+    configManager.startBrokers(deviceId);
 
     // Register sensors with Home Assistant Discovery (using first configured broker)
     MqttBrokerRegistry::forEachBroker([](const uint8_t brokerId, const MqttBroker* broker) {

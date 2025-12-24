@@ -13,7 +13,7 @@
 static auto TAG = "webserver";
 
 // External reference to global ConfigManager
-extern freebutton::ConfigManager componentManager;
+extern freebutton::ConfigManager configManager;
 
 AsyncWebServer server(80);
 
@@ -73,7 +73,7 @@ void handleConfig(AsyncWebServerRequest *request) {
     AsyncJsonOutputStream stream(response);
 
     // Write the configuration using ConfigManager's write method
-    componentManager.write(stream);
+    configManager.write(stream);
 
     request->send(response);
 }

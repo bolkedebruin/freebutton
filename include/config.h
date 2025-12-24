@@ -32,6 +32,6 @@ namespace freebutton {
 }
 
 // Global component manager
-extern freebutton::ConfigManager componentManager;
+extern freebutton::ConfigManager configManager;
 
 #endif //CONFIG_H
