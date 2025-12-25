@@ -127,6 +127,29 @@ bool DisplayManager::getSmallDisplayInfo(int index, int& connector, int& positio
     return false;
 }
 
+int DisplayManager::getSmallDisplayIndexByPosition(int buttonPosition) const {
+    // Convert button position (1-based) to connector and side
+    // Button position formula: position = (connector * 2) + 1 + side
+    // Where side is 0 (left) or 1 (right)
+
+    if (buttonPosition < 1) {
+        return -1;
+    }
+
+    const int connector = (buttonPosition - 1) / 2;
+    const int side = (buttonPosition - 1) % 2;
+
+    // Search through small displays to find matching connector and position
+    for (size_t i = 0; i < smallDisplays_.size(); ++i) {
+        if (smallDisplays_[i].connector == connector && smallDisplays_[i].position == side) {
+            return static_cast<int>(i);
+        }
+    }
+
+    // No small display found for this button position (likely on main display connector)
+    return -1;
+}
+
 void DisplayManager::selectMainDisplay() const {
     deselectAllDisplays();
     if (mainDisplayConnector_ >= 0 && mainDisplayConnector_ < mcps_.size() && mcps_[mainDisplayConnector_]) {

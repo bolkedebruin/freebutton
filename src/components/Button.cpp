@@ -6,6 +6,7 @@
 #include "Button.h"
 #include "mqtt/Registry.h"
 #include "drivers/LvglDisplay.h"
+#include "drivers/DisplayManager.h"
 #include "types.h"
 #include <esp_log.h>
 
@@ -171,18 +172,30 @@ void Button::publishToTopic(const EventType eventType, const std::string& payloa
 
 void Button::createButton() {
     // Get the appropriate small display for this button
-    // Button ID maps to small display index
+    // Button position maps to physical button, which should map to physical display
     auto& lvglDisplay = FreeButton::getLvglDisplay();
-    lv_display_t* smallDisplay = lvglDisplay.getSmallDisplay(id);
+    auto& displayManager = FreeButton::getDisplayManager();
+
+    // Map button position to small display index
+    int smallDisplayIndex = displayManager.getSmallDisplayIndexByPosition(position_);
+
+    if (smallDisplayIndex < 0) {
+        ESP_LOGD(TAG, "Button position %u has no small display (likely on large display connector)", position_);
+        return;
+    }
+
+    lv_display_t* smallDisplay = lvglDisplay.getSmallDisplay(smallDisplayIndex);
 
     if (!smallDisplay) {
-        ESP_LOGD(TAG, "Small display %lu not available for Button %lu, skipping UI creation", id, id);
+        ESP_LOGD(TAG, "Small display %d not available for Button position %u, skipping UI creation",
+                 smallDisplayIndex, position_);
         return;
     }
 
     // Acquire buffer for the small display
-    if (!lvglDisplay.acquireSmallDisplayBuffer(id)) {
-        ESP_LOGW(TAG, "Failed to acquire buffer for small display %lu, Button %lu", id, id);
+    if (!lvglDisplay.acquireSmallDisplayBuffer(smallDisplayIndex)) {
+        ESP_LOGW(TAG, "Failed to acquire buffer for small display %d, Button position %u",
+                 smallDisplayIndex, position_);
         return;
     }
 
@@ -194,9 +207,9 @@ void Button::createButton() {
     lv_obj_t* parent = lv_display_get_screen_active(smallDisplay);
 
     if (!parent) {
-        ESP_LOGE(TAG, "Screen not available for Button %lu on small display %lu", id, id);
+        ESP_LOGE(TAG, "Screen not available for Button position %u on small display %d", position_, smallDisplayIndex);
         lv_display_set_default(original_default_disp);
-        lvglDisplay.releaseSmallDisplayBuffer(id);
+        lvglDisplay.releaseSmallDisplayBuffer(smallDisplayIndex);
         return;
     }
 
@@ -222,9 +235,9 @@ void Button::createButton() {
     // Create the button with the correct small display parent
     button = ui_button_create(parent);
     if (!button) {
-        ESP_LOGE(TAG, "Failed to create UI button for Button %lu", id);
+        ESP_LOGE(TAG, "Failed to create UI button for Button position %u", position_);
         lvglDisplay.unlock();
-        lvglDisplay.releaseSmallDisplayBuffer(id);
+        lvglDisplay.releaseSmallDisplayBuffer(smallDisplayIndex);
         lv_display_set_default(original_default_disp);
         return;
     }
@@ -236,12 +249,13 @@ void Button::createButton() {
     // Force refresh the small display
     lv_obj_invalidate(parent);
 
-    ESP_LOGI(TAG, "Created UI button for Button %lu on small display %lu", id, id);
+    ESP_LOGI(TAG, "Created UI button for position %u (Button id %lu) on small display %d",
+             position_, id, smallDisplayIndex);
 
     lvglDisplay.unlock();
 
     // Release the buffer after setting up the UI
-    lvglDisplay.releaseSmallDisplayBuffer(id);
+    lvglDisplay.releaseSmallDisplayBuffer(smallDisplayIndex);
 
     // Restore original default display
     lv_display_set_default(original_default_disp);

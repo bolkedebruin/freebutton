@@ -7,6 +7,7 @@
 
 #include "pins.h"
 #include "config.h"
+#include "drivers/DisplayManager.h"
 #include "drivers/DeviceInfoManager.h"
 #include "drivers/Sensors.h"
 
@@ -195,10 +196,8 @@ int HardwareInitializer::initializeButtons() {
     int buttonCount = 0;
     
     // Create buttons for each active connector
-    for (int connector = 0; connector < MAX_CONNECTORS; ++connector) {
-        const auto connectorType = scanner_.getConnectorType(connector);
-        
-        if (connectorType && *connectorType != ConnectorType::EMPTY) {
+    for (const auto& [connector, connectorType] : scanner_.getConnectors()) {
+        if (connectorType != ConnectorType::EMPTY) {
             if (const auto mcp = getMCPForConnector(connector)) {
                 // Left button (even ID)
                 const int leftId = connector * 2;

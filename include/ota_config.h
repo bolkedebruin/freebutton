@@ -7,7 +7,7 @@
 #define OTA_CONFIG_H
 
 // API endpoint for remote firmware updates
-#define OTA_API_BASE_URL "https://api.button.plus/firmware/binary"
+#define OTA_API_BASE_URL "https://api.freebutton.plus/firmware/binary"
 
 // Watchdog timeout for OTA operations (milliseconds)
 #define OTA_WATCHDOG_TIMEOUT_MS 30000

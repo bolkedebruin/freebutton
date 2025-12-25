@@ -154,6 +154,10 @@ public:
     // Get connector and position for small display
     bool getSmallDisplayInfo(int index, int& connector, int& position) const;
 
+    // Convert button position to small display index
+    // Returns -1 if the button position is on a connector without small displays (e.g., large display)
+    int getSmallDisplayIndexByPosition(int buttonPosition) const;
+
     // Display control
     void showHelloWorld() const;
     void showDisplayNumbers() const;

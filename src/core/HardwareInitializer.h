@@ -4,13 +4,14 @@
 
 #pragma once
 
-#include "../drivers/HardwareScanner.h"
-#include "../drivers/PushButton.h"
-#include "../drivers/ButtonManager.h"
-#include "../drivers/DisplayManager.h"
-#include "Adafruit_MCP23008.h"
 #include <memory>
 #include <functional>
+
+#include "Adafruit_MCP23008.h"
+
+#include "../drivers/HardwareScanner.h"
+#include "../drivers/ButtonManager.h"
+
 
 namespace FreeButton {
 
@@ -43,7 +44,7 @@ public:
     [[nodiscard]] bool hasButtonBars() const { return scanner_.hasButtonBars(); }
 
 private:
-    static constexpr const char* TAG = "HardwareInitializer";
+    static constexpr auto TAG = "HardwareInitializer";
     static constexpr int MAX_CONNECTORS = 4;
 
     HardwareScanner scanner_;
