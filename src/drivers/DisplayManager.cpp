@@ -127,7 +127,7 @@ bool DisplayManager::getSmallDisplayInfo(int index, int& connector, int& positio
     return false;
 }
 
-int DisplayManager::getSmallDisplayIndexByPosition(int buttonPosition) const {
+int DisplayManager::getSmallDisplayIndexByPosition(const int buttonPosition) const {
     // Convert button position (1-based) to connector and side
     // Button position formula: position = (connector * 2) + 1 + side
     // Where side is 0 (left) or 1 (right)

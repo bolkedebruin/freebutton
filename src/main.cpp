@@ -49,7 +49,7 @@ void lvgl_task(void* pvParameter) {
 void setup() {
     ESP_LOGI(TAG, "FreeButton Firmware: %s  Id: %s starting!", FIRMWARE, deviceId.c_str());
 
-    HomeAssistantDiscovery::setDeviceInfo({"test", "ButtonPlus", MODEL, FIRMWARE, deviceId});
+    HomeAssistantDiscovery::setDeviceInfo({deviceId, "ButtonPlus", MODEL, FIRMWARE, deviceId});
 
     // set log levels
     esp_log_level_set(TAG, ESP_LOG_DEBUG);

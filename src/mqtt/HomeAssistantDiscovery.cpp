@@ -58,12 +58,20 @@ void HomeAssistantDiscovery::publishAllDiscovery(const uint8_t brokerId) {
         return;
     }
 
-    ESP_LOGI(TAG, "Publishing all callback discovery configs for broker %d (%zu components)",
-             brokerId, it->second.callbacks.size());
+    ESP_LOGI(TAG, "Publishing all discovery configs for broker %d (%zu components, %zu triggers)",
+             brokerId, it->second.callbacks.size(), it->second.triggers.size());
 
+    // Publish component discoveries
     for (const auto &callback_info: it->second.callbacks | std::views::values) {
         if (callback_info.enabled) {
             publishCallbackDiscovery(brokerId, callback_info);
+        }
+    }
+
+    // Publish trigger discoveries
+    for (const auto &trigger_info: it->second.triggers | std::views::values) {
+        if (trigger_info.enabled) {
+            publishTriggerDiscovery(brokerId, trigger_info);
         }
     }
 }
@@ -228,4 +236,135 @@ void HomeAssistantDiscovery::publishCallbackDiscovery(uint8_t brokerId, const Di
 
 void HomeAssistantDiscovery::setDeviceName(std::string name) {
     global_device_info_.name = std::move(name);
+}
+
+uint16_t HomeAssistantDiscovery::registerTrigger(uint8_t brokerId, TriggerConfigGenerator generator) {
+    auto& broker_config = broker_configs_[brokerId];
+    const uint16_t trigger_id = broker_config.next_trigger_id++;
+
+    // Store the callback
+    TriggerCallbackInfo trigger_info;
+    trigger_info.generator = std::move(generator);
+    trigger_info.enabled = true;
+
+    broker_config.triggers[trigger_id] = std::move(trigger_info);
+
+    // Generate config once to get object_id for logging
+    auto config = broker_config.triggers[trigger_id].generator(brokerId);
+    ESP_LOGD(TAG, "Registered trigger %d (%s) for broker %d",
+             trigger_id, config.object_id.c_str(), brokerId);
+
+    // Auto-publish if broker is enabled
+    if (broker_config.enabled) {
+        publishTriggerDiscovery(brokerId, broker_config.triggers[trigger_id]);
+    }
+
+    return trigger_id;
+}
+
+void HomeAssistantDiscovery::unregisterTrigger(const uint8_t brokerId, const uint16_t trigger_id) {
+    auto& broker_config = broker_configs_[brokerId];
+    const auto it = broker_config.triggers.find(trigger_id);
+
+    if (it != broker_config.triggers.end()) {
+        // Generate config to get object_id for removal
+        auto config = it->second.generator(brokerId);
+
+        // Remove discovery from HA before unregistering
+        const std::string topic = generateTriggerTopic(broker_config.discovery_prefix,
+                                                      global_device_info_.identifier,
+                                                      config.object_id);
+
+        auto* broker = MqttBrokerRegistry::getBroker(brokerId);
+        if (broker) {
+            ESP_LOGD(TAG, "Removing trigger discovery from %s", topic.c_str());
+            broker->publish(topic, "", 1, true);  // Empty payload removes the discovery
+        }
+
+        broker_config.triggers.erase(it);
+        ESP_LOGD(TAG, "Unregistered trigger %d from broker %d", trigger_id, brokerId);
+    }
+}
+
+std::string HomeAssistantDiscovery::generateTriggerTopic(const std::string& discovery_prefix,
+                                                         const std::string& device_id,
+                                                         const std::string& object_id) {
+    if (device_id.empty()) {
+        ESP_LOGW(TAG, "Device identifier not set, cannot generate trigger topic");
+        return "";
+    }
+
+    return discovery_prefix + "/device_automation/" + device_id + "/" + object_id + "/config";
+}
+
+std::string HomeAssistantDiscovery::triggerToJson(const HomeAssistantTriggerConfig& config) {
+    JsonDocument doc;
+
+    // Required fields for device automation trigger
+    doc["automation_type"] = "trigger";
+    doc["type"] = config.type;
+    doc["subtype"] = config.subtype;
+    doc["topic"] = config.topic;
+
+    // Optional payload filter
+    if (!config.payload.empty()) {
+        doc["payload"] = config.payload;
+    }
+
+    // Device information - use per-trigger device info if provided, otherwise global
+    const HomeAssistantDevice& device = config.device.name.empty() ? global_device_info_ : config.device;
+
+    const auto name = !device.name.empty() ? device.name : device.identifier;
+
+    const JsonObject deviceObj = doc["device"].to<JsonObject>();
+    deviceObj["name"] = name;
+
+    if (!device.manufacturer.empty()) {
+        deviceObj["manufacturer"] = device.manufacturer;
+    }
+    if (!device.model.empty()) {
+        deviceObj["model"] = device.model;
+    }
+    if (!device.sw_version.empty()) {
+        deviceObj["sw_version"] = device.sw_version;
+    }
+    if (!device.identifier.empty()) {
+        const auto identifiers = deviceObj["identifiers"].to<JsonArray>();
+        identifiers.add(device.identifier);
+    }
+
+    // Serialize to string
+    std::string output;
+    serializeJson(doc, output);
+    return output;
+}
+
+void HomeAssistantDiscovery::publishTriggerDiscovery(uint8_t brokerId, const TriggerCallbackInfo &trigger_info) {
+    if (!isDiscoveryEnabled(brokerId) || !trigger_info.enabled) {
+        return;
+    }
+
+    auto* broker = MqttBrokerRegistry::getBroker(brokerId);
+    if (!broker) {
+        ESP_LOGE(TAG, "Broker %d not found", brokerId);
+        return;
+    }
+
+    // Only publish if broker is connected
+    if (!broker->isConnected()) {
+        ESP_LOGD(TAG, "Broker %d not connected, trigger discovery will be published on connection", brokerId);
+        return;
+    }
+
+    // Generate config on-demand
+    auto config = trigger_info.generator(brokerId);
+
+    const auto& broker_config = broker_configs_[brokerId];
+    const std::string topic = generateTriggerTopic(broker_config.discovery_prefix,
+                                                   global_device_info_.identifier,
+                                                   config.object_id);
+    const std::string json_payload = triggerToJson(config);
+
+    ESP_LOGD(TAG, "Publishing trigger discovery to %s", topic.c_str());
+    broker->publish(topic, json_payload, 1, true);
 }

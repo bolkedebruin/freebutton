@@ -74,19 +74,35 @@ PushButton* ButtonManager::getButton(int position) const {
 
 void ButtonManager::registerButtonsWithHomeAssistant(const uint8_t brokerId) const {
     for (const auto& button : buttons_) {
-        auto generator = [&button](uint8_t broker_id) -> HomeAssistantDiscoveryConfig {
-            HomeAssistantDiscoveryConfig config;
-            config.component_type = "button";
-            config.default_entity_id = "button_" + std::to_string(button->position());
-            config.name = "Button " + std::to_string(button->position());
-            config.state_topic = std::string(PUBLICMQTTID) + "/" + deviceId + "/" + "button_" + std::to_string(button->position()) + "/state";
-            config.command_topic = std::string(PUBLICMQTTID) + "/" + deviceId + "/" + "button_" + std::to_string(button->position()) + "/set";
-            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
+        const int pos = button->position();
 
+        // Register click/short press trigger
+        auto clickGenerator = [pos](uint8_t broker_id) -> HomeAssistantTriggerConfig {
+            HomeAssistantTriggerConfig config;
+            config.object_id = "button_" + std::to_string(pos) + "_click";
+            config.type = "button_short_press";
+            config.subtype = "button_" + std::to_string(pos);
+            config.topic = std::string(PUBLICMQTTID) + "/" + deviceId + "/button_" + std::to_string(pos) + "/state";
+            config.payload = R"({"event_type":"click"})";
+            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
             config.enabled = true;
             return config;
         };
-        HomeAssistantDiscovery::registerComponent(brokerId, std::move(generator));
+        HomeAssistantDiscovery::registerTrigger(brokerId, std::move(clickGenerator));
+
+        // Register long press trigger
+        auto longPressGenerator = [pos](uint8_t broker_id) -> HomeAssistantTriggerConfig {
+            HomeAssistantTriggerConfig config;
+            config.object_id = "button_" + std::to_string(pos) + "_long";
+            config.type = "button_long_press";
+            config.subtype = "button_" + std::to_string(pos);
+            config.topic = std::string(PUBLICMQTTID) + "/" + deviceId + "/button_" + std::to_string(pos) + "/state";
+            config.payload = R"({"event_type":"longpress"})";
+            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
+            config.enabled = true;
+            return config;
+        };
+        HomeAssistantDiscovery::registerTrigger(brokerId, std::move(longPressGenerator));
     }
 }
 

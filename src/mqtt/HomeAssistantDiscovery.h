@@ -38,14 +38,31 @@ struct HomeAssistantDiscoveryConfig {
     bool enabled = true;           // Per-component discovery enable/disable
 };
 
+// Device automation trigger configuration (separate from entity discovery)
+struct HomeAssistantTriggerConfig {
+    std::string object_id;         // Unique object ID for this trigger
+    std::string type;              // button_short_press, button_long_press, etc.
+    std::string subtype;           // button_1, button_2, etc.
+    std::string topic;             // MQTT topic to listen for trigger events
+    std::string payload;           // Optional payload to match (e.g., "{\"event_type\":\"click\"}")
+    HomeAssistantDevice device;    // Device information
+    bool enabled = true;           // Per-trigger enable/disable
+};
+
 // Callback function type for on-demand config generation
 using DiscoveryConfigGenerator = std::function<HomeAssistantDiscoveryConfig(uint8_t brokerId)>;
+using TriggerConfigGenerator = std::function<HomeAssistantTriggerConfig(uint8_t brokerId)>;
 
 // Lightweight callback storage - replaces heavy config storage
 struct DiscoveryCallbackInfo {
     DiscoveryConfigGenerator generator;
     bool enabled = true;
     // Memory footprint: ~24 bytes vs 670 bytes for stored HomeAssistantDiscoveryConfig
+};
+
+struct TriggerCallbackInfo {
+    TriggerConfigGenerator generator;
+    bool enabled = true;
 };
 
 class HomeAssistantDiscovery {
@@ -68,10 +85,16 @@ public:
     
     // NEW CALLBACK-BASED API - Memory efficient discovery registration
     static uint16_t registerComponent(uint8_t brokerId, DiscoveryConfigGenerator generator);
-    
+
     // Unregister a component from discovery
     static void unregisterComponent(uint8_t brokerId, uint16_t component_id);
-    
+
+    // Device automation trigger registration
+    static uint16_t registerTrigger(uint8_t brokerId, TriggerConfigGenerator generator);
+
+    // Unregister a trigger from discovery
+    static void unregisterTrigger(uint8_t brokerId, uint16_t trigger_id);
+
     // Set global device information (used for all components)
     static void setDeviceInfo(const HomeAssistantDevice& device);
 
@@ -87,23 +110,36 @@ private:
     struct BrokerDiscoveryConfig {
         bool enabled = false;
         std::string discovery_prefix = "homeassistant";
-        std::map<uint16_t, DiscoveryCallbackInfo> callbacks; // NEW: Memory-efficient callbacks only
+        std::map<uint16_t, DiscoveryCallbackInfo> callbacks; // Memory-efficient callbacks only
+        std::map<uint16_t, TriggerCallbackInfo> triggers;    // Device automation triggers
         uint16_t next_component_id = 1; // Start from 1, 0 reserved for invalid
+        uint16_t next_trigger_id = 1;   // Start from 1, 0 reserved for invalid
     };
 
     // Helper to publish single callback-based discovery config
     static void publishCallbackDiscovery(uint8_t brokerId, const DiscoveryCallbackInfo &callback_info);
-    
+
+    // Helper to publish single trigger discovery config
+    static void publishTriggerDiscovery(uint8_t brokerId, const TriggerCallbackInfo &trigger_info);
+
     static std::map<uint8_t, BrokerDiscoveryConfig> broker_configs_;
     static HomeAssistantDevice global_device_info_;
-    
+
     // Generate the discovery topic for a component
     static std::string generateDiscoveryTopic(const std::string& discovery_prefix,
                                             const std::string& component_type,
                                             const std::string& object_id);
-    
+
+    // Generate the discovery topic for a device automation trigger
+    static std::string generateTriggerTopic(const std::string& discovery_prefix,
+                                           const std::string& device_id,
+                                           const std::string& object_id);
+
     // Convert config to JSON string
     static std::string configToJson(const HomeAssistantDiscoveryConfig& config);
+
+    // Convert trigger config to JSON string
+    static std::string triggerToJson(const HomeAssistantTriggerConfig& config);
 };
 
 #endif //FREEBUTTON_HOMEASSISTANTDISCOVERY_H

@@ -312,7 +312,7 @@ void ConfigManager::startBrokers(const std::string& deviceId) {
     MqttBrokerRegistry::forEachBroker([](uint8_t brokerId, MqttBroker* broker) {
         if (broker && broker->isConfigured()) {
             // Set up connection callback for HomeAssistant discovery
-            broker->setOnConnectedCallback([brokerId](uint8_t connectedBrokerId) {
+            broker->setOnConnectedCallback([](const uint8_t connectedBrokerId) {
                 ESP_LOGI(TAG, "Broker %d connected, triggering Home Assistant discovery", connectedBrokerId);
                 HomeAssistantDiscovery::onBrokerConnected(connectedBrokerId);
             });
@@ -342,8 +342,8 @@ void ConfigManager::processCoreFilter(const std::vector<std::string>& path, cons
         return;
     }
 
-    if (!doc["location"].isNull()) {
-        HomeAssistantDiscovery::setDeviceName(doc["location"].as<std::string>());
+    if (!doc["name"].isNull()) {
+        HomeAssistantDiscovery::setDeviceName(doc["name"].as<std::string>());
     }
 
     if (!doc["ntpserver"].isNull()) {
