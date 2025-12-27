@@ -1,0 +1,151 @@
+//
+// Button Hardware Abstraction Layer
+// C-compatible interface to C++ Button components
+//
+
+#include <Arduino.h>
+#include <esp_log.h>
+#include "config.h"  // For BUTTON_COUNT
+#include "button_hardware.h"
+#include "components/ConfigManager.h"
+#include "drivers/LvglDisplay.h"
+
+extern "C" {
+#include "ui/ui_button.h"
+}
+
+static const char* TAG = "ButtonHAL";
+
+// Access the global config manager (extern declared in main)
+extern freebutton::ConfigManager configManager;
+
+// Storage for callbacks - use BUTTON_COUNT from config.h
+static struct {
+    ButtonClickCallback click;
+    ButtonLongPressCallback longPress;
+    ButtonReleaseCallback release;
+} callbacks[BUTTON_COUNT] = {{nullptr, nullptr, nullptr}};
+
+extern "C" {
+
+// Set button label with LVGL locking
+int button_hw_set_label(int position, const char* label) {
+    if (!label) {
+        ESP_LOGE(TAG, "NULL label pointer");
+        return -1;
+    }
+
+    // Get button from global config manager
+    auto* button = configManager.getButtonByPosition(position);
+
+    if (!button) {
+        ESP_LOGW(TAG, "Button at position %d not found", position);
+        return -1;
+    }
+
+    lv_obj_t* buttonObj = button->getButtonObject();
+    if (!buttonObj) {
+        ESP_LOGW(TAG, "Button at position %d has no UI element", position);
+        return -1;
+    }
+
+    // CRITICAL: Acquire LVGL lock before any display operation
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lvglDisplay.lock();
+
+    // Update the UI
+    ui_button_set_text(buttonObj, label);
+
+    // CRITICAL: Release lock after operation
+    lvglDisplay.unlock();
+
+    ESP_LOGD(TAG, "Set label for button %d to: %s", position, label);
+    return 0;
+}
+
+// Set button top label with LVGL locking
+int button_hw_set_top_label(int position, const char* topLabel) {
+    if (!topLabel) {
+        ESP_LOGE(TAG, "NULL topLabel pointer");
+        return -1;
+    }
+
+    // Get button from global config manager
+    auto* button = configManager.getButtonByPosition(position);
+
+    if (!button) {
+        ESP_LOGW(TAG, "Button at position %d not found", position);
+        return -1;
+    }
+
+    lv_obj_t* buttonObj = button->getButtonObject();
+    if (!buttonObj) {
+        ESP_LOGW(TAG, "Button at position %d has no UI element", position);
+        return -1;
+    }
+
+    // CRITICAL: Acquire LVGL lock before any display operation
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lvglDisplay.lock();
+
+    // Update the UI
+    ui_button_set_title(buttonObj, topLabel);
+
+    // CRITICAL: Release lock after operation
+    lvglDisplay.unlock();
+
+    ESP_LOGD(TAG, "Set top label for button %d to: %s", position, topLabel);
+    return 0;
+}
+
+// Get button count from config.h
+int button_hw_get_count() {
+    return BUTTON_COUNT;
+}
+
+// Register click callback (positions are 1-based: 1-8)
+void button_hw_register_click_callback(int position, ButtonClickCallback callback) {
+    if (position >= 1 && position <= BUTTON_COUNT) {
+        callbacks[position - 1].click = callback;
+        ESP_LOGD(TAG, "Registered click callback for button %d", position);
+    }
+}
+
+// Register long press callback (positions are 1-based: 1-8)
+void button_hw_register_long_press_callback(int position, ButtonLongPressCallback callback) {
+    if (position >= 1 && position <= BUTTON_COUNT) {
+        callbacks[position - 1].longPress = callback;
+        ESP_LOGD(TAG, "Registered long press callback for button %d", position);
+    }
+}
+
+// Register release callback (positions are 1-based: 1-8)
+void button_hw_register_release_callback(int position, ButtonReleaseCallback callback) {
+    if (position >= 1 && position <= BUTTON_COUNT) {
+        callbacks[position - 1].release = callback;
+        ESP_LOGD(TAG, "Registered release callback for button %d", position);
+    }
+}
+
+// Dispatch click event to JavaScript (positions are 1-based: 1-8)
+void button_hw_dispatch_click(int position) {
+    if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].click) {
+        callbacks[position - 1].click(position);
+    }
+}
+
+// Dispatch long press event to JavaScript (positions are 1-based: 1-8)
+void button_hw_dispatch_long_press(int position) {
+    if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].longPress) {
+        callbacks[position - 1].longPress(position);
+    }
+}
+
+// Dispatch release event to JavaScript (positions are 1-based: 1-8)
+void button_hw_dispatch_release(int position) {
+    if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].release) {
+        callbacks[position - 1].release(position);
+    }
+}
+
+} // extern "C"

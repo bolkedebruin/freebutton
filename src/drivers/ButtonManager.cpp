@@ -13,6 +13,7 @@
 
 #include "mqtt/HomeAssistantDiscovery.h"
 #include "components/ConfigManager.h"
+#include "scripting/button_hardware.h"
 
 namespace FreeButton {
 
@@ -35,6 +36,21 @@ void ButtonManager::addButton(std::unique_ptr<PushButton> button) {
     // Set up button event callback to forward to display components
     button->onButtonEvent([this](const int pos, const EventType event) {
         ESP_LOGI(TAG, "Button at position %d with event %d", pos, event);
+
+        // Dispatch to JavaScript callbacks first
+        switch (event) {
+            case CLICK:
+                button_hw_dispatch_click(pos);
+                break;
+            case LONG_PRESS:
+                button_hw_dispatch_long_press(pos);
+                break;
+            case RELEASE:
+                button_hw_dispatch_release(pos);
+                break;
+            default:
+                break;
+        }
 
         // Find and trigger corresponding display button
         auto* displayButton = configManager.getButtonByPosition(pos);

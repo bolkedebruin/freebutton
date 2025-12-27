@@ -63,6 +63,9 @@ public:
     uint32_t getPosition() const { return position_; }
     void handlePhysicalEvent(EventType event);
 
+    // UI button access for scripting
+    lv_obj_t* getButtonObject() const { return button; }
+
     static std::unique_ptr<Button> fromJson(const JsonObject& config) {
         auto button = std::make_unique<Button>();
         button->configure(config);

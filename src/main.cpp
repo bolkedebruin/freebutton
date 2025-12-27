@@ -18,6 +18,7 @@
 #include "drivers/Sensors.h"
 #include "drivers/LvglDisplay.h"
 #include "ui/ProgressBar.h"
+#include "scripting/ScriptEngine.h"
 
 using namespace FreeButton;
 
@@ -34,6 +35,7 @@ const std::map<std::string_view, std::string_view> deviceInfo = {
 
 NeoPixelController neopixels(NEOPIN);
 auto& registry = MqttBrokerRegistry::instance();
+auto& scriptEngine = Scripting::ScriptEngine::getInstance(10 * 1024); // 10KB heap
 
 // Global ConfigManager
 freebutton::ConfigManager configManager;
@@ -153,6 +155,70 @@ void setup() {
     }
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
 
+    // Initialize JavaScript Engine (singleton)
+    ESP_LOGI(TAG, "Initializing JavaScript engine...");
+
+    if (scriptEngine.init()) {
+        ESP_LOGI(TAG, "ScriptEngine initialized successfully");
+
+        // Comprehensive test script showing all features
+        const char* testScript = R"(
+            // Basic console output
+            console.log('JavaScript engine is working!');
+            print('Testing print function');
+
+            // Math operations
+            var x = 42;
+            var y = x * 2;
+            console.log('42 * 2 = ' + y);
+
+            // Date and time functions
+            console.log('Date.now():', Date.now());
+            console.log('performance.now():', performance.now());
+
+            // Array and string methods
+            var colors = ['red', 'green', 'blue'];
+            console.log('Colors:', colors.join(', '));
+
+            // LED control
+            var numLeds = led.count();
+            console.log('Number of LEDs:', numLeds);
+
+            // Timers - schedule LED animations
+            setTimeout(function() {
+                console.log('Timer 1: Setting LED 0 to red');
+                led.setColor(0, 255, 0, 0);
+            }, 500);
+
+            setTimeout(function() {
+                console.log('Timer 2: Setting LED 0 to green');
+                led.setColor(0, 0, 255, 0);
+            }, 1500);
+
+            setTimeout(function() {
+                console.log('Timer 3: Setting LED 0 to blue');
+                led.setColor(0, 0, 0, 255);
+            }, 2500);
+
+            button.onClick(8, function() {
+                console.log('Button 8 clicked');
+                led.setColor(0, 0, 255, 0);
+                button.setLabel(8, 'ON');
+            });
+
+            console.log('Timers scheduled - will execute in main loop');
+        )";
+
+        auto result = scriptEngine.execute(testScript, "test.js");
+        if (result.success) {
+            ESP_LOGI(TAG, "JavaScript test executed successfully");
+        } else {
+            ESP_LOGE(TAG, "JavaScript test failed: %s", result.error.c_str());
+        }
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize ScriptEngine");
+    }
+
     // Hide progress bar and show main application screen with DisplayItems
     if (progressBar) {
         progressBar->hide();
@@ -167,6 +233,14 @@ void loop() {
     if (const unsigned long currentTime = millis(); currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
         lastSensorUpdateTime = currentTime;
         sampleSensors();
+    }
+
+    // Process JavaScript timers
+    auto& scriptEngine = Scripting::ScriptEngine::getInstance();
+    if (scriptEngine.isInitialized()) {
+        int64_t delay_ms = scriptEngine.processTimers();
+        // Timer processing is non-blocking, returns next timer delay or -1 if no timers
+        (void)delay_ms; // We process timers every loop iteration
     }
 
     delay(10);
