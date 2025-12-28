@@ -3,6 +3,7 @@
 #include <lvgl.h>
 #include "../mqtt/Registry.h"
 #include "../mqtt/HomeAssistantDiscovery.h"
+#include "../scripting/sensor_binding.h"
 
 #include "../../lib/vendored/stscommon/sensirion_arch_config.h"
 #include "../../lib/vendored/stscommon/sensirion_i2c.h"
@@ -216,10 +217,13 @@ void sampleSensors() {
     for (auto& [id, sensor] : sensorDevices) {
         if (sensor && sensor->online) {
             const float value = sensor->sample();
-            
+
             if (sensorComponents[id]) {
                 sensorComponents[id]->publishSensorValue(brokerId, value);
             }
+
+            // Dispatch JavaScript onChange events (if registered)
+            sensor_hw_notify_value(id, value);
         }
     }
 }

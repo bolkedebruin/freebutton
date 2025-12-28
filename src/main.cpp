@@ -206,6 +206,21 @@ void setup() {
                 button.setLabel(8, 'ON');
             });
 
+            for (var i = 0; i < sensor.count(); i++) {
+                console.log('Sensor ' + i + ' type ' + sensor.getType(i));
+            }
+
+            sensor.onChange(1, function(value) {
+                console.log('Sensor 1 changed to ' + value);
+                if (value > 25.0) {
+                    led.setColor(1, 255, 0, 0); // red
+                } else if (value > 23.0) {
+                    led.setColor(1, 255, 165, 0); // orange
+                } else {
+                    led.setColor(1, 0, 0, 255); // blue
+                }
+            });
+
             console.log('Timers scheduled - will execute in main loop');
         )";
 
@@ -236,7 +251,6 @@ void loop() {
     }
 
     // Process JavaScript timers
-    auto& scriptEngine = Scripting::ScriptEngine::getInstance();
     if (scriptEngine.isInitialized()) {
         int64_t delay_ms = scriptEngine.processTimers();
         // Timer processing is non-blocking, returns next timer delay or -1 if no timers

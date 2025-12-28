@@ -78,6 +78,13 @@ bool ScriptEngine::init() {
     ESP_LOGI(TAG, "    - button.onClick(position, callback)");
     ESP_LOGI(TAG, "    - button.onLongPress(position, callback)");
     ESP_LOGI(TAG, "    - button.onRelease(position, callback)");
+    ESP_LOGI(TAG, "  FreeButton Sensor monitoring:");
+    ESP_LOGI(TAG, "    - sensor.count()");
+    ESP_LOGI(TAG, "    - sensor.getValue(sensorId)");
+    ESP_LOGI(TAG, "    - sensor.getType(sensorId)");
+    ESP_LOGI(TAG, "    - sensor.getInfo(sensorId)");
+    ESP_LOGI(TAG, "    - sensor.getAll()");
+    ESP_LOGI(TAG, "    - sensor.onChange(sensorId, callback)");
     return true;
 }
 
