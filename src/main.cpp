@@ -202,7 +202,8 @@ void setup() {
 
             button.onClick(8, function() {
                 console.log('Button 8 clicked');
-                led.setColor(0, 0, 255, 0);
+                led.setColor(2, 0, 255, 0);
+                mqtt.publish(0, "test/button/8/clicked", "PRESS");
                 button.setLabel(8, 'ON');
             });
 
@@ -221,6 +222,7 @@ void setup() {
                 }
             });
 
+            console.log('Active MQTT brokers: ' + mqtt.getBrokerCount());
             console.log('Timers scheduled - will execute in main loop');
         )";
 

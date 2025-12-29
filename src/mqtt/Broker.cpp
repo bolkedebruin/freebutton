@@ -9,6 +9,9 @@
 
 #include "esp_log.h"
 
+// Import JavaScript MQTT binding layer
+#include "../scripting/mqtt_binding.h"
+
 static const auto TAG = "mqtt";
 
 void MqttBroker::start() {
@@ -210,10 +213,13 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
             ESP_LOGI(TAG, "MQTT %s broker connected", url.c_str());
             const_cast<MqttBroker*>(this)->connected_ = true;
             sendBirth();
-            
+
             // Resubscribe to all existing subscriptions
             const_cast<MqttBroker*>(this)->resubscribeAll();
-            
+
+            // Notify JavaScript callbacks
+            MqttBinding::notifyConnected(brokerId);
+
             if (on_connected_callback_) {
                 on_connected_callback_(brokerId);
             }
@@ -221,6 +227,10 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "MQTT broker %s disconnected", url.c_str());
             const_cast<MqttBroker*>(this)->connected_ = false;
+
+            // Notify JavaScript callbacks
+            MqttBinding::notifyDisconnected(brokerId);
+
             if (on_disconnected_callback_) {
                 on_disconnected_callback_(brokerId);
             }
@@ -237,11 +247,11 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
         case MQTT_EVENT_DATA:
             {
                 ESP_LOGI(TAG, "Message received on topic: %.*s", event->topic_len, event->topic);
-                
+
                 // Dispatch to subscribers
                 std::string_view topic_view(event->topic, event->topic_len);
                 std::string_view data_view(event->data, event->data_len);
-                
+
                 for (const auto& subscription : subscriptions_) {
                     if (subscription.topic == topic_view) {
                         for (auto* subscriber : subscription.subscribers) {
@@ -250,7 +260,18 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
                         break;
                     }
                 }
-                
+
+                // Notify JavaScript callbacks (Phase 3: Script Integration)
+                // Create null-terminated strings for C interface
+                char topic_buf[event->topic_len + 1];
+                char data_buf[event->data_len + 1];
+                memcpy(topic_buf, event->topic, event->topic_len);
+                memcpy(data_buf, event->data, event->data_len);
+                topic_buf[event->topic_len] = '\0';
+                data_buf[event->data_len] = '\0';
+
+                MqttBinding::notifyMessageReceived(brokerId, topic_buf, data_buf, event->data_len);
+
                 // Keep existing callback for backward compatibility
                 if (on_message_callback_) {
                     on_message_callback_(brokerId, event->topic, event->data, event->data_len);
