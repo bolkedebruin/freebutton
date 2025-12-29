@@ -1,0 +1,45 @@
+{
+  "compilerOptions": {
+    // Target modern browsers
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+
+    // Module resolution
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+
+    // Strict type checking
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+
+    // Output
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+
+    // Emit
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Advanced
+    "allowJs": false,
+    "checkJs": false
+  },
+  "include": [
+    "src/**/*",
+    "src/js/freebutton.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}
