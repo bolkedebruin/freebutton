@@ -9,10 +9,13 @@
  * - No value boxing: new Number(1), new String(), new Boolean()
  * - for...of only works with arrays
  * - ES5 feature set with limited ES6+ extensions
+ *
+ * Validates against actual MQuickJS and FreeButton stdlib from generated sources
  */
 
 import * as acorn from 'acorn';
 import type { Node } from 'acorn';
+import stdlib from './stdlib.json';
 
 export interface ValidationError {
     message: string;
@@ -23,6 +26,48 @@ export interface ValidationError {
 export interface ValidationResult {
     valid: boolean;
     errors: ValidationError[];
+}
+
+// Load known globals from stdlib.json
+const KNOWN_GLOBALS = new Set<string>();
+
+// Add global functions
+for (const globalFunc of stdlib.globals) {
+    KNOWN_GLOBALS.add(globalFunc.name);
+}
+
+// Add FreeButton APIs
+for (const apiName of Object.keys(stdlib.apis)) {
+    KNOWN_GLOBALS.add(apiName);
+}
+
+// Add stdlib classes
+for (const className of Object.keys(stdlib.classes)) {
+    KNOWN_GLOBALS.add(className);
+}
+
+// Add constants
+for (const constant of stdlib.constants) {
+    KNOWN_GLOBALS.add(constant.name);
+}
+
+// Build API methods map
+const API_METHODS: Record<string, Set<string>> = {};
+for (const [apiName, api] of Object.entries(stdlib.apis)) {
+    API_METHODS[apiName] = new Set(api.methods.map(m => m.name));
+}
+
+// API method signatures for type checking - generated from stdlib.json
+// Format: { api: { method: [param types] } }
+const API_SIGNATURES: Record<string, Record<string, string[]>> = {};
+
+// Build API signatures from stdlib.json
+for (const [apiName, api] of Object.entries(stdlib.apis)) {
+    API_SIGNATURES[apiName] = {};
+    for (const method of api.methods) {
+        // Map types to lowercase for compatibility (Function -> function)
+        API_SIGNATURES[apiName][method.name] = method.params.map(p => p.type.toLowerCase());
+    }
 }
 
 // Forbidden value boxing constructors
@@ -99,14 +144,66 @@ export function validateCode(code: string): ValidationResult {
 }
 
 /**
+ * Track variable declarations in scope
+ */
+interface Scope {
+    variables: Set<string>;
+    parent?: Scope;
+}
+
+function createScope(parent?: Scope): Scope {
+    return { variables: new Set(), parent };
+}
+
+function isDeclared(scope: Scope | undefined, name: string): boolean {
+    if (!scope) return false;
+    if (scope.variables.has(name)) return true;
+    return isDeclared(scope.parent, name);
+}
+
+/**
  * Walk AST and check for MQuickJS violations
  */
-function walkAST(node: any, errors: ValidationError[]): void {
+function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: any): void {
     if (!node || typeof node !== 'object') return;
+
+    // Attach parent reference for context checking
+    node.parent = parent;
 
     const loc = node.loc;
     const line = loc?.start?.line;
     const column = loc?.start?.column ? loc.start.column + 1 : undefined;
+
+    // Create new scope for functions and blocks
+    let currentScope = scope;
+    if (!currentScope) {
+        currentScope = createScope();
+    }
+
+    // Track variable declarations
+    if (node.type === 'VariableDeclaration') {
+        for (const decl of node.declarations || []) {
+            if (decl.id?.type === 'Identifier') {
+                currentScope.variables.add(decl.id.name);
+            }
+        }
+    }
+
+    // Track function declarations
+    if (node.type === 'FunctionDeclaration' && node.id?.type === 'Identifier') {
+        currentScope.variables.add(node.id.name);
+    }
+
+    // Track function parameters
+    if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression') {
+        const funcScope = createScope(currentScope);
+        for (const param of node.params || []) {
+            if (param.type === 'Identifier') {
+                funcScope.variables.add(param.name);
+            }
+        }
+        currentScope = funcScope;
+    }
 
     // Check for `with` statement (forbidden in strict mode)
     if (node.type === 'WithStatement') {
@@ -233,6 +330,126 @@ function walkAST(node: any, errors: ValidationError[]): void {
         });
     }
 
+    // Check for undefined variable references
+    if (node.type === 'Identifier') {
+        const name = node.name;
+
+        // Get parent to determine context
+        const parent = (node as any).parent;
+
+        // Skip if this is a declaration (not a reference)
+        if (parent) {
+            // Skip property names in member expressions (e.g., the "x" in obj.x)
+            if (parent.type === 'MemberExpression' && parent.property === node && !parent.computed) {
+                return; // This is a property access, not a variable reference
+            }
+
+            // Skip labels in object properties (e.g., {x: 1})
+            if (parent.type === 'Property' && parent.key === node && !parent.computed) {
+                return;
+            }
+
+            // Skip function names in declarations
+            if ((parent.type === 'FunctionDeclaration' || parent.type === 'FunctionExpression') && parent.id === node) {
+                return;
+            }
+
+            // Skip variable declarator names
+            if (parent.type === 'VariableDeclarator' && parent.id === node) {
+                return;
+            }
+        }
+
+        // Check if variable is declared or is a known global
+        if (!isDeclared(currentScope, name) && !KNOWN_GLOBALS.has(name)) {
+            const suggestions = findSimilarGlobals(name);
+            const suggestionText = suggestions.length > 0
+                ? ` Did you mean one of: ${suggestions.join(', ')}?`
+                : '';
+
+            errors.push({
+                message: `'${name}' is not defined.${suggestionText}`,
+                line,
+                column
+            });
+        }
+    }
+
+    // Check for member expressions (e.g., led.setColor, mqtt.publish)
+    if (node.type === 'MemberExpression' && !node.computed) {
+        const object = node.object;
+        const property = node.property;
+
+        if (object?.type === 'Identifier' && property?.type === 'Identifier') {
+            const apiName = object.name;
+            const methodName = property.name;
+
+            // Check if API exists in our known APIs
+            if (API_METHODS[apiName]) {
+                // Check if method exists on this API
+                if (!API_METHODS[apiName].has(methodName)) {
+                    errors.push({
+                        message: `'${apiName}.${methodName}' is not defined. Available methods: ${Array.from(API_METHODS[apiName]).join(', ')}`,
+                        line,
+                        column
+                    });
+                }
+            }
+        }
+    }
+
+    // Check for undefined function calls and validate API method arguments
+    if (node.type === 'CallExpression') {
+        const callee = node.callee;
+
+        // Check for API method calls to validate argument types
+        if (callee?.type === 'MemberExpression' && !callee.computed) {
+            const object = callee.object;
+            const property = callee.property;
+
+            if (object?.type === 'Identifier' && property?.type === 'Identifier') {
+                const apiName = object.name;
+                const methodName = property.name;
+
+                // Validate argument types for known API methods
+                if (API_SIGNATURES[apiName]?.[methodName]) {
+                    const expectedTypes = API_SIGNATURES[apiName][methodName];
+                    const args = node.arguments || [];
+
+                    // Check each argument
+                    for (let i = 0; i < args.length && i < expectedTypes.length; i++) {
+                        const arg = args[i];
+                        const expectedType = expectedTypes[i];
+                        const actualType = inferArgumentType(arg);
+
+                        // Skip type check if expected type is 'any' or actual type is 'unknown'
+                        if (actualType && actualType !== expectedType && actualType !== 'unknown' && expectedType !== 'any') {
+                            errors.push({
+                                message: `${apiName}.${methodName}() argument ${i + 1} expects ${expectedType}, but got ${actualType}`,
+                                line: arg.loc?.start?.line,
+                                column: arg.loc?.start?.column ? arg.loc.start.column + 1 : undefined
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check regular function calls
+        if (callee?.type === 'Identifier') {
+            const name = callee.name;
+
+            // Check if function is declared or is a known global
+            if (!isDeclared(currentScope, name) && !KNOWN_GLOBALS.has(name)) {
+                errors.push({
+                    message: `'${name}' is not defined. Did you mean one of: ${findSimilarGlobals(name).join(', ')}?`,
+                    line,
+                    column
+                });
+            }
+        }
+    }
+
     // MQuickJS allows some ES6+ features:
     // - Exponentiation operator ** (we'll allow it)
     // - for...of with arrays (checked above)
@@ -242,17 +459,96 @@ function walkAST(node: any, errors: ValidationError[]): void {
 
     // Recursively walk child nodes
     for (const key in node) {
-        if (key === 'loc' || key === 'range' || key === 'start' || key === 'end') {
+        if (key === 'loc' || key === 'range' || key === 'start' || key === 'end' || key === 'parent') {
             continue;
         }
 
         const child = node[key];
         if (Array.isArray(child)) {
-            child.forEach(c => walkAST(c, errors));
+            child.forEach(c => walkAST(c, errors, currentScope, node));
         } else if (child && typeof child === 'object') {
-            walkAST(child, errors);
+            walkAST(child, errors, currentScope, node);
         }
     }
+}
+
+/**
+ * Infer the type of an argument from AST node
+ */
+function inferArgumentType(node: any): string {
+    if (!node) return 'unknown';
+
+    // Literal values
+    if (node.type === 'Literal') {
+        if (typeof node.value === 'number') return 'number';
+        if (typeof node.value === 'string') return 'string';
+        if (typeof node.value === 'boolean') return 'boolean';
+        if (node.value === null) return 'null';
+    }
+
+    // Function expressions
+    if (node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') {
+        return 'function';
+    }
+
+    // Identifiers and expressions - we can't determine type statically
+    // Return 'unknown' to skip validation
+    return 'unknown';
+}
+
+/**
+ * Find similar global identifiers using simple string matching
+ */
+function findSimilarGlobals(input: string): string[] {
+    const similar: string[] = [];
+    const inputLower = input.toLowerCase();
+
+    for (const global of KNOWN_GLOBALS) {
+        const globalLower = global.toLowerCase();
+
+        // Check for substring match or Levenshtein distance
+        if (globalLower.includes(inputLower) || inputLower.includes(globalLower)) {
+            similar.push(global);
+        } else if (levenshteinDistance(inputLower, globalLower) <= 2) {
+            similar.push(global);
+        }
+    }
+
+    return similar.slice(0, 3); // Return top 3 matches
+}
+
+/**
+ * Calculate Levenshtein distance
+ */
+function levenshteinDistance(a: string, b: string): number {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+
+    const matrix: number[][] = [];
+
+    for (let i = 0; i <= b.length; i++) {
+        matrix[i] = [i];
+    }
+
+    for (let j = 0; j <= a.length; j++) {
+        matrix[0]![j] = j;
+    }
+
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                matrix[i]![j] = matrix[i - 1]![j - 1]!;
+            } else {
+                matrix[i]![j] = Math.min(
+                    matrix[i - 1]![j - 1]! + 1, // substitution
+                    matrix[i]![j - 1]! + 1,     // insertion
+                    matrix[i - 1]![j]! + 1      // deletion
+                );
+            }
+        }
+    }
+
+    return matrix[b.length]![a.length]!;
 }
 
 /**

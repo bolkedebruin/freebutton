@@ -88,6 +88,7 @@ button.success {
 }
 
 .editor-container {
+    position: relative;
     border: 2px solid #e0e0e0;
     border-radius: 8px;
     overflow: hidden;
@@ -107,6 +108,20 @@ button.success {
 
 .cm-scroller {
     min-height: 400px;
+}
+
+.cursor-position {
+    position: absolute;
+    bottom: 5px;
+    right: 10px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+    font-size: 11px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 2px 8px;
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 10;
 }
 
 .status {
@@ -222,6 +237,7 @@ button.success {
     overflow-x: auto;
     max-height: 200px;
     overflow-y: auto;
+    white-space: pre;
 }
 
 .loading {

@@ -177,7 +177,7 @@ describe('MQuickJS Validator', () => {
         });
 
         it('should allow exponentiation operator', () => {
-            const result = validateCode('var squared = x ** 2;');
+            const result = validateCode('var x = 5; var squared = x ** 2;');
             expect(result.valid).toBe(true);
         });
     });
@@ -238,8 +238,103 @@ describe('MQuickJS Validator', () => {
         });
     });
 
-    describe('FreeButton API Integration', () => {
-        it('should accept LED API calls', () => {
+    describe('Stdlib Globals Validation', () => {
+        it('should reject undefined function calls', () => {
+            const result = validateCode('unknownFunction();');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('not defined');
+        });
+
+        it('should accept known global functions', () => {
+            const result = validateCode(`
+                var x = parseInt("42");
+                var y = parseFloat("3.14");
+                var z = isNaN(x);
+            `);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should suggest similar globals for typos', () => {
+            const result = validateCode('parseIng("42");');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('parseInt');
+        });
+    });
+
+    describe('MQuickJS Stdlib API Validation', () => {
+        it('should accept console.log', () => {
+            const result = validateCode('console.log("Hello, World!");');
+            expect(result.valid).toBe(true);
+        });
+
+        it('should accept console.log with multiple arguments', () => {
+            const result = validateCode('console.log("Value:", 42, "test");');
+            expect(result.valid).toBe(true);
+        });
+
+        it('should reject invalid console methods', () => {
+            const result = validateCode('console.error("Error!");');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('not defined');
+        });
+
+        it('should accept performance.now', () => {
+            const result = validateCode('var t = performance.now();');
+            expect(result.valid).toBe(true);
+        });
+
+        it('should reject invalid performance methods', () => {
+            const result = validateCode('performance.measure();');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('not defined');
+        });
+    });
+
+    describe('Case Sensitivity', () => {
+        it('should accept uppercase Math', () => {
+            const result = validateCode('var x = Math.atan2(1, 2);');
+            expect(result.valid).toBe(true);
+        });
+
+        it('should reject lowercase math as undefined', () => {
+            const result = validateCode('var x = math.atan2(1, 2);');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('math');
+            expect(result.errors[0]?.message).toContain('not defined');
+        });
+
+        it('should accept uppercase Object', () => {
+            const result = validateCode('var keys = Object.keys({a: 1});');
+            expect(result.valid).toBe(true);
+        });
+
+        it('should reject lowercase object as undefined', () => {
+            const result = validateCode('var keys = object.keys({a: 1});');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('object');
+        });
+
+        it('should accept uppercase String', () => {
+            const result = validateCode('var s = String.fromCharCode(65);');
+            expect(result.valid).toBe(true);
+        });
+
+        it('should reject lowercase string as undefined', () => {
+            const result = validateCode('var s = string.fromCharCode(65);');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('string');
+        });
+    });
+
+    describe('FreeButton API Method Validation', () => {
+        it('should reject invalid LED methods', () => {
+            const result = validateCode('led.invalidMethod();');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('not defined');
+            expect(result.errors[0]?.message).toContain('Available methods');
+        });
+
+        it('should accept valid LED API calls', () => {
             const result = validateCode(`
                 led.on(0);
                 led.off(1);
@@ -249,7 +344,13 @@ describe('MQuickJS Validator', () => {
             expect(result.valid).toBe(true);
         });
 
-        it('should accept button API calls', () => {
+        it('should reject invalid button methods', () => {
+            const result = validateCode('button.invalidMethod();');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('not defined');
+        });
+
+        it('should accept valid button API calls', () => {
             const result = validateCode(`
                 button.setLabel(0, "Click Me");
                 button.onClick(0, function() {
@@ -259,7 +360,12 @@ describe('MQuickJS Validator', () => {
             expect(result.valid).toBe(true);
         });
 
-        it('should accept sensor API calls', () => {
+        it('should reject invalid sensor methods', () => {
+            const result = validateCode('sensor.invalidMethod();');
+            expect(result.valid).toBe(false);
+        });
+
+        it('should accept valid sensor API calls', () => {
             const result = validateCode(`
                 var temp = sensor.getValue(0);
                 var info = sensor.getInfo(0);
@@ -267,7 +373,12 @@ describe('MQuickJS Validator', () => {
             expect(result.valid).toBe(true);
         });
 
-        it('should accept MQTT API calls', () => {
+        it('should reject invalid MQTT methods', () => {
+            const result = validateCode('mqtt.invalidMethod();');
+            expect(result.valid).toBe(false);
+        });
+
+        it('should accept valid MQTT API calls', () => {
             const result = validateCode(`
                 mqtt.publish(0, "test/topic", "hello");
                 mqtt.subscribe(0, "test/topic", function(topic, msg) {
@@ -275,6 +386,133 @@ describe('MQuickJS Validator', () => {
                 });
             `);
             expect(result.valid).toBe(true);
+        });
+    });
+
+    describe('Scope Tracking', () => {
+        it('should not flag locally declared variables', () => {
+            const result = validateCode(`
+                function test() {
+                    var localVar = 42;
+                    localVar();
+                }
+            `);
+            // localVar is declared, so calling it should only fail if it's not a function
+            // But we're checking if it's defined, so this should pass the undefined check
+            expect(result.valid).toBe(true);
+        });
+
+        it('should track function parameters', () => {
+            const result = validateCode(`
+                function test(callback) {
+                    callback();
+                }
+            `);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should track function declarations', () => {
+            const result = validateCode(`
+                function myFunc() {
+                    return 42;
+                }
+                myFunc();
+            `);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should catch undefined variables used as values', () => {
+            const result = validateCode(`
+                var temp = sensor.getValue(0);
+                var humidity = sensor.getValue(x);
+            `);
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain("'x' is not defined");
+        });
+
+        it('should allow property access on defined variables', () => {
+            const result = validateCode(`
+                var obj = {x: 1, y: 2};
+                var value = obj.x;
+            `);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should not flag property names as undefined', () => {
+            const result = validateCode(`
+                var obj = {
+                    unknownProp: 42
+                };
+            `);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should catch undefined variables in expressions', () => {
+            const result = validateCode(`
+                var result = undefinedVar + 10;
+            `);
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain("'undefinedVar' is not defined");
+        });
+
+        it('should catch undefined variables passed as arguments', () => {
+            const result = validateCode(`
+                print(undefinedVariable);
+            `);
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain("'undefinedVariable' is not defined");
+        });
+    });
+
+    describe('Type Validation', () => {
+        it('should reject string literal where number expected', () => {
+            const result = validateCode('sensor.getValue("x");');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('expects number');
+            expect(result.errors[0]?.message).toContain('got string');
+        });
+
+        it('should reject number literal where string expected', () => {
+            const result = validateCode('button.setLabel(0, 123);');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('expects string');
+            expect(result.errors[0]?.message).toContain('got number');
+        });
+
+        it('should accept correct literal types', () => {
+            const result = validateCode(`
+                sensor.getValue(0);
+                button.setLabel(0, "Click Me");
+                led.setColor(0, 255, 0, 0);
+            `);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should accept function expressions for callback parameters', () => {
+            const result = validateCode(`
+                button.onClick(0, function() {
+                    print("Clicked");
+                });
+            `);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should not validate variable references (unknown type)', () => {
+            const result = validateCode(`
+                var sensorId = 0;
+                sensor.getValue(sensorId);
+            `);
+            // Should pass because we can't determine type of variables statically
+            expect(result.valid).toBe(true);
+        });
+
+        it('should catch multiple type errors', () => {
+            const result = validateCode(`
+                sensor.getValue("0");
+                button.setLabel("0", 123);
+            `);
+            expect(result.valid).toBe(false);
+            expect(result.errors.length).toBeGreaterThanOrEqual(2);
         });
     });
 });
