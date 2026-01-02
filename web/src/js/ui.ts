@@ -124,23 +124,34 @@ export async function compileCode(): Promise<void> {
         return;
     }
 
+    // Check if device URL is provided for pre-relocation
+    const deviceUrlInput = document.getElementById('deviceUrl') as HTMLInputElement | null;
+    const deviceUrl = deviceUrlInput?.value.trim();
+
     showStatus('Compiling...', 'info');
     const compileBtn = document.getElementById('compileBtn') as HTMLButtonElement | null;
     if (compileBtn) compileBtn.disabled = true;
 
     try {
+        // Always compile as position-independent bytecode (targetAddr: 0)
+        // Device firmware will perform relocation on upload using streaming algorithm
         compiledBytecode = await compile(sourceCode, {
             targetAddr: 0,
             use32Bit: true
         });
-
-        showStatus(`✓ Compilation successful! (${compiledBytecode.length} bytes)`, 'success');
+        showStatus(`✓ Compilation successful! (${compiledBytecode.length} bytes, position-independent)`, 'success');
 
         // Show bytecode info
         displayBytecodeInfo(compiledBytecode);
 
         const downloadBtn = document.getElementById('downloadBtn') as HTMLButtonElement | null;
         if (downloadBtn) downloadBtn.disabled = false;
+
+        // Enable compile & upload if device URL is set
+        if (deviceUrl) {
+            const compileUploadBtn = document.getElementById('compileUploadBtn') as HTMLButtonElement | null;
+            if (compileUploadBtn) compileUploadBtn.disabled = false;
+        }
 
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
@@ -152,6 +163,9 @@ export async function compileCode(): Promise<void> {
 
         const downloadBtn = document.getElementById('downloadBtn') as HTMLButtonElement | null;
         if (downloadBtn) downloadBtn.disabled = true;
+
+        const compileUploadBtn = document.getElementById('compileUploadBtn') as HTMLButtonElement | null;
+        if (compileUploadBtn) compileUploadBtn.disabled = true;
     } finally {
         if (compileBtn) compileBtn.disabled = false;
     }
@@ -217,6 +231,90 @@ export function downloadBytecode(): void {
 }
 
 /**
+ * Compile and upload bytecode to device
+ */
+export async function compileAndUpload(): Promise<void> {
+    const deviceUrlInput = document.getElementById('deviceUrl') as HTMLInputElement | null;
+    const deviceUrl = deviceUrlInput?.value.trim();
+
+    if (!deviceUrl) {
+        showStatus('Please enter a device URL to upload', 'error');
+        return;
+    }
+
+    const sourceCode = getCode();
+
+    if (!sourceCode.trim()) {
+        showStatus('Please enter some JavaScript code', 'error');
+        return;
+    }
+
+    // Pre-validate code
+    showStatus('Validating code...', 'info');
+    const validationResult = validateCode(sourceCode);
+
+    if (!validationResult.valid) {
+        const errorMessages = formatValidationErrors(validationResult.errors);
+        showStatus('Validation failed:\n' + errorMessages, 'error');
+        return;
+    }
+
+    const compileUploadBtn = document.getElementById('compileUploadBtn') as HTMLButtonElement | null;
+    if (compileUploadBtn) compileUploadBtn.disabled = true;
+
+    try {
+        // Compile as position-independent bytecode (device will relocate on upload)
+        showStatus('Compiling...', 'info');
+
+        compiledBytecode = await compile(sourceCode, {
+            targetAddr: 0,
+            use32Bit: true
+        });
+        showStatus(`✓ Compiled! (${compiledBytecode.length} bytes) - Uploading...`, 'info');
+
+        // Upload to device
+        const formData = new FormData();
+        const blob = new Blob([compiledBytecode as BlobPart], { type: 'application/octet-stream' });
+        formData.append('file', blob, 'script.jsc');
+
+        const uploadResponse = await fetch(`${deviceUrl}/api/bytecode/upload`, {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!uploadResponse.ok) {
+            throw new Error(`Upload failed: ${uploadResponse.statusText}`);
+        }
+
+        const result = await uploadResponse.json();
+        if (result.status !== 'success') {
+            throw new Error(result.message || 'Upload failed');
+        }
+
+        showStatus(`✓ Upload successful! (${compiledBytecode.length} bytes relocated and written to flash)`, 'success');
+
+        // Show bytecode info
+        displayBytecodeInfo(compiledBytecode);
+
+        const downloadBtn = document.getElementById('downloadBtn') as HTMLButtonElement | null;
+        if (downloadBtn) downloadBtn.disabled = false;
+
+    } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        showStatus('Upload failed: ' + errorMessage, 'error');
+        compiledBytecode = null;
+
+        const bytecodeInfoElem = document.getElementById('bytecodeInfo');
+        if (bytecodeInfoElem) bytecodeInfoElem.style.display = 'none';
+
+        const downloadBtn = document.getElementById('downloadBtn') as HTMLButtonElement | null;
+        if (downloadBtn) downloadBtn.disabled = true;
+    } finally {
+        if (compileUploadBtn) compileUploadBtn.disabled = false;
+    }
+}
+
+/**
  * Clear the editor and reset state
  */
 export function clearEditor(): void {
@@ -229,6 +327,9 @@ export function clearEditor(): void {
 
     const downloadBtn = document.getElementById('downloadBtn') as HTMLButtonElement | null;
     if (downloadBtn) downloadBtn.disabled = true;
+
+    const compileUploadBtn = document.getElementById('compileUploadBtn') as HTMLButtonElement | null;
+    if (compileUploadBtn) compileUploadBtn.disabled = true;
 }
 
 /**
@@ -259,6 +360,12 @@ export function initUI(): void {
         validateBtn.addEventListener('click', validateCodeUI);
     }
 
+    // Compile & Upload button
+    const compileUploadBtn = document.getElementById('compileUploadBtn');
+    if (compileUploadBtn) {
+        compileUploadBtn.addEventListener('click', compileAndUpload);
+    }
+
     // Download button
     const downloadBtn = document.getElementById('downloadBtn');
     if (downloadBtn) {
@@ -269,6 +376,19 @@ export function initUI(): void {
     const clearBtn = document.getElementById('clearBtn');
     if (clearBtn) {
         clearBtn.addEventListener('click', clearEditor);
+    }
+
+    // Device URL input - enable/disable Compile & Upload button
+    const deviceUrlInput = document.getElementById('deviceUrl') as HTMLInputElement | null;
+    if (deviceUrlInput) {
+        deviceUrlInput.addEventListener('input', () => {
+            const compileUploadBtn = document.getElementById('compileUploadBtn') as HTMLButtonElement | null;
+            if (compileUploadBtn) {
+                const hasDeviceUrl = deviceUrlInput.value.trim().length > 0;
+                // Enable button if device URL is set and code is available
+                compileUploadBtn.disabled = !hasDeviceUrl;
+            }
+        });
     }
 
     // Example buttons

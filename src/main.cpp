@@ -19,6 +19,13 @@
 #include "drivers/LvglDisplay.h"
 #include "ui/ProgressBar.h"
 #include "scripting/ScriptEngine.h"
+#include "scripting/BytecodeRegistry.h"
+
+extern "C" {
+    #include "scripting/file_hardware_mmap.h"
+    #include <mquickjs.h>
+    #include <esp_crc.h>
+}
 
 using namespace FreeButton;
 
@@ -161,76 +168,198 @@ void setup() {
     if (scriptEngine.init()) {
         ESP_LOGI(TAG, "ScriptEngine initialized successfully");
 
-        // Comprehensive test script showing all features
-        const char* testScript = R"(
-            // Basic console output
-            console.log('JavaScript engine is working!');
-            print('Testing print function');
+        // Load and execute user script from flash if it exists
+        // Must load bytecode BEFORE executing any JavaScript to avoid RAM atom conflicts
+        JSContext* ctx = scriptEngine.getContext();
 
-            // Math operations
-            var x = 42;
-            var y = x * 2;
-            console.log('42 * 2 = ' + y);
+        // Find bytecode in registry
+        BytecodeEntry entry;
+        if (bytecode_registry_find("script.jsc", &entry)) {
+            ESP_LOGI(TAG, "Found user script in bytecode registry");
 
-            // Date and time functions
-            console.log('Date.now():', Date.now());
-            console.log('performance.now():', performance.now());
+            // Memory map from flash
+            MappedFile* mapped = file_hw_mmap("js_user", entry.offset, entry.size);
+            if (mapped) {
+                // Verify checksum
+                uint32_t checksum = esp_crc32_le(0, mapped->data, mapped->size);
+                if (checksum == entry.checksum) {
+                    // Verify bytecode relocation before loading
+                    const JSBytecodeHeader* hdr = (const JSBytecodeHeader*)mapped->data;
+                    uintptr_t expected_base = (uintptr_t)(hdr + 1) + JS_GetRomTableSize(hdr);
 
-            // Array and string methods
-            var colors = ['red', 'green', 'blue'];
-            console.log('Colors:', colors.join(', '));
+                    ESP_LOGI(TAG, "Bytecode header: base_addr=0x%lx, expected=0x%lx",
+                             (unsigned long)hdr->base_addr, (unsigned long)expected_base);
 
-            // LED control
-            var numLeds = led.count();
-            console.log('Number of LEDs:', numLeds);
+                    if (hdr->base_addr != expected_base) {
+                        ESP_LOGE(TAG, "Bytecode relocation mismatch! Need to re-upload.");
+                        file_hw_munmap(mapped);
+                    } else {
+                        // Debug: Check unique_strings before loading
+                        ESP_LOGI(TAG, "=== BEFORE JS_LoadBytecode ===");
+                        ESP_LOGI(TAG, "unique_strings JSValue: 0x%llx", (unsigned long long)hdr->unique_strings);
 
-            // Timers - schedule LED animations
-            setTimeout(function() {
-                console.log('Timer 1: Setting LED 0 to red');
-                led.setColor(0, 255, 0, 0);
-            }, 500);
+                        // Decode and inspect unique_strings
+                        if ((hdr->unique_strings & 3) == 1) {  // JS_TAG_PTR
+                            uintptr_t ptr = (uintptr_t)hdr->unique_strings - 1;
+                            int mtag = JS_GetMemBlockMTag((void*)ptr);
+                            size_t size = JS_GetMemBlockSize((void*)ptr);
+                            ESP_LOGI(TAG, "unique_strings points to: 0x%lx, mtag=%d, size=%zu",
+                                     (unsigned long)ptr, mtag, size);
 
-            setTimeout(function() {
-                console.log('Timer 2: Setting LED 0 to green');
-                led.setColor(0, 0, 255, 0);
-            }, 1500);
+                            // Dump the array contents
+                            if (mtag == 5) {  // JS_MTAG_VALUE_ARRAY
+                                JSValueArrayPublic *arr = (JSValueArrayPublic*)ptr;
+                                ESP_LOGI(TAG, "unique_strings array has %d values:", arr->size);
+                                for (int i = 0; i < arr->size && i < 20; i++) {
+                                    JSValue val = arr->arr[i];
+                                    ESP_LOGI(TAG, "  [%d] = 0x%llx (isPtr=%d)",
+                                             i, (unsigned long long)val, (val & 3) == 1);
+                                    // Check if it's a pointer to a string
+                                    if ((val & 3) == 1) {  // JS_TAG_PTR
+                                        uintptr_t str_ptr = (uintptr_t)val - 1;
+                                        int str_mtag = JS_GetMemBlockMTag((void*)str_ptr);
+                                        ESP_LOGI(TAG, "       mtag=%d", str_mtag);
+                                    }
+                                }
+                            }
+                        }
 
-            setTimeout(function() {
-                console.log('Timer 3: Setting LED 0 to blue');
-                led.setColor(0, 0, 0, 255);
-            }, 2500);
+                        // Load bytecode directly from flash (already relocated, no ROM atoms)
+                        ESP_LOGI(TAG, "Loading bytecode from flash (zero-copy)");
 
-            button.onClick(8, function() {
-                console.log('Button 8 clicked');
-                led.setColor(2, 0, 255, 0);
-                mqtt.publish(0, "test/button/8/clicked", "PRESS");
-                button.setLabel(8, 'ON');
-            });
+                        // DEBUG: Dump unique_strings table before loading
+                        const JSBytecodeHeader* hdr = (const JSBytecodeHeader*)mapped->data;
+                        ESP_LOGI(TAG, "=== Bytecode Header ===");
+                        ESP_LOGI(TAG, "  magic: 0x%04x", hdr->magic);
+                        ESP_LOGI(TAG, "  version: 0x%04x", hdr->version);
+                        ESP_LOGI(TAG, "  base_addr: 0x%lx", (unsigned long)hdr->base_addr);
+                        ESP_LOGI(TAG, "  unique_strings: 0x%llx", (unsigned long long)hdr->unique_strings);
+                        ESP_LOGI(TAG, "  main_func: 0x%llx", (unsigned long long)hdr->main_func);
 
-            for (var i = 0; i < sensor.count(); i++) {
-                console.log('Sensor ' + i + ' type ' + sensor.getType(i));
-            }
+                        // Dump unique_strings table
+                        if (!JS_IsNull(hdr->unique_strings)) {
+                            void* atom_table_ptr = (void*)((uintptr_t)hdr->unique_strings - 1);
+                            int table_mtag = JS_GetMemBlockMTag(atom_table_ptr);
+                            ESP_LOGI(TAG, "=== Unique Strings Table ===");
+                            ESP_LOGI(TAG, "  pointer: %p", atom_table_ptr);
+                            ESP_LOGI(TAG, "  mtag: %d (expected 5=VALUE_ARRAY)", table_mtag);
 
-            sensor.onChange(1, function(value) {
-                console.log('Sensor 1 changed to ' + value);
-                if (value > 25.0) {
-                    led.setColor(1, 255, 0, 0); // red
-                } else if (value > 23.0) {
-                    led.setColor(1, 255, 165, 0); // orange
+                            if (table_mtag == 5) {  // JS_MTAG_VALUE_ARRAY
+                                JSValueArrayPublic* arr = (JSValueArrayPublic*)atom_table_ptr;
+                                ESP_LOGI(TAG, "  size: %lu atoms", (unsigned long)arr->size);
+
+                                // Dump first few atoms
+                                for (size_t i = 0; i < arr->size && i < 10; i++) {
+                                    JSValue atom_val = arr->arr[i];
+                                    ESP_LOGI(TAG, "  atom[%zu]: 0x%llx", i, (unsigned long long)atom_val);
+
+                                    if (JS_IsPtr(atom_val)) {
+                                        void* str_ptr = (void*)((uintptr_t)atom_val - 1);
+                                        int str_mtag = JS_GetMemBlockMTag(str_ptr);
+                                        ESP_LOGI(TAG, "    -> ptr=%p, mtag=%d", str_ptr, str_mtag);
+
+                                        // Try to read string if it's a string object
+                                        if (str_mtag == 3) {  // JS_MTAG_STRING
+                                            // Can't safely print the string without proper QuickJS API
+                                            ESP_LOGI(TAG, "    -> (string object)");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Load bytecode directly from flash (ROM atoms remapped by BytecodeWriter)
+                        ESP_LOGI(TAG, "Loading bytecode from flash (zero-copy)");
+                        JSValue userFunc = JS_LoadBytecode(ctx, mapped->data);
+
+                        if (!JS_IsException(userFunc)) {
+                            ESP_LOGI(TAG, "User bytecode loaded successfully");
+
+                            // DEBUG: Inspect the JSValue type and memory contents
+                            ESP_LOGI(TAG, "=== DEBUG: Inspecting userFunc ===");
+                            ESP_LOGI(TAG, "userFunc raw value: 0x%llx", (unsigned long long)userFunc);
+                            ESP_LOGI(TAG, "IsPtr: %d", JS_IsPtr(userFunc));
+                            ESP_LOGI(TAG, "IsFunction: %d", JS_IsFunction(ctx, userFunc));
+                            ESP_LOGI(TAG, "IsString: %d", JS_IsString(ctx, userFunc));
+                            ESP_LOGI(TAG, "IsNumber: %d", JS_IsNumber(ctx, userFunc));
+                            ESP_LOGI(TAG, "IsNull: %d", JS_IsNull(userFunc));
+                            ESP_LOGI(TAG, "IsUndefined: %d", JS_IsUndefined(userFunc));
+
+                            // Inspect the actual memory content
+                            if (JS_IsPtr(userFunc)) {
+                                // Decode the pointer (JSValue is pointer + 1)
+                                uintptr_t ptr_val = (uintptr_t)userFunc - 1;
+                                ESP_LOGI(TAG, "Decoded pointer: 0x%lx", (unsigned long)ptr_val);
+
+                                // Read the mtag from the memory block header
+                                // JSMemBlockHeader is at the start: { gc_mark:1, mtag:7, ... }
+                                uint8_t* mem_ptr = (uint8_t*)ptr_val;
+                                uint8_t first_byte = mem_ptr[0];
+                                int actual_mtag = (first_byte >> 1) & 0x0F;  // Extract bits 1-4
+                                ESP_LOGI(TAG, "Memory first byte: 0x%02x", first_byte);
+                                ESP_LOGI(TAG, "Extracted mtag: %d", actual_mtag);
+                                ESP_LOGI(TAG, "  Expected: 4 (JS_MTAG_FUNCTION_BYTECODE)");
+                                ESP_LOGI(TAG, "  Mtag meanings: 0=FREE, 1=OBJECT, 2=FLOAT64, 3=STRING, 4=FUNCTION_BYTECODE");
+
+                                // Also use the public API
+                                size_t block_size = JS_GetMemBlockSize((void*)ptr_val);
+                                int api_mtag = JS_GetMemBlockMTag((void*)ptr_val);
+                                ESP_LOGI(TAG, "API mtag: %d, block size: %zu bytes", api_mtag, block_size);
+                            }
+                            ESP_LOGI(TAG, "=================================");
+
+                            // Try using JS_Run() instead of JS_Call()
+                            ESP_LOGI(TAG, "Attempting to execute with JS_Run()...");
+                            JSValue result = JS_Run(ctx, userFunc);
+
+                            if (JS_IsException(result)) {
+                                ESP_LOGE(TAG, "User script execution failed");
+                                JSValue exception = JS_GetException(ctx);
+                                JSCStringBuf buf;
+                                const char* err = JS_ToCString(ctx, exception, &buf);
+                                if (err) {
+                                    ESP_LOGE(TAG, "Error: %s", err);
+                                }
+
+                                // Also try to get the stack trace
+                                JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
+                                if (!JS_IsUndefined(stack)) {
+                                    JSCStringBuf stack_buf;
+                                    const char* stack_str = JS_ToCString(ctx, stack, &stack_buf);
+                                    if (stack_str) {
+                                        ESP_LOGE(TAG, "Stack: %s", stack_str);
+                                    }
+                                }
+                            } else {
+                                ESP_LOGI(TAG, "User script executed successfully");
+
+                                // Print the result
+                                JSCStringBuf buf;
+                                const char* result_str = JS_ToCString(ctx, result, &buf);
+                                if (result_str) {
+                                    ESP_LOGI(TAG, "Result: %s", result_str);
+                                }
+                            }
+                        } else {
+                            ESP_LOGE(TAG, "Failed to load bytecode");
+                            JSValue exception = JS_GetException(ctx);
+                            JSCStringBuf buf;
+                            const char* err = JS_ToCString(ctx, exception, &buf);
+                            if (err) {
+                                ESP_LOGE(TAG, "Error: %s", err);
+                            }
+                        }
+                    }
                 } else {
-                    led.setColor(1, 0, 0, 255); // blue
+                    ESP_LOGE(TAG, "Bytecode checksum mismatch");
                 }
-            });
-
-            console.log('Active MQTT brokers: ' + mqtt.getBrokerCount());
-            console.log('Timers scheduled - will execute in main loop');
-        )";
-
-        auto result = scriptEngine.execute(testScript, "test.js");
-        if (result.success) {
-            ESP_LOGI(TAG, "JavaScript test executed successfully");
+                // Note: We keep mapped for zero-copy execution
+            } else {
+                ESP_LOGE(TAG, "Failed to memory map user script");
+            }
         } else {
-            ESP_LOGE(TAG, "JavaScript test failed: %s", result.error.c_str());
+            ESP_LOGI(TAG, "No user script found");
+            ESP_LOGI(TAG, "Upload script.jsc via web interface to run custom code");
         }
     } else {
         ESP_LOGE(TAG, "Failed to initialize ScriptEngine");

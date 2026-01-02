@@ -127,3 +127,47 @@ export function getVersion(): CompilerVersion {
 export function isReady(): boolean {
     return compilerInstance !== null && compilerInstance.ready;
 }
+
+/**
+ * Fetch the next available virtual address from the device
+ * @param deviceUrl - The device URL (e.g., "http://192.168.1.100")
+ * @returns Virtual address information
+ */
+export async function getDeviceVirtualAddress(deviceUrl: string): Promise<{
+    offset: string;
+    virtual_addr: string;
+    free_space: number;
+}> {
+    const response = await fetch(`${deviceUrl}/api/bytecode/next_address`);
+
+    if (!response.ok) {
+        throw new Error(`Failed to get virtual address: ${response.statusText}`);
+    }
+
+    return await response.json();
+}
+
+/**
+ * Compile JavaScript for a specific device
+ * Automatically queries the device for the correct virtual memory address
+ * @param sourceCode - The JavaScript source code
+ * @param deviceUrl - The device URL (e.g., "http://192.168.1.100")
+ * @returns The compiled bytecode pre-relocated for the device
+ */
+export async function compileForDevice(sourceCode: string, deviceUrl: string): Promise<Uint8Array> {
+    // Get the target virtual address from the device
+    const addressInfo = await getDeviceVirtualAddress(deviceUrl);
+
+    // Parse hex address to number
+    const targetAddr = parseInt(addressInfo.virtual_addr, 16);
+
+    console.log(`Compiling for device at ${deviceUrl}`);
+    console.log(`Target virtual address: ${addressInfo.virtual_addr} (${targetAddr})`);
+    console.log(`Free space: ${addressInfo.free_space} bytes`);
+
+    // Compile with the correct target address
+    return await compile(sourceCode, {
+        targetAddr,
+        use32Bit: true
+    });
+}

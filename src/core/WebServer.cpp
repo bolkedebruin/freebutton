@@ -8,7 +8,11 @@
 #include "json/StreamWrappers.h"
 #include "Update.h"
 #include "OtaManager.h"
+#include "scripting/BytecodeWriter.h"
+#include "scripting/BytecodeRegistry.h"
+#include <ArduinoJson.h>
 #include <esp_log.h>
+#include <LittleFS.h>
 
 static auto TAG = "webserver";
 
@@ -179,7 +183,7 @@ static constexpr std::string_view upgradePage = R"rawliteral(
 )rawliteral";
 
 void handleUpgradePage(AsyncWebServerRequest *request) {
-    std::string content{upgradePage};
+    const std::string content{upgradePage};
     request->send(200, "text/html", content.c_str());
 }
 
@@ -256,7 +260,135 @@ void handleRemoteFirmwareUpdate(AsyncWebServerRequest *request) {
     }
 }
 
-void webserver_start(void) {
+// Bytecode Upload Functionality
+// Use a small heap-allocated structure to store upload status
+struct UploadStatus {
+    esp_err_t error;
+};
+
+void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
+                      size_t index, uint8_t *data, size_t len, bool final) {
+    BytecodeWriter* writer = nullptr;
+
+    if (index == 0) {
+        ESP_LOGI(TAG, "Bytecode upload start: %s", filename.c_str());
+
+        // Create new writer and store in request
+        writer = new BytecodeWriter();
+        request->_tempObject = writer;
+    } else {
+        // Retrieve existing writer from request
+        writer = static_cast<BytecodeWriter*>(request->_tempObject);
+    }
+
+    if (!writer) {
+        ESP_LOGE(TAG, "BytecodeWriter is null");
+        return;
+    }
+
+    // Write chunk to flash (incremental, no buffering)
+    esp_err_t err = writer->write(filename.c_str(), data, len, final);
+
+    if (final) {
+        ESP_LOGI(TAG, "Bytecode upload complete: %s", filename.c_str());
+
+        // Allocate status structure for response handler
+        UploadStatus* status = new UploadStatus{err};
+
+        // Clean up writer and replace with status
+        delete writer;
+        request->_tempObject = status;
+    } else if (err != ESP_OK) {
+        // Upload failed mid-stream, clean up
+        ESP_LOGE(TAG, "Upload failed during chunk write: 0x%x", err);
+
+        // Allocate status structure for response handler
+        UploadStatus* status = new UploadStatus{err};
+
+        delete writer;
+        request->_tempObject = status;
+    }
+}
+
+void handleBytecodeUpload(AsyncWebServerRequest *request) {
+    UploadStatus* status = static_cast<UploadStatus*>(request->_tempObject);
+
+    if (!status) {
+        request->send(500, "application/json", R"({"status":"error","message":"Upload failed"})");
+        return;
+    }
+
+    esp_err_t err = status->error;
+    delete status;
+    request->_tempObject = nullptr;
+
+    if (err == ESP_OK) {
+        request->send(200, "application/json", R"({"status":"success"})");
+    } else {
+        AsyncResponseStream *response = request->beginResponseStream("application/json");
+        response->printf(R"({"status":"error","message":"Write failed","code":%d})", err);
+        request->send(response);
+    }
+}
+
+void handleBytecodeNextAddress(AsyncWebServerRequest *request) {
+    // Use static registry to avoid repeated heap allocations
+    static BytecodeRegistry registry;
+    registry.load();
+
+    uint32_t virtual_base = registry.getVirtualBaseAddress();
+    if (virtual_base == 0) {
+        ESP_LOGE(TAG, "Virtual base address not initialized!");
+        request->send(500, "application/json", R"({"error":"Virtual address not initialized"})");
+        return;
+    }
+
+    uint32_t offset = registry.getNextOffset();
+    uint32_t virtual_addr = virtual_base + offset;
+    size_t free_space = registry.getFreeSpace();
+
+    // Use streaming response to avoid String allocation
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    response->printf(R"({"offset":"0x%X","virtual_addr":"0x%X","free_space":%u})",
+                     (unsigned int)offset, (unsigned int)virtual_addr, (unsigned int)free_space);
+    request->send(response);
+}
+
+void handleBytecodeDownload(AsyncWebServerRequest *request) {
+    // Download the temp file created by BytecodeWriter
+    // Default name is "script" but can be overridden
+    String filename = "script.jsc";
+    if (request->hasParam("name")) {
+        filename = request->getParam("name")->value();
+    }
+
+    String temp_path = String("/tmp_reloc_") + filename;
+
+    // Check if file exists
+    if (!LittleFS.exists(temp_path)) {
+        request->send(404, "text/plain", "Temp file not found. Upload bytecode first.");
+        return;
+    }
+
+    // Send file directly from LittleFS
+    request->send(LittleFS, temp_path, "application/octet-stream", true);
+}
+
+void webserver_start() {
+    // Enable CORS for all responses
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
+
+    // Handle CORS preflight requests
+    server.onNotFound([](AsyncWebServerRequest *request){
+        if (request->method() == HTTP_OPTIONS) {
+            request->send(200);
+        } else {
+            request->send(404);
+        }
+    });
+
     server.on("/", HTTP_GET, handleHomepage);
     server.on("/config", HTTP_GET, handleConfig);
     server.on("/resetWifi", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -270,6 +402,14 @@ void webserver_start(void) {
     server.on("/upload", HTTP_POST, handleFirmwareUpload, onFileUpload);
     server.on("/ota_update", HTTP_POST, handleOtaUpdate);
     server.on("/updatefirmware", HTTP_POST, handleRemoteFirmwareUpdate);
+
+    // Bytecode upload endpoints
+    server.on("/bytecode", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(LittleFS, "/bytecode_upload.html", "text/html");
+    });
+    server.on("/api/bytecode/next_address", HTTP_GET, handleBytecodeNextAddress);
+    server.on("/api/bytecode/upload", HTTP_POST, handleBytecodeUpload, onBytecodeUpload);
+    server.on("/api/bytecode/download", HTTP_GET, handleBytecodeDownload);
 
     ESP_LOGI(TAG, "Starting webserver");
     server.begin();

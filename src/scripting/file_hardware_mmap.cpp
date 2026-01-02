@@ -70,6 +70,10 @@ MappedFile* file_hw_mmap(const char* partition_label, size_t offset, size_t size
     ESP_LOGI(TAG, "Mapped %zu bytes from partition '%s' at offset 0x%zx to address %p",
              size, partition_label, offset, mapped->data);
 
+    // Log for stability testing across reboots
+    ESP_LOGW(TAG, "VIRTUAL_ADDRESS_TEST: partition=%s offset=0x%zx virtual_addr=%p",
+             partition_label, offset, mapped->data);
+
     return mapped;
 }
 
