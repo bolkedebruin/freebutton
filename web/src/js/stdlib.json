@@ -1629,6 +1629,12 @@
           "name": "toString",
           "params": [],
           "returns": "string"
+        },
+        {
+          "description": "",
+          "name": "repeat",
+          "params": [],
+          "returns": "any"
         }
       ],
       "static": [
@@ -1799,6 +1805,12 @@
           "type": "number"
         }
       ],
+      "returns": "any"
+    },
+    {
+      "description": "",
+      "name": "loadUserBytecode",
+      "params": [],
       "returns": "any"
     },
     {

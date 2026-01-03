@@ -176,6 +176,15 @@ function generateTypes() {
         console.log(`  ${globalFunc.name}`);
     }
 
+    // Add test utilities (from test_language.js and test_builtin.js)
+    output += '\n    // Test utility functions\n';
+    output += '    /** Throws an error with the given message (test utility) */\n';
+    output += '    function throw_error(msg: string): never;\n';
+    output += '    /** Asserts that actual equals expected, throws error if not (test utility) */\n';
+    output += '    function assert(actual: any, expected?: any, message?: string): void;\n';
+    output += '    /** Asserts that a function throws the expected error type (test utility) */\n';
+    output += '    function assert_throws(expected_error: any, func: Function): void;\n';
+
     output += '}\n';
 
     // Add custom compiler API (not in stdlib.json, specific to editor)

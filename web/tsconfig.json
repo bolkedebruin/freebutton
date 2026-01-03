@@ -19,6 +19,10 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
 
+    // Allow catch clause variables without type annotations
+    // This is important for JavaScript code validation in the editor
+    "useUnknownInCatchVariables": false,
+
     // Output
     "declaration": true,
     "declarationMap": true,

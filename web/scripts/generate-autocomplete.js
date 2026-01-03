@@ -118,6 +118,47 @@ function generateAutocomplete() {
         console.log(`  ${globalFunc.name}`);
     }
 
+    // Test utility functions (from test_language.js and test_builtin.js)
+    const testUtilities = [
+        {
+            name: 'throw_error',
+            params: [{ name: 'msg', type: 'string' }],
+            returns: 'never',
+            description: 'Throws an error with the given message (test utility)'
+        },
+        {
+            name: 'assert',
+            params: [
+                { name: 'actual', type: 'any' },
+                { name: 'expected', type: 'any' },
+                { name: 'message', type: 'string' }
+            ],
+            returns: 'void',
+            description: 'Asserts that actual equals expected, throws error if not (test utility)'
+        },
+        {
+            name: 'assert_throws',
+            params: [
+                { name: 'expected_error', type: 'any' },
+                { name: 'func', type: 'Function' }
+            ],
+            returns: 'void',
+            description: 'Asserts that a function throws the expected error type (test utility)'
+        }
+    ];
+
+    console.log('\nTest Utilities:');
+    for (const testFunc of testUtilities) {
+        globalCompletions.push({
+            label: testFunc.name,
+            type: 'function',
+            detail: generateDetail(testFunc.params, testFunc.returns),
+            info: testFunc.description,
+            apply: generateSnippet(testFunc.name, testFunc.params)
+        });
+        console.log(`  ${testFunc.name}`);
+    }
+
     // Generate TypeScript output
     let output = `/**
  * Autocomplete Data for FreeButton Editor

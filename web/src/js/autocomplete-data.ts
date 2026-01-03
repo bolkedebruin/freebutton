@@ -588,6 +588,13 @@ export const globalCompletions: CompletionItem[] = [
     "apply": "loadMapped(${1:filename}, ${2:offset}, ${3:size})"
   },
   {
+    "label": "loadUserBytecode",
+    "type": "function",
+    "detail": "() → any",
+    "info": "",
+    "apply": "loadUserBytecode()"
+  },
+  {
     "label": "setTimeout",
     "type": "function",
     "detail": "(callback: Function, delay: number) → number",
@@ -600,5 +607,26 @@ export const globalCompletions: CompletionItem[] = [
     "detail": "(timeoutId: number) → void",
     "info": "Cancels a timeout previously established by setTimeout",
     "apply": "clearTimeout(${1:timeoutId})"
+  },
+  {
+    "label": "throw_error",
+    "type": "function",
+    "detail": "(msg: string) → never",
+    "info": "Throws an error with the given message (test utility)",
+    "apply": "throw_error(${1:msg})"
+  },
+  {
+    "label": "assert",
+    "type": "function",
+    "detail": "(actual: any, expected: any, message: string) → void",
+    "info": "Asserts that actual equals expected, throws error if not (test utility)",
+    "apply": "assert(${1:actual}, ${2:expected}, ${3:message})"
+  },
+  {
+    "label": "assert_throws",
+    "type": "function",
+    "detail": "(expected_error: any, func: Function) → void",
+    "info": "Asserts that a function throws the expected error type (test utility)",
+    "apply": "assert_throws(${1:expected_error}, function() {\n\t${2}\n})"
   }
 ];

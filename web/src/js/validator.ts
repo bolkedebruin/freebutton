@@ -51,6 +51,12 @@ for (const constant of stdlib.constants) {
     KNOWN_GLOBALS.add(constant.name);
 }
 
+// Add test utility functions (from test_language.js and test_builtin.js)
+// These are JavaScript helper functions for test files, not C bindings
+KNOWN_GLOBALS.add('throw_error');
+KNOWN_GLOBALS.add('assert');
+KNOWN_GLOBALS.add('assert_throws');
+
 // Build API methods map
 const API_METHODS: Record<string, Set<string>> = {};
 for (const [apiName, api] of Object.entries(stdlib.apis)) {
@@ -203,6 +209,15 @@ function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: a
             }
         }
         currentScope = funcScope;
+    }
+
+    // Track catch clause parameters
+    if (node.type === 'CatchClause') {
+        const catchScope = createScope(currentScope);
+        if (node.param && node.param.type === 'Identifier') {
+            catchScope.variables.add(node.param.name);
+        }
+        currentScope = catchScope;
     }
 
     // Check for `with` statement (forbidden in strict mode)
