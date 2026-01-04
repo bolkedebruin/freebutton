@@ -6,6 +6,7 @@
 import { initEditor, loadExample } from './editor';
 import { initCompiler } from './compiler';
 import { initUI, showStatus } from './ui';
+import { initConsole } from './console';
 
 /**
  * Initialize the application
@@ -26,6 +27,10 @@ async function init(): Promise<void> {
         // Initialize UI event listeners
         console.log('Initializing UI...');
         initUI();
+
+        // Initialize console panel
+        console.log('Initializing console...');
+        initConsole();
 
         // Initialize WASM compiler
         console.log('Initializing WASM compiler...');

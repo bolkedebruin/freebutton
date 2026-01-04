@@ -3,6 +3,7 @@
 //
 
 #include "ScriptEngine.h"
+#include "WebSocketREPL.h"
 #include <Arduino.h>
 #include <cstring>
 #include <esp_log.h>
@@ -60,6 +61,10 @@ bool ScriptEngine::init() {
     // Set log callback for internal mquickjs logging
     JS_SetLogFunc(ctx_, logCallback);
 
+    // Set console callback for WebSocket REPL
+    // This enables print()/console.log() to be sent to WebSocket clients
+    JS_SetConsoleWriteFunc(websocketConsoleCallback);
+
     ESP_LOGI(TAG, "Initialized with %zu bytes heap", heapSize_);
     ESP_LOGI(TAG, "JavaScript API available:");
     ESP_LOGI(TAG, "  Standard library:");
@@ -105,8 +110,8 @@ ScriptResult ScriptEngine::execute(std::string_view script, const char* filename
         return {false, "", "Script engine not initialized"};
     }
 
-    // Evaluate the script
-    JSValue result = JS_Eval(ctx_, script.data(), script.size(), filename, 0);
+    // Evaluate the script with JS_EVAL_RETVAL to return expression values (needed for REPL)
+    JSValue result = JS_Eval(ctx_, script.data(), script.size(), filename, JS_EVAL_RETVAL);
 
     // Check for exception
     if (JS_IsException(result)) {
@@ -223,6 +228,21 @@ std::string ScriptEngine::jsValueToString(JSValue value) {
 
     if (JS_VALUE_GET_SPECIAL_TAG(value) == JS_TAG_INT) {
         return std::to_string(JS_VALUE_GET_INT(value));
+    }
+
+    // This ensures large numbers like Date.now() timestamps are handled correctly
+    if (JS_IsNumber(ctx_, value)) {
+        double num;
+        if (JS_ToNumber(ctx_, &num, value) == 0) {
+            // Check if it's a whole number (can display without decimals)
+            if (num == static_cast<int64_t>(num) && num >= -9007199254740992.0 && num <= 9007199254740992.0) {
+                return std::to_string(static_cast<int64_t>(num));
+            }
+            // Format as floating point
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.6g", num);
+            return buf;
+        }
     }
 
     if (JS_IsNull(value)) {

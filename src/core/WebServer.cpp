@@ -10,6 +10,7 @@
 #include "OtaManager.h"
 #include "scripting/BytecodeWriter.h"
 #include "scripting/BytecodeRegistry.h"
+#include "scripting/WebSocketREPL.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
 #include <LittleFS.h>
@@ -311,7 +312,7 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
 }
 
 void handleBytecodeUpload(AsyncWebServerRequest *request) {
-    UploadStatus* status = static_cast<UploadStatus*>(request->_tempObject);
+    const auto status = static_cast<UploadStatus*>(request->_tempObject);
 
     if (!status) {
         request->send(500, "application/json", R"({"status":"error","message":"Upload failed"})");
@@ -329,29 +330,6 @@ void handleBytecodeUpload(AsyncWebServerRequest *request) {
         response->printf(R"({"status":"error","message":"Write failed","code":%d})", err);
         request->send(response);
     }
-}
-
-void handleBytecodeNextAddress(AsyncWebServerRequest *request) {
-    // Use static registry to avoid repeated heap allocations
-    static BytecodeRegistry registry;
-    registry.load();
-
-    uint32_t virtual_base = registry.getVirtualBaseAddress();
-    if (virtual_base == 0) {
-        ESP_LOGE(TAG, "Virtual base address not initialized!");
-        request->send(500, "application/json", R"({"error":"Virtual address not initialized"})");
-        return;
-    }
-
-    uint32_t offset = registry.getNextOffset();
-    uint32_t virtual_addr = virtual_base + offset;
-    size_t free_space = registry.getFreeSpace();
-
-    // Use streaming response to avoid String allocation
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    response->printf(R"({"offset":"0x%X","virtual_addr":"0x%X","free_space":%u})",
-                     (unsigned int)offset, (unsigned int)virtual_addr, (unsigned int)free_space);
-    request->send(response);
 }
 
 void handleBytecodeDownload(AsyncWebServerRequest *request) {
@@ -407,9 +385,11 @@ void webserver_start() {
     server.on("/bytecode", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(LittleFS, "/bytecode_upload.html", "text/html");
     });
-    server.on("/api/bytecode/next_address", HTTP_GET, handleBytecodeNextAddress);
+
     server.on("/api/bytecode/upload", HTTP_POST, handleBytecodeUpload, onBytecodeUpload);
-    server.on("/api/bytecode/download", HTTP_GET, handleBytecodeDownload);
+
+    // WebSocket REPL for JavaScript debugging
+    Scripting::WebSocketREPL::getInstance().init(server);
 
     ESP_LOGI(TAG, "Starting webserver");
     server.begin();

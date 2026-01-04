@@ -22,10 +22,11 @@
             <div id="editorSection" class="editor-section" style="display: none;">
                 <div class="device-settings">
                     <label for="deviceUrl">
-                        Device URL (for upload):
+                        Device URL:
                         <input type="text" id="deviceUrl" placeholder="http://freebutton.local" />
                     </label>
-                    <span class="help-text">Bytecode will be relocated on device during upload</span>
+                    <span id="consoleStatus" class="status-disconnected" title="Disconnected"></span>
+                    <span class="help-text">Enter device URL for bytecode upload and REPL</span>
                 </div>
 
                 <div class="toolbar">
@@ -49,6 +50,26 @@
                 <div class="editor-container">
                     <div id="codeEditor"></div>
                     <div class="cursor-position" id="cursorPosition">Ln 1, Col 1</div>
+                </div>
+
+                <!-- Console Panel -->
+                <div id="consolePanel" class="console-panel collapsed">
+                    <div class="console-header">
+                        <span class="console-title">Console</span>
+                        <div class="console-controls">
+                            <button id="consoleConnect" class="console-btn">Connect</button>
+                            <button id="consoleClear" class="console-btn">Clear</button>
+                            <button id="consoleToggle" class="console-btn">▲</button>
+                        </div>
+                    </div>
+                    <div class="console-content">
+                        <div id="consoleOutput" class="console-output"></div>
+                        <div class="console-input-line">
+                            <span class="console-prompt">&gt;</span>
+                            <textarea id="consoleInput" class="console-input" rows="1"
+                                      placeholder="Enter JavaScript... (Shift+Enter for new line)"></textarea>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="status" class="status"></div>
