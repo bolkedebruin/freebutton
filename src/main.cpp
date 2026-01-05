@@ -24,7 +24,6 @@
 extern "C" {
     #include "scripting/file_hardware_mmap.h"
     #include <mquickjs.h>
-    #include <mquickjs_ext.h>
     #include <esp_crc.h>
 }
 
@@ -185,8 +184,8 @@ void setup() {
                 uint32_t checksum = esp_crc32_le(0, mapped->data, mapped->size);
                 if (checksum == entry.checksum) {
                     // Verify bytecode relocation before loading
-                    const JSBytecodeHeader* hdr = (const JSBytecodeHeader*)mapped->data;
-                    uintptr_t expected_base = (uintptr_t)(hdr + 1);
+                    auto hdr = reinterpret_cast<const JSBytecodeHeader *>(mapped->data);
+                    uintptr_t expected_base = reinterpret_cast<uintptr_t>(hdr + 1);
 
                     ESP_LOGI(TAG, "Bytecode header: base_addr=0x%lx, expected=0x%lx",
                              (unsigned long)hdr->base_addr, (unsigned long)expected_base);
@@ -195,122 +194,11 @@ void setup() {
                         ESP_LOGE(TAG, "Bytecode relocation mismatch! Need to re-upload.");
                         file_hw_munmap(mapped);
                     } else {
-                        // Debug: Check unique_strings before loading
-                        ESP_LOGI(TAG, "=== BEFORE JS_LoadBytecode ===");
-                        ESP_LOGI(TAG, "unique_strings JSValue: 0x%llx", (unsigned long long)hdr->unique_strings);
-
-                        // Decode and inspect unique_strings
-                        if ((hdr->unique_strings & 3) == 1) {  // JS_TAG_PTR
-                            uintptr_t ptr = (uintptr_t)hdr->unique_strings - 1;
-                            int mtag = JS_GetMemBlockMTag((void*)ptr);
-                            size_t size = JS_GetMemBlockSize((void*)ptr);
-                            ESP_LOGI(TAG, "unique_strings points to: 0x%lx, mtag=%d, size=%zu",
-                                     (unsigned long)ptr, mtag, size);
-
-                            // Dump the array contents
-                            if (mtag == 5) {  // JS_MTAG_VALUE_ARRAY
-                                JSValueArrayPublic *arr = (JSValueArrayPublic*)ptr;
-                                ESP_LOGI(TAG, "unique_strings array has %d values:", arr->size);
-                                for (int i = 0; i < arr->size && i < 20; i++) {
-                                    JSValue val = arr->arr[i];
-                                    ESP_LOGI(TAG, "  [%d] = 0x%llx (isPtr=%d)",
-                                             i, (unsigned long long)val, (val & 3) == 1);
-                                    // Check if it's a pointer to a string
-                                    if ((val & 3) == 1) {  // JS_TAG_PTR
-                                        uintptr_t str_ptr = (uintptr_t)val - 1;
-                                        int str_mtag = JS_GetMemBlockMTag((void*)str_ptr);
-                                        ESP_LOGI(TAG, "       mtag=%d", str_mtag);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Load bytecode directly from flash (already relocated, no ROM atoms)
-                        ESP_LOGI(TAG, "Loading bytecode from flash (zero-copy)");
-
-                        // DEBUG: Dump unique_strings table before loading
-                        const JSBytecodeHeader* hdr = (const JSBytecodeHeader*)mapped->data;
-                        ESP_LOGI(TAG, "=== Bytecode Header ===");
-                        ESP_LOGI(TAG, "  magic: 0x%04x", hdr->magic);
-                        ESP_LOGI(TAG, "  version: 0x%04x", hdr->version);
-                        ESP_LOGI(TAG, "  base_addr: 0x%lx", (unsigned long)hdr->base_addr);
-                        ESP_LOGI(TAG, "  unique_strings: 0x%llx", (unsigned long long)hdr->unique_strings);
-                        ESP_LOGI(TAG, "  main_func: 0x%llx", (unsigned long long)hdr->main_func);
-
-                        // Dump unique_strings table
-                        if (!JS_IsNull(hdr->unique_strings)) {
-                            void* atom_table_ptr = (void*)((uintptr_t)hdr->unique_strings - 1);
-                            int table_mtag = JS_GetMemBlockMTag(atom_table_ptr);
-                            ESP_LOGI(TAG, "=== Unique Strings Table ===");
-                            ESP_LOGI(TAG, "  pointer: %p", atom_table_ptr);
-                            ESP_LOGI(TAG, "  mtag: %d (expected 5=VALUE_ARRAY)", table_mtag);
-
-                            if (table_mtag == 5) {  // JS_MTAG_VALUE_ARRAY
-                                JSValueArrayPublic* arr = (JSValueArrayPublic*)atom_table_ptr;
-                                ESP_LOGI(TAG, "  size: %lu atoms", (unsigned long)arr->size);
-
-                                // Dump first few atoms
-                                for (size_t i = 0; i < arr->size && i < 10; i++) {
-                                    JSValue atom_val = arr->arr[i];
-                                    ESP_LOGI(TAG, "  atom[%zu]: 0x%llx", i, (unsigned long long)atom_val);
-
-                                    if (JS_IsPtr(atom_val)) {
-                                        void* str_ptr = (void*)((uintptr_t)atom_val - 1);
-                                        int str_mtag = JS_GetMemBlockMTag(str_ptr);
-                                        ESP_LOGI(TAG, "    -> ptr=%p, mtag=%d", str_ptr, str_mtag);
-
-                                        // Try to read string if it's a string object
-                                        if (str_mtag == 3) {  // JS_MTAG_STRING
-                                            // Can't safely print the string without proper QuickJS API
-                                            ESP_LOGI(TAG, "    -> (string object)");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Load bytecode directly from flash (ROM atoms remapped by BytecodeWriter)
-                        ESP_LOGI(TAG, "Loading bytecode from flash (zero-copy)");
+                        // Load bytecode directly from flash (zero-copy, already relocated)
                         JSValue userFunc = JS_LoadBytecode(ctx, mapped->data);
 
                         if (!JS_IsException(userFunc)) {
                             ESP_LOGI(TAG, "User bytecode loaded successfully");
-
-                            // DEBUG: Inspect the JSValue type and memory contents
-                            ESP_LOGI(TAG, "=== DEBUG: Inspecting userFunc ===");
-                            ESP_LOGI(TAG, "userFunc raw value: 0x%llx", (unsigned long long)userFunc);
-                            ESP_LOGI(TAG, "IsPtr: %d", JS_IsPtr(userFunc));
-                            ESP_LOGI(TAG, "IsFunction: %d", JS_IsFunction(ctx, userFunc));
-                            ESP_LOGI(TAG, "IsString: %d", JS_IsString(ctx, userFunc));
-                            ESP_LOGI(TAG, "IsNumber: %d", JS_IsNumber(ctx, userFunc));
-                            ESP_LOGI(TAG, "IsNull: %d", JS_IsNull(userFunc));
-                            ESP_LOGI(TAG, "IsUndefined: %d", JS_IsUndefined(userFunc));
-
-                            // Inspect the actual memory content
-                            if (JS_IsPtr(userFunc)) {
-                                // Decode the pointer (JSValue is pointer + 1)
-                                uintptr_t ptr_val = (uintptr_t)userFunc - 1;
-                                ESP_LOGI(TAG, "Decoded pointer: 0x%lx", (unsigned long)ptr_val);
-
-                                // Read the mtag from the memory block header
-                                // JSMemBlockHeader is at the start: { gc_mark:1, mtag:7, ... }
-                                uint8_t* mem_ptr = (uint8_t*)ptr_val;
-                                uint8_t first_byte = mem_ptr[0];
-                                int actual_mtag = (first_byte >> 1) & 0x0F;  // Extract bits 1-4
-                                ESP_LOGI(TAG, "Memory first byte: 0x%02x", first_byte);
-                                ESP_LOGI(TAG, "Extracted mtag: %d", actual_mtag);
-                                ESP_LOGI(TAG, "  Expected: 4 (JS_MTAG_FUNCTION_BYTECODE)");
-                                ESP_LOGI(TAG, "  Mtag meanings: 0=FREE, 1=OBJECT, 2=FLOAT64, 3=STRING, 4=FUNCTION_BYTECODE");
-
-                                // Also use the public API
-                                size_t block_size = JS_GetMemBlockSize((void*)ptr_val);
-                                int api_mtag = JS_GetMemBlockMTag((void*)ptr_val);
-                                ESP_LOGI(TAG, "API mtag: %d, block size: %zu bytes", api_mtag, block_size);
-                            }
-                            ESP_LOGI(TAG, "=================================");
-
-                            // Try using JS_Run() instead of JS_Call()
-                            ESP_LOGI(TAG, "Attempting to execute with JS_Run()...");
                             JSValue result = JS_Run(ctx, userFunc);
 
                             if (JS_IsException(result)) {
