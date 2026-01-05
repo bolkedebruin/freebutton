@@ -17,10 +17,14 @@ extern "C" {
 #include "lib/mquickjs/mquickjs_priv.h"  // For JS_MTAG_* constants
 
 // QuickJS internal relocation structures and functions
+typedef uint8_t* (*BCRelocReadFunc)(void *opaque, uintptr_t offset, size_t size);
+
 typedef struct {
     JSContext *ctx;
     uintptr_t offset;        // Relocation offset (target - base)
     int update_atoms;        // BOOL
+    BCRelocReadFunc read_func;  // Callback to read data (NULL = use relocated ptr)
+    void *read_opaque;          // Opaque data for read_func
 } BCRelocState;
 
 int JS_RelocateHdr(BCRelocState *s, JSBytecodeHeader *hdr, uintptr_t new_base_addr);
@@ -29,6 +33,50 @@ extern const JSSTDLibraryDef js_stdlib;  // For creating temp context with ROM a
 }
 
 static auto TAG = "BytecodeWriter";
+
+// Context for streaming relocation read callback
+struct StreamingRelocContext {
+    const esp_partition_t* partition;
+    uint32_t flash_data_start;       // Flash address where data section starts
+    uint32_t bytes_written_to_flash; // How many bytes of data section are in flash
+    uint8_t* chunk_buffer;           // Current chunk buffer
+    uint32_t chunk_data_offset;      // Offset of current chunk in data section
+    uint32_t chunk_size;             // Size of data in current chunk
+    uint8_t* read_buffer;            // Temp buffer for flash reads
+    static constexpr size_t READ_BUFFER_SIZE = 256;  // Size for full JSString with content
+};
+
+// Read callback for streaming relocation
+// Returns pointer to data at given offset, or NULL if not accessible
+static uint8_t* streaming_reloc_read(void* opaque, uintptr_t offset, size_t size) {
+    auto* ctx = static_cast<StreamingRelocContext*>(opaque);
+
+    // Check if data is in current chunk buffer
+    if (offset >= ctx->chunk_data_offset &&
+        offset + size <= ctx->chunk_data_offset + ctx->chunk_size) {
+        return ctx->chunk_buffer + (offset - ctx->chunk_data_offset);
+    }
+
+    // Check if data is in flash (already written)
+    if (offset + size <= ctx->bytes_written_to_flash) {
+        // Read from flash into temp buffer
+        if (size > StreamingRelocContext::READ_BUFFER_SIZE) {
+            ESP_LOGE(TAG, "Read size %zu exceeds buffer %zu", size, StreamingRelocContext::READ_BUFFER_SIZE);
+            return nullptr;
+        }
+        uint32_t flash_offset = ctx->flash_data_start + offset;
+        esp_err_t err = esp_partition_read(ctx->partition, flash_offset, ctx->read_buffer, size);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to read from flash at 0x%lx: 0x%x", flash_offset, err);
+            return nullptr;
+        }
+        return ctx->read_buffer;
+    }
+
+    // Data not yet accessible (in a later chunk)
+    ESP_LOGW(TAG, "Data at offset 0x%lx not accessible yet", (uint32_t)offset);
+    return nullptr;
+}
 
 BytecodeWriter::BytecodeWriter()
     : partition_(nullptr)
@@ -125,8 +173,8 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
     ESP_LOGI(TAG, "Starting streaming relocation with ROM atom translation (4KB chunks)");
 
     // Create temporary QuickJS context for ROM atom remapping
-    const size_t ctx_heap_size = 8 * 1024;  // 8KB
-    uint8_t* ctx_mem_buf = (uint8_t*)malloc(ctx_heap_size);
+    constexpr size_t ctx_heap_size = 8 * 1024;  // 8KB
+    auto ctx_mem_buf = static_cast<uint8_t *>(malloc(ctx_heap_size));
     if (!ctx_mem_buf) {
         ESP_LOGE(TAG, "Failed to allocate context heap");
         return ESP_ERR_NO_MEM;
@@ -139,11 +187,32 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
         return ESP_ERR_NO_MEM;
     }
 
+    // Allocate read buffer for streaming relocation
+    uint8_t* reloc_read_buffer = (uint8_t*)malloc(StreamingRelocContext::READ_BUFFER_SIZE);
+    if (!reloc_read_buffer) {
+        ESP_LOGE(TAG, "Failed to allocate reloc read buffer");
+        JS_FreeContext(temp_ctx);
+        free(ctx_mem_buf);
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Create streaming relocation context
+    StreamingRelocContext stream_ctx;
+    stream_ctx.partition = partition_;
+    stream_ctx.flash_data_start = partition_offset_ + sizeof(JSBytecodeHeader);
+    stream_ctx.bytes_written_to_flash = 0;
+    stream_ctx.chunk_buffer = chunk_buffer_;
+    stream_ctx.chunk_data_offset = 0;
+    stream_ctx.chunk_size = 0;
+    stream_ctx.read_buffer = reloc_read_buffer;
+
     // Create BCRelocState for streaming relocation
     BCRelocState reloc_state;
     reloc_state.ctx = temp_ctx;
     reloc_state.offset = relocation_target_addr_ + sizeof(JSBytecodeHeader);  // Data section offset
     reloc_state.update_atoms = 1;  // Replace atom pointers with ROM equivalents
+    reloc_state.read_func = streaming_reloc_read;  // Use callback for streaming
+    reloc_state.read_opaque = &stream_ctx;
 
     ESP_LOGI(TAG, "Streaming relocation with ROM translation table");
 
@@ -155,6 +224,7 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
         ESP_LOGE(TAG, "Failed to open temp file: %s", temp_path_.c_str());
         JS_FreeContext(temp_ctx);
         free(ctx_mem_buf);
+        free(reloc_read_buffer);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -166,6 +236,7 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
              relocation_target_addr_ + sizeof(JSBytecodeHeader));
 
     uint32_t flash_write_offset = partition_offset_;
+    uint32_t data_section_offset = 0;  // Track position in data section
     reloc_state_ = RelocationState::HEADER_PENDING;
     overflow_size_ = 0;
 
@@ -201,6 +272,7 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                 temp_file.close();
                 JS_FreeContext(temp_ctx);
                 free(ctx_mem_buf);
+                free(reloc_read_buffer);
                 return ESP_ERR_INVALID_ARG;
             }
 
@@ -214,6 +286,7 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                 temp_file.close();
                 JS_FreeContext(temp_ctx);
                 free(ctx_mem_buf);
+                free(reloc_read_buffer);
                 return ESP_ERR_INVALID_STATE;
             }
 
@@ -244,6 +317,10 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                 break;  // EOF
             }
 
+            // Update streaming context for current chunk
+            stream_ctx.chunk_data_offset = data_section_offset;
+            stream_ctx.chunk_size = chunk_read;
+
             // Prepend overflow from previous chunk if any
             if (overflow_size_ > 0) {
                 // Check if prepending would overflow
@@ -264,6 +341,12 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                     memcpy(large_buffer + overflow_size_, chunk_buffer_, chunk_read);
                     size_t combined_size = overflow_size_ + chunk_read;
 
+                    // Update stream context for large buffer
+                    // The overflow is from data_section_offset - overflow_size_
+                    stream_ctx.chunk_buffer = large_buffer;
+                    stream_ctx.chunk_data_offset = data_section_offset - overflow_size_;
+                    stream_ctx.chunk_size = combined_size;
+
                     // Process the large block using JS_RelocateMtag
                     size_t processed = 0;
                     uint8_t* block_start = large_buffer;
@@ -277,6 +360,7 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                         temp_file.close();
                         JS_FreeContext(temp_ctx);
                         free(ctx_mem_buf);
+                        free(reloc_read_buffer);
                         return ESP_ERR_INVALID_STATE;
                     }
 
@@ -286,8 +370,12 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                         temp_file.close();
                         JS_FreeContext(temp_ctx);
                         free(ctx_mem_buf);
+                        free(reloc_read_buffer);
                         return ESP_ERR_INVALID_STATE;
                     }
+
+                    // Restore stream context to chunk_buffer_
+                    stream_ctx.chunk_buffer = chunk_buffer_;
 
                     processed = block_size;
                     if (processed > 0 && processed <= combined_size) {
@@ -304,6 +392,10 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
 
                         flash_write_offset += processed;
 
+                        // Update tracking
+                        data_section_offset += processed;
+                        stream_ctx.bytes_written_to_flash = data_section_offset;
+
                         // Save any remaining to overflow
                         overflow_size_ = combined_size - processed;
                         if (overflow_size_ > 0) {
@@ -318,6 +410,10 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                 // Normal case: prepend overflow
                 memmove(chunk_buffer_ + overflow_size_, chunk_buffer_, chunk_read);
                 memcpy(chunk_buffer_, overflow_buffer_, overflow_size_);
+
+                // Adjust context: overflow data is from earlier in data section
+                stream_ctx.chunk_data_offset -= overflow_size_;
+                stream_ctx.chunk_size = chunk_read + overflow_size_;
                 chunk_read += overflow_size_;
                 overflow_size_ = 0;
             }
@@ -353,6 +449,7 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                     temp_file.close();
                     JS_FreeContext(temp_ctx);
                     free(ctx_mem_buf);
+                    free(reloc_read_buffer);
                     return ESP_ERR_INVALID_STATE;
                 }
 
@@ -371,8 +468,13 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                 }
 
                 flash_write_offset += write_size;
-                ESP_LOGD(TAG, "Wrote %zu bytes to flash (offset 0x%lx)",
-                         write_size, flash_write_offset - write_size);
+
+                // Update tracking: data_section_offset advances by what was written
+                data_section_offset += write_size;
+                stream_ctx.bytes_written_to_flash = data_section_offset;
+
+                ESP_LOGD(TAG, "Wrote %zu bytes to flash (offset 0x%lx, data_section_offset=%lu)",
+                         write_size, flash_write_offset - write_size, data_section_offset);
             }
         }
     }
@@ -440,9 +542,10 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
 
     ESP_LOGI(TAG, "Successfully wrote relocated bytecode for '%s'", current_name_);
 
-    // Clean up QuickJS context
+    // Clean up QuickJS context and buffers
     JS_FreeContext(temp_ctx);
     free(ctx_mem_buf);
+    free(reloc_read_buffer);
 
     return ESP_OK;
 }
