@@ -24,6 +24,7 @@
 extern "C" {
     #include "scripting/file_hardware_mmap.h"
     #include <mquickjs.h>
+    #include <mquickjs_ext.h>
     #include <esp_crc.h>
 }
 
@@ -185,7 +186,7 @@ void setup() {
                 if (checksum == entry.checksum) {
                     // Verify bytecode relocation before loading
                     const JSBytecodeHeader* hdr = (const JSBytecodeHeader*)mapped->data;
-                    uintptr_t expected_base = (uintptr_t)(hdr + 1) + JS_GetRomTableSize(hdr);
+                    uintptr_t expected_base = (uintptr_t)(hdr + 1);
 
                     ESP_LOGI(TAG, "Bytecode header: base_addr=0x%lx, expected=0x%lx",
                              (unsigned long)hdr->base_addr, (unsigned long)expected_base);

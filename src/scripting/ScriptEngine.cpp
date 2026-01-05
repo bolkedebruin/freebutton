@@ -14,6 +14,7 @@ static const char* TAG = "ScriptEngine";
 // Include mquickjs C headers
 extern "C" {
     #include <mquickjs.h>
+    #include <mquickjs_ext.h>
 
     // External declaration for the generated FreeButton stdlib
     // This is defined in lib/mquickjs/src/stdlib_export.c which includes the generated header

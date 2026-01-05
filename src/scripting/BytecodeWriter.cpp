@@ -13,17 +13,14 @@
 // Include QuickJS for bytecode validation and structures
 extern "C" {
 #include "lib/mquickjs/mquickjs.h"
+#include "lib/mquickjs/mquickjs_ext.h"
 #include "lib/mquickjs/mquickjs_priv.h"  // For JS_MTAG_* constants
 
-// QuickJS internal relocation structures and functions for streaming ROM atom remapping
+// QuickJS internal relocation structures and functions
 typedef struct {
     JSContext *ctx;
     uintptr_t offset;        // Relocation offset (target - base)
     int update_atoms;        // BOOL
-    uintptr_t current_ptr;   // Current position in bytecode buffer (for ROM translation)
-    uint32_t data_offset;    // Offset from start of bytecode data (for ROM table lookup)
-    void* rom_collect_buf;   // ROM collection buffer (WASM only, for building ROM table)
-    int* rom_collect_count;  // ROM collection count (WASM only)
 } BCRelocState;
 
 int JS_RelocateHdr(BCRelocState *s, JSBytecodeHeader *hdr, uintptr_t new_base_addr);
@@ -142,20 +139,11 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
         return ESP_ERR_NO_MEM;
     }
 
-    // ROM translation table buffer (allocated if v0x0002 bytecode)
-    uint8_t* rom_table_buf = nullptr;
-
     // Create BCRelocState for streaming relocation
-    // ROM atoms: translated via ROM translation table (happens first in bc_reloc_value)
-    // Non-ROM strings: embedded in bytecode via update_atoms=1
     BCRelocState reloc_state;
     reloc_state.ctx = temp_ctx;
     reloc_state.offset = relocation_target_addr_ + sizeof(JSBytecodeHeader);  // Data section offset
-    reloc_state.update_atoms = 1;  // Embed non-ROM strings; ROM atoms handled by translation table
-    reloc_state.current_ptr = 0;   // Will be set by JS_RelocateMtag() for each block
-    reloc_state.data_offset = 0;   // Current position in bytecode data (updated per chunk)
-    reloc_state.rom_collect_buf = nullptr;   // Not used on ESP32 (WASM only)
-    reloc_state.rom_collect_count = nullptr; // Not used on ESP32 (WASM only)
+    reloc_state.update_atoms = 1;  // Replace atom pointers with ROM equivalents
 
     ESP_LOGI(TAG, "Streaming relocation with ROM translation table");
 
@@ -216,19 +204,11 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                 return ESP_ERR_INVALID_ARG;
             }
 
-            // Check for ROM table size (needed for correct base_addr calculation)
-            size_t rom_table_size = JS_GetRomTableSize(hdr);
-            // IMPORTANT: Save rom_atom_count NOW before chunk_buffer_ gets overwritten!
-            uint16_t rom_atom_count = hdr->rom_atom_count;
-
-            ESP_LOGI(TAG, "Header BEFORE relocation: version=0x%04x, rom_atom_count=%u, base_addr=0x%lx",
-                     hdr->version, rom_atom_count, (uint32_t)hdr->base_addr);
-            ESP_LOGI(TAG, "ROM table size: %zu bytes, target_base_addr will be: 0x%lx",
-                     rom_table_size, relocation_target_addr_ + sizeof(JSBytecodeHeader) + rom_table_size);
+            ESP_LOGI(TAG, "Header BEFORE relocation: version=0x%04x, base_addr=0x%lx",
+                     hdr->version, (uint32_t)hdr->base_addr);
 
             // Use JS_RelocateHdr for header relocation
-            // For v0x0002, base_addr must point to data section (after ROM table)
-            uintptr_t target_base_addr = relocation_target_addr_ + sizeof(JSBytecodeHeader) + rom_table_size;
+            uintptr_t target_base_addr = relocation_target_addr_ + sizeof(JSBytecodeHeader);
             if (JS_RelocateHdr(&reloc_state, hdr, target_base_addr) != 0) {
                 ESP_LOGE(TAG, "JS_RelocateHdr failed");
                 temp_file.close();
@@ -237,8 +217,8 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                 return ESP_ERR_INVALID_STATE;
             }
 
-            ESP_LOGI(TAG, "Header AFTER relocation: version=0x%04x, rom_atom_count=%u, base_addr=0x%lx",
-                     hdr->version, hdr->rom_atom_count, (uint32_t)hdr->base_addr);
+            ESP_LOGI(TAG, "Header AFTER relocation: version=0x%04x, base_addr=0x%lx",
+                     hdr->version, (uint32_t)hdr->base_addr);
 
             // Write relocated header to flash
             err = esp_partition_write(partition_, flash_write_offset,
@@ -252,74 +232,6 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
             flash_write_offset += header_size;
 
             ESP_LOGI(TAG, "Header relocated and written to flash");
-
-            // Copy ROM translation table if present (rom_table_size calculated earlier)
-            if (rom_table_size > 0) {
-                // Read and copy ROM table (don't process it!)
-                ESP_LOGI(TAG, "v0x0002 bytecode detected: copying ROM table (%u entries, %zu bytes)",
-                         hdr->rom_atom_count, rom_table_size);
-
-                size_t rom_bytes_read = temp_file.read(chunk_buffer_, rom_table_size);
-                if (rom_bytes_read != rom_table_size) {
-                    ESP_LOGE(TAG, "Failed to read ROM table (got %zu, expected %zu)",
-                             rom_bytes_read, rom_table_size);
-                    temp_file.close();
-                    JS_FreeContext(temp_ctx);
-                    free(ctx_mem_buf);
-                    return ESP_ERR_INVALID_STATE;
-                }
-
-                // Allocate persistent buffer for ROM translation table
-                // (chunk_buffer_ will be reused for bytecode blocks)
-                rom_table_buf = (uint8_t*)malloc(rom_table_size);
-                if (!rom_table_buf) {
-                    ESP_LOGE(TAG, "Failed to allocate ROM table buffer");
-                    temp_file.close();
-                    JS_FreeContext(temp_ctx);
-                    free(ctx_mem_buf);
-                    return ESP_ERR_NO_MEM;
-                }
-                memcpy(rom_table_buf, chunk_buffer_, rom_table_size);
-
-                // Set up global ROM translation table for use during relocation
-                // This allows bc_reloc_value() to translate WASM ROM pointers → ESP32 ROM pointers
-                extern const ROMAtomEntry* g_rom_translation_table;
-                extern uint16_t g_rom_translation_count;
-                g_rom_translation_table = (const ROMAtomEntry*)rom_table_buf;
-                g_rom_translation_count = rom_atom_count;  // Use saved count (hdr overwritten by ROM table read!)
-                ESP_LOGI(TAG, "Set up ROM translation table (%u entries) for relocation", g_rom_translation_count);
-
-                // Dump ROM table for debugging
-                ESP_LOGI(TAG, "=== ROM Translation Table ===");
-                for (uint16_t i = 0; i < g_rom_translation_count && i < 20; i++) {
-                    ESP_LOGI(TAG, "  [%2u] offset=0x%04lx → rom_index=%u",
-                             i,
-                             (unsigned long)g_rom_translation_table[i].bytecode_offset,
-                             g_rom_translation_table[i].rom_index);
-                }
-                if (g_rom_translation_count > 20) {
-                    ESP_LOGI(TAG, "  ... (%u more entries)", g_rom_translation_count - 20);
-                }
-                ESP_LOGI(TAG, "=============================");
-
-                // Write ROM table to flash as-is (no relocation needed)
-                err = esp_partition_write(partition_, flash_write_offset,
-                                          chunk_buffer_, rom_table_size);
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to write ROM table to flash: 0x%x", err);
-                    free(rom_table_buf);
-                    temp_file.close();
-                    JS_FreeContext(temp_ctx);
-                    free(ctx_mem_buf);
-                    return ESP_ERR_INVALID_STATE;
-                }
-
-                flash_write_offset += rom_table_size;
-                ESP_LOGI(TAG, "ROM table copied to flash");
-
-                // NOTE: rom_table_buf will be freed at the end of relocation
-                //       (we need it for the entire relocation process)
-            }
 
             reloc_state_ = RelocationState::BLOCKS_PENDING;
         }
@@ -378,7 +290,6 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                     }
 
                     processed = block_size;
-                    reloc_state.data_offset += block_size;  // Update position in bytecode data
                     if (processed > 0 && processed <= combined_size) {
 
                         // Write relocated block to flash
@@ -446,7 +357,6 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
                 }
 
                 processed += block_size;
-                reloc_state.data_offset += block_size;  // Update position in bytecode data
             }
 
             // Write relocated blocks to flash (excluding overflow)
@@ -533,16 +443,6 @@ esp_err_t BytecodeWriter::streamRelocateToFlash() {
     // Clean up QuickJS context
     JS_FreeContext(temp_ctx);
     free(ctx_mem_buf);
-
-    // Clean up ROM translation table and clear global pointers
-    if (rom_table_buf) {
-        extern const ROMAtomEntry* g_rom_translation_table;
-        extern uint16_t g_rom_translation_count;
-        g_rom_translation_table = nullptr;
-        g_rom_translation_count = 0;
-        free(rom_table_buf);
-        ESP_LOGI(TAG, "Cleaned up ROM translation table");
-    }
 
     return ESP_OK;
 }
