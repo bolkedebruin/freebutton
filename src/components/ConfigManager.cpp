@@ -5,6 +5,7 @@
 
 #include "ConfigManager.h"
 #include "json/FilteredReaderHandler.h"
+#include <algorithm>
 #include <esp_log.h>
 #include "LittleFS.h"
 #include "drivers/BusAwareFileSystem.h"
@@ -126,6 +127,45 @@ Button* ConfigManager::getButtonByPosition(const int position) const {
         }
     }
     return nullptr;
+}
+
+DisplayItem* ConfigManager::findDisplayItemById(unsigned long id) const {
+    for (const auto& item : displayItems) {
+        if (item->id == id) {
+            return item.get();
+        }
+    }
+    return nullptr;
+}
+
+DisplayItem* ConfigManager::addDisplayItem(std::unique_ptr<DisplayItem> item) {
+    if (!item) {
+        return nullptr;
+    }
+
+    DisplayItem* ptr = item.get();
+    displayItems.emplace_back(std::move(item));
+
+    ESP_LOGI(TAG, "Added DisplayItem: id=%lu, label='%s', page=%d",
+             ptr->id, ptr->label.c_str(), ptr->page);
+
+    return ptr;
+}
+
+bool ConfigManager::removeDisplayItem(unsigned long id) {
+    auto it = std::find_if(displayItems.begin(), displayItems.end(),
+        [id](const std::unique_ptr<DisplayItem>& item) {
+            return item->id == id;
+        });
+
+    if (it != displayItems.end()) {
+        ESP_LOGI(TAG, "Removing DisplayItem: id=%lu", id);
+        displayItems.erase(it);
+        return true;
+    }
+
+    ESP_LOGW(TAG, "DisplayItem not found: id=%lu", id);
+    return false;
 }
 
 ConfigManager::MemoryStats ConfigManager::getMemoryStats() const {

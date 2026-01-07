@@ -332,6 +332,77 @@ void handleBytecodeUpload(AsyncWebServerRequest *request) {
     }
 }
 
+// Embedded WebSocket test page - served from device to avoid PNA restrictions
+static constexpr std::string_view wsTestPage = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket REPL Test</title>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        #log { background: #f0f0f0; padding: 10px; height: 300px; overflow: auto; font-family: monospace; }
+        input { width: 300px; padding: 5px; }
+        button { padding: 5px 15px; margin: 5px 0; }
+    </style>
+</head>
+<body>
+    <h1>WebSocket REPL Test</h1>
+    <p><strong>Page origin:</strong> <span id="origin"></span></p>
+    <input type="text" id="code" placeholder="Enter JavaScript code..." value="1+1">
+    <button onclick="sendCode()">Evaluate</button>
+    <button onclick="connect()">Reconnect</button>
+    <button onclick="disconnect()">Disconnect</button>
+    <pre id="log"></pre>
+    <script>
+        let ws = null;
+        const log = (msg) => {
+            const el = document.getElementById('log');
+            el.textContent += new Date().toLocaleTimeString() + ': ' + msg + '\n';
+            el.scrollTop = el.scrollHeight;
+        };
+        const connect = () => {
+            if (ws) { ws.close(); ws = null; }
+            const wsUrl = 'ws://' + location.host + '/ws/repl';
+            log('Connecting to ' + wsUrl);
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => log('CONNECTED');
+            ws.onclose = (e) => log('CLOSED: code=' + e.code);
+            ws.onerror = () => log('ERROR');
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'result') {
+                    log('=> ' + (msg.success ? msg.value : 'Error: ' + msg.error));
+                } else if (msg.type === 'console') {
+                    log('[console] ' + msg.message);
+                } else {
+                    log('MSG: ' + e.data);
+                }
+            };
+        };
+        const disconnect = () => { if (ws) { ws.close(); ws = null; } };
+        const sendCode = () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) { log('Not connected'); return; }
+            const code = document.getElementById('code').value;
+            const id = Math.random().toString(36).substr(2, 8);
+            log('> ' + code);
+            ws.send(JSON.stringify({ type: 'eval', id: id, code: code }));
+        };
+        document.getElementById('code').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendCode();
+        });
+        document.getElementById('origin').textContent = location.origin;
+        connect();
+    </script>
+</body>
+</html>
+)rawliteral";
+
+void handleWsTestPage(AsyncWebServerRequest *request) {
+    const std::string content{wsTestPage};
+    request->send(200, "text/html", content.c_str());
+}
+
 void handleBytecodeDownload(AsyncWebServerRequest *request) {
     // Download the temp file created by BytecodeWriter
     // Default name is "script" but can be overridden
@@ -357,6 +428,8 @@ void webserver_start() {
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
+    // Required for Private Network Access (PNA) - allows localhost to connect to private IPs
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Private-Network", "true");
 
     // Handle CORS preflight requests
     server.onNotFound([](AsyncWebServerRequest *request){
@@ -387,6 +460,9 @@ void webserver_start() {
     });
 
     server.on("/api/bytecode/upload", HTTP_POST, handleBytecodeUpload, onBytecodeUpload);
+
+    // WebSocket test page (served from device to avoid browser PNA restrictions)
+    server.on("/ws-test", HTTP_GET, handleWsTestPage);
 
     // WebSocket REPL for JavaScript debugging
     Scripting::WebSocketREPL::getInstance().init(server);

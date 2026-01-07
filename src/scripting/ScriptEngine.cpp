@@ -111,8 +111,12 @@ ScriptResult ScriptEngine::execute(std::string_view script, const char* filename
         return {false, "", "Script engine not initialized"};
     }
 
+    // Copy to std::string to ensure null-termination
+    // mquickjs JS_Eval requires input[input_len] = '\0'
+    std::string scriptStr(script);
+
     // Evaluate the script with JS_EVAL_RETVAL to return expression values (needed for REPL)
-    JSValue result = JS_Eval(ctx_, script.data(), script.size(), filename, JS_EVAL_RETVAL);
+    JSValue result = JS_Eval(ctx_, scriptStr.c_str(), scriptStr.size(), filename, JS_EVAL_RETVAL);
 
     // Check for exception
     if (JS_IsException(result)) {

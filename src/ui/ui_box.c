@@ -124,7 +124,7 @@ void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const c
 	ui_box_set_caption(box, caption);
 	ui_box_set_text(box, text);
 	ui_box_set_hint(box, unit);
-    ui_box_set_font_size(box, font, boxtype);
+	ui_box_set_font_size(box, font, boxtype);
 	lv_obj_set_align(box, align == 0 ? LV_ALIGN_TOP_LEFT : align);
 
 	lv_obj_set_pos(box, x * 320 / 100, y * 240 / 100);
@@ -134,20 +134,21 @@ void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const c
 
 void ui_box_set_caption(lv_obj_t* box, const char* caption)
 {
-	box_dsc_t* b = lv_obj_get_user_data(box);
-    ui_render_text(b->title, caption, &style_title, b->base_font_size, true);
+	const box_dsc_t* b = lv_obj_get_user_data(box);
+	/* Caption always uses fixed size 1 (fnt_semibold_14), not base_font_size */
+    ui_render_text(b->title, caption, &style_title, 1, true);
 }
 
 void ui_box_set_text(lv_obj_t* box, const char* text)
 {
-	box_dsc_t* b = lv_obj_get_user_data(box);
+	const box_dsc_t* b = lv_obj_get_user_data(box);
 
     ui_render_text(b->text, text, &style_text, b->base_font_size, false);
 }
 
 void ui_box_set_hint(lv_obj_t* box, const char* hint)
 {
-	box_dsc_t* b = lv_obj_get_user_data(box);
+	const box_dsc_t* b = lv_obj_get_user_data(box);
     ui_render_text(b->hint, hint, &style_hint, b->base_font_size, false);
 }
 

@@ -21,6 +21,11 @@
 #include "scripting/ScriptEngine.h"
 #include "scripting/BytecodeRegistry.h"
 
+// Forward declaration - avoid include order issues with ESPAsyncWebServer
+namespace Scripting {
+    void cleanupWebSocketClients();
+}
+
 extern "C" {
     #include "scripting/file_hardware_mmap.h"
     #include <mquickjs.h>
@@ -264,10 +269,19 @@ void setup() {
 
 void loop() {
     static unsigned long lastSensorUpdateTime = 0;
+    static unsigned long lastWsCleanupTime = 0;
 
-    if (const unsigned long currentTime = millis(); currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
+    const unsigned long currentTime = millis();
+
+    if (currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
         lastSensorUpdateTime = currentTime;
         sampleSensors();
+    }
+
+    // Clean up stale WebSocket clients every second
+    if (currentTime - lastWsCleanupTime > 1000) {
+        lastWsCleanupTime = currentTime;
+        Scripting::cleanupWebSocketClients();
     }
 
     // Process JavaScript timers

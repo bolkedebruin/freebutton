@@ -148,4 +148,40 @@ void DisplayItem::destroyBox() {
     lvglDisplay.unlock();
 }
 
+void DisplayItem::setDisplayLabel(const char* text) const {
+    if (box == nullptr) {
+        ESP_LOGW(TAG, "Box not created yet for DisplayItem %lu", id);
+        return;
+    }
+
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lvglDisplay.lock();
+    ui_box_set_caption(box, text);
+    lvglDisplay.unlock();
+}
+
+void DisplayItem::setDisplayValue(const char* text) const {
+    if (box == nullptr) {
+        ESP_LOGW(TAG, "Box not created yet for DisplayItem %lu", id);
+        return;
+    }
+
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lvglDisplay.lock();
+    ui_box_set_text(box, text);
+    lvglDisplay.unlock();
+}
+
+void DisplayItem::setDisplayUnit(const char* text) const {
+    if (box == nullptr) {
+        ESP_LOGW(TAG, "Box not created yet for DisplayItem %lu", id);
+        return;
+    }
+
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lvglDisplay.lock();
+    ui_box_set_hint(box, text);
+    lvglDisplay.unlock();
+}
+
 } // freebutton

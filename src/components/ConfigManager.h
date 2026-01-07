@@ -173,6 +173,26 @@ public:
     std::vector<Clock*> getClocksByPage(int page) const;
 
     /**
+     * Find display item by ID
+     * @param id ID of display item
+     * @return Pointer to DisplayItem or nullptr if not found
+     */
+    DisplayItem* findDisplayItemById(unsigned long id) const;
+
+    /**
+     * Add a new display item dynamically
+     * @return Pointer to the created DisplayItem, or nullptr on failure
+     */
+    DisplayItem* addDisplayItem(std::unique_ptr<DisplayItem> item);
+
+    /**
+     * Remove a display item by ID
+     * @param id ID of display item to remove
+     * @return true if removed, false if not found
+     */
+    bool removeDisplayItem(unsigned long id);
+
+    /**
      * Get memory usage statistics
      */
     struct MemoryStats {

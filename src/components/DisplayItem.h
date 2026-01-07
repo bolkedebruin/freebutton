@@ -122,6 +122,11 @@ public:
     void createBox();
     void destroyBox();
 
+    // Direct UI update methods (for programmatic control)
+    void setDisplayLabel(const char* text) const;
+    void setDisplayValue(const char* text) const;
+    void setDisplayUnit(const char* text) const;
+
 };
 
 } // freebutton
