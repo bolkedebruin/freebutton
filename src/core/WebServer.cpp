@@ -270,12 +270,24 @@ struct UploadStatus {
 void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
                       size_t index, uint8_t *data, size_t len, bool final) {
     BytecodeWriter* writer = nullptr;
+    esp_err_t err = ESP_OK;
 
     if (index == 0) {
-        ESP_LOGI(TAG, "Bytecode upload start: %s", filename.c_str());
+        size_t content_length = request->contentLength();
+        ESP_LOGI(TAG, "Bytecode upload start: %s (%zu bytes)", filename.c_str(), content_length);
 
         // Create new writer and store in request
         writer = new BytecodeWriter();
+
+        // Initialize with total size for upfront flash erase
+        err = writer->beginWrite(filename.c_str(), content_length);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "beginWrite failed: 0x%x", err);
+            delete writer;
+            request->_tempObject = new UploadStatus{err};
+            return;
+        }
+
         request->_tempObject = writer;
     } else {
         // Retrieve existing writer from request
@@ -287,8 +299,8 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         return;
     }
 
-    // Write chunk to flash (incremental, no buffering)
-    esp_err_t err = writer->write(filename.c_str(), data, len, final);
+    // Write chunk directly to flash with inline relocation
+    err = writer->write(data, len, final);
 
     if (final) {
         ESP_LOGI(TAG, "Bytecode upload complete: %s", filename.c_str());
