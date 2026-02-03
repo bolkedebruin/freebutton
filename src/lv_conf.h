@@ -126,7 +126,7 @@
 #define LV_USE_CANVAS     1
 #define LV_USE_CHECKBOX   0
 #define LV_USE_DROPDOWN   1  /* Required by calendar */
-#define LV_USE_IMG        0
+#define LV_USE_IMG        1  /* Required for SVG/image support */
 #define LV_USE_LABEL      1  /* Essential */
 #define LV_USE_LINE       1  /* Required by scale */
 #define LV_USE_ROLLER     0
@@ -142,7 +142,19 @@
 #define LV_USE_SPINNER    0
 
 /*==================
- * DISABLE ALL LIBS
+ * VECTOR GRAPHICS & SVG
+ *==================*/
+#define LV_USE_FLOAT 1              /* Required for matrix operations */
+#define LV_USE_MATRIX 0
+#define LV_USE_VECTOR_GRAPHIC 0
+#define LV_USE_THORVG_INTERNAL 0
+#define LV_USE_THORVG_EXTERNAL 0
+#define LV_USE_SVG 0
+#define LV_USE_SVG_ANIMATION 0
+#define LV_USE_SVG_DEBUG 0
+
+/*==================
+ * OTHER LIBS
  *==================*/
 #define LV_USE_FS 0
 #define LV_USE_PNG 0

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ui_button.h"
+#include "image_loader.h"
 #include "lvgl.h"
 
 
@@ -121,12 +122,11 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
     lv_obj_align(botlabel, LV_ALIGN_CENTER, 0, 0);
 
 
-    // CONTENT => BOTTOM => ICON
-	/*lv_obj_t* img = lv_img_create(botobj);
-	LV_IMG_DECLARE(volplus);
-   	lv_img_set_src(img, &volplus);
-	lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
-	b->icon = img;*/
+    // CONTENT => BOTTOM => ICON (initially hidden)
+    lv_obj_t* icon = lv_image_create(botobj);
+    b->icon = icon;
+    lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);  // Hidden by default
+    lv_obj_align(icon, LV_ALIGN_CENTER, 0, 0);
 
     return cont;
 }
@@ -158,12 +158,30 @@ void ui_button_set_text(lv_obj_t * button, const char * text)
 	lv_label_set_text(b->text, text);
 }
 
-void ui_button_set_icon(lv_obj_t* button, const char* icon)
+void ui_button_set_icon(lv_obj_t* button, const char* icon_name)
 {
     button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
-    if (!b || !icon) {
+    if (!b || !b->icon) {
+        printf("ui_button_set_icon: invalid button or icon object\n");
         return;
     }
-    // Icon functionality not implemented yet
-    (void)b; // Suppress unused parameter warning
+
+    // Empty or NULL icon_name hides the icon
+    if (!icon_name || icon_name[0] == '\0') {
+        lv_obj_add_flag(b->icon, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    // Load image from registry
+    lv_image_dsc_t* img_dsc = image_load_asset_c(icon_name);
+    if (!img_dsc) {
+        printf("ui_button_set_icon: failed to load icon '%s'\n", icon_name);
+        lv_obj_add_flag(b->icon, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    // Set image source and show
+    lv_image_set_src(b->icon, img_dsc);
+    lv_obj_remove_flag(b->icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(b->icon, LV_ALIGN_CENTER, 0, 0);
 }

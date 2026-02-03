@@ -113,6 +113,194 @@
       ],
       "type": "object"
     },
+    "display": {
+      "methods": [
+        {
+          "description": "Create a new display item on the screen",
+          "name": "create",
+          "params": [
+            {
+              "description": "X position",
+              "name": "x",
+              "type": "number"
+            },
+            {
+              "description": "Y position",
+              "name": "y",
+              "type": "number"
+            },
+            {
+              "description": "Width of the display item",
+              "name": "width",
+              "type": "number"
+            },
+            {
+              "description": "Box type (0-3)",
+              "name": "boxType",
+              "type": "number"
+            },
+            {
+              "description": "Font size",
+              "name": "fontSize",
+              "type": "number"
+            },
+            {
+              "description": "Text alignment (0=left, 1=center, 2=right)",
+              "name": "alignment",
+              "type": "number"
+            },
+            {
+              "description": "Label text",
+              "name": "label",
+              "type": "string"
+            },
+            {
+              "description": "Unit text",
+              "name": "unit",
+              "type": "string"
+            },
+            {
+              "description": "Decimal rounding",
+              "name": "round",
+              "type": "number"
+            },
+            {
+              "description": "Page number",
+              "name": "page",
+              "type": "number"
+            }
+          ],
+          "returns": "number"
+        },
+        {
+          "description": "Remove a display item by ID",
+          "name": "remove",
+          "params": [
+            {
+              "description": "Display item ID",
+              "name": "id",
+              "type": "number"
+            }
+          ],
+          "returns": "boolean"
+        },
+        {
+          "description": "Get number of display items",
+          "name": "count",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Get display item information by ID",
+          "name": "get",
+          "params": [
+            {
+              "description": "Display item ID",
+              "name": "id",
+              "type": "number"
+            }
+          ],
+          "returns": "object"
+        },
+        {
+          "description": "Get array of all display item IDs",
+          "name": "getAll",
+          "params": [],
+          "returns": "number[]"
+        },
+        {
+          "description": "Set display item label text",
+          "name": "setLabel",
+          "params": [
+            {
+              "description": "Display item ID",
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "description": "New label text",
+              "name": "label",
+              "type": "string"
+            }
+          ],
+          "returns": "boolean"
+        },
+        {
+          "description": "Set display item value text",
+          "name": "setValue",
+          "params": [
+            {
+              "description": "Display item ID",
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "description": "New value text",
+              "name": "value",
+              "type": "string"
+            }
+          ],
+          "returns": "boolean"
+        },
+        {
+          "description": "Set display item unit text",
+          "name": "setUnit",
+          "params": [
+            {
+              "description": "Display item ID",
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "description": "New unit text",
+              "name": "unit",
+              "type": "string"
+            }
+          ],
+          "returns": "boolean"
+        },
+        {
+          "description": "Set display item position",
+          "name": "setPosition",
+          "params": [
+            {
+              "description": "Display item ID",
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "description": "New X position",
+              "name": "x",
+              "type": "number"
+            },
+            {
+              "description": "New Y position",
+              "name": "y",
+              "type": "number"
+            }
+          ],
+          "returns": "boolean"
+        },
+        {
+          "description": "Set display item page",
+          "name": "setPage",
+          "params": [
+            {
+              "description": "Display item ID",
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "description": "New page number",
+              "name": "page",
+              "type": "number"
+            }
+          ],
+          "returns": "boolean"
+        }
+      ],
+      "type": "object"
+    },
     "led": {
       "methods": [
         {

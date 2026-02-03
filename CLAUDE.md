@@ -15,7 +15,7 @@ pio run
 pio run -e esp32 -t upload
 
 # Monitor serial output
-pio device monitor -e esp32
+pio run -t monitor -e esp32
 
 # Run native tests
 pio test -e native

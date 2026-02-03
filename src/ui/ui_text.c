@@ -3,6 +3,7 @@
 //
 
 #include "ui_text.h"
+#include "image_loader.h"
 
 #include "lvgl.h"
 
@@ -27,8 +28,24 @@ static inline void add_text(button_text_t **output, const char *text, const size
         (*output)->color = color;
         (*output)->text_align = text_align;
         (*output)->vertical_align = vertical_align;
+        (*output)->image_path[0] = '\0';  // Not an image
         (*output)++;
     }
+}
+
+// Helper function to add an image reference to the output
+static inline void add_image(button_text_t **output, const char *name, size_t name_len, const uint8_t size, const lv_text_align_t text_align, const lv_align_t vertical_align) {
+    (*output)->character = 0;  // Mark as image (not a character)
+    (*output)->size = size;
+    (*output)->color = lv_color_black();
+    (*output)->text_align = text_align;
+    (*output)->vertical_align = vertical_align;
+
+    // Copy image name, ensuring null termination
+    size_t copy_len = name_len < MAX_IMAGE_PATH_LENGTH - 1 ? name_len : MAX_IMAGE_PATH_LENGTH - 1;
+    memcpy((*output)->image_path, name, copy_len);
+    (*output)->image_path[copy_len] = '\0';
+    (*output)++;
 }
 
 
@@ -144,6 +161,34 @@ size_t parse_text(const char * text, const size_t len, button_text_t * button_te
                     add_text(&output, "\\c", 2, current_size, current_color, current_text_align, current_vertical_align);
                 }
                 break;
+            case 'i':
+                /* Image reference: \i{name} - loads image from registry */
+                if (input + 1 < end && *(input + 1) == '{') {
+                    /* Find closing brace */
+                    const char *name_start = input + 2;
+                    const char *name_end = name_start;
+                    while (name_end < end && *name_end != '}') {
+                        name_end++;
+                    }
+                    if (name_end < end && *name_end == '}') {
+                        /* Valid image reference */
+                        size_t name_len = name_end - name_start;
+                        if (name_len > 0 && name_len < MAX_IMAGE_PATH_LENGTH) {
+                            add_image(&output, name_start, name_len, current_size, current_text_align, current_vertical_align);
+                            input = name_end;  /* Skip to closing brace */
+                        } else {
+                            /* Invalid name length */
+                            add_text(&output, "\\i", 2, current_size, current_color, current_text_align, current_vertical_align);
+                        }
+                    } else {
+                        /* No closing brace found */
+                        add_text(&output, "\\i", 2, current_size, current_color, current_text_align, current_vertical_align);
+                    }
+                } else {
+                    /* not followed by { */
+                    add_text(&output, "\\i", 2, current_size, current_color, current_text_align, current_vertical_align);
+                }
+                break;
             default:
                 // Invalid escape sequence: output the backslash and the current character
                 add_text(&output, "\\", 1, current_size, current_color, current_text_align, current_vertical_align);
@@ -172,11 +217,16 @@ void ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * defaul
 
     len = parse_text(text, len, button_text);
 
-    lv_obj_t * span_group = lv_spangroup_create(obj);
-    lv_obj_add_style(span_group, default_style, 0);
-    // LVGL 9.3: lv_spangroup_set_mode is deprecated, use width control instead
-    lv_obj_set_width(span_group, LV_SIZE_CONTENT);
-    lv_spangroup_set_overflow(span_group, LV_SPAN_OVERFLOW_ELLIPSIS);
+    /* Create a flex container for mixed text/image content */
+    lv_obj_t * container = lv_obj_create(obj);
+    lv_obj_set_size(container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_layout(container, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(container, 0, 0);
+    lv_obj_set_style_border_width(container, 0, 0);
+    lv_obj_set_style_pad_all(container, 0, 0);
+    lv_obj_set_style_pad_gap(container, 2, 0);  /* Small gap between elements */
 
     const lv_color_t base_font_color = lv_obj_get_style_text_color(obj, LV_PART_MAIN);
     uint8_t max_size = 0;
@@ -186,8 +236,20 @@ void ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * defaul
 
     uint16_t i = 0;
     while (i < len) {
-        lv_span_t * span = lv_spangroup_new_span(span_group);
+        /* Check if this is an image element */
+        if (button_text_is_image(&button_text[i])) {
+            /* Render image */
+            lv_image_dsc_t* img_dsc = image_load_asset_c(button_text[i].image_path);
+            if (img_dsc) {
+                lv_obj_t* img = lv_image_create(container);
+                lv_image_set_src(img, img_dsc);
+                lv_obj_set_style_pad_all(img, 0, 0);
+            }
+            i++;
+            continue;
+        }
 
+        /* Text element - create a span group for this text segment */
         const uint8_t current_size = button_text[i].size > 0 ? button_text[i].size : base_font_size;
         const lv_color_t current_color = lv_color_eq(button_text[i].color, lv_color_black()) ? base_font_color : button_text[i].color;
 
@@ -198,9 +260,10 @@ void ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * defaul
             current_vertical_align = button_text[i].vertical_align;
         }
 
-        /* group characters that are of equal color, size and alignment */
+        /* group characters that are of equal color, size, alignment AND are not images */
         uint16_t span_length = i;
         while (span_length < len
+               && !button_text_is_image(&button_text[span_length])
                && (button_text[span_length].size == current_size || button_text[span_length].size == 0)
                && (button_text[span_length].vertical_align == current_vertical_align || button_text[span_length].vertical_align == 0)
                && (button_text[span_length].text_align == current_text_align || button_text[span_length].text_align == 0)
@@ -208,50 +271,45 @@ void ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * defaul
             span_length++;
         }
 
-        lv_style_t * span_style = lv_span_get_style(span);
-        
-        switch (current_size) {
-            case 1:
-                bold ? lv_style_set_text_font(span_style, fnt_semibold_14) : lv_style_set_text_font(span_style, fnt_medium_14);
-                break;
-            case 2:
-                bold ? lv_style_set_text_font(span_style, fnt_semibold_18) : lv_style_set_text_font(span_style, fnt_medium_24);
-                break;
-            case 3: lv_style_set_text_font(span_style, fnt_medium_32); break;
-            case 4: lv_style_set_text_font(span_style, fnt_medium_48); break;
-            case 5: lv_style_set_text_font(span_style, fnt_medium_72); break;
-            default: lv_style_set_text_font(span_style, fnt_medium_14); break;
+        if (span_length > i) {
+            /* Create a label for this text segment */
+            lv_obj_t* label = lv_label_create(container);
+            lv_obj_add_style(label, default_style, 0);
+
+            /* Set font based on size */
+            lv_font_t* font = fnt_medium_14;
+            switch (current_size) {
+                case 1: font = bold ? fnt_semibold_14 : fnt_medium_14; break;
+                case 2: font = bold ? fnt_semibold_18 : fnt_medium_24; break;
+                case 3: font = fnt_medium_32; break;
+                case 4: font = fnt_medium_48; break;
+                case 5: font = fnt_medium_72; break;
+                default: font = fnt_medium_14; break;
+            }
+            lv_obj_set_style_text_font(label, font, 0);
+            lv_obj_set_style_text_color(label, current_color, 0);
+
+            if (current_size > max_size) {
+                max_size = current_size;
+            }
+
+            /* Build text string */
+            char * buf = (char *)lv_malloc((span_length - i + 1) * sizeof(uint32_t));
+            for (uint16_t j = i; j < span_length; j++) {
+                buf[j - i] = button_text[j].character;
+            }
+            buf[span_length - i] = '\0';
+
+            lv_label_set_text(label, buf);
+            lv_free(buf);
         }
-        lv_style_set_text_color(span_style, current_color);
 
-        /* set alignment */
-        lv_style_set_text_align(span_style, current_text_align);
-        lv_style_set_align(span_style, current_vertical_align);
-
-        if (current_size > max_size) {
-            max_size = current_size;
-        }
-
-        /* 4 bytes per character for unicode */
-        char * buf = (char *)lv_malloc((span_length - i + 1) * sizeof(uint32_t));
-
-        for (uint16_t j = i; j < span_length; j++) {
-            buf[j - i] = button_text[j].character;
-        }
-        buf[span_length - i] = '\0';
-
-        lv_span_set_text(span, buf);
-        lv_free(buf);
-        i = span_length;
+        i = span_length > i ? span_length : i + 1;
     }
 
-    lv_spangroup_refr_mode(span_group);
-
-    // Apply the final text alignment to the span group
-    lv_obj_set_style_text_align(span_group, current_text_align, 0);
-
-    // Apply the final vertical alignment to the span group
-    lv_obj_align(span_group, current_vertical_align, 0, 0);
+    /* Apply alignment to container */
+    lv_obj_set_style_text_align(container, current_text_align, 0);
+    lv_obj_align(container, current_vertical_align, 0, 0);
 
     lv_free(button_text);
 }

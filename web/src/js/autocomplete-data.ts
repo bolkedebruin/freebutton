@@ -78,6 +78,80 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       }
     ]
   },
+  "display": {
+    "methods": [
+      {
+        "label": "display.create",
+        "type": "method",
+        "detail": "(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number) → number",
+        "info": "Create a new display item on the screen",
+        "apply": "display.create(${1:x}, ${2:y}, ${3:width}, ${4:boxType}, ${5:fontSize}, ${6:alignment}, ${7:label}, ${8:unit}, ${9:round}, ${10:page})"
+      },
+      {
+        "label": "display.remove",
+        "type": "method",
+        "detail": "(id: number) → boolean",
+        "info": "Remove a display item by ID",
+        "apply": "display.remove(${1:id})"
+      },
+      {
+        "label": "display.count",
+        "type": "method",
+        "detail": "() → number",
+        "info": "Get number of display items",
+        "apply": "display.count()"
+      },
+      {
+        "label": "display.get",
+        "type": "method",
+        "detail": "(id: number) → object",
+        "info": "Get display item information by ID",
+        "apply": "display.get(${1:id})"
+      },
+      {
+        "label": "display.getAll",
+        "type": "method",
+        "detail": "() → number[]",
+        "info": "Get array of all display item IDs",
+        "apply": "display.getAll()"
+      },
+      {
+        "label": "display.setLabel",
+        "type": "method",
+        "detail": "(id: number, label: string) → boolean",
+        "info": "Set display item label text",
+        "apply": "display.setLabel(${1:id}, ${2:label})"
+      },
+      {
+        "label": "display.setValue",
+        "type": "method",
+        "detail": "(id: number, value: string) → boolean",
+        "info": "Set display item value text",
+        "apply": "display.setValue(${1:id}, ${2:value})"
+      },
+      {
+        "label": "display.setUnit",
+        "type": "method",
+        "detail": "(id: number, unit: string) → boolean",
+        "info": "Set display item unit text",
+        "apply": "display.setUnit(${1:id}, ${2:unit})"
+      },
+      {
+        "label": "display.setPosition",
+        "type": "method",
+        "detail": "(id: number, x: number, y: number) → boolean",
+        "info": "Set display item position",
+        "apply": "display.setPosition(${1:id}, ${2:x}, ${3:y})"
+      },
+      {
+        "label": "display.setPage",
+        "type": "method",
+        "detail": "(id: number, page: number) → boolean",
+        "info": "Set display item page",
+        "apply": "display.setPage(${1:id}, ${2:page})"
+      }
+    ]
+  },
   "led": {
     "methods": [
       {
