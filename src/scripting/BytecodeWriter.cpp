@@ -13,7 +13,6 @@
 extern "C" {
 #include "lib/mquickjs/mquickjs.h"
 #include "lib/mquickjs/mquickjs_ext.h"
-#include "lib/mquickjs/mquickjs_priv.h"  // For JS_MTAG_* constants
 
 // QuickJS internal relocation structures and functions
 typedef uint8_t* (*BCRelocReadFunc)(void *opaque, uintptr_t offset, size_t size);
@@ -29,7 +28,7 @@ typedef struct {
 int JS_RelocateHdr(BCRelocState *s, JSBytecodeHeader *hdr, uintptr_t new_base_addr);
 int JS_RelocateMtag(BCRelocState *s, uint8_t *buf, uint32_t buf_len);
 extern const JSSTDLibraryDef js_stdlib;  // For creating temp context with ROM atoms
-}
+} // C
 
 static auto TAG = "BytecodeWriter";
 
@@ -358,7 +357,7 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
 
                 uint8_t* large_buffer = static_cast<uint8_t*>(malloc(overflow_size_ + size));
                 if (!large_buffer) {
-                    ESP_LOGE(TAG, "Failed to allocate large buffer");
+                    ESP_LOGE(TAG, "Failed to allocate large buffer of %lu byte", overflow_size_ + size);
                     cleanup();
                     writing_ = false;
                     return ESP_ERR_NO_MEM;

@@ -6,9 +6,6 @@
 #ifndef DISPLAYITEM_BINDING_H
 #define DISPLAYITEM_BINDING_H
 
-#include <stdint.h>
-#include <stdbool.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
