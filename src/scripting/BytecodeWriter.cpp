@@ -495,8 +495,7 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
         }
 
         // Write relocated blocks to flash (excluding overflow)
-        size_t write_size = processed;
-        if (write_size > 0) {
+        if (size_t write_size = processed; write_size > 0) {
             err = esp_partition_write(partition_, write_offset_, chunk_buffer_, write_size);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to write data to flash: 0x%x", err);
