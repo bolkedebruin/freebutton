@@ -22,8 +22,7 @@ BytecodeRegistry::BytecodeRegistry()
     initVirtualMapping();
 }
 
-BytecodeRegistry::~BytecodeRegistry() {
-}
+BytecodeRegistry::~BytecodeRegistry() = default;
 
 bool BytecodeRegistry::initPartition() {
     user_partition_ = esp_partition_find_first(
@@ -198,7 +197,7 @@ bool BytecodeRegistry::loadFromFile(const char* path) {
     }
 
     // Load entries
-    JsonArray array = doc["entries"].as<JsonArray>();
+    auto array = doc["entries"].as<JsonArray>();
     for (JsonObject obj : array) {
         BytecodeEntry entry;
 
@@ -233,10 +232,10 @@ bool BytecodeRegistry::saveToFile(const char* path) {
 
     // Create JSON document
     JsonDocument doc;
-    JsonArray array = doc["entries"].to<JsonArray>();
+    auto array = doc["entries"].to<JsonArray>();
 
     for (const auto& entry : entries_) {
-        JsonObject obj = array.add<JsonObject>();
+        auto obj = array.add<JsonObject>();
         obj["name"] = entry.name;
         obj["offset"] = entry.offset;
         obj["size"] = entry.size;
@@ -283,10 +282,9 @@ bool BytecodeRegistry::initVirtualMapping() {
         return false;
     }
 
-    virtual_base_addr_ = (uint32_t)mapped_ptr;
+    virtual_base_addr_ = reinterpret_cast<uint32_t>(mapped_ptr);
 
     ESP_LOGI(TAG, "Partition permanently mapped to virtual address 0x%lx", virtual_base_addr_);
-    ESP_LOGW(TAG, "VIRTUAL_BASE_ADDRESS: 0x%lx (stable across reboots)", virtual_base_addr_);
 
     return true;
 }

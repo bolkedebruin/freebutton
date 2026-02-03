@@ -70,6 +70,8 @@ void ProgressBar::create_ui() {
     lv_obj_add_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(progress_label_, LV_OBJ_FLAG_HIDDEN);
 
+    create_blur_overlay();
+
     FreeButton::getLvglDisplay().unlock();
 
     ESP_LOGD(TAG, "Progress bar UI created successfully");
@@ -84,7 +86,35 @@ void ProgressBar::cleanup() {
         lv_obj_del(progress_label_);
         progress_label_ = nullptr;
     }
+    if (blur_overlay_) {
+        lv_obj_del(blur_overlay_);
+        blur_overlay_ = nullptr;
+    }
     visible_ = false;
+}
+
+void ProgressBar::create_blur_overlay() {
+    if (!parent_ || !config_.blur_background) return;
+
+    blur_overlay_ = lv_obj_create(parent_);
+    if (!blur_overlay_) {
+        ESP_LOGE(TAG, "Failed to create blur overlay");
+        return;
+    }
+
+    lv_obj_set_size(blur_overlay_, LV_PCT(100), LV_PCT(100));
+    lv_obj_align(blur_overlay_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(blur_overlay_, lv_color_hex(config_.blur_color), 0);
+    lv_obj_set_style_bg_opa(blur_overlay_, config_.blur_opacity, 0);
+    lv_obj_set_style_border_width(blur_overlay_, 0, 0);
+    lv_obj_set_style_radius(blur_overlay_, 0, 0);
+    lv_obj_remove_flag(blur_overlay_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(blur_overlay_, LV_OBJ_FLAG_HIDDEN);
+
+    // Move to back so progress bar and label are on top
+    lv_obj_move_to_index(blur_overlay_, 0);
+
+    ESP_LOGD(TAG, "Blur overlay created");
 }
 
 void ProgressBar::show(std::string_view message) {
@@ -95,6 +125,9 @@ void ProgressBar::show(std::string_view message) {
     lv_label_set_text(progress_label_, message.data());
     lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
 
+    if (blur_overlay_) {
+        lv_obj_clear_flag(blur_overlay_, LV_OBJ_FLAG_HIDDEN);
+    }
     lv_obj_clear_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(progress_label_, LV_OBJ_FLAG_HIDDEN);
 
@@ -132,6 +165,9 @@ void ProgressBar::hide() {
 
     lv_obj_add_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(progress_label_, LV_OBJ_FLAG_HIDDEN);
+    if (blur_overlay_) {
+        lv_obj_add_flag(blur_overlay_, LV_OBJ_FLAG_HIDDEN);
+    }
 
     visible_ = false;
 

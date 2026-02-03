@@ -24,6 +24,9 @@ public:
         std::uint32_t text_color = 0xffffff;
         std::int32_t radius = 2;
         const lv_font_t* font = &lv_font_montserrat_14;
+        bool blur_background = false;
+        std::uint32_t blur_color = 0x000000;
+        std::uint8_t blur_opacity = 180;  // 0-255
     };
 
     explicit ProgressBar(lv_obj_t* parent, const Config& config);
@@ -45,11 +48,13 @@ public:
 private:
     lv_obj_t* progress_bar_{nullptr};
     lv_obj_t* progress_label_{nullptr};
+    lv_obj_t* blur_overlay_{nullptr};
     lv_obj_t* parent_{nullptr};
     Config config_;
     bool visible_{false};
 
     void create_ui();
+    void create_blur_overlay();
     void cleanup();
 };
 

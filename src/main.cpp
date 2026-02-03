@@ -98,33 +98,26 @@ void setup() {
 
     std::unique_ptr<UI::ProgressBar> progressBar;
     if (auto* main_screen = getLvglDisplay().getMainScreen(); main_screen) {
-        progressBar = std::make_unique<UI::ProgressBar>(main_screen);
+        UI::ProgressBar::Config cfg = {
+            .blur_background = true,
+        };
+        progressBar = std::make_unique<UI::ProgressBar>(main_screen, cfg);
         progressBar->show("Starting...");
     } else {
         ESP_LOGE(TAG, "Main screen initialization failed!");
+        exit(-1);
     }
 
-    // Update progress
-    if (progressBar) {
-        progressBar->update(10, "Mounting file system..");
-    }
+    progressBar->update(10, "Mounting file system..");
 
-    if (progressBar) {
-        progressBar->update(20, "Loading configuration...");
-    }
+    progressBar->update(20, "Loading configuration...");
     configManager.loadFromFile("/config.json");
 
-    // Update progress
-    if (progressBar) {
-        progressBar->update(40, "WiFi starting...");
-    }
-
+    progressBar->update(30, "WiFi starting...");
     setup_wifi_event_handler();
     start_wifi_manager();
 
-    if (progressBar) {
-        progressBar->update(60, "Starting web server...");
-    }
+    progressBar->update(50, "Starting web server...");
     webserver_start();
 
     while (!is_wifi_connected()) {
@@ -132,9 +125,7 @@ void setup() {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    if (progressBar) {
-        progressBar->update(75, "Synchronizing time...");
-    }
+    progressBar->update(60, "Synchronizing time...");
 
     // Initialize and synchronize NTP time
     const std::string ntpServer = configManager.getNtpServer().empty() ? "pool.ntp.org" : configManager.getNtpServer();
@@ -143,9 +134,7 @@ void setup() {
     NtpClient::initialize(ntpServer, timezone);
     NtpClient::syncTime();
 
-    if (progressBar) {
-        progressBar->update(85, "Starting MQTT brokers...");
-    }
+    progressBar->update(65, "Starting MQTT brokers...");
 
     // Start brokers and configure Home Assistant auto-discovery
     configManager.startBrokers(deviceId);
@@ -157,16 +146,7 @@ void setup() {
         }
     });
 
-    if (progressBar) {
-        progressBar->update(90, "Finalizing setup...");
-    }
-    vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to show final progress
-
-    if (progressBar) {
-        progressBar->update(100, "Ready!");
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
-
+    progressBar->update(75, "Starting scripting engine..");
     // Initialize JavaScript Engine (singleton)
     ESP_LOGI(TAG, "Initializing JavaScript engine...");
 
@@ -259,10 +239,14 @@ void setup() {
         ESP_LOGE(TAG, "Failed to initialize ScriptEngine");
     }
 
+    progressBar->update(90, "Finalizing setup...");
+    vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to show final progress
+
+    progressBar->update(100, "Ready!");
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
+
     // Hide progress bar and show main application screen with DisplayItems
-    if (progressBar) {
-        progressBar->hide();
-    }
+    progressBar->hide();
 
     ESP_LOGI(TAG, "main UI loaded");
 }

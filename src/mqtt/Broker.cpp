@@ -101,8 +101,8 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
 
     ESP_LOGD(TAG, "Subscribing to topic: %.*s", topic.length(), topic.data());
 
-    auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(),
-                           [topic](const SubscriptionEntry& entry) { return entry.topic == topic; });
+    auto it = std::ranges::find_if(subscriptions_,
+                                   [topic](const SubscriptionEntry& entry) { return entry.topic == topic; });
 
     bool needsBrokerSubscription = false;
     
