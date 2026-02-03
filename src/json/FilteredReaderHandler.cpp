@@ -14,7 +14,7 @@ public:
         return c == -1 ? '\0' : static_cast<Ch>(c);
     }
 
-    [[nodiscard]] Ch Take() const {
+    Ch Take() const {
         int c = file_.read();
         return c == -1 ? '\0' : static_cast<Ch>(c);
     }

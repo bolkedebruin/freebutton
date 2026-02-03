@@ -3,8 +3,6 @@
 //
 
 #include "ui_text.h"
-#include "image_loader.h"
-
 #include "lvgl.h"
 
 #include <stdlib.h>
@@ -238,13 +236,7 @@ void ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * defaul
     while (i < len) {
         /* Check if this is an image element */
         if (button_text_is_image(&button_text[i])) {
-            /* Render image */
-            lv_image_dsc_t* img_dsc = image_load_asset_c(button_text[i].image_path);
-            if (img_dsc) {
-                lv_obj_t* img = lv_image_create(container);
-                lv_image_set_src(img, img_dsc);
-                lv_obj_set_style_pad_all(img, 0, 0);
-            }
+            /* Image loading not yet implemented - skip */
             i++;
             continue;
         }

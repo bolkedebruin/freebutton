@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "ui_button.h"
-#include "image_loader.h"
 #include "lvgl.h"
 
 
@@ -172,16 +171,7 @@ void ui_button_set_icon(lv_obj_t* button, const char* icon_name)
         return;
     }
 
-    // Load image from registry
-    lv_image_dsc_t* img_dsc = image_load_asset_c(icon_name);
-    if (!img_dsc) {
-        printf("ui_button_set_icon: failed to load icon '%s'\n", icon_name);
-        lv_obj_add_flag(b->icon, LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
-
-    // Set image source and show
-    lv_image_set_src(b->icon, img_dsc);
-    lv_obj_remove_flag(b->icon, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_align(b->icon, LV_ALIGN_CENTER, 0, 0);
+    // Image loading not yet implemented
+    printf("ui_button_set_icon: image loading not implemented for '%s'\n", icon_name);
+    lv_obj_add_flag(b->icon, LV_OBJ_FLAG_HIDDEN);
 }
