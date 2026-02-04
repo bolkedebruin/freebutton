@@ -66,31 +66,8 @@ bool ScriptEngine::init() {
     // This enables print()/console.log() to be sent to WebSocket clients
     JS_SetConsoleWriteFunc(websocketConsoleCallback);
 
-    ESP_LOGI(TAG, "Initialized with %zu bytes heap", heapSize_);
-    ESP_LOGI(TAG, "JavaScript API available:");
-    ESP_LOGI(TAG, "  Standard library:");
-    ESP_LOGI(TAG, "    - console.log(...)");
-    ESP_LOGI(TAG, "    - print(...)");
-    ESP_LOGI(TAG, "    - Math, String, Array, Object, etc.");
-    ESP_LOGI(TAG, "  FreeButton LED control:");
-    ESP_LOGI(TAG, "    - led.count()");
-    ESP_LOGI(TAG, "    - led.on(position)");
-    ESP_LOGI(TAG, "    - led.off(position)");
-    ESP_LOGI(TAG, "    - led.setColor(position, r, g, b)");
-    ESP_LOGI(TAG, "  FreeButton Button control:");
-    ESP_LOGI(TAG, "    - button.count()");
-    ESP_LOGI(TAG, "    - button.setLabel(position, text)");
-    ESP_LOGI(TAG, "    - button.setTopLabel(position, text)");
-    ESP_LOGI(TAG, "    - button.onClick(position, callback)");
-    ESP_LOGI(TAG, "    - button.onLongPress(position, callback)");
-    ESP_LOGI(TAG, "    - button.onRelease(position, callback)");
-    ESP_LOGI(TAG, "  FreeButton Sensor monitoring:");
-    ESP_LOGI(TAG, "    - sensor.count()");
-    ESP_LOGI(TAG, "    - sensor.getValue(sensorId)");
-    ESP_LOGI(TAG, "    - sensor.getType(sensorId)");
-    ESP_LOGI(TAG, "    - sensor.getInfo(sensorId)");
-    ESP_LOGI(TAG, "    - sensor.getAll()");
-    ESP_LOGI(TAG, "    - sensor.onChange(sensorId, callback)");
+    ESP_LOGI(TAG, "JavaScript API initialized with %zu bytes heap", heapSize_);
+
     return true;
 }
 
@@ -113,17 +90,17 @@ ScriptResult ScriptEngine::execute(std::string_view script, const char* filename
 
     // Copy to std::string to ensure null-termination
     // mquickjs JS_Eval requires input[input_len] = '\0'
-    std::string scriptStr(script);
+    const std::string scriptStr(script);
 
     // Evaluate the script with JS_EVAL_RETVAL to return expression values (needed for REPL)
-    JSValue result = JS_Eval(ctx_, scriptStr.c_str(), scriptStr.size(), filename, JS_EVAL_RETVAL);
+    const JSValue result = JS_Eval(ctx_, scriptStr.c_str(), scriptStr.size(), filename, JS_EVAL_RETVAL);
 
     // Check for exception
     if (JS_IsException(result)) {
         lastResult_.success = false;
         lastResult_.output = "";
 
-        JSValue exception = JS_GetException(ctx_);
+        const JSValue exception = JS_GetException(ctx_);
         lastResult_.error = jsValueToString(exception);
 
         ESP_LOGE(TAG, "Exception: %s", lastResult_.error.c_str());
@@ -136,63 +113,6 @@ ScriptResult ScriptEngine::execute(std::string_view script, const char* filename
     lastResult_.error = "";
 
     return lastResult_;
-}
-
-ScriptResult ScriptEngine::executeFile(const char* filepath) {
-    // TODO: Implement file loading from LittleFS
-    return {false, "", "File loading not yet implemented"};
-}
-
-void ScriptEngine::runREPL() {
-    if (!ctx_) {
-        ESP_LOGE(TAG, "Cannot run REPL - engine not initialized");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Starting MicroQuickJS REPL");
-    ESP_LOGI(TAG, "Enter JavaScript code (type 'exit' to quit)");
-    ESP_LOGI(TAG, "Examples:");
-    ESP_LOGI(TAG, "  console.log('Hello, JavaScript!')");
-    ESP_LOGI(TAG, "  led.on(0)");
-    ESP_LOGI(TAG, "  led.setColor(0, 255, 0, 0)");
-    ESP_LOGI(TAG, "  button.setLabel(1, 'Hello')");
-    ESP_LOGI(TAG, "  button.onClick(1, function() { console.log('Clicked!'); })");
-    Serial.print("\nmqjs> ");
-
-    String line;
-    while (true) {
-        if (Serial.available()) {
-            char c = Serial.read();
-
-            // Echo character
-            Serial.write(c);
-
-            if (c == '\n' || c == '\r') {
-                // Execute the line
-                if (line.length() > 0) {
-                    // Check for exit command
-                    if (line.equals("exit") || line.equals("quit")) {
-                        ESP_LOGI(TAG, "REPL exited");
-                        return;
-                    }
-
-                    evalLine(line.c_str());
-                    line = "";
-                }
-                Serial.print("mqjs> ");
-            } else if (c == '\b' || c == 127) {  // Backspace
-                if (line.length() > 0) {
-                    line.remove(line.length() - 1);
-                    // Echo backspace visually
-                    Serial.print(" \b");
-                }
-            } else if (c >= 32 && c < 127) {  // Printable character
-                line += c;
-            }
-        }
-
-        yield();  // Let other tasks run
-    }
 }
 
 bool ScriptEngine::evalLine(std::string_view line) {
@@ -216,7 +136,7 @@ void ScriptEngine::logCallback(void* opaque, const void* buf, size_t buf_len) {
     esp_rom_printf("%.*s", (int)buf_len, (const char*)buf);
 }
 
-std::string ScriptEngine::jsValueToString(JSValue value) {
+std::string ScriptEngine::jsValueToString(const JSValue value) const {
     if (!ctx_) return "";
 
     if (JS_IsString(ctx_, value)) {
@@ -277,7 +197,7 @@ std::string ScriptEngine::jsValueToString(JSValue value) {
     return "[object]";
 }
 
-void ScriptEngine::printException() {
+void ScriptEngine::printException() const {
     if (!ctx_) return;
 
     JSValue exception = JS_GetException(ctx_);
@@ -285,7 +205,7 @@ void ScriptEngine::printException() {
     ESP_LOGE(TAG, "Exception: %s", exceptionStr.c_str());
 }
 
-int64_t ScriptEngine::processTimers() {
+int64_t ScriptEngine::processTimers() const {
     if (!ctx_) {
         return -1;  // No timers when engine not initialized
     }

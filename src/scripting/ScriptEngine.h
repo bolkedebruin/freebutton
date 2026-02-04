@@ -43,10 +43,8 @@ public:
 
     // Script execution
     ScriptResult execute(std::string_view script, const char* filename = "<eval>");
-    ScriptResult executeFile(const char* filepath);
 
     // REPL support
-    void runREPL();  // Blocking REPL loop for serial console
     bool evalLine(std::string_view line);  // Evaluate single line (non-blocking)
 
     // Get last result as string
@@ -58,7 +56,7 @@ public:
 
     // Process JavaScript timers - call this regularly from main loop
     // Returns milliseconds until next timer, or -1 if no timers pending
-    int64_t processTimers();
+    int64_t processTimers() const;
 
 private:
     explicit ScriptEngine(size_t heapSize = DEFAULT_HEAP_SIZE);
@@ -74,8 +72,8 @@ private:
 
     // Helper functions
     static void logCallback(void* opaque, const void* buf, size_t buf_len);
-    std::string jsValueToString(JSValue value);
-    void printException();
+    std::string jsValueToString(JSValue value) const;
+    void printException() const;
 
     // Disable copy and move
     ScriptEngine(const ScriptEngine&) = delete;
