@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+/* === Design Tokens (CSS Custom Properties) === */
+@theme {
+  --color-bg-default: #0D0D10;
+  --color-bg-primary: #27272C;
+  --color-bg-secondary: #3C3C44;
+  --color-bg-accent: #6B26FF;
+  --color-border-default: #26262C;
+  --color-text-default: #E6E6E9;
+  --color-icon-default: #E6E6E9;
+
+  /* Purple scale */
+  --color-purple-90: #6B26FF;
+  --color-purple-100: #8D72D9;
+  --color-purple-80: #AF8BFF;
+  --color-purple-400: #7459C1;
+  --color-purple-active: #624FA6;
+  --color-purple-200: #241B3B;
+  --color-purple-300: #110A23;
+  --color-purple-500: #120831;
+
+  /* Backgrounds */
+  --color-bg-base: #151517;
+  --color-bg-dark: #0F0F12;
+
+  /* Grays */
+  --color-gray-80: #434242;
+  --color-gray-90: #2D2C2C;
+  --color-gray-100: #AAAAB2;
+  --color-gray-200: #686872;
+  --color-gray-300: #2A2A30;
+  --color-gray-accent: #3C3C44;
+
+  /* Status */
+  --color-status-green: #A0D4B1;
+  --color-status-orange: #F2A359;
+  --color-status-red: #E24B32;
+  --color-green-90: #19D95D;
+
+  /* Glass */
+  --color-glass-dark: rgba(13, 13, 16, 0.50);
+  --color-glass-dark-30: rgba(45, 44, 44, 0.3);
+
+  /* Fonts */
+  --font-dm: "DM Sans", Tahoma, sans-serif;
+  --font-fira: "Fira Sans", sans-serif;
+  --font-mono: "Monaco", "Menlo", "Ubuntu Mono", "Consolas", monospace;
+
+  /* Breakpoints */
+  --breakpoint-sm: 1024px;
+  --breakpoint-ipadPro: 1381px;
+  --breakpoint-md: 1440px;
+  --breakpoint-lg: 2000px;
+}
+
+/* === Global Resets & Custom Element Defaults === */
+@layer base {
+  /* Lit light-DOM custom elements must be block-level for flex/grid to work */
+  fb-app, fb-navbar, fb-nav-item, fb-editor-pane, fb-toolbar,
+  fb-code-editor, fb-status-bar, fb-right-pane, fb-virtual-device,
+  fb-tft-display, fb-button-grid, fb-console-pane, fb-console-output,
+  fb-console-input, fb-resize-handle, fb-file-drawer {
+    display: block;
+  }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    font-family: var(--font-dm);
+    color: var(--color-text-default);
+    background: linear-gradient(65deg,
+      #0E0E10 10%, #131316 20%, #1A1A1D 25%,
+      #1F1F22 28%, #131316 31%, #0A0A0C 37%,
+      #0E0E10 43%, #131316 59%, #1A1A1D 66%,
+      #131316 73%, #0E0E10 82%, #131316 100%);
+    background-size: 200% 200%;
+    animation: bg-ripple 15s ease infinite;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@keyframes bg-ripple {
+  0% {
+    background-size: 100% 100%;
+    background-position: 0% 50%;
+  }
+  50% {
+    background-size: 200% 200%;
+    background-position: 100% 50%;
+  }
+  100% {
+    background-size: 100% 100%;
+    background-position: 0% 50%;
+  }
+}
+
+/* === Scrollbar Hiding === */
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* === Custom Scrollbar (for code areas) === */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-gray-80);
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gray-200);
+}

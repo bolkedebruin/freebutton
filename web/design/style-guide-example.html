@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Q Style Guide Example</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-default: #09091F;
+      --bg-primary: #232338;
+      --bg-secondary: #3A3A4C;
+      --bg-accent: #6B26FF;
+      --border-default: #222235;
+      --text-default: #E6E6E9;
+      --icon-default: #E6E6E9;
+      --purple-90: #6B26FF;
+      --purple-100: #8D72D9;
+      --purple-80: #AF8BFF;
+      --purple-400: #7459C1;
+      --purple-active: #624FA6;
+      --purple-200: #241B3B;
+      --purple-300: #110A23;
+      --gray-100: #A7A2B6;
+      --gray-200: #605979;
+      --gray-300: #282436;
+      --accent-gray: #3A3A4C;
+      --glass-dark: rgba(9, 9, 31, 0.50);
+      --status-green: #A0D4B1;
+      --status-orange: #F2A359;
+      --status-red: #E24B32;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'DM Sans', Tahoma, sans-serif;
+      color: var(--text-default);
+      min-height: 100vh;
+      background: linear-gradient(65deg,
+        #0F0D11 10%, #151319 20%, #1E1B23 25%,
+        #242029 28%, #151319 31%, #0A090C 37%,
+        #0F0D11 43%, #151319 59%, #1E1B23 66%,
+        #151319 73%, #0F0D11 82%, #151319 100%);
+    }
+
+    .page { max-width: 800px; margin: 0 auto; padding: 48px 24px; display: flex; flex-direction: column; gap: 40px; }
+
+    /* Typography */
+    h1 { font-size: 32px; line-height: 38px; font-weight: 700; color: #fff; }
+    h2 { font-size: 24px; line-height: 31px; font-weight: 700; color: #fff; }
+    h3 { font-size: 20px; line-height: 24px; font-weight: 700; color: #fff; }
+    .label { font-size: 14px; line-height: 17px; color: var(--gray-100); }
+    .body { font-size: 16px; line-height: 24px; }
+    .small { font-size: 13px; line-height: 20px; color: var(--gray-200); }
+
+    /* Section */
+    section { display: flex; flex-direction: column; gap: 16px; }
+    .section-title { font-size: 14px; font-weight: 500; color: var(--gray-200); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* Card */
+    .card {
+      border-radius: 12px;
+      border: 1px solid rgba(141, 114, 217, 0.1);
+      background: rgba(17, 10, 35, 0.3);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
+    }
+
+    /* Glass card */
+    .glass {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,0.1), inset 0 -1px 1px rgba(0,0,0,0.2);
+    }
+
+    /* Button */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      font-family: inherit; font-weight: 500; cursor: pointer;
+      border: none; border-radius: 9999px;
+      transition: background-color 300ms ease-in-out;
+      letter-spacing: 0.025em;
+    }
+    .btn-sm { height: 32px; padding: 0 16px; font-size: 12px; }
+    .btn-md { height: 40px; padding: 0 24px; font-size: 14px; }
+    .btn-lg { height: 48px; padding: 0 24px; font-size: 14px; }
+    .btn-primary { background: var(--purple-90); color: #fff; }
+    .btn-primary:hover { background: var(--purple-active); }
+    .btn-ghost { background: rgba(255,255,255,0.05); color: var(--gray-100); border: 1px solid rgba(255,255,255,0.1); }
+    .btn-ghost:hover { background: rgba(255,255,255,0.1); }
+    .btn-accent { background: linear-gradient(90deg, #6B26FF 3.85%, #AF8BFF 64.42%); color: #fff; }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      border-radius: 1000px;
+      border: 1px solid rgba(141, 114, 217, 0.1);
+      background: rgba(17, 10, 35, 0.3);
+      padding: 4px 8px;
+      font-size: 12px; line-height: 16px;
+      color: var(--gray-100);
+    }
+
+    /* Input */
+    .input {
+      height: 56px; padding: 0 16px; width: 100%;
+      font-family: inherit; font-size: 16px; color: var(--text-default);
+      border-radius: 12px;
+      border: 1px solid rgba(141, 114, 217, 0.1);
+      background: rgba(17, 10, 35, 0.3);
+      outline: none;
+      transition: box-shadow 200ms ease-in-out;
+    }
+    .input::placeholder { color: var(--gray-200); font-size: 14px; }
+    .input:focus { box-shadow: 0 0 0 3px rgba(107, 38, 255, 0.4); }
+
+    /* Tab bar */
+    .tabs {
+      display: inline-flex; padding: 4px; border-radius: 12px;
+      background: rgba(255,255,255,0.05); backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,0.1), inset 0 -1px 1px rgba(0,0,0,0.2);
+    }
+    .tab {
+      padding: 8px 20px; font-size: 14px; border-radius: 8px;
+      background: none; border: none; color: var(--gray-100);
+      font-family: inherit; cursor: pointer;
+      transition: all 200ms ease-in-out;
+    }
+    .tab.active { background: rgba(255,255,255,0.95); color: var(--purple-300); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+
+    /* Dropdown */
+    .dropdown {
+      border-radius: 8px; padding: 8px;
+      border: 1px solid rgba(141, 114, 217, 0.1);
+      background: var(--bg-primary); backdrop-filter: blur(16px);
+      box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
+      max-width: 280px;
+    }
+    .dropdown-item {
+      display: flex; align-items: center; width: 100%;
+      height: 44px; padding: 0 12px; border-radius: 4px;
+      font-family: inherit; font-size: 15px; color: var(--gray-100);
+      background: none; border: none; cursor: pointer;
+      transition: background 200ms;
+    }
+    .dropdown-item:hover { background: rgba(141, 114, 217, 0.1); }
+
+    /* Status dot */
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+    /* Row helpers */
+    .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .row-between { display: flex; align-items: center; justify-content: space-between; }
+    .cards-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+    /* Shimmer */
+    .shimmer {
+      height: 16px; border-radius: 8px; background: rgba(255,255,255,0.05);
+      overflow: hidden; position: relative;
+    }
+    .shimmer::after {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+      animation: shimmer 2s linear infinite;
+    }
+    @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(200%); } }
+
+    /* Pulse loading */
+    .pulse-bars { display: flex; align-items: center; gap: 3px; }
+    .pulse-bar {
+      width: 4px; height: 8px; border-radius: 2px; background: var(--purple-100);
+      animation: pulse 0.6s ease-in-out infinite;
+    }
+    .pulse-bar:nth-child(2) { animation-delay: 0.1s; }
+    .pulse-bar:nth-child(3) { animation-delay: 0.2s; }
+    .pulse-bar:nth-child(4) { animation-delay: 0.3s; }
+    @keyframes pulse { 0%, 100% { height: 8px; } 50% { height: 18px; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- Typography -->
+    <section>
+      <p class="section-title">Typography</p>
+      <h1>Heading LG — 32px bold</h1>
+      <h2>Heading MD — 24px bold</h2>
+      <h3>Heading SM — 20px bold</h3>
+      <p class="body">Body — 16px regular</p>
+      <p class="label">Label — 14px</p>
+      <p class="small">Small — 13px secondary</p>
+    </section>
+
+    <!-- Buttons -->
+    <section>
+      <p class="section-title">Buttons</p>
+      <div class="row">
+        <button class="btn btn-sm btn-primary">Small</button>
+        <button class="btn btn-md btn-primary">Medium</button>
+        <button class="btn btn-lg btn-primary">Large</button>
+        <button class="btn btn-lg btn-ghost">Ghost</button>
+        <button class="btn btn-lg btn-accent">Accent</button>
+      </div>
+    </section>
+
+    <!-- Badges -->
+    <section>
+      <p class="section-title">Badges</p>
+      <div class="row">
+        <span class="badge">Default</span>
+        <span class="badge">+12%</span>
+        <span class="badge">Live</span>
+      </div>
+    </section>
+
+    <!-- Input -->
+    <section>
+      <p class="section-title">Input</p>
+      <input class="input" placeholder="Search anything...">
+    </section>
+
+    <!-- Tabs -->
+    <section>
+      <p class="section-title">Tabs</p>
+      <div class="tabs">
+        <button class="tab active">Overview</button>
+        <button class="tab">Analytics</button>
+        <button class="tab">Settings</button>
+      </div>
+    </section>
+
+    <!-- Cards -->
+    <section>
+      <p class="section-title">Cards</p>
+      <div class="cards-row">
+        <div class="card">
+          <p class="label">Sessions</p>
+          <h2>1,284</h2>
+          <div class="row"><span class="badge">+12%</span></div>
+        </div>
+        <div class="card">
+          <p class="label">Processing</p>
+          <div class="row">
+            <h2>3 tasks</h2>
+            <div class="pulse-bars">
+              <div class="pulse-bar"></div>
+              <div class="pulse-bar"></div>
+              <div class="pulse-bar"></div>
+              <div class="pulse-bar"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <p class="label">Status</p>
+          <div class="row"><span class="dot" style="background:var(--status-green)"></span> All systems go</div>
+          <div class="row"><span class="dot" style="background:var(--status-orange)"></span><span class="small">1 warning</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Glass card -->
+    <section>
+      <p class="section-title">Glass card</p>
+      <div class="card glass">
+        <p class="label">Glassmorphism panel with backdrop blur</p>
+        <p class="body">Content sits on a translucent surface.</p>
+      </div>
+    </section>
+
+    <!-- Dropdown -->
+    <section>
+      <p class="section-title">Dropdown</p>
+      <div class="dropdown">
+        <button class="dropdown-item">Create meeting</button>
+        <button class="dropdown-item">Upload file</button>
+        <button class="dropdown-item">Invite member</button>
+      </div>
+    </section>
+
+    <!-- Loading / shimmer -->
+    <section>
+      <p class="section-title">Loading skeleton</p>
+      <div class="card">
+        <div class="shimmer" style="width:40%"></div>
+        <div class="shimmer" style="width:70%"></div>
+        <div class="shimmer" style="width:30%"></div>
+      </div>
+    </section>
+
+    <!-- Colors -->
+    <section>
+      <p class="section-title">Color palette</p>
+      <div class="row">
+        <div style="width:48px;height:48px;border-radius:12px;background:#6B26FF" title="#6B26FF"></div>
+        <div style="width:48px;height:48px;border-radius:12px;background:#8D72D9" title="#8D72D9"></div>
+        <div style="width:48px;height:48px;border-radius:12px;background:#AF8BFF" title="#AF8BFF"></div>
+        <div style="width:48px;height:48px;border-radius:12px;background:#7459C1" title="#7459C1"></div>
+        <div style="width:48px;height:48px;border-radius:12px;background:#232338" title="#232338"></div>
+        <div style="width:48px;height:48px;border-radius:12px;background:#3A3A4C" title="#3A3A4C"></div>
+        <div style="width:48px;height:48px;border-radius:12px;background:#A0D4B1" title="#A0D4B1"></div>
+        <div style="width:48px;height:48px;border-radius:12px;background:#F2A359" title="#F2A359"></div>
+        <div style="width:48px;height:48px;border-radius:12px;background:#E24B32" title="#E24B32"></div>
+      </div>
+    </section>
+
+  </div>
+</body>
+</html>
