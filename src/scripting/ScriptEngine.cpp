@@ -19,6 +19,9 @@ extern "C" {
     // External declaration for the generated FreeButton stdlib
     // This is defined in lib/mquickjs/src/stdlib_export.c which includes the generated header
     extern const JSSTDLibraryDef js_stdlib;
+
+    // Initialize the fb object tree (hierarchical device API, built entirely in C)
+    void device_hw_init_fb(void* ctx);
 }
 
 namespace Scripting {
@@ -65,6 +68,9 @@ bool ScriptEngine::init() {
     // Set console callback for WebSocket REPL
     // This enables print()/console.log() to be sent to WebSocket clients
     JS_SetConsoleWriteFunc(websocketConsoleCallback);
+
+    // Initialize the fb object tree (hierarchical device API)
+    device_hw_init_fb(ctx_);
 
     ESP_LOGI(TAG, "JavaScript API initialized with %zu bytes heap", heapSize_);
 

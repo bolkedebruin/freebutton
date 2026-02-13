@@ -8,4 +8,5 @@
 #include "../../lib/mquickjs/freebutton_sensor.c"
 #include "../../lib/mquickjs/freebutton_mqtt.c"
 #include "../../lib/mquickjs/freebutton_displayitem.c"
+#include "../../lib/mquickjs/freebutton_device.c"
 #include "../../lib/mquickjs/stdlib_export.c"
