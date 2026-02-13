@@ -574,6 +574,48 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(obj: object) → string[]",
         "info": "Returns an array of a given object's own enumerable property names",
         "apply": "Object.keys(${1:obj})"
+      },
+      {
+        "label": "Object.freeze",
+        "type": "method",
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.freeze()"
+      },
+      {
+        "label": "Object.seal",
+        "type": "method",
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.seal()"
+      },
+      {
+        "label": "Object.preventExtensions",
+        "type": "method",
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.preventExtensions()"
+      },
+      {
+        "label": "Object.isFrozen",
+        "type": "method",
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.isFrozen()"
+      },
+      {
+        "label": "Object.isSealed",
+        "type": "method",
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.isSealed()"
+      },
+      {
+        "label": "Object.isExtensible",
+        "type": "method",
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.isExtensible()"
       }
     ]
   },

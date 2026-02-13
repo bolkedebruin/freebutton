@@ -33,6 +33,7 @@ import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
 import { indentUnit } from '@codemirror/language';
 import { freebuttonAutocomplete } from './autocomplete';
 import { validateCode } from './validator';
+import { emit } from './app-state';
 
 let editorView: EditorView | null = null;
 
@@ -45,6 +46,13 @@ const mquickjsLinter = linter((view) => {
 
     // Run validation
     const result = validateCode(code);
+
+    // Update status bar
+    emit('validation-result', {
+        valid: result.valid,
+        errors: result.errors.map(e => e.message),
+        errorCount: result.errors.length
+    });
 
     // Convert validation errors to CodeMirror diagnostics
     for (const error of result.errors) {
@@ -139,20 +147,14 @@ function customTabHandler(target: EditorView): boolean {
 }
 
 /**
- * Extension to update cursor position display
+ * Extension to update cursor position display via events
  */
 function cursorPositionExtension() {
     return EditorView.updateListener.of((update: ViewUpdate) => {
         if (update.selectionSet) {
             const pos = update.state.selection.main.head;
             const line = update.state.doc.lineAt(pos);
-            const lineNum = line.number;
-            const column = pos - line.from + 1;
-
-            const cursorPosElem = document.getElementById('cursorPosition');
-            if (cursorPosElem) {
-                cursorPosElem.textContent = `Ln ${lineNum}, Col ${column}`;
-            }
+            emit('cursor-position', { line: line.number, col: pos - line.from + 1 });
         }
     });
 }

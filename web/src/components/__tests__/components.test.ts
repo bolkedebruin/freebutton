@@ -80,6 +80,73 @@ describe('fb-navbar', () => {
   });
 });
 
+describe('fb-app keyboard shortcuts', () => {
+  it('prevents default on Ctrl+S', async () => {
+    const el = createElement('fb-app');
+    await nextFrame();
+
+    const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('Ctrl+L dispatches console-clear', async () => {
+    const el = createElement('fb-app');
+    await nextFrame();
+
+    const events: Event[] = [];
+    const handler = (e: Event) => events.push(e);
+    window.addEventListener('console-clear', handler);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', ctrlKey: true, bubbles: true, cancelable: true }));
+    await nextFrame();
+
+    window.removeEventListener('console-clear', handler);
+    expect(events.length).toBe(1);
+  });
+});
+
+describe('fb-navbar sidebar-panel events', () => {
+  it('Assets click dispatches sidebar-panel with assets', async () => {
+    const el = createElement('fb-navbar');
+    await nextFrame();
+
+    const events: CustomEvent[] = [];
+    const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
+    window.addEventListener('sidebar-panel', handler);
+
+    const assetsItem = Array.from(el.querySelectorAll('fb-nav-item')).find(
+      item => item.getAttribute('label') === 'Assets'
+    );
+    assetsItem!.click();
+    await nextFrame();
+
+    window.removeEventListener('sidebar-panel', handler);
+    expect(events.length).toBe(1);
+    expect(events[0].detail.panel).toBe('assets');
+  });
+
+  it('Examples click dispatches sidebar-panel with examples', async () => {
+    const el = createElement('fb-navbar');
+    await nextFrame();
+
+    const events: CustomEvent[] = [];
+    const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
+    window.addEventListener('sidebar-panel', handler);
+
+    const examplesItem = Array.from(el.querySelectorAll('fb-nav-item')).find(
+      item => item.getAttribute('label') === 'Examples'
+    );
+    examplesItem!.click();
+    await nextFrame();
+
+    window.removeEventListener('sidebar-panel', handler);
+    expect(events.length).toBe(1);
+    expect(events[0].detail.panel).toBe('examples');
+  });
+});
+
 describe('fb-toolbar', () => {
   it('renders icon buttons', async () => {
     const el = createElement('fb-toolbar');
@@ -97,22 +164,23 @@ describe('fb-toolbar', () => {
     expect(input).not.toBeNull();
   });
 
-  it('has a green connection indicator dot', async () => {
+  it('has a connection indicator dot', async () => {
     const el = createElement('fb-toolbar');
     await nextFrame();
 
-    const dot = el.querySelector('.bg-status-green');
+    // Starts disconnected (red), turns green on connection
+    const dot = el.querySelector('.bg-status-red') || el.querySelector('.bg-status-green');
     expect(dot).not.toBeNull();
   });
 });
 
 describe('fb-code-editor', () => {
-  it('renders line numbers', async () => {
+  it('renders CodeMirror container', async () => {
     const el = createElement('fb-code-editor');
     await nextFrame();
 
-    const lineNumbers = el.querySelectorAll('.text-gray-200 > div');
-    expect(lineNumbers.length).toBeGreaterThan(0);
+    const container = el.querySelector('#cm-editor');
+    expect(container).not.toBeNull();
   });
 
   it('uses translucent background for ripple effect', async () => {
@@ -120,16 +188,7 @@ describe('fb-code-editor', () => {
     await nextFrame();
 
     const bgElements = el.querySelectorAll('.bg-black\\/70');
-    expect(bgElements.length).toBe(2); // gutter + code area
-  });
-
-  it('renders mock code with syntax highlighting', async () => {
-    const el = createElement('fb-code-editor');
-    await nextFrame();
-
-    // Check for keyword coloring (var, function, if, else)
-    const keywords = el.querySelectorAll('.text-\\[\\#ff7b72\\]');
-    expect(keywords.length).toBeGreaterThan(0);
+    expect(bgElements.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -149,6 +208,19 @@ describe('fb-status-bar', () => {
     expect(el.textContent).toContain('Valid');
     const greenText = el.querySelector('.text-status-green');
     expect(greenText).not.toBeNull();
+  });
+
+  it('shows error icon and text when invalid', async () => {
+    const el = createElement('fb-status-bar');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('validation-result', {
+      detail: { valid: false, errors: ['some error'], errorCount: 1 }
+    }));
+    await nextFrame();
+
+    expect(el.textContent).toContain('1 error');
+    expect(el.querySelector('.text-status-red')).not.toBeNull();
   });
 });
 
@@ -220,11 +292,108 @@ describe('fb-virtual-device', () => {
     // Page 2 tab should now have the active styling
     expect(page2Tab!.classList.contains('bg-white/95')).toBe(true);
   });
+
+  it('renders gear icon next to tabs', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]');
+    expect(gearBtn).not.toBeNull();
+  });
+
+  it('clicking gear toggles flipped class on flip container', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    const flipInner = el.querySelector('.device-flip-inner');
+    expect(flipInner?.classList.contains('flipped')).toBe(false);
+
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
+    gearBtn.click();
+    await nextFrame();
+
+    expect(flipInner?.classList.contains('flipped')).toBe(true);
+  });
+
+  it('settings card shows device info fields', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    // Flip to settings
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
+    gearBtn.click();
+    await nextFrame();
+
+    const fields = el.querySelectorAll('[data-field]');
+    const fieldNames = Array.from(fields).map(f => f.getAttribute('data-field'));
+    expect(fieldNames).toContain('IPv4');
+    expect(fieldNames).toContain('MAC');
+    expect(fieldNames).toContain('Firmware');
+    expect(fieldNames).toContain('Uptime');
+  });
+
+  it('device name input is present and editable', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    // Flip to settings
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
+    gearBtn.click();
+    await nextFrame();
+
+    const input = el.querySelector('[data-testid="device-name-input"]') as HTMLInputElement;
+    expect(input).not.toBeNull();
+    expect(input.value).toBe('btn_fab028');
+
+    // Edit the name
+    input.value = 'my_device';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextFrame();
+
+    expect((el as any)._deviceName).toBe('my_device');
+  });
+
+  it('renders memory graph with three SVG polylines', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    // Flip to settings
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
+    gearBtn.click();
+    await nextFrame();
+
+    const graph = el.querySelector('[data-testid="memory-graph"]');
+    expect(graph).not.toBeNull();
+
+    const lines = graph!.querySelectorAll('polyline[data-series]');
+    const series = Array.from(lines).map(l => l.getAttribute('data-series'));
+    expect(series).toContain('heap');
+    expect(series).toContain('lvgl');
+    expect(series).toContain('js');
+  });
+
+  it('memory graph legend shows current values', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
+    gearBtn.click();
+    await nextFrame();
+
+    const graph = el.querySelector('[data-testid="memory-graph"]');
+    expect(graph?.textContent).toContain('Heap');
+    expect(graph?.textContent).toContain('LVGL');
+    expect(graph?.textContent).toContain('JS');
+  });
 });
 
 describe('fb-tft-display', () => {
   it('renders display items', async () => {
-    const el = createElement('fb-tft-display');
+    const el = createElement('fb-tft-display') as any;
+    el.displayItems = [
+      { x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: 'time', fontSize: 42 },
+      { x: 0, y: 50, width: 100, height: 50, type: 'number', label: 'Button+ Likes', value: '67005', fontSize: 18 },
+    ];
     await nextFrame();
 
     expect(el.textContent).toContain('Amsterdam');
@@ -232,7 +401,10 @@ describe('fb-tft-display', () => {
   });
 
   it('shows live time', async () => {
-    const el = createElement('fb-tft-display');
+    const el = createElement('fb-tft-display') as any;
+    el.displayItems = [
+      { x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: 'time', fontSize: 42 },
+    ];
     await nextFrame();
 
     // Time should contain a colon (HH:MM format)
@@ -242,8 +414,16 @@ describe('fb-tft-display', () => {
 });
 
 describe('fb-button-grid', () => {
+  const testButtons = [
+    { position: 5, label: 'Tolomeo', topLabel: '', ledOn: true, ledColor: 'rgb(255,0,0)', page: 1 },
+    { position: 6, label: 'Green Lamp', topLabel: 'Virtual', ledOn: true, ledColor: 'rgb(255,0,0)', page: 1 },
+    { position: 7, label: 'Like!', topLabel: 'Button+', ledOn: false, ledColor: 'rgb(0,0,0)', page: 1 },
+    { position: 8, label: 'Kantoor', topLabel: '', ledOn: true, ledColor: 'rgb(255,0,0)', page: 1 },
+  ];
+
   it('renders 4 buttons', async () => {
-    const el = createElement('fb-button-grid');
+    const el = createElement('fb-button-grid') as any;
+    el.buttons = testButtons;
     await nextFrame();
 
     const buttons = el.querySelectorAll('button');
@@ -251,7 +431,8 @@ describe('fb-button-grid', () => {
   });
 
   it('shows button labels', async () => {
-    const el = createElement('fb-button-grid');
+    const el = createElement('fb-button-grid') as any;
+    el.buttons = testButtons;
     await nextFrame();
 
     expect(el.textContent).toContain('Tolomeo');
@@ -261,7 +442,8 @@ describe('fb-button-grid', () => {
   });
 
   it('shows LED indicators', async () => {
-    const el = createElement('fb-button-grid');
+    const el = createElement('fb-button-grid') as any;
+    el.buttons = testButtons;
     await nextFrame();
 
     // LED on = red border, LED off = black border
@@ -288,27 +470,73 @@ describe('fb-console-pane', () => {
     );
     expect(clearBtn).not.toBeUndefined();
   });
+
+  it('Clear button dispatches console-clear event', async () => {
+    const el = createElement('fb-console-pane');
+    await nextFrame();
+
+    const events: Event[] = [];
+    const handler = (e: Event) => events.push(e);
+    window.addEventListener('console-clear', handler);
+
+    const clearBtn = Array.from(el.querySelectorAll('button')).find(
+      b => b.textContent?.trim() === 'Clear'
+    );
+    clearBtn!.click();
+    await nextFrame();
+
+    window.removeEventListener('console-clear', handler);
+    expect(events.length).toBe(1);
+  });
 });
 
 describe('fb-console-output', () => {
-  it('renders mock output lines', async () => {
+  it('renders welcome message on mount', async () => {
     const el = createElement('fb-console-output');
     await nextFrame();
 
     const lines = el.querySelectorAll('.p-3 > div');
-    expect(lines.length).toBeGreaterThanOrEqual(11);
+    expect(lines.length).toBe(1);
+    expect(lines[0].textContent).toContain('Console ready');
+  });
+
+  it('renders lines from console-line events', async () => {
+    const el = createElement('fb-console-output');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: 'Hello world', type: 'log' } }));
+    await nextFrame();
+
+    const lines = el.querySelectorAll('.p-3 > div');
+    expect(lines.length).toBe(2); // welcome + new line
+    expect(lines[1].textContent).toContain('Hello world');
+  });
+
+  it('clears lines on console-clear event', async () => {
+    const el = createElement('fb-console-output');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('console-clear'));
+    await nextFrame();
+
+    const lines = el.querySelectorAll('.p-3 > div');
+    expect(lines.length).toBe(0);
   });
 
   it('applies correct color classes for input lines', async () => {
     const el = createElement('fb-console-output');
     await nextFrame();
 
-    const inputLines = el.querySelectorAll('.text-\\[\\#4fc3f7\\]');
-    expect(inputLines.length).toBeGreaterThan(0);
+    // Welcome message uses info type which maps to text-[#4fc3f7]
+    const infoLines = el.querySelectorAll('.text-\\[\\#4fc3f7\\]');
+    expect(infoLines.length).toBeGreaterThan(0);
   });
 
   it('applies correct color classes for result lines', async () => {
     const el = createElement('fb-console-output');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: '42', type: 'result' } }));
     await nextFrame();
 
     const resultLines = el.querySelectorAll('.text-status-green');
@@ -317,6 +545,9 @@ describe('fb-console-output', () => {
 
   it('applies correct color classes for log lines', async () => {
     const el = createElement('fb-console-output');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: 'some log', type: 'log' } }));
     await nextFrame();
 
     const logLines = el.querySelectorAll('.text-gray-100');
@@ -332,12 +563,68 @@ describe('fb-console-input', () => {
     expect(el.textContent).toContain('>');
   });
 
-  it('has input with placeholder', async () => {
+  it('has textarea with placeholder', async () => {
     const el = createElement('fb-console-input');
     await nextFrame();
 
-    const input = el.querySelector('input[placeholder="Type JavaScript..."]');
-    expect(input).not.toBeNull();
+    const textarea = el.querySelector('textarea[placeholder="Type JavaScript..."]');
+    expect(textarea).not.toBeNull();
+  });
+
+  it('dispatches console-eval on Enter with code', async () => {
+    const el = createElement('fb-console-input');
+    await nextFrame();
+
+    const textarea = el.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'led.count()';
+
+    const events: CustomEvent[] = [];
+    const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
+    window.addEventListener('console-eval', handler);
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await nextFrame();
+
+    window.removeEventListener('console-eval', handler);
+    expect(events.length).toBe(1);
+    expect(events[0].detail.code).toBe('led.count()');
+  });
+
+  it('clears input after execution', async () => {
+    const el = createElement('fb-console-input');
+    await nextFrame();
+
+    const textarea = el.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'test()';
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await nextFrame();
+
+    expect(textarea.value).toBe('');
+  });
+
+  it('navigates history with ArrowUp', async () => {
+    const el = createElement('fb-console-input');
+    await nextFrame();
+
+    const textarea = el.querySelector('textarea') as HTMLTextAreaElement;
+
+    // Execute two commands to build history
+    textarea.value = 'first()';
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await nextFrame();
+
+    textarea.value = 'second()';
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await nextFrame();
+
+    // Arrow up should recall last command
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    await nextFrame();
+
+    expect(textarea.value).toBe('second()');
   });
 });
 
@@ -397,35 +684,82 @@ describe('fb-editor-pane', () => {
     expect(el.querySelector('fb-status-bar')).not.toBeNull();
   });
 
-  it('renders file drawer sidebar', async () => {
+  it('renders file drawer sidebar by default', async () => {
     const el = createElement('fb-editor-pane');
     await nextFrame();
 
     expect(el.querySelector('fb-file-drawer')).not.toBeNull();
   });
 
-  it('toggles sidebar on toggle-assets event', async () => {
+  it('toggles assets sidebar on sidebar-panel event', async () => {
     const el = createElement('fb-editor-pane');
     await nextFrame();
 
-    // Sidebar should start open (w-[200px])
-    const sidebar = el.querySelector('.w-\\[200px\\]');
-    expect(sidebar).not.toBeNull();
+    // Sidebar starts open with assets
+    expect(el.querySelector('.w-\\[200px\\]')).not.toBeNull();
 
-    // Dispatch toggle event
-    window.dispatchEvent(new CustomEvent('toggle-assets'));
+    // Close by toggling assets again
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'assets' } }));
+    await nextFrame();
+    expect(el.querySelector('.w-0')).not.toBeNull();
+
+    // Reopen
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'assets' } }));
+    await nextFrame();
+    expect(el.querySelector('.w-\\[200px\\]')).not.toBeNull();
+  });
+
+  it('switches from assets to examples panel', async () => {
+    const el = createElement('fb-editor-pane');
     await nextFrame();
 
-    // Sidebar should now be closed (w-0)
-    const closed = el.querySelector('.w-0');
-    expect(closed).not.toBeNull();
+    // Starts with assets
+    expect(el.querySelector('fb-file-drawer')).not.toBeNull();
 
-    // Toggle again to open
-    window.dispatchEvent(new CustomEvent('toggle-assets'));
+    // Switch to examples
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'examples' } }));
     await nextFrame();
 
-    const reopened = el.querySelector('.w-\\[200px\\]');
-    expect(reopened).not.toBeNull();
+    // Assets gone, examples visible
+    expect(el.querySelector('fb-file-drawer')).toBeNull();
+    expect(el.textContent).toContain('Examples');
+    expect(el.textContent).toContain('LED Blink');
+  });
+
+  it('switches from examples back to assets', async () => {
+    const el = createElement('fb-editor-pane');
+    await nextFrame();
+
+    // Switch to examples
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'examples' } }));
+    await nextFrame();
+    expect(el.querySelector('fb-file-drawer')).toBeNull();
+
+    // Switch back to assets
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'assets' } }));
+    await nextFrame();
+    expect(el.querySelector('fb-file-drawer')).not.toBeNull();
+  });
+
+  it('examples panel dispatches load-example on click', async () => {
+    const el = createElement('fb-editor-pane');
+    await nextFrame();
+
+    // Open examples panel
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'examples' } }));
+    await nextFrame();
+
+    const events: CustomEvent[] = [];
+    const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
+    window.addEventListener('load-example', handler);
+
+    const exampleBtn = el.querySelector('.group\\/example') as HTMLElement;
+    exampleBtn?.click();
+    await nextFrame();
+
+    window.removeEventListener('load-example', handler);
+    expect(events.length).toBe(1);
+    expect(events[0].detail.name).toBeDefined();
   });
 });
 

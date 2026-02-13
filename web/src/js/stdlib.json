@@ -1551,6 +1551,42 @@
             }
           ],
           "returns": "string[]"
+        },
+        {
+          "description": "",
+          "name": "freeze",
+          "params": [],
+          "returns": "any"
+        },
+        {
+          "description": "",
+          "name": "seal",
+          "params": [],
+          "returns": "any"
+        },
+        {
+          "description": "",
+          "name": "preventExtensions",
+          "params": [],
+          "returns": "any"
+        },
+        {
+          "description": "",
+          "name": "isFrozen",
+          "params": [],
+          "returns": "any"
+        },
+        {
+          "description": "",
+          "name": "isSealed",
+          "params": [],
+          "returns": "any"
+        },
+        {
+          "description": "",
+          "name": "isExtensible",
+          "params": [],
+          "returns": "any"
         }
       ]
     },

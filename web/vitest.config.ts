@@ -13,10 +13,6 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     include: ['src/**/*.test.ts'],
-    exclude: [
-      // Phase 2 tests — dependencies not yet installed
-      'src/js/autocomplete.test.ts',
-      'src/js/validator.test.ts',
-    ],
+    exclude: [],
   },
 });

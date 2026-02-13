@@ -1,0 +1,139 @@
+{
+  "generated": "2025-12-30T09:07:54.865Z",
+  "sources": {
+    "mqjs_stdlib": "../../../lib/mquickjs/mqjs_stdlib.c",
+    "freebutton_stdlib": "../../../lib/mquickjs/freebutton_stdlib.c",
+    "freebutton_types": "freebutton.d.ts"
+  },
+  "globals": [
+    "Array",
+    "ArrayBuffer",
+    "Boolean",
+    "Console",
+    "DataView",
+    "Date",
+    "Error",
+    "EvalError",
+    "FilledRectangle",
+    "Float32Array",
+    "Float64Array",
+    "Function",
+    "Infinity",
+    "Int16Array",
+    "Int32Array",
+    "Int8Array",
+    "InternalError",
+    "JSON",
+    "LED",
+    "Math",
+    "NaN",
+    "Number",
+    "Object",
+    "Performance",
+    "RangeError",
+    "Rectangle",
+    "ReferenceError",
+    "RegExp",
+    "String",
+    "SyntaxError",
+    "TypeError",
+    "TypedArray",
+    "URIError",
+    "Uint16Array",
+    "Uint32Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "arguments",
+    "button",
+    "clearTimeout",
+    "console",
+    "decodeURI",
+    "decodeURIComponent",
+    "encodeURI",
+    "encodeURIComponent",
+    "eval",
+    "globalThis",
+    "isFinite",
+    "isNaN",
+    "led",
+    "mqtt",
+    "null",
+    "parseFloat",
+    "parseInt",
+    "performance",
+    "print",
+    "sensor",
+    "setTimeout",
+    "this",
+    "undefined"
+  ],
+  "apis": {
+    "Math": [
+      "atan2",
+      "pow",
+      "random",
+      "imul",
+      "clz32"
+    ],
+    "JSON": [
+      "parse",
+      "stringify"
+    ],
+    "console": [
+      "log"
+    ],
+    "performance": [
+      "now"
+    ],
+    "led": [
+      "on",
+      "off",
+      "setColor",
+      "count"
+    ],
+    "math": [
+      "atan2",
+      "pow",
+      "random",
+      "imul",
+      "clz32"
+    ],
+    "json": [
+      "parse",
+      "stringify"
+    ],
+    "button": [
+      "setLabel",
+      "setTopLabel",
+      "onClick",
+      "onLongPress",
+      "onRelease",
+      "count"
+    ],
+    "sensor": [
+      "getValue",
+      "getType",
+      "getInfo",
+      "getAll",
+      "count"
+    ],
+    "mqtt": [
+      "publish",
+      "subscribe",
+      "unsubscribe",
+      "onConnect",
+      "onDisconnect",
+      "isConnected",
+      "getBrokerName",
+      "getBrokerCount"
+    ]
+  },
+  "counts": {
+    "total": 60,
+    "es5_builtins": 34,
+    "mqjs_extensions": 11,
+    "mqjs_globals": 40,
+    "freebutton_apis": 4,
+    "global_functions": 3
+  }
+}

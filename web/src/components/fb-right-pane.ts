@@ -12,7 +12,7 @@ export class FbRightPane extends LitElement {
           <fb-virtual-device></fb-virtual-device>
         </div>
         <fb-resize-handle class="h-[16px] cursor-row-resize shrink-0" data-direction="vertical"></fb-resize-handle>
-        <fb-console-pane class="flex-1 min-h-[200px] flex flex-col border border-border-default rounded-2xl mb-0"></fb-console-pane>
+        <fb-console-pane class="flex-1 min-h-[120px] flex flex-col border border-border-default rounded-2xl mb-0"></fb-console-pane>
       </div>
     `;
   }

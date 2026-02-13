@@ -1,0 +1,457 @@
+/**
+ * FreeButton Global Type Declarations
+ * Auto-generated from stdlib.json
+ * DO NOT EDIT MANUALLY - Run: npm run generate-types
+ */
+
+export interface ButtonAPI {
+    /** Get number of available buttons */
+    count(): number;
+
+    /** Set button label text */
+    setLabel(position: number, text: string): void;
+
+    /** Set button top label text */
+    setTopLabel(position: number, text: string): void;
+
+    /** Register click event handler for button */
+    onClick(position: number, callback: Function): void;
+
+    /** Register long press event handler for button */
+    onLongPress(position: number, callback: Function): void;
+
+    /** Register release event handler for button */
+    onRelease(position: number, callback: Function): void;
+
+}
+
+export interface ConsoleAPI {
+    /** Outputs a message to the console */
+    log(args: any): void;
+
+}
+
+export interface DisplayAPI {
+    /** Create a new display item on the screen */
+    create(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number): number;
+
+    /** Remove a display item by ID */
+    remove(id: number): boolean;
+
+    /** Get number of display items */
+    count(): number;
+
+    /** Get display item information by ID */
+    get(id: number): object;
+
+    /** Get array of all display item IDs */
+    getAll(): number[];
+
+    /** Set display item label text */
+    setLabel(id: number, label: string): boolean;
+
+    /** Set display item value text */
+    setValue(id: number, value: string): boolean;
+
+    /** Set display item unit text */
+    setUnit(id: number, unit: string): boolean;
+
+    /** Set display item position */
+    setPosition(id: number, x: number, y: number): boolean;
+
+    /** Set display item page */
+    setPage(id: number, page: number): boolean;
+
+}
+
+export interface LedAPI {
+    /** Get number of available LEDs */
+    count(): number;
+
+    /** Turn LED white at specified position */
+    on(position: number): void;
+
+    /** Turn LED off at specified position */
+    off(position: number): void;
+
+    /** Set LED RGB color (0-255 for each component) */
+    setColor(position: number, r: number, g: number, b: number): void;
+
+}
+
+export interface MqttAPI {
+    /** Get number of configured MQTT brokers */
+    getBrokerCount(): number;
+
+    /** Get MQTT broker name */
+    getBrokerName(brokerId: number): string;
+
+    /** Check if MQTT broker is connected */
+    isConnected(brokerId: number): boolean;
+
+    /** Publish MQTT message to topic */
+    publish(brokerId: number, topic: string, payload: string, qos: number, retain: number): void;
+
+    /** Subscribe to MQTT topic with callback */
+    subscribe(brokerId: number, topic: string, callback: Function, qos: number): void;
+
+    /** Unsubscribe from MQTT topic */
+    unsubscribe(brokerId: number, topic: string): void;
+
+    /** Register callback for MQTT broker connection event */
+    onConnect(brokerId: number, callback: Function): void;
+
+    /** Register callback for MQTT broker disconnection event */
+    onDisconnect(brokerId: number, callback: Function): void;
+
+}
+
+export interface PerformanceAPI {
+    /** Returns a high-resolution timestamp in milliseconds */
+    now(): number;
+
+}
+
+export interface SensorAPI {
+    /** Get number of available sensors */
+    count(): number;
+
+    /** Read current sensor value */
+    getValue(sensorId: number): number;
+
+    /** Get sensor type name */
+    getType(sensorId: number): string;
+
+    /** Get sensor information object */
+    getInfo(sensorId: number): object;
+
+    /** Get array of all sensor information objects */
+    getAll(): object[];
+
+    /** Register change event handler for sensor value changes */
+    onChange(sensorId: number, callback: Function): void;
+
+}
+
+export interface ArrayConstructor {
+    /** Determines whether the passed value is an Array */
+    isArray(value: any): boolean;
+}
+
+export interface Array {
+    /** Merges two or more arrays */
+    concat(array: any[]): any[];
+    /** Adds one or more elements to the end of an array */
+    push(element: any): number;
+    /** Removes the last element from an array and returns that element */
+    pop(): any;
+    /** Joins all elements of an array into a string */
+    join(separator: string): string;
+    /** Returns a string representing the specified array and its elements */
+    toString(): string;
+    /** Reverses an array in place */
+    reverse(): any[];
+    /** Removes the first element from an array and returns that element */
+    shift(): any;
+    /** Returns a shallow copy of a portion of an array */
+    slice(start: number, end: number): any[];
+    /** Changes the contents of an array by removing or replacing elements */
+    splice(start: number, deleteCount: number, item: any): any[];
+    /** Adds one or more elements to the beginning of an array */
+    unshift(element: any): number;
+    /** Returns the first index at which a given element can be found */
+    indexOf(searchElement: any, fromIndex: number): number;
+    /** Returns the last index at which a given element can be found */
+    lastIndexOf(searchElement: any, fromIndex: number): number;
+    /** Tests whether all elements pass the test implemented by the provided function */
+    every(callback: Function, thisArg: any): boolean;
+    /** Tests whether at least one element passes the test */
+    some(callback: Function, thisArg: any): boolean;
+    /** Executes a provided function once for each array element */
+    forEach(callback: Function, thisArg: any): void;
+    /** Creates a new array with the results of calling a function for every element */
+    map(callback: Function, thisArg: any): any[];
+    /** Creates a new array with all elements that pass the test */
+    filter(callback: Function, thisArg: any): any[];
+    /** Executes a reducer function on each element, resulting in a single output value */
+    reduce(callback: Function, initialValue: any): any;
+    /** Applies a function against an accumulator and each value (from right-to-left) */
+    reduceRight(callback: Function, initialValue: any): any;
+    /** Executes a reducer function on each element, resulting in a single output value */
+    reduce(callback: Function, initialValue: any): any;
+    /** Sorts the elements of an array in place */
+    sort(compareFunction: Function): any[];
+}
+
+export interface DateConstructor {
+    /** Returns the number of milliseconds elapsed since January 1, 1970 */
+    now(): number;
+}
+
+export interface Error {
+    /** Returns a string representing the error */
+    toString(): string;
+}
+
+export interface Function {
+    /** Calls a function with a given this value and arguments */
+    call(thisArg: any, arg: any): any;
+    /** Calls a function with a given this value and arguments provided as an array */
+    apply(thisArg: any, argsArray: any[]): any;
+    /** Creates a new function that has its this keyword set to the provided value */
+    bind(thisArg: any, arg: any): Function;
+    /** Returns a string representing the source code of the function */
+    toString(): string;
+}
+
+export interface JSONConstructor {
+    /** Parses a JSON string, constructing the JavaScript value or object */
+    parse(text: string, reviver: Function): any;
+    /** Converts a JavaScript value to a JSON string */
+    stringify(value: any, replacer: Function|any[], space: string|number): string;
+}
+
+export interface MathConstructor {
+    /** Returns the smallest of zero or more numbers */
+    min(value: number): number;
+    /** Returns the largest of zero or more numbers */
+    max(value: number): number;
+    /** Returns the sign of a number */
+    sign(x: number): number;
+    /** Returns the absolute value of a number */
+    abs(x: number): number;
+    /** Returns the largest integer less than or equal to a number */
+    floor(x: number): number;
+    /** Returns the smallest integer greater than or equal to a number */
+    ceil(x: number): number;
+    /** Returns the value of a number rounded to the nearest integer */
+    round(x: number): number;
+    /** Returns the square root of a number */
+    sqrt(x: number): number;
+    /** Returns the sine of a number */
+    sin(x: number): number;
+    /** Returns the cosine of a number */
+    cos(x: number): number;
+    /** Returns the tangent of a number */
+    tan(x: number): number;
+    /** Returns the arcsine of a number */
+    asin(x: number): number;
+    /** Returns the arccosine of a number */
+    acos(x: number): number;
+    /** Returns the arctangent of a number */
+    atan(x: number): number;
+    /** Returns the arctangent of the quotient of its arguments */
+    atan2(y: number, x: number): number;
+    /** Returns E raised to the power of a number */
+    exp(x: number): number;
+    /** Returns the natural logarithm of a number */
+    log(x: number): number;
+    /** Returns base to the exponent power */
+    pow(base: number, exponent: number): number;
+    /** Returns a pseudo-random number between 0 and 1 */
+    random(): number;
+    /** Returns the result of the 32-bit integer multiplication */
+    imul(a: number, b: number): number;
+    /** Returns the number of leading zero bits in the 32-bit binary representation */
+    clz32(x: number): number;
+    /** Returns the nearest 32-bit single precision float representation */
+    fround(x: number): number;
+    /** Returns the integer part of a number */
+    trunc(x: number): number;
+    /** Returns the base 2 logarithm of a number */
+    log2(x: number): number;
+    /** Returns the base 10 logarithm of a number */
+    log10(x: number): number;
+}
+
+export interface NumberConstructor {
+    /** Parses a string argument and returns an integer */
+    parseInt(string: string, radix: number): number;
+    /** Parses a string argument and returns a floating point number */
+    parseFloat(string: string): number;
+}
+
+export interface Number {
+    /** Returns a string representing the number in exponential notation */
+    toExponential(fractionDigits: number): string;
+    /** Formats a number using fixed-point notation */
+    toFixed(digits: number): string;
+    /** Returns a string representing the number to a specified precision */
+    toPrecision(precision: number): string;
+    /** Returns a string representing the specified number object */
+    toString(radix: number): string;
+}
+
+export interface ObjectConstructor {
+    /** Defines a new property or modifies an existing property on an object */
+    defineProperty(obj: object, prop: string, descriptor: object): object;
+    /** Returns the prototype of the specified object */
+    getPrototypeOf(obj: object): object;
+    /** Sets the prototype of a specified object */
+    setPrototypeOf(obj: object, prototype: object): object;
+    /** Creates a new object with the specified prototype object */
+    create(proto: object): object;
+    /** Returns an array of a given object's own enumerable property names */
+    keys(obj: object): string[];
+    freeze(): any;
+    seal(): any;
+    preventExtensions(): any;
+    isFrozen(): any;
+    isSealed(): any;
+    isExtensible(): any;
+}
+
+export interface Object {
+    /** Returns a boolean indicating whether the object has the specified property */
+    hasOwnProperty(prop: string): boolean;
+    /** Returns a string representation of the object */
+    toString(): string;
+}
+
+export interface RegExp {
+    /** Executes a search for a match in a specified string */
+    exec(str: string): any;
+    /** Tests for a match in a string */
+    test(str: string): boolean;
+}
+
+export interface StringConstructor {
+    /** Returns a string created from the specified sequence of UTF-16 code units */
+    fromCharCode(charCode: number): string;
+    /** Returns a string created from the specified sequence of code points */
+    fromCodePoint(codePoint: number): string;
+}
+
+export interface String {
+    /** Returns the character at the specified index */
+    charAt(index: number): string;
+    /** Returns the UTF-16 code unit at the given index */
+    charCodeAt(index: number): number;
+    /** Returns a non-negative integer that is the Unicode code point value */
+    codePointAt(index: number): number;
+    /** Extracts a section of a string and returns it as a new string */
+    slice(start: number, end: number): string;
+    /** Returns the part of the string between the start and end indexes */
+    substring(start: number, end: number): string;
+    /** Combines the text of two or more strings and returns a new string */
+    concat(str: string): string;
+    /** Returns the index of the first occurrence of a specified value */
+    indexOf(searchValue: string, fromIndex: number): number;
+    /** Returns the index of the last occurrence of a specified value */
+    lastIndexOf(searchValue: string, fromIndex: number): number;
+    /** Retrieves the result of matching a string against a regular expression */
+    match(regexp: RegExp): any;
+    /** Returns a new string with some or all matches of a pattern replaced */
+    replace(pattern: string|RegExp, replacement: string|Function): string;
+    /** Returns a new string with all matches of a pattern replaced */
+    replaceAll(pattern: string|RegExp, replacement: string|Function): string;
+    /** Executes a search for a match between a regular expression and this string */
+    search(regexp: RegExp): number;
+    /** Divides a string into an ordered list of substrings */
+    split(separator: string|RegExp, limit: number): string[];
+    /** Returns the calling string value converted to lowercase */
+    toLowerCase(): string;
+    /** Returns the calling string value converted to uppercase */
+    toUpperCase(): string;
+    /** Removes whitespace from both ends of a string */
+    trim(): string;
+    /** Removes whitespace from the end of a string */
+    trimEnd(): string;
+    /** Removes whitespace from the beginning of a string */
+    trimStart(): string;
+    /** Returns a string representing the specified object */
+    toString(): string;
+    repeat(): any;
+}
+
+// ============================================================================
+// Global Variables and Functions
+// ============================================================================
+
+declare global {
+    const button: ButtonAPI;
+    const console: ConsoleAPI;
+    const display: DisplayAPI;
+    const led: LedAPI;
+    const mqtt: MqttAPI;
+    const performance: PerformanceAPI;
+    const sensor: SensorAPI;
+
+    const Array: ArrayConstructor;
+    const Date: DateConstructor;
+    const JSON: JSONConstructor;
+    const Math: MathConstructor;
+    const Number: NumberConstructor;
+    const Object: ObjectConstructor;
+    const String: StringConstructor;
+
+    // Global constants
+    /** The undefined value */
+    const undefined: undefined;
+    /** Positive infinity value */
+    const Infinity: number;
+    /** Not-a-Number value */
+    const NaN: number;
+    /** The global object */
+    const globalThis: object;
+
+    // Global functions
+    /** Parses a string argument and returns an integer */
+    function parseInt(string: string, radix: number): number;
+    /** Parses a string argument and returns a floating point number */
+    function parseFloat(string: string): number;
+    /** Evaluates JavaScript code represented as a string */
+    function eval(code: string): any;
+    /** Determines whether a value is NaN (Not-A-Number) */
+    function isNaN(value: any): boolean;
+    /** Determines whether a value is a finite number */
+    function isFinite(value: any): boolean;
+    /** Print values to console output */
+    function print(args: any): void;
+    /** Triggers garbage collection (development/testing only) */
+    function gc(): void;
+    /** Loads and executes a JavaScript file */
+    function load(filename: string): any;
+    /** Loads a memory-mapped bytecode file for efficient execution */
+    function loadMapped(filename: string, offset: number, size: number): any;
+    function loadUserBytecode(): any;
+    /** Executes a function after a specified delay in milliseconds */
+    function setTimeout(callback: Function, delay: number): number;
+    /** Cancels a timeout previously established by setTimeout */
+    function clearTimeout(timeoutId: number): void;
+
+    // Test utility functions
+    /** Throws an error with the given message (test utility) */
+    function throw_error(msg: string): never;
+    /** Asserts that actual equals expected, throws error if not (test utility) */
+    function assert(actual: any, expected?: any, message?: string): void;
+    /** Asserts that a function throws the expected error type (test utility) */
+    function assert_throws(expected_error: any, func: Function): void;
+}
+
+// ============================================================================
+// Compiler API (loaded via WASM)
+// ============================================================================
+
+export interface CompileOptions {
+    targetAddr?: number;
+    use32Bit?: boolean;
+}
+
+export interface CompilerVersion {
+    compiler: string;
+    features: string[];
+    platform: string;
+}
+
+export interface MQuickJSCompiler {
+    ready: boolean;
+    init(): Promise<void>;
+    compile(sourceCode: string, options?: CompileOptions): Promise<Uint8Array>;
+    validate(sourceCode: string): Promise<boolean>;
+    getVersion(): CompilerVersion;
+}
+
+declare global {
+    const mqjsCompiler: MQuickJSCompiler;
+}

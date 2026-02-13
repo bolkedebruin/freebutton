@@ -53,7 +53,11 @@ export function freebuttonCompletions(context: CompletionContext): CompletionRes
     }
 
     // Return completions for the specific API if we found an object name
-    if (objectName && objectName in freebuttonAPI) {
+    if (objectName) {
+        // If we found an object name but it's not a known API, return empty
+        if (!(objectName in freebuttonAPI)) {
+            return { from: word.from, options: [], validFor: /^\w*$/ };
+        }
         const apiKey = objectName as keyof FreebuttonAPIDefinition;
         const api = freebuttonAPI[apiKey];
         if (!api) return null;
