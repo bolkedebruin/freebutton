@@ -60,7 +60,7 @@
   fb-app, fb-navbar, fb-nav-item, fb-editor-pane, fb-toolbar,
   fb-code-editor, fb-status-bar, fb-right-pane, fb-virtual-device,
   fb-tft-display, fb-button-grid, fb-console-pane, fb-console-output,
-  fb-console-input, fb-resize-handle, fb-file-drawer {
+  fb-console-input, fb-resize-handle, fb-file-drawer, fb-settings-modal {
     display: block;
   }
 

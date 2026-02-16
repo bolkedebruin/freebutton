@@ -31,7 +31,7 @@ export class FbNavbar extends LitElement {
 
           <!-- Bottom section — pinned to bottom -->
           <div class="flex w-full flex-col items-center pl-1.5 mt-auto">
-            <fb-nav-item .icon=${SettingsIcon()} label="Settings"></fb-nav-item>
+            <fb-nav-item .icon=${SettingsIcon()} label="Settings" @click=${() => emit('open-settings')}></fb-nav-item>
           </div>
         </div>
       </nav>

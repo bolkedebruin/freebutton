@@ -83,6 +83,7 @@ declare global {
     'sidebar-panel': CustomEvent<{ panel: 'assets' | 'examples' }>;
     'load-example': CustomEvent<{ name: string }>;
     'nav-select': CustomEvent<{ item: string }>;
+    'open-settings': CustomEvent<void>;
   }
 }
 

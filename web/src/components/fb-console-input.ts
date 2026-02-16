@@ -11,6 +11,7 @@ export class FbConsoleInput extends LitElement {
   private _history: string[] = [];
   private _historyIndex = -1;
   private _autocompleteInitialized = false;
+  private _needsJsResize = !CSS.supports('field-sizing', 'content');
 
   private get _textarea(): HTMLTextAreaElement | null {
     return this.querySelector('textarea');
@@ -24,6 +25,14 @@ export class FbConsoleInput extends LitElement {
         this._autocompleteInitialized = true;
       }
     }
+  }
+
+  private _autoResize() {
+    if (!this._needsJsResize) return;
+    const textarea = this._textarea;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
   }
 
   private _handleKeydown = (e: KeyboardEvent) => {
@@ -85,6 +94,7 @@ export class FbConsoleInput extends LitElement {
     const textarea = this._textarea;
     if (textarea) {
       textarea.value = '';
+      this._autoResize();
     }
   }
 
@@ -98,6 +108,7 @@ export class FbConsoleInput extends LitElement {
 
     textarea.value = this._historyIndex === -1 ? '' : this._history[this._historyIndex] || '';
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    this._autoResize();
   }
 
   render() {
@@ -110,6 +121,7 @@ export class FbConsoleInput extends LitElement {
           style="field-sizing: content"
           placeholder="Type JavaScript..."
           @keydown=${this._handleKeydown}
+          @input=${() => this._autoResize()}
         ></textarea>
       </div>
     `;

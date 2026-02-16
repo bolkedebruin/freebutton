@@ -17,3 +17,4 @@ import './components/fb-console-pane.js';
 import './components/fb-console-output.js';
 import './components/fb-console-input.js';
 import './components/fb-file-drawer.js';
+import './components/fb-settings-modal.js';

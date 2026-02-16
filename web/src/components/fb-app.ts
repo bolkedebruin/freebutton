@@ -105,6 +105,7 @@ export class FbApp extends LitElement {
             style="width: ${this.rightPaneWidth}px; min-width: 380px; max-width: 600px;"
           ></fb-right-pane>
         </div>
+        <fb-settings-modal></fb-settings-modal>
       </div>
     `;
   }

@@ -22,6 +22,7 @@ export class FbVirtualDevice extends LitElement {
   @state() private _pages: PageConfig[] = [];
   @state() private _flipped = false;
   @state() private _deviceName = 'btn_fab028';
+  @state() private _ntpServer = 'pool.ntp.org';
   @state() private _uptimeSeconds = 720; // 12 minutes
   @state() private _memorySamples: MemorySample[] = [];
 
@@ -198,6 +199,19 @@ export class FbVirtualDevice extends LitElement {
             @input=${(e: Event) => { this._deviceName = (e.target as HTMLInputElement).value; }}
             class="bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-[13px] text-white outline-none focus:border-purple-80 transition-colors"
             data-testid="device-name-input"
+          />
+        </div>
+
+        <!-- NTP Server -->
+        <div class="flex flex-col gap-1">
+          <label class="text-[11px] text-gray-200">NTP Server</label>
+          <input
+            type="text"
+            .value=${this._ntpServer}
+            @input=${(e: Event) => { this._ntpServer = (e.target as HTMLInputElement).value; }}
+            class="bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-[13px] text-white font-mono outline-none focus:border-purple-80 transition-colors"
+            placeholder="pool.ntp.org"
+            data-testid="ntp-server-input"
           />
         </div>
 
