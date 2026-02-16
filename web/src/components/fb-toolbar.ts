@@ -122,7 +122,7 @@ export class FbToolbar extends LitElement {
         <div class="w-px h-6 bg-border-default mx-4"></div>
         ${this._iconBtn(TrashIcon(), 'Clear', () => this._handleClear())}
         <div class="flex-1"></div>
-        <div class="flex items-center rounded-xl h-14 bg-purple-300/30 border border-purple-100/10 w-72 focus-within:ring-3 focus-within:ring-purple-100/20 focus-within:ring-offset-0 transition-all duration-200">
+        <div class="flex items-center rounded-xl h-14 bg-purple-300/30 border border-white/10 w-72 focus-within:border-purple-80 transition-all duration-200">
           <span class="shrink-0 w-2.5 h-2.5 rounded-full ${dotColor} ml-4"></span>
           <input
             type="text"
