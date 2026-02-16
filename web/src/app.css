@@ -108,6 +108,7 @@
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
   font-size: 14px;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .cm-gutters {
   background: transparent !important;
@@ -116,6 +117,15 @@
 .cm-activeLineGutter, .cm-activeLine {
   background: rgba(255, 255, 255, 0.03) !important;
 }
+/* Fold gutter — fixed width so it doesn't shift when markers appear */
+.cm-foldGutter {
+  width: 1em !important;
+}
+/* Line number gutter — reserve space for 3 digits to prevent shifting */
+.cm-lineNumbers {
+  min-width: 4ch !important;
+}
+
 /* Lint gutter — align dot with line numbers, use style-guide red */
 .cm-gutter-lint {
   width: 1em !important;
