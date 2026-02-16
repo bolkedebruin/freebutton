@@ -1,7 +1,7 @@
 import { LitElement, html, svg } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { on, emit } from '../js/app-state.js';
-import { examples } from '../js/editor.js';
+import { examples } from '../js/examples.js';
 
 import './fb-toolbar.js';
 import './fb-code-editor.js';
@@ -47,46 +47,24 @@ export class FbEditorPane extends LitElement {
     </svg>`;
   }
 
-  private _exampleLabel(key: string): string {
-    const labels: Record<string, string> = {
-      blink: 'LED Blink',
-      sensor: 'Sensor Read',
-      button: 'Button Handler',
-      mqtt: 'MQTT Publish',
-    };
-    return labels[key] ?? key;
-  }
-
-  private _exampleDescription(key: string): string {
-    const desc: Record<string, string> = {
-      blink: 'Toggle an LED on and off',
-      sensor: 'Read temperature & humidity',
-      button: 'Handle click & long press',
-      mqtt: 'Publish sensor data',
-    };
-    return desc[key] ?? '';
-  }
-
   private _loadExample(name: string) {
     emit('load-example', { name });
   }
 
   private _renderExamplesPanel() {
-    const exampleKeys = Object.keys(examples);
-
     return html`
       <div class="flex flex-col gap-3">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-gray-100 uppercase tracking-wider">Examples</span>
         </div>
         <div class="flex flex-col gap-0.5">
-          ${exampleKeys.map(key => html`
+          ${examples.map(ex => html`
             <div class="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 transition-colors duration-200 cursor-pointer group/example"
-              @click=${() => this._loadExample(key)}>
+              @click=${() => this._loadExample(ex.id)}>
               <span class="shrink-0 text-gray-200">${this._fileIcon()}</span>
               <div class="flex-1 min-w-0">
-                <div class="text-xs text-text-default truncate">${this._exampleLabel(key)}</div>
-                <div class="text-[10px] text-gray-200">${this._exampleDescription(key)}</div>
+                <div class="text-xs text-text-default truncate">${ex.title}</div>
+                <div class="text-[10px] text-gray-200">${ex.description}</div>
               </div>
             </div>
           `)}

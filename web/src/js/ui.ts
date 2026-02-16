@@ -409,6 +409,6 @@ export function initUI(): void {
 
     const exampleMqtt = document.getElementById('exampleMqtt');
     if (exampleMqtt) {
-        exampleMqtt.addEventListener('click', () => loadExampleScript('mqtt'));
+        exampleMqtt.addEventListener('click', () => loadExampleScript('mqtt_simple'));
     }
 }

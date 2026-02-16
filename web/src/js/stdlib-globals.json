@@ -1,5 +1,5 @@
 {
-  "generated": "2025-12-30T09:07:54.865Z",
+  "generated": "2026-02-16T17:08:43.763Z",
   "sources": {
     "mqjs_stdlib": "../../../lib/mquickjs/mqjs_stdlib.c",
     "freebutton_stdlib": "../../../lib/mquickjs/freebutton_stdlib.c",
@@ -44,7 +44,8 @@
     "Uint8Array",
     "Uint8ClampedArray",
     "arguments",
-    "button",
+    "assert",
+    "assert_throws",
     "clearTimeout",
     "console",
     "decodeURI",
@@ -52,10 +53,15 @@
     "encodeURI",
     "encodeURIComponent",
     "eval",
+    "fb",
+    "gc",
     "globalThis",
     "isFinite",
     "isNaN",
     "led",
+    "load",
+    "loadMapped",
+    "loadUserBytecode",
     "mqtt",
     "null",
     "parseFloat",
@@ -64,7 +70,9 @@
     "print",
     "sensor",
     "setTimeout",
+    "system",
     "this",
+    "throw_error",
     "undefined"
   ],
   "apis": {
@@ -86,54 +94,41 @@
       "now"
     ],
     "led": [
+      "init",
+      "rgb",
       "on",
-      "off",
-      "setColor",
-      "count"
-    ],
-    "math": [
-      "atan2",
-      "pow",
-      "random",
-      "imul",
-      "clz32"
-    ],
-    "json": [
-      "parse",
-      "stringify"
-    ],
-    "button": [
-      "setLabel",
-      "setTopLabel",
-      "onClick",
-      "onLongPress",
-      "onRelease",
-      "count"
-    ],
-    "sensor": [
-      "getValue",
-      "getType",
-      "getInfo",
-      "getAll",
-      "count"
+      "off"
     ],
     "mqtt": [
+      "getBrokerCount",
+      "getBrokerName",
+      "isConnected",
       "publish",
       "subscribe",
       "unsubscribe",
       "onConnect",
-      "onDisconnect",
-      "isConnected",
-      "getBrokerName",
-      "getBrokerCount"
+      "onDisconnect"
+    ],
+    "sensor": [
+      "count",
+      "getValue",
+      "getType",
+      "getInfo",
+      "getAll",
+      "onChange"
+    ],
+    "system": [
+      "uptime",
+      "freeHeap",
+      "version"
     ]
   },
   "counts": {
-    "total": 60,
+    "total": 68,
     "es5_builtins": 34,
     "mqjs_extensions": 11,
     "mqjs_globals": 40,
-    "freebutton_apis": 4,
-    "global_functions": 3
+    "freebutton_apis": 3,
+    "global_functions": 32
   }
 }

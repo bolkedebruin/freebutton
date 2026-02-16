@@ -576,7 +576,7 @@ describe('fb-console-input', () => {
     await nextFrame();
 
     const textarea = el.querySelector('textarea') as HTMLTextAreaElement;
-    textarea.value = 'led.count()';
+    textarea.value = 'sensor.count()';
 
     const events: CustomEvent[] = [];
     const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
@@ -587,7 +587,7 @@ describe('fb-console-input', () => {
 
     window.removeEventListener('console-eval', handler);
     expect(events.length).toBe(1);
-    expect(events[0].detail.code).toBe('led.count()');
+    expect(events[0].detail.code).toBe('sensor.count()');
   });
 
   it('clears input after execution', async () => {

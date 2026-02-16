@@ -148,6 +148,12 @@ function generateTypes() {
         }
     }
 
+    // fb global (hierarchical device API)
+    if (stdlib.fb) {
+        output += `\n    /** ${stdlib.fb.description || 'Device hierarchy'} */\n`;
+        output += `    const fb: FbRoot;\n`;
+    }
+
     output += '\n    // Global constants\n';
 
     // Global constants
@@ -186,6 +192,65 @@ function generateTypes() {
     output += '    function assert_throws(expected_error: any, func: Function): void;\n';
 
     output += '}\n';
+
+    // Generate fb hierarchy types (runtime-constructed device API)
+    if (stdlib.fb) {
+        output += '\n// ============================================================================\n';
+        output += '// FreeButton Device Hierarchy (fb global)\n';
+        output += '// ============================================================================\n\n';
+
+        const fbTypes = stdlib.fb.types || {};
+
+        // Emit interfaces for each fb type
+        for (const [typeName, typeDef] of Object.entries(fbTypes)) {
+            output += `export interface ${typeName} {\n`;
+
+            // Emit methods
+            if (typeDef.methods) {
+                for (const method of typeDef.methods) {
+                    const params = (method.params || [])
+                        .map(p => `${p.name}: ${p.type}`)
+                        .join(', ');
+                    if (method.description) {
+                        output += `    /** ${method.description} */\n`;
+                    }
+                    output += `    ${method.name}(${params}): ${method.returns};\n`;
+                }
+            }
+
+            // Emit properties
+            if (typeDef.properties) {
+                for (const prop of typeDef.properties) {
+                    if (prop.description) {
+                        output += `    /** ${prop.description} */\n`;
+                    }
+                    output += `    readonly ${prop.name}: ${prop.type};\n`;
+                }
+            }
+
+            output += '}\n\n';
+        }
+
+        // Emit the root fb interface
+        const root = stdlib.fb.root;
+        if (root) {
+            output += `export interface FbRoot {\n`;
+            for (const prop of root.properties || []) {
+                if (prop.description) {
+                    output += `    /** ${prop.description} */\n`;
+                }
+                output += `    readonly ${prop.name}: ${prop.type};\n`;
+            }
+            output += '}\n\n';
+        }
+
+        console.log('\nFb Hierarchy Types:');
+        for (const typeName of Object.keys(fbTypes)) {
+            const methodCount = fbTypes[typeName].methods?.length || 0;
+            const propCount = fbTypes[typeName].properties?.length || 0;
+            console.log(`  ${typeName}: ${methodCount} methods, ${propCount} properties`);
+        }
+    }
 
     // Add custom compiler API (not in stdlib.json, specific to editor)
     output += `

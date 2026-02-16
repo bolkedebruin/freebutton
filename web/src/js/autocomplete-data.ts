@@ -21,52 +21,6 @@ export interface FreebuttonAPIDefinition {
 }
 
 export const freebuttonAPI: FreebuttonAPIDefinition = {
-  "button": {
-    "methods": [
-      {
-        "label": "button.count",
-        "type": "method",
-        "detail": "() → number",
-        "info": "Get number of available buttons",
-        "apply": "button.count()"
-      },
-      {
-        "label": "button.setLabel",
-        "type": "method",
-        "detail": "(position: number, text: string) → void",
-        "info": "Set button label text",
-        "apply": "button.setLabel(${1:position}, ${2:text})"
-      },
-      {
-        "label": "button.setTopLabel",
-        "type": "method",
-        "detail": "(position: number, text: string) → void",
-        "info": "Set button top label text",
-        "apply": "button.setTopLabel(${1:position}, ${2:text})"
-      },
-      {
-        "label": "button.onClick",
-        "type": "method",
-        "detail": "(position: number, callback: Function) → void",
-        "info": "Register click event handler for button",
-        "apply": "button.onClick(${1:position}, function() {\n\t${2}\n})"
-      },
-      {
-        "label": "button.onLongPress",
-        "type": "method",
-        "detail": "(position: number, callback: Function) → void",
-        "info": "Register long press event handler for button",
-        "apply": "button.onLongPress(${1:position}, function() {\n\t${2}\n})"
-      },
-      {
-        "label": "button.onRelease",
-        "type": "method",
-        "detail": "(position: number, callback: Function) → void",
-        "info": "Register release event handler for button",
-        "apply": "button.onRelease(${1:position}, function() {\n\t${2}\n})"
-      }
-    ]
-  },
   "console": {
     "methods": [
       {
@@ -75,112 +29,6 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(args: any) → void",
         "info": "Outputs a message to the console",
         "apply": "console.log(${1:args})"
-      }
-    ]
-  },
-  "display": {
-    "methods": [
-      {
-        "label": "display.create",
-        "type": "method",
-        "detail": "(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number) → number",
-        "info": "Create a new display item on the screen",
-        "apply": "display.create(${1:x}, ${2:y}, ${3:width}, ${4:boxType}, ${5:fontSize}, ${6:alignment}, ${7:label}, ${8:unit}, ${9:round}, ${10:page})"
-      },
-      {
-        "label": "display.remove",
-        "type": "method",
-        "detail": "(id: number) → boolean",
-        "info": "Remove a display item by ID",
-        "apply": "display.remove(${1:id})"
-      },
-      {
-        "label": "display.count",
-        "type": "method",
-        "detail": "() → number",
-        "info": "Get number of display items",
-        "apply": "display.count()"
-      },
-      {
-        "label": "display.get",
-        "type": "method",
-        "detail": "(id: number) → object",
-        "info": "Get display item information by ID",
-        "apply": "display.get(${1:id})"
-      },
-      {
-        "label": "display.getAll",
-        "type": "method",
-        "detail": "() → number[]",
-        "info": "Get array of all display item IDs",
-        "apply": "display.getAll()"
-      },
-      {
-        "label": "display.setLabel",
-        "type": "method",
-        "detail": "(id: number, label: string) → boolean",
-        "info": "Set display item label text",
-        "apply": "display.setLabel(${1:id}, ${2:label})"
-      },
-      {
-        "label": "display.setValue",
-        "type": "method",
-        "detail": "(id: number, value: string) → boolean",
-        "info": "Set display item value text",
-        "apply": "display.setValue(${1:id}, ${2:value})"
-      },
-      {
-        "label": "display.setUnit",
-        "type": "method",
-        "detail": "(id: number, unit: string) → boolean",
-        "info": "Set display item unit text",
-        "apply": "display.setUnit(${1:id}, ${2:unit})"
-      },
-      {
-        "label": "display.setPosition",
-        "type": "method",
-        "detail": "(id: number, x: number, y: number) → boolean",
-        "info": "Set display item position",
-        "apply": "display.setPosition(${1:id}, ${2:x}, ${3:y})"
-      },
-      {
-        "label": "display.setPage",
-        "type": "method",
-        "detail": "(id: number, page: number) → boolean",
-        "info": "Set display item page",
-        "apply": "display.setPage(${1:id}, ${2:page})"
-      }
-    ]
-  },
-  "led": {
-    "methods": [
-      {
-        "label": "led.count",
-        "type": "method",
-        "detail": "() → number",
-        "info": "Get number of available LEDs",
-        "apply": "led.count()"
-      },
-      {
-        "label": "led.on",
-        "type": "method",
-        "detail": "(position: number) → void",
-        "info": "Turn LED white at specified position",
-        "apply": "led.on(${1:position})"
-      },
-      {
-        "label": "led.off",
-        "type": "method",
-        "detail": "(position: number) → void",
-        "info": "Turn LED off at specified position",
-        "apply": "led.off(${1:position})"
-      },
-      {
-        "label": "led.setColor",
-        "type": "method",
-        "detail": "(position: number, r: number, g: number, b: number) → void",
-        "info": "Set LED RGB color (0-255 for each component)",
-        "apply": "led.setColor(${1:position}, ${2:r}, ${3:g}, ${4:b})"
       }
     ]
   },
@@ -298,6 +146,31 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(sensorId: number, callback: Function) → void",
         "info": "Register change event handler for sensor value changes",
         "apply": "sensor.onChange(${1:sensorId}, function() {\n\t${2}\n})"
+      }
+    ]
+  },
+  "system": {
+    "methods": [
+      {
+        "label": "system.uptime",
+        "type": "method",
+        "detail": "() → number",
+        "info": "Get device uptime in seconds",
+        "apply": "system.uptime()"
+      },
+      {
+        "label": "system.freeHeap",
+        "type": "method",
+        "detail": "() → number",
+        "info": "Get free heap memory in bytes",
+        "apply": "system.freeHeap()"
+      },
+      {
+        "label": "system.version",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Get firmware version string",
+        "apply": "system.version()"
       }
     ]
   },
@@ -634,6 +507,388 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(codePoint: number) → string",
         "info": "Returns a string created from the specified sequence of code points",
         "apply": "String.fromCodePoint(${1:codePoint})"
+      }
+    ]
+  },
+  "fb": {
+    "methods": [
+      {
+        "label": "fb.main.display.create",
+        "type": "method",
+        "detail": "(type: string) → number",
+        "info": "Create a display item",
+        "apply": "fb.main.display.create(${1:type})"
+      },
+      {
+        "label": "fb.main.display.remove",
+        "type": "method",
+        "detail": "(id: number) → boolean",
+        "info": "Remove a display item",
+        "apply": "fb.main.display.remove(${1:id})"
+      },
+      {
+        "label": "fb.main.display.count",
+        "type": "method",
+        "detail": "() → number",
+        "info": "Get number of display items",
+        "apply": "fb.main.display.count()"
+      },
+      {
+        "label": "fb.main.display.get",
+        "type": "method",
+        "detail": "(id: number) → object",
+        "info": "Get display item by ID",
+        "apply": "fb.main.display.get(${1:id})"
+      },
+      {
+        "label": "fb.main.display.getAll",
+        "type": "method",
+        "detail": "() → Array",
+        "info": "Get all display items",
+        "apply": "fb.main.display.getAll()"
+      },
+      {
+        "label": "fb.main.display.setLabel",
+        "type": "method",
+        "detail": "(id: number, label: string) → void",
+        "info": "Set item label",
+        "apply": "fb.main.display.setLabel(${1:id}, ${2:label})"
+      },
+      {
+        "label": "fb.main.display.setValue",
+        "type": "method",
+        "detail": "(id: number, value: any) → void",
+        "info": "Set item value",
+        "apply": "fb.main.display.setValue(${1:id}, ${2:value})"
+      },
+      {
+        "label": "fb.main.display.setUnit",
+        "type": "method",
+        "detail": "(id: number, unit: string) → void",
+        "info": "Set item unit",
+        "apply": "fb.main.display.setUnit(${1:id}, ${2:unit})"
+      },
+      {
+        "label": "fb.main.display.setPosition",
+        "type": "method",
+        "detail": "(id: number, x: number, y: number) → void",
+        "info": "Set item position",
+        "apply": "fb.main.display.setPosition(${1:id}, ${2:x}, ${3:y})"
+      },
+      {
+        "label": "fb.main.display.setPage",
+        "type": "method",
+        "detail": "(id: number, page: number) → void",
+        "info": "Set item page",
+        "apply": "fb.main.display.setPage(${1:id}, ${2:page})"
+      },
+      {
+        "label": "fb.main.left.led.setColor",
+        "type": "method",
+        "detail": "(r: number, g: number, b: number) → void",
+        "info": "Set LED RGB color",
+        "apply": "fb.main.left.led.setColor(${1:r}, ${2:g}, ${3:b})"
+      },
+      {
+        "label": "fb.main.left.led.on",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED on (white)",
+        "apply": "fb.main.left.led.on()"
+      },
+      {
+        "label": "fb.main.left.led.off",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED off",
+        "apply": "fb.main.left.led.off()"
+      },
+      {
+        "label": "fb.main.left.backLed.setColor",
+        "type": "method",
+        "detail": "(r: number, g: number, b: number) → void",
+        "info": "Set LED RGB color",
+        "apply": "fb.main.left.backLed.setColor(${1:r}, ${2:g}, ${3:b})"
+      },
+      {
+        "label": "fb.main.left.backLed.on",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED on (white)",
+        "apply": "fb.main.left.backLed.on()"
+      },
+      {
+        "label": "fb.main.left.backLed.off",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED off",
+        "apply": "fb.main.left.backLed.off()"
+      },
+      {
+        "label": "fb.main.left.button.onClick",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register click handler",
+        "apply": "fb.main.left.button.onClick(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.main.left.button.onLongPress",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register long press handler",
+        "apply": "fb.main.left.button.onLongPress(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.main.left.button.onRelease",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register release handler",
+        "apply": "fb.main.left.button.onRelease(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.main.left.display.setLabel",
+        "type": "method",
+        "detail": "(text: string) → void",
+        "info": "Set button display label",
+        "apply": "fb.main.left.display.setLabel(${1:text})"
+      },
+      {
+        "label": "fb.main.left.display.setTopLabel",
+        "type": "method",
+        "detail": "(text: string) → void",
+        "info": "Set button display top label",
+        "apply": "fb.main.left.display.setTopLabel(${1:text})"
+      },
+      {
+        "label": "fb.main.right.led.setColor",
+        "type": "method",
+        "detail": "(r: number, g: number, b: number) → void",
+        "info": "Set LED RGB color",
+        "apply": "fb.main.right.led.setColor(${1:r}, ${2:g}, ${3:b})"
+      },
+      {
+        "label": "fb.main.right.led.on",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED on (white)",
+        "apply": "fb.main.right.led.on()"
+      },
+      {
+        "label": "fb.main.right.led.off",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED off",
+        "apply": "fb.main.right.led.off()"
+      },
+      {
+        "label": "fb.main.right.backLed.setColor",
+        "type": "method",
+        "detail": "(r: number, g: number, b: number) → void",
+        "info": "Set LED RGB color",
+        "apply": "fb.main.right.backLed.setColor(${1:r}, ${2:g}, ${3:b})"
+      },
+      {
+        "label": "fb.main.right.backLed.on",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED on (white)",
+        "apply": "fb.main.right.backLed.on()"
+      },
+      {
+        "label": "fb.main.right.backLed.off",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED off",
+        "apply": "fb.main.right.backLed.off()"
+      },
+      {
+        "label": "fb.main.right.button.onClick",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register click handler",
+        "apply": "fb.main.right.button.onClick(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.main.right.button.onLongPress",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register long press handler",
+        "apply": "fb.main.right.button.onLongPress(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.main.right.button.onRelease",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register release handler",
+        "apply": "fb.main.right.button.onRelease(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.main.right.display.setLabel",
+        "type": "method",
+        "detail": "(text: string) → void",
+        "info": "Set button display label",
+        "apply": "fb.main.right.display.setLabel(${1:text})"
+      },
+      {
+        "label": "fb.main.right.display.setTopLabel",
+        "type": "method",
+        "detail": "(text: string) → void",
+        "info": "Set button display top label",
+        "apply": "fb.main.right.display.setTopLabel(${1:text})"
+      },
+      {
+        "label": "fb.bars[n].left.led.setColor",
+        "type": "method",
+        "detail": "(r: number, g: number, b: number) → void",
+        "info": "Set LED RGB color",
+        "apply": "fb.bars[n].left.led.setColor(${1:r}, ${2:g}, ${3:b})"
+      },
+      {
+        "label": "fb.bars[n].left.led.on",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED on (white)",
+        "apply": "fb.bars[n].left.led.on()"
+      },
+      {
+        "label": "fb.bars[n].left.led.off",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED off",
+        "apply": "fb.bars[n].left.led.off()"
+      },
+      {
+        "label": "fb.bars[n].left.backLed.setColor",
+        "type": "method",
+        "detail": "(r: number, g: number, b: number) → void",
+        "info": "Set LED RGB color",
+        "apply": "fb.bars[n].left.backLed.setColor(${1:r}, ${2:g}, ${3:b})"
+      },
+      {
+        "label": "fb.bars[n].left.backLed.on",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED on (white)",
+        "apply": "fb.bars[n].left.backLed.on()"
+      },
+      {
+        "label": "fb.bars[n].left.backLed.off",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED off",
+        "apply": "fb.bars[n].left.backLed.off()"
+      },
+      {
+        "label": "fb.bars[n].left.button.onClick",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register click handler",
+        "apply": "fb.bars[n].left.button.onClick(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.bars[n].left.button.onLongPress",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register long press handler",
+        "apply": "fb.bars[n].left.button.onLongPress(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.bars[n].left.button.onRelease",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register release handler",
+        "apply": "fb.bars[n].left.button.onRelease(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.bars[n].left.display.setLabel",
+        "type": "method",
+        "detail": "(text: string) → void",
+        "info": "Set button display label",
+        "apply": "fb.bars[n].left.display.setLabel(${1:text})"
+      },
+      {
+        "label": "fb.bars[n].left.display.setTopLabel",
+        "type": "method",
+        "detail": "(text: string) → void",
+        "info": "Set button display top label",
+        "apply": "fb.bars[n].left.display.setTopLabel(${1:text})"
+      },
+      {
+        "label": "fb.bars[n].right.led.setColor",
+        "type": "method",
+        "detail": "(r: number, g: number, b: number) → void",
+        "info": "Set LED RGB color",
+        "apply": "fb.bars[n].right.led.setColor(${1:r}, ${2:g}, ${3:b})"
+      },
+      {
+        "label": "fb.bars[n].right.led.on",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED on (white)",
+        "apply": "fb.bars[n].right.led.on()"
+      },
+      {
+        "label": "fb.bars[n].right.led.off",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED off",
+        "apply": "fb.bars[n].right.led.off()"
+      },
+      {
+        "label": "fb.bars[n].right.backLed.setColor",
+        "type": "method",
+        "detail": "(r: number, g: number, b: number) → void",
+        "info": "Set LED RGB color",
+        "apply": "fb.bars[n].right.backLed.setColor(${1:r}, ${2:g}, ${3:b})"
+      },
+      {
+        "label": "fb.bars[n].right.backLed.on",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED on (white)",
+        "apply": "fb.bars[n].right.backLed.on()"
+      },
+      {
+        "label": "fb.bars[n].right.backLed.off",
+        "type": "method",
+        "detail": "() → void",
+        "info": "Turn LED off",
+        "apply": "fb.bars[n].right.backLed.off()"
+      },
+      {
+        "label": "fb.bars[n].right.button.onClick",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register click handler",
+        "apply": "fb.bars[n].right.button.onClick(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.bars[n].right.button.onLongPress",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register long press handler",
+        "apply": "fb.bars[n].right.button.onLongPress(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.bars[n].right.button.onRelease",
+        "type": "method",
+        "detail": "(callback: Function) → void",
+        "info": "Register release handler",
+        "apply": "fb.bars[n].right.button.onRelease(function() {\n\t${1}\n})"
+      },
+      {
+        "label": "fb.bars[n].right.display.setLabel",
+        "type": "method",
+        "detail": "(text: string) → void",
+        "info": "Set button display label",
+        "apply": "fb.bars[n].right.display.setLabel(${1:text})"
+      },
+      {
+        "label": "fb.bars[n].right.display.setTopLabel",
+        "type": "method",
+        "detail": "(text: string) → void",
+        "info": "Set button display top label",
+        "apply": "fb.bars[n].right.display.setTopLabel(${1:text})"
       }
     ]
   }

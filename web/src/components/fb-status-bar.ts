@@ -56,7 +56,7 @@ export class FbStatusBar extends LitElement {
     return html`
       <div class="flex items-center justify-between px-4 h-7 bg-bg-default border-t border-border-default text-xs font-mono">
         <span class="text-gray-200">Ln ${this._line}, Col ${this._col}</span>
-        <span class="status-indicator flex items-center gap-1.5 ${statusClass}">
+        <span class="status-indicator flex items-center gap-1.5 text-balance ${statusClass}">
           ${statusIcon} ${statusText}
         </span>
       </div>

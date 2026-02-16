@@ -140,35 +140,6 @@ describe('FreeButton Autocomplete', () => {
     });
 
     describe('Member Expression Completion', () => {
-        it('should suggest led methods when typing "led."', () => {
-            const context = createContext('led.');
-            const result = freebuttonCompletions(context);
-
-            expect(result).not.toBeNull();
-            const labels = result?.options.map(opt =>
-                typeof opt === 'string' ? opt : opt.label
-            ) || [];
-
-            expect(labels).toContain('count');
-            expect(labels).toContain('on');
-            expect(labels).toContain('off');
-            expect(labels).toContain('setColor');
-        });
-
-        it('should suggest button methods when typing "button."', () => {
-            const context = createContext('button.');
-            const result = freebuttonCompletions(context);
-
-            expect(result).not.toBeNull();
-            const labels = result?.options.map(opt =>
-                typeof opt === 'string' ? opt : opt.label
-            ) || [];
-
-            expect(labels).toContain('count');
-            expect(labels).toContain('onClick');
-            expect(labels).toContain('setLabel');
-        });
-
         it('should suggest Math methods when typing "Math."', () => {
             const context = createContext('Math.');
             const result = freebuttonCompletions(context);
@@ -209,6 +180,18 @@ describe('FreeButton Autocomplete', () => {
 
             // setTimeout starts with lowercase 's', not uppercase 'S'
             expect(labels).not.toContain('setTimeout');
+        });
+
+        it('should suggest fb when typing "f"', () => {
+            const context = createContext('f');
+            const result = freebuttonCompletions(context);
+
+            expect(result).not.toBeNull();
+            const labels = result?.options.map(opt =>
+                typeof opt === 'string' ? opt : opt.label
+            ) || [];
+
+            expect(labels).toContain('fb');
         });
     });
 });

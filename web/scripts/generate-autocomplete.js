@@ -118,6 +118,63 @@ function generateAutocomplete() {
         console.log(`  ${globalFunc.name}`);
     }
 
+    // fb hierarchy completions (runtime-constructed device API)
+    if (stdlib.fb) {
+        const fbTypes = stdlib.fb.types || {};
+        const root = stdlib.fb.root;
+
+        // Helper: generate completions for all paths through the hierarchy
+        function addFbCompletions(prefix, typeName, depth) {
+            if (depth > 4) return; // prevent infinite recursion
+
+            const typeDef = fbTypes[typeName];
+            if (!typeDef) return;
+
+            // Add method completions
+            if (typeDef.methods) {
+                for (const method of typeDef.methods) {
+                    const label = `${prefix}.${method.name}`;
+                    methods.push({
+                        label,
+                        type: 'method',
+                        detail: generateDetail(method.params, method.returns),
+                        info: method.description || '',
+                        apply: generateSnippet(label, method.params)
+                    });
+                }
+            }
+
+            // Recurse into properties
+            if (typeDef.properties) {
+                for (const prop of typeDef.properties) {
+                    const propType = prop.type.replace('[]', '');
+                    if (fbTypes[propType]) {
+                        addFbCompletions(`${prefix}.${prop.name}`, propType, depth + 1);
+                    }
+                }
+            }
+        }
+
+        // Build fb completions from root properties
+        const methods = [];
+        if (root && root.properties) {
+            for (const prop of root.properties) {
+                const propType = prop.type.replace('[]', '');
+                const propPrefix = prop.type.endsWith('[]')
+                    ? `fb.${prop.name}[n]`
+                    : `fb.${prop.name}`;
+                if (fbTypes[propType]) {
+                    addFbCompletions(propPrefix, propType, 0);
+                }
+            }
+        }
+
+        if (methods.length > 0) {
+            apiObjects['fb'] = { methods };
+            console.log(`\nfb hierarchy: ${methods.length} completions`);
+        }
+    }
+
     // Test utility functions (from test_language.js and test_builtin.js)
     const testUtilities = [
         {

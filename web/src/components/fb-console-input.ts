@@ -45,7 +45,6 @@ export class FbConsoleInput extends LitElement {
             const end = textarea.selectionEnd || 0;
             textarea.value = code.substring(0, start) + '\n' + code.substring(end);
             textarea.selectionStart = textarea.selectionEnd = start + 1;
-            this._autoResize();
           } else {
             this._execute(code);
           }
@@ -69,7 +68,6 @@ export class FbConsoleInput extends LitElement {
       case 'Escape':
         textarea.value = '';
         this._historyIndex = -1;
-        this._autoResize();
         break;
     }
   };
@@ -87,7 +85,6 @@ export class FbConsoleInput extends LitElement {
     const textarea = this._textarea;
     if (textarea) {
       textarea.value = '';
-      this._autoResize();
     }
   }
 
@@ -100,15 +97,7 @@ export class FbConsoleInput extends LitElement {
     else if (this._historyIndex >= this._history.length) this._historyIndex = this._history.length - 1;
 
     textarea.value = this._historyIndex === -1 ? '' : this._history[this._historyIndex] || '';
-    this._autoResize();
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-  }
-
-  private _autoResize() {
-    const textarea = this._textarea;
-    if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
   }
 
   render() {
@@ -117,10 +106,10 @@ export class FbConsoleInput extends LitElement {
         <span class="text-[#4fc3f7] select-none">&gt;&nbsp;</span>
         <textarea
           rows="1"
-          class="flex-1 bg-transparent text-[#4fc3f7] font-mono text-xs leading-5 outline-none placeholder:text-gray-200 caret-[#4fc3f7] resize-none"
+          class="flex-1 bg-transparent text-[#4fc3f7] font-mono text-xs leading-5 outline-none placeholder:text-gray-200 caret-[#4fc3f7] resize-none max-h-[150px]"
+          style="field-sizing: content"
           placeholder="Type JavaScript..."
           @keydown=${this._handleKeydown}
-          @input=${() => this._autoResize()}
         ></textarea>
       </div>
     `;

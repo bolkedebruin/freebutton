@@ -1,101 +1,5 @@
 {
   "apis": {
-    "button": {
-      "methods": [
-        {
-          "description": "Get number of available buttons",
-          "name": "count",
-          "params": [],
-          "returns": "number"
-        },
-        {
-          "description": "Set button label text",
-          "name": "setLabel",
-          "params": [
-            {
-              "description": "Button position (1-based)",
-              "name": "position",
-              "type": "number"
-            },
-            {
-              "description": "Label text to display",
-              "name": "text",
-              "type": "string"
-            }
-          ],
-          "returns": "void"
-        },
-        {
-          "description": "Set button top label text",
-          "name": "setTopLabel",
-          "params": [
-            {
-              "description": "Button position (1-based)",
-              "name": "position",
-              "type": "number"
-            },
-            {
-              "description": "Top label text to display",
-              "name": "text",
-              "type": "string"
-            }
-          ],
-          "returns": "void"
-        },
-        {
-          "description": "Register click event handler for button",
-          "name": "onClick",
-          "params": [
-            {
-              "description": "Button position (1-based)",
-              "name": "position",
-              "type": "number"
-            },
-            {
-              "description": "Function to call on click",
-              "name": "callback",
-              "type": "Function"
-            }
-          ],
-          "returns": "void"
-        },
-        {
-          "description": "Register long press event handler for button",
-          "name": "onLongPress",
-          "params": [
-            {
-              "description": "Button position (1-based)",
-              "name": "position",
-              "type": "number"
-            },
-            {
-              "description": "Function to call on long press",
-              "name": "callback",
-              "type": "Function"
-            }
-          ],
-          "returns": "void"
-        },
-        {
-          "description": "Register release event handler for button",
-          "name": "onRelease",
-          "params": [
-            {
-              "description": "Button position (1-based)",
-              "name": "position",
-              "type": "number"
-            },
-            {
-              "description": "Function to call on release",
-              "name": "callback",
-              "type": "Function"
-            }
-          ],
-          "returns": "void"
-        }
-      ],
-      "type": "object"
-    },
     "console": {
       "methods": [
         {
@@ -106,256 +10,6 @@
               "description": "Values to print (variadic)",
               "name": "args",
               "type": "any"
-            }
-          ],
-          "returns": "void"
-        }
-      ],
-      "type": "object"
-    },
-    "display": {
-      "methods": [
-        {
-          "description": "Create a new display item on the screen",
-          "name": "create",
-          "params": [
-            {
-              "description": "X position",
-              "name": "x",
-              "type": "number"
-            },
-            {
-              "description": "Y position",
-              "name": "y",
-              "type": "number"
-            },
-            {
-              "description": "Width of the display item",
-              "name": "width",
-              "type": "number"
-            },
-            {
-              "description": "Box type (0-3)",
-              "name": "boxType",
-              "type": "number"
-            },
-            {
-              "description": "Font size",
-              "name": "fontSize",
-              "type": "number"
-            },
-            {
-              "description": "Text alignment (0=left, 1=center, 2=right)",
-              "name": "alignment",
-              "type": "number"
-            },
-            {
-              "description": "Label text",
-              "name": "label",
-              "type": "string"
-            },
-            {
-              "description": "Unit text",
-              "name": "unit",
-              "type": "string"
-            },
-            {
-              "description": "Decimal rounding",
-              "name": "round",
-              "type": "number"
-            },
-            {
-              "description": "Page number",
-              "name": "page",
-              "type": "number"
-            }
-          ],
-          "returns": "number"
-        },
-        {
-          "description": "Remove a display item by ID",
-          "name": "remove",
-          "params": [
-            {
-              "description": "Display item ID",
-              "name": "id",
-              "type": "number"
-            }
-          ],
-          "returns": "boolean"
-        },
-        {
-          "description": "Get number of display items",
-          "name": "count",
-          "params": [],
-          "returns": "number"
-        },
-        {
-          "description": "Get display item information by ID",
-          "name": "get",
-          "params": [
-            {
-              "description": "Display item ID",
-              "name": "id",
-              "type": "number"
-            }
-          ],
-          "returns": "object"
-        },
-        {
-          "description": "Get array of all display item IDs",
-          "name": "getAll",
-          "params": [],
-          "returns": "number[]"
-        },
-        {
-          "description": "Set display item label text",
-          "name": "setLabel",
-          "params": [
-            {
-              "description": "Display item ID",
-              "name": "id",
-              "type": "number"
-            },
-            {
-              "description": "New label text",
-              "name": "label",
-              "type": "string"
-            }
-          ],
-          "returns": "boolean"
-        },
-        {
-          "description": "Set display item value text",
-          "name": "setValue",
-          "params": [
-            {
-              "description": "Display item ID",
-              "name": "id",
-              "type": "number"
-            },
-            {
-              "description": "New value text",
-              "name": "value",
-              "type": "string"
-            }
-          ],
-          "returns": "boolean"
-        },
-        {
-          "description": "Set display item unit text",
-          "name": "setUnit",
-          "params": [
-            {
-              "description": "Display item ID",
-              "name": "id",
-              "type": "number"
-            },
-            {
-              "description": "New unit text",
-              "name": "unit",
-              "type": "string"
-            }
-          ],
-          "returns": "boolean"
-        },
-        {
-          "description": "Set display item position",
-          "name": "setPosition",
-          "params": [
-            {
-              "description": "Display item ID",
-              "name": "id",
-              "type": "number"
-            },
-            {
-              "description": "New X position",
-              "name": "x",
-              "type": "number"
-            },
-            {
-              "description": "New Y position",
-              "name": "y",
-              "type": "number"
-            }
-          ],
-          "returns": "boolean"
-        },
-        {
-          "description": "Set display item page",
-          "name": "setPage",
-          "params": [
-            {
-              "description": "Display item ID",
-              "name": "id",
-              "type": "number"
-            },
-            {
-              "description": "New page number",
-              "name": "page",
-              "type": "number"
-            }
-          ],
-          "returns": "boolean"
-        }
-      ],
-      "type": "object"
-    },
-    "led": {
-      "methods": [
-        {
-          "description": "Get number of available LEDs",
-          "name": "count",
-          "params": [],
-          "returns": "number"
-        },
-        {
-          "description": "Turn LED white at specified position",
-          "name": "on",
-          "params": [
-            {
-              "description": "LED position index",
-              "name": "position",
-              "type": "number"
-            }
-          ],
-          "returns": "void"
-        },
-        {
-          "description": "Turn LED off at specified position",
-          "name": "off",
-          "params": [
-            {
-              "description": "LED position index",
-              "name": "position",
-              "type": "number"
-            }
-          ],
-          "returns": "void"
-        },
-        {
-          "description": "Set LED RGB color (0-255 for each component)",
-          "name": "setColor",
-          "params": [
-            {
-              "description": "LED position index",
-              "name": "position",
-              "type": "number"
-            },
-            {
-              "description": "Red component (0-255)",
-              "name": "r",
-              "type": "number"
-            },
-            {
-              "description": "Green component (0-255)",
-              "name": "g",
-              "type": "number"
-            },
-            {
-              "description": "Blue component (0-255)",
-              "name": "b",
-              "type": "number"
             }
           ],
           "returns": "void"
@@ -585,6 +239,29 @@
             }
           ],
           "returns": "void"
+        }
+      ],
+      "type": "object"
+    },
+    "system": {
+      "methods": [
+        {
+          "description": "Get device uptime in seconds",
+          "name": "uptime",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Get free heap memory in bytes",
+          "name": "freeHeap",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Get firmware version string",
+          "name": "version",
+          "params": [],
+          "returns": "string"
         }
       ],
       "type": "object"
@@ -1913,6 +1590,331 @@
       "type": "object"
     }
   ],
+  "fb": {
+    "description": "Hierarchical device API mirroring physical topology. Built at runtime in C.",
+    "root": {
+      "name": "fb",
+      "properties": [
+        {
+          "description": "Main display unit",
+          "name": "main",
+          "type": "FbMain"
+        },
+        {
+          "description": "Connected bar modules",
+          "name": "bars",
+          "type": "FbBar[]"
+        }
+      ]
+    },
+    "types": {
+      "FbBar": {
+        "properties": [
+          {
+            "description": "Left side",
+            "name": "left",
+            "type": "FbSide"
+          },
+          {
+            "description": "Right side",
+            "name": "right",
+            "type": "FbSide"
+          }
+        ]
+      },
+      "FbButton": {
+        "methods": [
+          {
+            "description": "Register click handler",
+            "name": "onClick",
+            "params": [
+              {
+                "description": "Function to call on click",
+                "name": "callback",
+                "type": "Function"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Register long press handler",
+            "name": "onLongPress",
+            "params": [
+              {
+                "description": "Function to call on long press",
+                "name": "callback",
+                "type": "Function"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Register release handler",
+            "name": "onRelease",
+            "params": [
+              {
+                "description": "Function to call on release",
+                "name": "callback",
+                "type": "Function"
+              }
+            ],
+            "returns": "void"
+          }
+        ]
+      },
+      "FbLed": {
+        "methods": [
+          {
+            "description": "Set LED RGB color",
+            "name": "setColor",
+            "params": [
+              {
+                "description": "Red (0-255)",
+                "name": "r",
+                "type": "number"
+              },
+              {
+                "description": "Green (0-255)",
+                "name": "g",
+                "type": "number"
+              },
+              {
+                "description": "Blue (0-255)",
+                "name": "b",
+                "type": "number"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Turn LED on (white)",
+            "name": "on",
+            "params": [],
+            "returns": "void"
+          },
+          {
+            "description": "Turn LED off",
+            "name": "off",
+            "params": [],
+            "returns": "void"
+          }
+        ]
+      },
+      "FbMain": {
+        "properties": [
+          {
+            "description": "Main TFT display (display items)",
+            "name": "display",
+            "type": "FbMainDisplay"
+          },
+          {
+            "description": "Left side",
+            "name": "left",
+            "type": "FbSide"
+          },
+          {
+            "description": "Right side",
+            "name": "right",
+            "type": "FbSide"
+          }
+        ]
+      },
+      "FbMainDisplay": {
+        "methods": [
+          {
+            "description": "Create a display item",
+            "name": "create",
+            "params": [
+              {
+                "description": "Item type (text, number, gauge, etc.)",
+                "name": "type",
+                "type": "string"
+              }
+            ],
+            "returns": "number"
+          },
+          {
+            "description": "Remove a display item",
+            "name": "remove",
+            "params": [
+              {
+                "description": "Item ID to remove",
+                "name": "id",
+                "type": "number"
+              }
+            ],
+            "returns": "boolean"
+          },
+          {
+            "description": "Get number of display items",
+            "name": "count",
+            "params": [],
+            "returns": "number"
+          },
+          {
+            "description": "Get display item by ID",
+            "name": "get",
+            "params": [
+              {
+                "description": "Item ID",
+                "name": "id",
+                "type": "number"
+              }
+            ],
+            "returns": "object"
+          },
+          {
+            "description": "Get all display items",
+            "name": "getAll",
+            "params": [],
+            "returns": "Array"
+          },
+          {
+            "description": "Set item label",
+            "name": "setLabel",
+            "params": [
+              {
+                "description": "Item ID",
+                "name": "id",
+                "type": "number"
+              },
+              {
+                "description": "Label text",
+                "name": "label",
+                "type": "string"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Set item value",
+            "name": "setValue",
+            "params": [
+              {
+                "description": "Item ID",
+                "name": "id",
+                "type": "number"
+              },
+              {
+                "description": "Value to set",
+                "name": "value",
+                "type": "any"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Set item unit",
+            "name": "setUnit",
+            "params": [
+              {
+                "description": "Item ID",
+                "name": "id",
+                "type": "number"
+              },
+              {
+                "description": "Unit string",
+                "name": "unit",
+                "type": "string"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Set item position",
+            "name": "setPosition",
+            "params": [
+              {
+                "description": "Item ID",
+                "name": "id",
+                "type": "number"
+              },
+              {
+                "description": "X position",
+                "name": "x",
+                "type": "number"
+              },
+              {
+                "description": "Y position",
+                "name": "y",
+                "type": "number"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Set item page",
+            "name": "setPage",
+            "params": [
+              {
+                "description": "Item ID",
+                "name": "id",
+                "type": "number"
+              },
+              {
+                "description": "Page number",
+                "name": "page",
+                "type": "number"
+              }
+            ],
+            "returns": "void"
+          }
+        ]
+      },
+      "FbSide": {
+        "properties": [
+          {
+            "description": "Front-facing LED",
+            "name": "led",
+            "type": "FbLed"
+          },
+          {
+            "description": "Wall-facing LED",
+            "name": "backLed",
+            "type": "FbLed"
+          },
+          {
+            "description": "Physical button",
+            "name": "button",
+            "type": "FbButton"
+          },
+          {
+            "description": "Button display",
+            "name": "display",
+            "type": "FbSmallDisplay"
+          }
+        ]
+      },
+      "FbSmallDisplay": {
+        "methods": [
+          {
+            "description": "Set button display label",
+            "name": "setLabel",
+            "params": [
+              {
+                "description": "Label text",
+                "name": "text",
+                "type": "string"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Set button display top label",
+            "name": "setTopLabel",
+            "params": [
+              {
+                "description": "Top label text",
+                "name": "text",
+                "type": "string"
+              }
+            ],
+            "returns": "void"
+          }
+        ]
+      }
+    }
+  },
   "globals": [
     {
       "description": "Parses a string argument and returns an integer",

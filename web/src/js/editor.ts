@@ -34,6 +34,7 @@ import { indentUnit } from '@codemirror/language';
 import { freebuttonAutocomplete } from './autocomplete';
 import { validateCode } from './validator';
 import { emit } from './app-state';
+import { examples as examplesList, exampleMap } from './examples';
 
 let editorView: EditorView | null = null;
 
@@ -68,7 +69,7 @@ const mquickjsLinter = linter((view) => {
             let to: number;
 
             // Try to extract identifier name from error message
-            // Messages like: "'x' is not defined.", "'led.setColor' is not defined."
+            // Messages like: "'x' is not defined.", "'mqtt.publish' is not defined."
             const identifierMatch = error.message.match(/^'([^']+)'/);
             const identifierName = identifierMatch ? identifierMatch[1] : null;
 
@@ -159,43 +160,10 @@ function cursorPositionExtension() {
     });
 }
 
-// Example scripts for FreeButton
-export const examples: Record<string, string> = {
-    blink: `// LED Blinker
-function blink() {
-    led.setColor(0, 255, 0, 0);  // Red
-    setTimeout(function() {
-        led.off(0);
-        setTimeout(blink, 500);
-    }, 500);
-}
-
-blink();`,
-    sensor: `// Read sensor values
-var temp = sensor.getValue(0);
-var humidity = sensor.getValue(1);
-
-print("Temperature:", temp, "°C");
-print("Humidity:", humidity, "%");`,
-    button: `// Button click handler
-button.onClick(0, function() {
-    print("Button 0 clicked!");
-    led.setColor(0, 0, 255, 0);  // Green
-});
-
-button.onLongPress(0, function() {
-    print("Button 0 long pressed!");
-    led.setColor(0, 255, 0, 0);  // Red
-});`,
-    mqtt: `// Publish to MQTT
-var temp = sensor.getValue(0);
-var humidity = sensor.getValue(1);
-
-mqtt.publish("home/sensors/temperature", temp.toString());
-mqtt.publish("home/sensors/humidity", humidity.toString());
-
-print("Published sensor data to MQTT");`
-};
+// Compat re-export: Record<id, code> for legacy consumers
+export const examples: Record<string, string> = Object.fromEntries(
+    examplesList.map(e => [e.id, e.code])
+);
 
 /**
  * Initialize the CodeMirror editor
@@ -295,8 +263,9 @@ export function clearEditor(): void {
  * @returns True if example was loaded, false otherwise
  */
 export function loadExample(name: string): boolean {
-    if (examples[name]) {
-        setCode(examples[name]);
+    const example = exampleMap[name];
+    if (example) {
+        setCode(example.code);
         return true;
     }
     return false;

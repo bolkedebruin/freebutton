@@ -120,12 +120,12 @@ describe('MQuickJS Validator', () => {
             expect(result.errors).toHaveLength(0);
         });
 
-        it('should accept LED blink example', () => {
+        it('should accept LED blink example using fb hierarchy', () => {
             const result = validateCode(`
                 function blink() {
-                    led.setColor(0, 255, 0, 0);
+                    fb.main.left.led.setColor(255, 0, 0);
                     setTimeout(function() {
-                        led.off(0);
+                        fb.main.left.led.off();
                         setTimeout(blink, 500);
                     }, 500);
                 }
@@ -327,37 +327,16 @@ describe('MQuickJS Validator', () => {
     });
 
     describe('FreeButton API Method Validation', () => {
-        it('should reject invalid LED methods', () => {
-            const result = validateCode('led.invalidMethod();');
-            expect(result.valid).toBe(false);
-            expect(result.errors[0]?.message).toContain('not defined');
-            expect(result.errors[0]?.message).toContain('Available methods');
-        });
-
-        it('should accept valid LED API calls', () => {
-            const result = validateCode(`
-                led.on(0);
-                led.off(1);
-                led.setColor(0, 255, 0, 0);
-                var count = led.count();
-            `);
-            expect(result.valid).toBe(true);
-        });
-
-        it('should reject invalid button methods', () => {
-            const result = validateCode('button.invalidMethod();');
+        it('should reject removed LED global', () => {
+            const result = validateCode('led.on(0);');
             expect(result.valid).toBe(false);
             expect(result.errors[0]?.message).toContain('not defined');
         });
 
-        it('should accept valid button API calls', () => {
-            const result = validateCode(`
-                button.setLabel(0, "Click Me");
-                button.onClick(0, function() {
-                    print("Clicked!");
-                });
-            `);
-            expect(result.valid).toBe(true);
+        it('should reject removed button global', () => {
+            const result = validateCode('button.onClick(0, function() {});');
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain('not defined');
         });
 
         it('should reject invalid sensor methods', () => {
@@ -385,6 +364,16 @@ describe('MQuickJS Validator', () => {
                     print(msg);
                 });
             `);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should accept fb hierarchy LED access', () => {
+            const result = validateCode('fb.main.left.led.setColor(255, 0, 0);');
+            expect(result.valid).toBe(true);
+        });
+
+        it('should accept fb hierarchy button access', () => {
+            const result = validateCode('fb.main.left.button.onClick(function() { print("click"); });');
             expect(result.valid).toBe(true);
         });
     });
@@ -473,7 +462,7 @@ describe('MQuickJS Validator', () => {
         });
 
         it('should reject number literal where string expected', () => {
-            const result = validateCode('button.setLabel(0, 123);');
+            const result = validateCode('mqtt.subscribe(0, 123, function(){});');
             expect(result.valid).toBe(false);
             expect(result.errors[0]?.message).toContain('expects string');
             expect(result.errors[0]?.message).toContain('got number');
@@ -482,16 +471,15 @@ describe('MQuickJS Validator', () => {
         it('should accept correct literal types', () => {
             const result = validateCode(`
                 sensor.getValue(0);
-                button.setLabel(0, "Click Me");
-                led.setColor(0, 255, 0, 0);
+                mqtt.publish(0, "topic", "payload");
             `);
             expect(result.valid).toBe(true);
         });
 
         it('should accept function expressions for callback parameters', () => {
             const result = validateCode(`
-                button.onClick(0, function() {
-                    print("Clicked");
+                mqtt.subscribe(0, "topic", function() {
+                    print("received");
                 });
             `);
             expect(result.valid).toBe(true);
@@ -509,7 +497,7 @@ describe('MQuickJS Validator', () => {
         it('should catch multiple type errors', () => {
             const result = validateCode(`
                 sensor.getValue("0");
-                button.setLabel("0", 123);
+                mqtt.publish("0", "topic", "payload");
             `);
             expect(result.valid).toBe(false);
             expect(result.errors.length).toBeGreaterThanOrEqual(2);

@@ -51,6 +51,11 @@ for (const constant of stdlib.constants) {
     KNOWN_GLOBALS.add(constant.name);
 }
 
+// Add fb hierarchy global
+if ((stdlib as any).fb?.root?.name) {
+    KNOWN_GLOBALS.add((stdlib as any).fb.root.name);
+}
+
 // Add test utility functions (from test_language.js and test_builtin.js)
 // These are JavaScript helper functions for test files, not C bindings
 KNOWN_GLOBALS.add('throw_error');
@@ -390,7 +395,7 @@ function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: a
         }
     }
 
-    // Check for member expressions (e.g., led.setColor, mqtt.publish)
+    // Check for member expressions (e.g., sensor.getValue, mqtt.publish)
     if (node.type === 'MemberExpression' && !node.computed) {
         const object = node.object;
         const property = node.property;

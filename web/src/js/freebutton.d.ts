@@ -4,78 +4,9 @@
  * DO NOT EDIT MANUALLY - Run: npm run generate-types
  */
 
-export interface ButtonAPI {
-    /** Get number of available buttons */
-    count(): number;
-
-    /** Set button label text */
-    setLabel(position: number, text: string): void;
-
-    /** Set button top label text */
-    setTopLabel(position: number, text: string): void;
-
-    /** Register click event handler for button */
-    onClick(position: number, callback: Function): void;
-
-    /** Register long press event handler for button */
-    onLongPress(position: number, callback: Function): void;
-
-    /** Register release event handler for button */
-    onRelease(position: number, callback: Function): void;
-
-}
-
 export interface ConsoleAPI {
     /** Outputs a message to the console */
     log(args: any): void;
-
-}
-
-export interface DisplayAPI {
-    /** Create a new display item on the screen */
-    create(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number): number;
-
-    /** Remove a display item by ID */
-    remove(id: number): boolean;
-
-    /** Get number of display items */
-    count(): number;
-
-    /** Get display item information by ID */
-    get(id: number): object;
-
-    /** Get array of all display item IDs */
-    getAll(): number[];
-
-    /** Set display item label text */
-    setLabel(id: number, label: string): boolean;
-
-    /** Set display item value text */
-    setValue(id: number, value: string): boolean;
-
-    /** Set display item unit text */
-    setUnit(id: number, unit: string): boolean;
-
-    /** Set display item position */
-    setPosition(id: number, x: number, y: number): boolean;
-
-    /** Set display item page */
-    setPage(id: number, page: number): boolean;
-
-}
-
-export interface LedAPI {
-    /** Get number of available LEDs */
-    count(): number;
-
-    /** Turn LED white at specified position */
-    on(position: number): void;
-
-    /** Turn LED off at specified position */
-    off(position: number): void;
-
-    /** Set LED RGB color (0-255 for each component) */
-    setColor(position: number, r: number, g: number, b: number): void;
 
 }
 
@@ -130,6 +61,18 @@ export interface SensorAPI {
 
     /** Register change event handler for sensor value changes */
     onChange(sensorId: number, callback: Function): void;
+
+}
+
+export interface SystemAPI {
+    /** Get device uptime in seconds */
+    uptime(): number;
+
+    /** Get free heap memory in bytes */
+    freeHeap(): number;
+
+    /** Get firmware version string */
+    version(): string;
 
 }
 
@@ -369,13 +312,11 @@ export interface String {
 // ============================================================================
 
 declare global {
-    const button: ButtonAPI;
     const console: ConsoleAPI;
-    const display: DisplayAPI;
-    const led: LedAPI;
     const mqtt: MqttAPI;
     const performance: PerformanceAPI;
     const sensor: SensorAPI;
+    const system: SystemAPI;
 
     const Array: ArrayConstructor;
     const Date: DateConstructor;
@@ -384,6 +325,9 @@ declare global {
     const Number: NumberConstructor;
     const Object: ObjectConstructor;
     const String: StringConstructor;
+
+    /** Hierarchical device API mirroring physical topology. Built at runtime in C. */
+    const fb: FbRoot;
 
     // Global constants
     /** The undefined value */
@@ -428,6 +372,93 @@ declare global {
     /** Asserts that a function throws the expected error type (test utility) */
     function assert_throws(expected_error: any, func: Function): void;
 }
+
+// ============================================================================
+// FreeButton Device Hierarchy (fb global)
+// ============================================================================
+
+export interface FbBar {
+    /** Left side */
+    readonly left: FbSide;
+    /** Right side */
+    readonly right: FbSide;
+}
+
+export interface FbButton {
+    /** Register click handler */
+    onClick(callback: Function): void;
+    /** Register long press handler */
+    onLongPress(callback: Function): void;
+    /** Register release handler */
+    onRelease(callback: Function): void;
+}
+
+export interface FbLed {
+    /** Set LED RGB color */
+    setColor(r: number, g: number, b: number): void;
+    /** Turn LED on (white) */
+    on(): void;
+    /** Turn LED off */
+    off(): void;
+}
+
+export interface FbMain {
+    /** Main TFT display (display items) */
+    readonly display: FbMainDisplay;
+    /** Left side */
+    readonly left: FbSide;
+    /** Right side */
+    readonly right: FbSide;
+}
+
+export interface FbMainDisplay {
+    /** Create a display item */
+    create(type: string): number;
+    /** Remove a display item */
+    remove(id: number): boolean;
+    /** Get number of display items */
+    count(): number;
+    /** Get display item by ID */
+    get(id: number): object;
+    /** Get all display items */
+    getAll(): Array;
+    /** Set item label */
+    setLabel(id: number, label: string): void;
+    /** Set item value */
+    setValue(id: number, value: any): void;
+    /** Set item unit */
+    setUnit(id: number, unit: string): void;
+    /** Set item position */
+    setPosition(id: number, x: number, y: number): void;
+    /** Set item page */
+    setPage(id: number, page: number): void;
+}
+
+export interface FbSide {
+    /** Front-facing LED */
+    readonly led: FbLed;
+    /** Wall-facing LED */
+    readonly backLed: FbLed;
+    /** Physical button */
+    readonly button: FbButton;
+    /** Button display */
+    readonly display: FbSmallDisplay;
+}
+
+export interface FbSmallDisplay {
+    /** Set button display label */
+    setLabel(text: string): void;
+    /** Set button display top label */
+    setTopLabel(text: string): void;
+}
+
+export interface FbRoot {
+    /** Main display unit */
+    readonly main: FbMain;
+    /** Connected bar modules */
+    readonly bars: FbBar[];
+}
+
 
 // ============================================================================
 // Compiler API (loaded via WASM)

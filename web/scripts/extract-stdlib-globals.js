@@ -135,6 +135,12 @@ function extractGlobalFunctions(content) {
         while ((match = globalFunctionRegex.exec(globalBlock)) !== null) {
             functions.add(match[1]);
         }
+
+        // Extract: const varName: Type (inside declare global {})
+        const globalConstRegex = /\bconst\s+(\w+)\s*:/g;
+        while ((match = globalConstRegex.exec(globalBlock)) !== null) {
+            functions.add(match[1]);
+        }
     }
 
     return Array.from(functions);

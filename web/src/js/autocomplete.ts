@@ -66,9 +66,9 @@ export function freebuttonCompletions(context: CompletionContext): CompletionRes
             from: word.from,
             options: api.methods.map(m => {
                 // Strip object prefix from both label and apply
-                // e.g., "button.onClick(...)" -> "onClick(...)"
+                // e.g., "mqtt.publish(...)" -> "publish(...)"
                 const methodName = m.label.split('.')[1] || m.label;
-                const applyText = m.apply.replace(/^\w+\./, ''); // Remove "button." prefix
+                const applyText = m.apply.replace(/^\w+\./, ''); // Remove "mqtt." prefix
 
                 return snippetCompletion(applyText, {
                     label: methodName,

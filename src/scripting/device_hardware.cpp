@@ -59,6 +59,10 @@ void device_hw_init_fb(void* ctx) {
         LED_SET_COLOR = 0, LED_ON = 1, LED_OFF = 2,
         BTN_ON_CLICK = 3, BTN_ON_LONG_PRESS = 4, BTN_ON_RELEASE = 5,
         DISP_SET_LABEL = 6, DISP_SET_TOP_LABEL = 7,
+        DITEM_CREATE = 8, DITEM_REMOVE = 9, DITEM_COUNT = 10,
+        DITEM_GET = 11, DITEM_GET_ALL = 12, DITEM_SET_LABEL = 13,
+        DITEM_SET_VALUE = 14, DITEM_SET_UNIT = 15, DITEM_SET_POSITION = 16,
+        DITEM_SET_PAGE = 17,
     };
 
     const int P = FB_PROXY_FUNC_IDX;
@@ -78,6 +82,18 @@ void device_hw_init_fb(void* ctx) {
     JSValue disp_proto = JS_NewObject(c);
     JS_SetPropertyStr(c, disp_proto, "setLabel",    JS_NewCFunctionParams(c, P, JS_NewInt32(c, DISP_SET_LABEL)));
     JS_SetPropertyStr(c, disp_proto, "setTopLabel", JS_NewCFunctionParams(c, P, JS_NewInt32(c, DISP_SET_TOP_LABEL)));
+
+    JSValue disp_items_proto = JS_NewObject(c);
+    JS_SetPropertyStr(c, disp_items_proto, "create",      JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_CREATE)));
+    JS_SetPropertyStr(c, disp_items_proto, "remove",      JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_REMOVE)));
+    JS_SetPropertyStr(c, disp_items_proto, "count",       JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_COUNT)));
+    JS_SetPropertyStr(c, disp_items_proto, "get",         JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_GET)));
+    JS_SetPropertyStr(c, disp_items_proto, "getAll",      JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_GET_ALL)));
+    JS_SetPropertyStr(c, disp_items_proto, "setLabel",    JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_LABEL)));
+    JS_SetPropertyStr(c, disp_items_proto, "setValue",    JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_VALUE)));
+    JS_SetPropertyStr(c, disp_items_proto, "setUnit",     JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_UNIT)));
+    JS_SetPropertyStr(c, disp_items_proto, "setPosition", JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_POSITION)));
+    JS_SetPropertyStr(c, disp_items_proto, "setPage",     JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_PAGE)));
 
     // --- Get Object.create for prototype inheritance ---
 
@@ -126,7 +142,7 @@ void device_hw_init_fb(void* ctx) {
         if (type == 2 && mainConn == conn) {
             // LARGE connector → fb.main
             JSValue main_obj = JS_NewObject(c);
-            JS_SetPropertyStr(c, main_obj, "display", JS_GetPropertyStr(c, global, "display"));
+            JS_SetPropertyStr(c, main_obj, "display", makeInst(disp_items_proto, 0));
             JS_SetPropertyStr(c, main_obj, "left",  makeSide(leftPos));
             JS_SetPropertyStr(c, main_obj, "right", makeSide(rightPos));
             JS_SetPropertyStr(c, fb, "main", main_obj);

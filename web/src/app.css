@@ -107,6 +107,7 @@
 .cm-scroller {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
   font-size: 14px;
+  overscroll-behavior: contain;
 }
 .cm-gutters {
   background: transparent !important;
@@ -143,6 +144,9 @@
 }
 
 /* === Custom Scrollbar (for code areas) === */
+.custom-scrollbar {
+  overscroll-behavior: contain;
+}
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
