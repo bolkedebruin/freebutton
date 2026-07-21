@@ -34,7 +34,17 @@ Thumbs.db
 .vscode/settings.json
 .idea/
 
-# Node.js 
+# Font generation build artifacts (wrong dir — the tracked copies live in
+# src/ui/fonts/). generatefonts.sh emits these into tools/fonts/; never track them.
+tools/fonts/mnt_*.c
+tools/fonts/mnt_*.bin
+
+# Stale idf.py / standalone build artifacts at repo root (WS-D).
+# Scope to repo-root only (leading slash) so tools/** and data/** bins stay tracked.
+/firmware.bin
+/littlefs.bin
+
+# Node.js
 web/node_modules/
 web/build/
 web/.env.local
@@ -42,3 +52,6 @@ web/.env.development.local
 web/.env.test.local
 web/.env.production.local
 
+
+# clangd index cache
+.cache/
