@@ -13,6 +13,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # The mquickjs engine is a pinned submodule; without this the
+          # firmware and the web IDE cannot build at all.
+          submodules: recursive
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -32,6 +36,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -39,34 +45,50 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-            ~/.npm
-          key: ${{ runner.os }}-deps-${{ hashFiles('platformio.ini', 'package*.json') }}
+          key: ${{ runner.os }}-deps-${{ hashFiles('platformio.ini', 'web/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-deps-
 
       - name: Install PlatformIO Core
         run: uv pip install --upgrade platformio setuptools
 
-      - name: Install lv_font_conv
-        run: npm install -g lv_font_conv
+      # Fonts are committed (src/ui/fonts/mnt_*.c) and the mquickjs wasm assets
+      # in web/public/assets are committed real files, so CI does NOT install
+      # lv_font_conv, run generatefonts.sh, or run emcc.
 
-      - name: Install jq (for font processing)
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Web install
+        working-directory: web
+        run: npm ci
 
-      - name: Generate fonts
-        run: |
-          cd tools/fonts
-          chmod +x generatefonts.sh
-          ./generatefonts.sh
+      - name: Web build
+        # prebuild regenerates stdlib.json / freebutton.d.ts / autocomplete-data.ts
+        # from the engine before vite build.
+        working-directory: web
+        run: npm run build
+
+      - name: Check generated web artifacts are in sync with engine
+        # Fails CI if the committed generated files drift from what the current
+        # engine produces (engine <-> web drift).
+        run: git diff --exit-code -- web/src/js/stdlib.json web/src/js/freebutton.d.ts web/src/js/autocomplete-data.ts
+
+      - name: Web test
+        working-directory: web
+        run: npm run test
 
       - name: Build firmware (ESP32)
-        run: pio run -e esp32
+        # crt.S race mitigation: full-clean builds intermittently fail with
+        # "Source .../rmaker_*.crt.S not found" (esp_insights/esp_rainmaker embed
+        # certs via transitive framework deps even though disabled; not removable
+        # via our config). See .wolf/buglog.json bug-004. Retry once on failure.
+        run: pio run -e esp32 || pio run -e esp32
 
-      - name: Build tests (Native)
+      - name: Build LittleFS image (web IDE + config + fonts)
+        run: pio run -e esp32 -t buildfs
+
+      - name: Build native (compile check)
+        # Compile-only sanity check. test/ has no Unity suites, so `pio test`
+        # is intentionally NOT run here (it would fail with no tests).
         run: pio run -e native
-
-      - name: Run tests
-        run: pio test -e native
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -76,4 +98,5 @@ jobs:
             .pio/build/esp32/firmware.bin
             .pio/build/esp32/bootloader.bin
             .pio/build/esp32/partitions.bin
+            .pio/build/esp32/littlefs.bin
           retention-days: 30

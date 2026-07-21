@@ -11,7 +11,7 @@ tools/
 │   ├── get_mdi_codes.sh # Material Design Icons code extractor
 │   └── *.ttf           # Font files (Montserrat + Material Design Icons)
 ├── scripts/            # Build and utility scripts
-│   ├── update_version.py   # Version management
+│   ├── sync_version.py     # Version management (VERSION -> config.h + web/package.json)
 │   └── build_info.py      # Build metadata generation
 └── partition_tables/   # ESP32 partition table definitions
 ```
@@ -42,19 +42,28 @@ Edit `generatefonts.sh` to:
 
 ## Version Management
 
+The single source of truth is the repo-root `VERSION` file. `sync_version.py`
+propagates it into `include/config.h` (the `FIRMWARE` define, preserving the
+`FreeButton ` prefix) and `web/package.json`.
+
 ### Get Current Version
 
 ```bash
-python3 tools/scripts/update_version.py --get
+cat VERSION
 ```
 
 ### Update Version
 
 ```bash
-python3 tools/scripts/update_version.py "3.2.0"
-```
+# Override VERSION and sync all locations
+python3 tools/scripts/sync_version.py "3.2.0"
 
-The script automatically updates the `FIRMWARE` define in `include/config.h`.
+# Re-sync from the current VERSION file (no override)
+python3 tools/scripts/sync_version.py
+
+# Verify everything is in lockstep (non-zero exit on drift)
+python3 tools/scripts/sync_version.py --check
+```
 
 ## Build Information
 
@@ -74,24 +83,25 @@ The build pipeline automatically:
 
 1. **CI Pipeline** (`.github/workflows/ci.yml`):
    - Triggered on push/PR to main/develop
-   - Generates fonts
-   - Builds firmware for ESP32
-   - Runs native tests
-   - Uploads build artifacts
+   - Checks out the mquickjs submodule
+   - Builds and tests the web IDE, checks generated artifacts for engine drift
+   - Builds firmware for ESP32 and the LittleFS image
+   - Compile-checks the native environment
+   - Uploads build artifacts (firmware.bin, bootloader.bin, partitions.bin, littlefs.bin)
+   - Fonts and wasm assets are committed, so no font/emcc generation runs
 
 2. **Release Pipeline** (`.github/workflows/release.yml`):
    - Triggered on GitHub releases or manual dispatch
-   - Updates firmware version automatically
-   - Generates fonts
-   - Builds release firmware
-   - Creates firmware packages with flash scripts
+   - Syncs the firmware version via `sync_version.py`
+   - Builds the web IDE, firmware, and the LittleFS image
+   - Packages firmware.bin, bootloader.bin, partitions.bin and littlefs.bin together
    - Uploads release assets
 
 ## Local Development
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.12+
 - Node.js 20+
 - PlatformIO Core
 - lv_font_conv (npm package)
@@ -136,7 +146,8 @@ pio run -e native && pio test -e native
 
 The release artifacts include:
 - `freebutton_X.Y.Z_firmware.tar.gz` - Complete firmware package
-- Contains: firmware.bin, bootloader.bin, partitions.bin
+- Contains: firmware.bin, bootloader.bin, partitions.bin, littlefs.bin (the
+  LittleFS image bundling the web IDE, config, and fonts)
 
 ## Flashing Firmware
 
