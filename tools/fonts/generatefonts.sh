@@ -1,7 +1,29 @@
 #!/usr/bin/env bash
+#
+# DEV-ONLY font regenerator. The compiled LVGL fonts (src/ui/fonts/mnt_*.c)
+# are committed to the repo and are the live render path, so a normal build
+# does NOT run this script. Run it only when the font set, symbols, or icon
+# selection change, then copy the regenerated mnt_*.c into src/ui/fonts/.
+#
+# Offline by default: the Material Design Icon glyph codepoints are read from
+# the committed cache file `mdi_glyphs.txt`. No network access is performed
+# when that cache exists. Pass `--refresh` to re-fetch the glyph codes from
+# the network (dev machines only) and rewrite the cache.
+#
+# Requires: lv_font_conv, and (for --refresh) curl + jq.
+#
 export LC_ALL=en_US.UTF-8
 
 FONT_SIZES=(14 18 20 24 32 48 72)
+
+GLYPH_CACHE="mdi_glyphs.txt"
+REFRESH=0
+for arg in "$@"; do
+    case "$arg" in
+        --refresh) REFRESH=1 ;;
+        *) echo "Unknown argument: $arg" >&2; echo "Usage: $0 [--refresh]" >&2; exit 1 ;;
+    esac
+done
 
 # use single quotes - extended for FreeButton
 USER_SYMBOLS='°³€$£øØÅåæÆéèêàâïîôöùûüçäöüßÄÖÜë↑↓⏴︎⏵︎⏶︎⏷︎⏸︎⏹︎⏭︎⏮︎⏯︎₂±×÷≠≤≥√∞'
@@ -45,8 +67,21 @@ ICON_NAMES=(
 # Convert array to space-separated string
 ICON_NAMES_STRING=$(IFS=" "; echo "${ICON_NAMES[*]}")
 
-# Fetch the HTML content and get the list of glyph codes using get_mdi_codes.sh
-GLYPHS=$(curl -s $MDI_URL | ./get_mdi_codes.sh $ICON_NAMES_STRING)
+# Resolve MDI glyph codepoints. Prefer the committed offline cache; only touch
+# the network when explicitly refreshing or when no cache is present.
+if [ "$REFRESH" -eq 1 ] || [ ! -f "$GLYPH_CACHE" ]; then
+    echo "Fetching MDI glyph codes from network..." >&2
+    GLYPHS=$(curl -s "$MDI_URL" | ./get_mdi_codes.sh $ICON_NAMES_STRING)
+    if [ -z "$GLYPHS" ]; then
+        echo "ERROR: failed to fetch MDI glyph codes and no cache available." >&2
+        exit 1
+    fi
+    printf "%s\n" "$GLYPHS" > "$GLYPH_CACHE"
+    echo "Wrote glyph cache: $GLYPH_CACHE" >&2
+else
+    echo "Using offline glyph cache: $GLYPH_CACHE (pass --refresh to update)" >&2
+    GLYPHS=$(cat "$GLYPH_CACHE")
+fi
 
 MDI_FONT="materialdesignicons-webfont.ttf"
 
