@@ -50,9 +50,13 @@ Decide and document per your deployment/fleet situation. New devices are unaffec
 
 ---
 
-## 4. Known CI caveat — `crt.S` clean-build race (bug-004)
+## 4. `crt.S` clean-build race (bug-004) — FIXED
 
-Full-clean firmware builds **intermittently** fail with `Source .../rmaker_*.crt.S not found`. Root cause: `esp_insights`/`esp_rainmaker` (transitive deps of the Arduino-ESP32 framework, disabled in `sdkconfig.defaults` but still embedding certs) — SCons races the IDF ninja generate step. It is NOT removable via our config (framework-level). CI mitigates with a single retry (`pio run -e esp32 || pio run -e esp32`); a double-failure would still go red. A proper fix needs upstream PlatformIO/pioarduino attention or a component-exclusion hack. Prefer incremental builds locally; only `rm -rf .pio/build/esp32` when you hit the separate `sdkconfig` double-output collision (a `-DSDKCONFIG=${PROJECT_BUILD_DIR}/sdkconfig` artifact — also a cleanup candidate).
+Full-clean builds used to **intermittently** fail with `Source .../rmaker_*.crt.S not found` (~50% of clean builds). Root cause: `esp_insights`/`esp_rainmaker` (hard-required transitive deps of the Arduino-ESP32 framework — `EXCLUDE_COMPONENTS` cannot drop them, verified) embed TLS certs as generated `.crt.S`, and SCons raced the IDF ninja generate step.
+
+**Fix (commit `6eebfd3`):** restore `board_build.embed_txtfiles` with the 4 cert paths — the original workaround that WS-D had wrongly removed. It makes PlatformIO materialize the `.crt.S` embeds up front, so SCons never races ninja. Verified with two consecutive full-clean green builds. The CI `pio run -e esp32 || pio run -e esp32` retry is now just belt-and-suspenders and can be dropped.
+
+Unrelated remaining nit: the `sdkconfig` "defined as an output multiple times" ninja warning (from the `-DSDKCONFIG=${PROJECT_BUILD_DIR}/sdkconfig` override) is non-fatal on full-clean builds; only edit-then-incremental needs a clean. Minor cleanup candidate, not a blocker.
 
 ---
 
