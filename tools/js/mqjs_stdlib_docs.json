@@ -1,0 +1,941 @@
+{
+  "Object": {
+    "static": {
+      "defineProperty": {
+        "description": "Defines a new property or modifies an existing property on an object",
+        "params": [
+          {"name": "obj", "type": "object", "description": "The object on which to define the property"},
+          {"name": "prop", "type": "string", "description": "The name of the property to define or modify"},
+          {"name": "descriptor", "type": "object", "description": "The descriptor for the property"}
+        ],
+        "returns": "object"
+      },
+      "getPrototypeOf": {
+        "description": "Returns the prototype of the specified object",
+        "params": [
+          {"name": "obj", "type": "object", "description": "The object whose prototype is to be returned"}
+        ],
+        "returns": "object"
+      },
+      "setPrototypeOf": {
+        "description": "Sets the prototype of a specified object",
+        "params": [
+          {"name": "obj", "type": "object", "description": "The object which is to have its prototype set"},
+          {"name": "prototype", "type": "object", "description": "The object's new prototype"}
+        ],
+        "returns": "object"
+      },
+      "create": {
+        "description": "Creates a new object with the specified prototype object",
+        "params": [
+          {"name": "proto", "type": "object", "description": "The object which should be the prototype of the newly-created object"}
+        ],
+        "returns": "object"
+      },
+      "keys": {
+        "description": "Returns an array of a given object's own enumerable property names",
+        "params": [
+          {"name": "obj", "type": "object", "description": "The object of which the enumerable properties are to be returned"}
+        ],
+        "returns": "string[]"
+      }
+    },
+    "prototype": {
+      "hasOwnProperty": {
+        "description": "Returns a boolean indicating whether the object has the specified property",
+        "params": [
+          {"name": "prop", "type": "string", "description": "The property name to test"}
+        ],
+        "returns": "boolean"
+      },
+      "toString": {
+        "description": "Returns a string representation of the object",
+        "params": [],
+        "returns": "string"
+      }
+    }
+  },
+  "Function": {
+    "prototype": {
+      "call": {
+        "description": "Calls a function with a given this value and arguments",
+        "params": [
+          {"name": "thisArg", "type": "any", "description": "The value to use as this"},
+          {"name": "arg", "type": "any", "variadic": true, "description": "Arguments for the function"}
+        ],
+        "returns": "any"
+      },
+      "apply": {
+        "description": "Calls a function with a given this value and arguments provided as an array",
+        "params": [
+          {"name": "thisArg", "type": "any", "description": "The value to use as this"},
+          {"name": "argsArray", "type": "any[]", "optional": true, "description": "An array of arguments"}
+        ],
+        "returns": "any"
+      },
+      "bind": {
+        "description": "Creates a new function that has its this keyword set to the provided value",
+        "params": [
+          {"name": "thisArg", "type": "any", "description": "The value to use as this"},
+          {"name": "arg", "type": "any", "variadic": true, "description": "Arguments to prepend"}
+        ],
+        "returns": "Function"
+      },
+      "toString": {
+        "description": "Returns a string representing the source code of the function",
+        "params": [],
+        "returns": "string"
+      }
+    }
+  },
+  "Number": {
+    "static": {
+      "parseInt": {
+        "description": "Parses a string argument and returns an integer",
+        "params": [
+          {"name": "string", "type": "string", "description": "The value to parse"},
+          {"name": "radix", "type": "number", "optional": true, "description": "An integer between 2 and 36"}
+        ],
+        "returns": "number"
+      },
+      "parseFloat": {
+        "description": "Parses a string argument and returns a floating point number",
+        "params": [
+          {"name": "string", "type": "string", "description": "The value to parse"}
+        ],
+        "returns": "number"
+      }
+    },
+    "prototype": {
+      "toExponential": {
+        "description": "Returns a string representing the number in exponential notation",
+        "params": [
+          {"name": "fractionDigits", "type": "number", "optional": true, "description": "Number of digits after the decimal point"}
+        ],
+        "returns": "string"
+      },
+      "toFixed": {
+        "description": "Formats a number using fixed-point notation",
+        "params": [
+          {"name": "digits", "type": "number", "optional": true, "description": "Number of digits after the decimal point"}
+        ],
+        "returns": "string"
+      },
+      "toPrecision": {
+        "description": "Returns a string representing the number to a specified precision",
+        "params": [
+          {"name": "precision", "type": "number", "optional": true, "description": "Number of significant digits"}
+        ],
+        "returns": "string"
+      },
+      "toString": {
+        "description": "Returns a string representing the specified number object",
+        "params": [
+          {"name": "radix", "type": "number", "optional": true, "description": "An integer between 2 and 36"}
+        ],
+        "returns": "string"
+      }
+    }
+  },
+  "Boolean": {},
+  "String": {
+    "static": {
+      "fromCharCode": {
+        "description": "Returns a string created from the specified sequence of UTF-16 code units",
+        "params": [
+          {"name": "charCode", "type": "number", "variadic": true, "description": "UTF-16 code units"}
+        ],
+        "returns": "string"
+      },
+      "fromCodePoint": {
+        "description": "Returns a string created from the specified sequence of code points",
+        "params": [
+          {"name": "codePoint", "type": "number", "variadic": true, "description": "Unicode code points"}
+        ],
+        "returns": "string"
+      }
+    },
+    "prototype": {
+      "length": {
+        "type": "property",
+        "description": "The length of the string",
+        "propertyType": "number"
+      },
+      "charAt": {
+        "description": "Returns the character at the specified index",
+        "params": [
+          {"name": "index", "type": "number", "description": "Position in the string"}
+        ],
+        "returns": "string"
+      },
+      "charCodeAt": {
+        "description": "Returns the UTF-16 code unit at the given index",
+        "params": [
+          {"name": "index", "type": "number", "description": "Position in the string"}
+        ],
+        "returns": "number"
+      },
+      "codePointAt": {
+        "description": "Returns a non-negative integer that is the Unicode code point value",
+        "params": [
+          {"name": "index", "type": "number", "description": "Position in the string"}
+        ],
+        "returns": "number"
+      },
+      "slice": {
+        "description": "Extracts a section of a string and returns it as a new string",
+        "params": [
+          {"name": "start", "type": "number", "description": "Starting index"},
+          {"name": "end", "type": "number", "optional": true, "description": "Ending index (exclusive)"}
+        ],
+        "returns": "string"
+      },
+      "substring": {
+        "description": "Returns the part of the string between the start and end indexes",
+        "params": [
+          {"name": "start", "type": "number", "description": "Starting index"},
+          {"name": "end", "type": "number", "optional": true, "description": "Ending index (exclusive)"}
+        ],
+        "returns": "string"
+      },
+      "concat": {
+        "description": "Combines the text of two or more strings and returns a new string",
+        "params": [
+          {"name": "str", "type": "string", "variadic": true, "description": "Strings to concatenate"}
+        ],
+        "returns": "string"
+      },
+      "indexOf": {
+        "description": "Returns the index of the first occurrence of a specified value",
+        "params": [
+          {"name": "searchValue", "type": "string", "description": "Value to search for"},
+          {"name": "fromIndex", "type": "number", "optional": true, "description": "Starting position"}
+        ],
+        "returns": "number"
+      },
+      "lastIndexOf": {
+        "description": "Returns the index of the last occurrence of a specified value",
+        "params": [
+          {"name": "searchValue", "type": "string", "description": "Value to search for"},
+          {"name": "fromIndex", "type": "number", "optional": true, "description": "Starting position"}
+        ],
+        "returns": "number"
+      },
+      "match": {
+        "description": "Retrieves the result of matching a string against a regular expression",
+        "params": [
+          {"name": "regexp", "type": "RegExp", "description": "Regular expression pattern"}
+        ],
+        "returns": "any"
+      },
+      "replace": {
+        "description": "Returns a new string with some or all matches of a pattern replaced",
+        "params": [
+          {"name": "pattern", "type": "string|RegExp", "description": "Pattern to replace"},
+          {"name": "replacement", "type": "string|Function", "description": "Replacement value"}
+        ],
+        "returns": "string"
+      },
+      "replaceAll": {
+        "description": "Returns a new string with all matches of a pattern replaced",
+        "params": [
+          {"name": "pattern", "type": "string|RegExp", "description": "Pattern to replace"},
+          {"name": "replacement", "type": "string|Function", "description": "Replacement value"}
+        ],
+        "returns": "string"
+      },
+      "search": {
+        "description": "Executes a search for a match between a regular expression and this string",
+        "params": [
+          {"name": "regexp", "type": "RegExp", "description": "Regular expression pattern"}
+        ],
+        "returns": "number"
+      },
+      "split": {
+        "description": "Divides a string into an ordered list of substrings",
+        "params": [
+          {"name": "separator", "type": "string|RegExp", "optional": true, "description": "Separator pattern"},
+          {"name": "limit", "type": "number", "optional": true, "description": "Maximum array length"}
+        ],
+        "returns": "string[]"
+      },
+      "toLowerCase": {
+        "description": "Returns the calling string value converted to lowercase",
+        "params": [],
+        "returns": "string"
+      },
+      "toUpperCase": {
+        "description": "Returns the calling string value converted to uppercase",
+        "params": [],
+        "returns": "string"
+      },
+      "trim": {
+        "description": "Removes whitespace from both ends of a string",
+        "params": [],
+        "returns": "string"
+      },
+      "trimEnd": {
+        "description": "Removes whitespace from the end of a string",
+        "params": [],
+        "returns": "string"
+      },
+      "trimStart": {
+        "description": "Removes whitespace from the beginning of a string",
+        "params": [],
+        "returns": "string"
+      },
+      "toString": {
+        "description": "Returns a string representing the specified object",
+        "params": [],
+        "returns": "string"
+      }
+    }
+  },
+  "Array": {
+    "static": {
+      "isArray": {
+        "description": "Determines whether the passed value is an Array",
+        "params": [
+          {"name": "value", "type": "any", "description": "Value to test"}
+        ],
+        "returns": "boolean"
+      }
+    },
+    "prototype": {
+      "concat": {
+        "description": "Merges two or more arrays",
+        "params": [
+          {"name": "array", "type": "any[]", "variadic": true, "description": "Arrays to concatenate"}
+        ],
+        "returns": "any[]"
+      },
+      "length": {
+        "type": "property",
+        "description": "The number of elements in the array",
+        "propertyType": "number"
+      },
+      "push": {
+        "description": "Adds one or more elements to the end of an array",
+        "params": [
+          {"name": "element", "type": "any", "variadic": true, "description": "Elements to add"}
+        ],
+        "returns": "number"
+      },
+      "pop": {
+        "description": "Removes the last element from an array and returns that element",
+        "params": [],
+        "returns": "any"
+      },
+      "join": {
+        "description": "Joins all elements of an array into a string",
+        "params": [
+          {"name": "separator", "type": "string", "optional": true, "description": "Separator string"}
+        ],
+        "returns": "string"
+      },
+      "toString": {
+        "description": "Returns a string representing the specified array and its elements",
+        "params": [],
+        "returns": "string"
+      },
+      "reverse": {
+        "description": "Reverses an array in place",
+        "params": [],
+        "returns": "any[]"
+      },
+      "shift": {
+        "description": "Removes the first element from an array and returns that element",
+        "params": [],
+        "returns": "any"
+      },
+      "slice": {
+        "description": "Returns a shallow copy of a portion of an array",
+        "params": [
+          {"name": "start", "type": "number", "optional": true, "description": "Starting index"},
+          {"name": "end", "type": "number", "optional": true, "description": "Ending index (exclusive)"}
+        ],
+        "returns": "any[]"
+      },
+      "splice": {
+        "description": "Changes the contents of an array by removing or replacing elements",
+        "params": [
+          {"name": "start", "type": "number", "description": "Starting index"},
+          {"name": "deleteCount", "type": "number", "optional": true, "description": "Number of elements to remove"},
+          {"name": "item", "type": "any", "variadic": true, "description": "Items to add"}
+        ],
+        "returns": "any[]"
+      },
+      "unshift": {
+        "description": "Adds one or more elements to the beginning of an array",
+        "params": [
+          {"name": "element", "type": "any", "variadic": true, "description": "Elements to add"}
+        ],
+        "returns": "number"
+      },
+      "indexOf": {
+        "description": "Returns the first index at which a given element can be found",
+        "params": [
+          {"name": "searchElement", "type": "any", "description": "Element to search for"},
+          {"name": "fromIndex", "type": "number", "optional": true, "description": "Starting position"}
+        ],
+        "returns": "number"
+      },
+      "lastIndexOf": {
+        "description": "Returns the last index at which a given element can be found",
+        "params": [
+          {"name": "searchElement", "type": "any", "description": "Element to search for"},
+          {"name": "fromIndex", "type": "number", "optional": true, "description": "Starting position"}
+        ],
+        "returns": "number"
+      },
+      "every": {
+        "description": "Tests whether all elements pass the test implemented by the provided function",
+        "params": [
+          {"name": "callback", "type": "Function", "description": "Test function"},
+          {"name": "thisArg", "type": "any", "optional": true, "description": "Value to use as this"}
+        ],
+        "returns": "boolean"
+      },
+      "some": {
+        "description": "Tests whether at least one element passes the test",
+        "params": [
+          {"name": "callback", "type": "Function", "description": "Test function"},
+          {"name": "thisArg", "type": "any", "optional": true, "description": "Value to use as this"}
+        ],
+        "returns": "boolean"
+      },
+      "forEach": {
+        "description": "Executes a provided function once for each array element",
+        "params": [
+          {"name": "callback", "type": "Function", "description": "Function to execute"},
+          {"name": "thisArg", "type": "any", "optional": true, "description": "Value to use as this"}
+        ],
+        "returns": "void"
+      },
+      "map": {
+        "description": "Creates a new array with the results of calling a function for every element",
+        "params": [
+          {"name": "callback", "type": "Function", "description": "Mapping function"},
+          {"name": "thisArg", "type": "any", "optional": true, "description": "Value to use as this"}
+        ],
+        "returns": "any[]"
+      },
+      "filter": {
+        "description": "Creates a new array with all elements that pass the test",
+        "params": [
+          {"name": "callback", "type": "Function", "description": "Test function"},
+          {"name": "thisArg", "type": "any", "optional": true, "description": "Value to use as this"}
+        ],
+        "returns": "any[]"
+      },
+      "reduce": {
+        "description": "Executes a reducer function on each element, resulting in a single output value",
+        "params": [
+          {"name": "callback", "type": "Function", "description": "Reducer function"},
+          {"name": "initialValue", "type": "any", "optional": true, "description": "Initial accumulator value"}
+        ],
+        "returns": "any"
+      },
+      "reduceRight": {
+        "description": "Applies a function against an accumulator and each value (from right-to-left)",
+        "params": [
+          {"name": "callback", "type": "Function", "description": "Reducer function"},
+          {"name": "initialValue", "type": "any", "optional": true, "description": "Initial accumulator value"}
+        ],
+        "returns": "any"
+      },
+      "sort": {
+        "description": "Sorts the elements of an array in place",
+        "params": [
+          {"name": "compareFunction", "type": "Function", "optional": true, "description": "Comparison function"}
+        ],
+        "returns": "any[]"
+      }
+    }
+  },
+  "Date": {
+    "static": {
+      "now": {
+        "description": "Returns the number of milliseconds elapsed since January 1, 1970",
+        "params": [],
+        "returns": "number"
+      },
+      "parse": {
+        "description": "Parses a string representation of a date and returns milliseconds since epoch",
+        "params": [
+          {"name": "dateString", "type": "string", "description": "A string representing a date"}
+        ],
+        "returns": "number"
+      },
+      "UTC": {
+        "description": "Accepts the same parameters as the Date constructor but treats them as UTC",
+        "params": [
+          {"name": "year", "type": "number", "description": "Year"},
+          {"name": "month", "type": "number", "description": "Month (0-11)"},
+          {"name": "day", "type": "number", "optional": true, "description": "Day of month"},
+          {"name": "hour", "type": "number", "optional": true, "description": "Hour"},
+          {"name": "minute", "type": "number", "optional": true, "description": "Minute"},
+          {"name": "second", "type": "number", "optional": true, "description": "Second"},
+          {"name": "millisecond", "type": "number", "optional": true, "description": "Millisecond"}
+        ],
+        "returns": "number"
+      }
+    },
+    "prototype": {
+      "getTime": {
+        "description": "Returns the numeric value corresponding to the time",
+        "params": [],
+        "returns": "number"
+      },
+      "setTime": {
+        "description": "Sets the Date object to the time represented by milliseconds since epoch",
+        "params": [
+          {"name": "timeValue", "type": "number", "description": "Milliseconds since epoch"}
+        ],
+        "returns": "number"
+      },
+      "toISOString": {
+        "description": "Returns a string in simplified extended ISO format",
+        "params": [],
+        "returns": "string"
+      },
+      "toString": {
+        "description": "Returns a string representing the specified Date object",
+        "params": [],
+        "returns": "string"
+      },
+      "getFullYear": {
+        "description": "Returns the year of the specified date",
+        "params": [],
+        "returns": "number"
+      },
+      "getMonth": {
+        "description": "Returns the month in the specified date",
+        "params": [],
+        "returns": "number"
+      },
+      "getDate": {
+        "description": "Returns the day of the month",
+        "params": [],
+        "returns": "number"
+      },
+      "getDay": {
+        "description": "Returns the day of the week",
+        "params": [],
+        "returns": "number"
+      },
+      "getHours": {
+        "description": "Returns the hour",
+        "params": [],
+        "returns": "number"
+      },
+      "getMinutes": {
+        "description": "Returns the minutes",
+        "params": [],
+        "returns": "number"
+      },
+      "getSeconds": {
+        "description": "Returns the seconds",
+        "params": [],
+        "returns": "number"
+      },
+      "getMilliseconds": {
+        "description": "Returns the milliseconds",
+        "params": [],
+        "returns": "number"
+      },
+      "setFullYear": {
+        "description": "Sets the full year for a specified date",
+        "params": [
+          {"name": "yearValue", "type": "number", "description": "Year value"},
+          {"name": "monthValue", "type": "number", "optional": true, "description": "Month value"},
+          {"name": "dateValue", "type": "number", "optional": true, "description": "Day value"}
+        ],
+        "returns": "number"
+      },
+      "setMonth": {
+        "description": "Sets the month for a specified date",
+        "params": [
+          {"name": "monthValue", "type": "number", "description": "Month value (0-11)"},
+          {"name": "dateValue", "type": "number", "optional": true, "description": "Day value"}
+        ],
+        "returns": "number"
+      },
+      "setDate": {
+        "description": "Sets the day of the month",
+        "params": [
+          {"name": "dateValue", "type": "number", "description": "Day value"}
+        ],
+        "returns": "number"
+      },
+      "setHours": {
+        "description": "Sets the hours",
+        "params": [
+          {"name": "hoursValue", "type": "number", "description": "Hours value"},
+          {"name": "minutesValue", "type": "number", "optional": true, "description": "Minutes value"},
+          {"name": "secondsValue", "type": "number", "optional": true, "description": "Seconds value"},
+          {"name": "msValue", "type": "number", "optional": true, "description": "Milliseconds value"}
+        ],
+        "returns": "number"
+      },
+      "setMinutes": {
+        "description": "Sets the minutes",
+        "params": [
+          {"name": "minutesValue", "type": "number", "description": "Minutes value"},
+          {"name": "secondsValue", "type": "number", "optional": true, "description": "Seconds value"},
+          {"name": "msValue", "type": "number", "optional": true, "description": "Milliseconds value"}
+        ],
+        "returns": "number"
+      },
+      "setSeconds": {
+        "description": "Sets the seconds",
+        "params": [
+          {"name": "secondsValue", "type": "number", "description": "Seconds value"},
+          {"name": "msValue", "type": "number", "optional": true, "description": "Milliseconds value"}
+        ],
+        "returns": "number"
+      },
+      "setMilliseconds": {
+        "description": "Sets the milliseconds",
+        "params": [
+          {"name": "msValue", "type": "number", "description": "Milliseconds value"}
+        ],
+        "returns": "number"
+      }
+    }
+  },
+  "Math": {
+    "static": {
+      "abs": {
+        "description": "Returns the absolute value of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "acos": {
+        "description": "Returns the arccosine of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "asin": {
+        "description": "Returns the arcsine of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "atan": {
+        "description": "Returns the arctangent of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "atan2": {
+        "description": "Returns the arctangent of the quotient of its arguments",
+        "params": [
+          {"name": "y", "type": "number", "description": "Y coordinate"},
+          {"name": "x", "type": "number", "description": "X coordinate"}
+        ],
+        "returns": "number"
+      },
+      "ceil": {
+        "description": "Returns the smallest integer greater than or equal to a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "clz32": {
+        "description": "Returns the number of leading zero bits in the 32-bit binary representation",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "cos": {
+        "description": "Returns the cosine of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number in radians"}
+        ],
+        "returns": "number"
+      },
+      "exp": {
+        "description": "Returns E raised to the power of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "floor": {
+        "description": "Returns the largest integer less than or equal to a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "fround": {
+        "description": "Returns the nearest 32-bit single precision float representation",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "imul": {
+        "description": "Returns the result of the 32-bit integer multiplication",
+        "params": [
+          {"name": "a", "type": "number", "description": "First number"},
+          {"name": "b", "type": "number", "description": "Second number"}
+        ],
+        "returns": "number"
+      },
+      "log": {
+        "description": "Returns the natural logarithm of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "log10": {
+        "description": "Returns the base 10 logarithm of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "log2": {
+        "description": "Returns the base 2 logarithm of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "max": {
+        "description": "Returns the largest of zero or more numbers",
+        "params": [
+          {"name": "value", "type": "number", "variadic": true, "description": "Numbers to compare"}
+        ],
+        "returns": "number"
+      },
+      "min": {
+        "description": "Returns the smallest of zero or more numbers",
+        "params": [
+          {"name": "value", "type": "number", "variadic": true, "description": "Numbers to compare"}
+        ],
+        "returns": "number"
+      },
+      "pow": {
+        "description": "Returns base to the exponent power",
+        "params": [
+          {"name": "base", "type": "number", "description": "The base number"},
+          {"name": "exponent", "type": "number", "description": "The exponent"}
+        ],
+        "returns": "number"
+      },
+      "random": {
+        "description": "Returns a pseudo-random number between 0 and 1",
+        "params": [],
+        "returns": "number"
+      },
+      "round": {
+        "description": "Returns the value of a number rounded to the nearest integer",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "sign": {
+        "description": "Returns the sign of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "sin": {
+        "description": "Returns the sine of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number in radians"}
+        ],
+        "returns": "number"
+      },
+      "sqrt": {
+        "description": "Returns the square root of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      },
+      "tan": {
+        "description": "Returns the tangent of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number in radians"}
+        ],
+        "returns": "number"
+      },
+      "trunc": {
+        "description": "Returns the integer part of a number",
+        "params": [
+          {"name": "x", "type": "number", "description": "A number"}
+        ],
+        "returns": "number"
+      }
+    }
+  },
+  "JSON": {
+    "static": {
+      "parse": {
+        "description": "Parses a JSON string, constructing the JavaScript value or object",
+        "params": [
+          {"name": "text", "type": "string", "description": "The JSON string to parse"},
+          {"name": "reviver", "type": "Function", "optional": true, "description": "Function to transform results"}
+        ],
+        "returns": "any"
+      },
+      "stringify": {
+        "description": "Converts a JavaScript value to a JSON string",
+        "params": [
+          {"name": "value", "type": "any", "description": "The value to convert"},
+          {"name": "replacer", "type": "Function|any[]", "optional": true, "description": "Function or array to transform values"},
+          {"name": "space", "type": "string|number", "optional": true, "description": "Indentation for formatting"}
+        ],
+        "returns": "string"
+      }
+    }
+  },
+  "RegExp": {
+    "prototype": {
+      "exec": {
+        "description": "Executes a search for a match in a specified string",
+        "params": [
+          {"name": "str", "type": "string", "description": "The string to search"}
+        ],
+        "returns": "any"
+      },
+      "test": {
+        "description": "Tests for a match in a string",
+        "params": [
+          {"name": "str", "type": "string", "description": "The string to test"}
+        ],
+        "returns": "boolean"
+      },
+      "toString": {
+        "description": "Returns a string representing the regular expression",
+        "params": [],
+        "returns": "string"
+      }
+    }
+  },
+  "Error": {
+    "prototype": {
+      "toString": {
+        "description": "Returns a string representing the error",
+        "params": [],
+        "returns": "string"
+      }
+    }
+  },
+  "console": {
+    "static": {
+      "log": {
+        "description": "Outputs a message to the console",
+        "params": [
+          {"name": "args", "type": "any", "description": "Values to print (variadic)"}
+        ],
+        "returns": "void"
+      }
+    }
+  },
+  "performance": {
+    "static": {
+      "now": {
+        "description": "Returns a high-resolution timestamp in milliseconds",
+        "params": [],
+        "returns": "number"
+      }
+    }
+  },
+  "globals": {
+    "print": {
+      "description": "Print values to console output",
+      "params": [
+        {"name": "args", "type": "any", "description": "Values to print (variadic)"}
+      ],
+      "returns": "void"
+    },
+    "parseInt": {
+      "description": "Parses a string argument and returns an integer",
+      "params": [
+        {"name": "string", "type": "string", "description": "The value to parse"},
+        {"name": "radix", "type": "number", "description": "An integer between 2 and 36 (optional)"}
+      ],
+      "returns": "number"
+    },
+    "parseFloat": {
+      "description": "Parses a string argument and returns a floating point number",
+      "params": [
+        {"name": "string", "type": "string", "description": "The value to parse"}
+      ],
+      "returns": "number"
+    },
+    "eval": {
+      "description": "Evaluates JavaScript code represented as a string",
+      "params": [
+        {"name": "code", "type": "string", "description": "JavaScript code to evaluate"}
+      ],
+      "returns": "any"
+    },
+    "isNaN": {
+      "description": "Determines whether a value is NaN (Not-A-Number)",
+      "params": [
+        {"name": "value", "type": "any", "description": "The value to test"}
+      ],
+      "returns": "boolean"
+    },
+    "isFinite": {
+      "description": "Determines whether a value is a finite number",
+      "params": [
+        {"name": "value", "type": "any", "description": "The value to test"}
+      ],
+      "returns": "boolean"
+    },
+    "setTimeout": {
+      "description": "Executes a function after a specified delay in milliseconds",
+      "params": [
+        {"name": "callback", "type": "Function", "description": "Function to execute"},
+        {"name": "delay", "type": "number", "description": "Delay in milliseconds"}
+      ],
+      "returns": "number"
+    },
+    "clearTimeout": {
+      "description": "Cancels a timeout previously established by setTimeout",
+      "params": [
+        {"name": "timeoutId", "type": "number", "description": "The identifier of the timeout"}
+      ],
+      "returns": "void"
+    },
+    "gc": {
+      "description": "Triggers garbage collection (development/testing only)",
+      "params": [],
+      "returns": "void"
+    },
+    "load": {
+      "description": "Loads and executes a JavaScript file",
+      "params": [
+        {"name": "filename", "type": "string", "description": "Path to the JavaScript file"}
+      ],
+      "returns": "any"
+    },
+    "loadMapped": {
+      "description": "Loads a memory-mapped bytecode file for efficient execution",
+      "params": [
+        {"name": "filename", "type": "string", "description": "Path to the bytecode file"},
+        {"name": "offset", "type": "number", "description": "Offset in the file"},
+        {"name": "size", "type": "number", "description": "Size to read"}
+      ],
+      "returns": "any"
+    }
+  }
+}

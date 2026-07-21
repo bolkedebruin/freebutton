@@ -2,7 +2,7 @@
  * MQTT JavaScript Binding Abstraction Layer for JavaScript Bindings
  *
  * This header provides a C-compatible interface between the MQuickJS JavaScript
- * bindings (in lib/mquickjs/freebutton_mqtt.c) and the C++ MQTT implementation
+ * bindings (in src/scripting/js/freebutton_mqtt.c) and the C++ MQTT implementation
  * (in src/mqtt/).
  *
  * All functions use C linkage for compatibility with the pure C mquickjs engine.

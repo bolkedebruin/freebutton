@@ -1,0 +1,4 @@
+# Everything in this dir is produced by tools/scripts/generate_js_stdlib.py
+# at build time (generated headers + host build artifacts). Ignore it all.
+*
+!.gitignore

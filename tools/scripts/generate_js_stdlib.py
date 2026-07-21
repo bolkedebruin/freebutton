@@ -39,35 +39,47 @@ def run_command(cmd, cwd=None):
 def main():
     # Get paths
     project_dir = Path(__file__).parent.parent.parent
-    mquickjs_dir = project_dir / "lib" / "mquickjs"
-    src_scripting_dir = project_dir / "src" / "scripting"
+    mquickjs_dir = project_dir / "lib" / "mquickjs"          # engine submodule (mquickjs_build.c, mqjs_stdlib.c, headers)
+    src_scripting_dir = project_dir / "src" / "scripting"    # firmware bindings
+    js_dir = src_scripting_dir / "js"                        # relocated FreeButton stdlib source
+    generated_dir = src_scripting_dir / "generated"          # output for generated headers
+
+    generated_dir.mkdir(parents=True, exist_ok=True)
+
+    # Host build artifacts live in the generated dir (kept out of the submodule)
+    build_obj = generated_dir / "mquickjs_build.host.o"
+    stdlib_obj = generated_dir / "freebutton_stdlib.host.o"
+    stdlib_tool = generated_dir / "freebutton_stdlib"
+    stdlib_header = generated_dir / "freebutton_stdlib.h"
+    atom_header = generated_dir / "mquickjs_atom.h"
 
     print("=" * 60)
     print("FreeButton MicroQuickJS stdlib generator")
     print("=" * 60)
     print(f"Project dir: {project_dir}")
     print(f"MQuickJS dir: {mquickjs_dir}")
+    print(f"JS source dir: {js_dir}")
+    print(f"Generated dir: {generated_dir}")
     print()
 
-    # Change to mquickjs directory
-    os.chdir(mquickjs_dir)
-
-    # Compile mquickjs_build.c as host executable
+    # Compile mquickjs_build.c (from the engine submodule) as a host object
     print("Step 1: Compiling mquickjs_build.c...")
     if not run_command([
         "gcc", "-O2", "-Wall", "-D_GNU_SOURCE",
-        "-c", "mquickjs_build.c",
-        "-o", "mquickjs_build.host.o"
+        f"-I{mquickjs_dir}",
+        "-c", str(mquickjs_dir / "mquickjs_build.c"),
+        "-o", str(build_obj)
     ]):
         return 1
 
-    # Compile freebutton_stdlib.c as host executable
+    # Compile freebutton_stdlib.c (from src/scripting/js) as a host object.
+    # It pulls in mquickjs_build.h and mqjs_stdlib.c from the engine submodule.
     print("\nStep 2: Compiling freebutton_stdlib.c...")
     if not run_command([
         "gcc", "-O2", "-Wall", "-D_GNU_SOURCE",
-        "-I.", f"-I{src_scripting_dir}",
-        "-c", "freebutton_stdlib.c",
-        "-o", "freebutton_stdlib.host.o"
+        f"-I{mquickjs_dir}", f"-I{src_scripting_dir}",
+        "-c", str(js_dir / "freebutton_stdlib.c"),
+        "-o", str(stdlib_obj)
     ]):
         return 1
 
@@ -75,24 +87,24 @@ def main():
     print("\nStep 3: Linking stdlib builder...")
     if not run_command([
         "gcc",
-        "freebutton_stdlib.host.o",
-        "mquickjs_build.host.o",
-        "-o", "freebutton_stdlib"
+        str(stdlib_obj),
+        str(build_obj),
+        "-o", str(stdlib_tool)
     ]):
         return 1
 
     # Generate stdlib header (32-bit for ESP32)
     print("\nStep 4: Generating freebutton_stdlib.h...")
     try:
-        with open("freebutton_stdlib.h", "w") as f:
+        with open(stdlib_header, "w") as f:
             result = subprocess.run(
-                ["./freebutton_stdlib", "-m32"],
+                [str(stdlib_tool), "-m32"],
                 check=True,
                 capture_output=True,
                 text=True
             )
             f.write(result.stdout)
-        print("Generated freebutton_stdlib.h")
+        print(f"Generated {stdlib_header}")
     except subprocess.CalledProcessError as e:
         print(f"Error generating stdlib header: {e}")
         if e.stderr:
@@ -102,15 +114,15 @@ def main():
     # Generate atom header (32-bit for ESP32)
     print("\nStep 5: Generating mquickjs_atom.h...")
     try:
-        with open("mquickjs_atom.h", "w") as f:
+        with open(atom_header, "w") as f:
             result = subprocess.run(
-                ["./freebutton_stdlib", "-a", "-m32"],
+                [str(stdlib_tool), "-a", "-m32"],
                 check=True,
                 capture_output=True,
                 text=True
             )
             f.write(result.stdout)
-        print("Generated mquickjs_atom.h")
+        print(f"Generated {atom_header}")
     except subprocess.CalledProcessError as e:
         print(f"Error generating atom header: {e}")
         if e.stderr:
@@ -122,8 +134,8 @@ def main():
     print("=" * 60)
     print()
     print("Generated files:")
-    print(f"  - {mquickjs_dir}/freebutton_stdlib.h")
-    print(f"  - {mquickjs_dir}/mquickjs_atom.h")
+    print(f"  - {stdlib_header}")
+    print(f"  - {atom_header}")
     print()
     print("These headers will be included in the firmware build.")
 
