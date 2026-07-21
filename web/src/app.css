@@ -1,5 +1,45 @@
 @import "tailwindcss";
 
+/* === Self-hosted fonts (latin subset, woff2) ===
+   Served from /fonts/ (web/public/fonts → dist root → LittleFS /www/fonts) so
+   the IDE renders identically offline with no external font requests.
+   DM Sans ships as a variable font (one file spans weights 400–700). */
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url("/fonts/dm-sans-var.woff2") format("woff2");
+}
+@font-face {
+  font-family: "DM Sans";
+  font-style: italic;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url("/fonts/dm-sans-italic-var.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Fira Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/fira-sans-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Fira Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/fira-sans-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Fira Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/fira-sans-600.woff2") format("woff2");
+}
+
 /* === Design Tokens (CSS Custom Properties) === */
 @theme {
   --color-bg-default: #0D0D10;

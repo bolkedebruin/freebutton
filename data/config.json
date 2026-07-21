@@ -1,0 +1,368 @@
+{
+    "info": {
+        "id": "btn_a00003",
+        "firmware": "FreeButton 3.1.alpha1",
+        "connectors": [
+            {
+                "id": 3,
+                "connector": 4,
+                "type": 1
+            },
+            {
+                "id": 2,
+                "connector": 3,
+                "type": 2
+            }
+        ],
+        "sensors": [
+            {
+                "sensorid": 1,
+                "description": "STS35 Temperature Sensor 1"
+            },
+            {
+                "sensorid": 100,
+                "description": "Free Memory"
+            },
+            {
+                "sensorid": 101,
+                "description": "LVGL Used Memory"
+            },
+            {
+                "sensorid": 102,
+                "description": "LVGL Free Memory"
+            }
+        ]
+    },
+    "core": {
+        "name": "ButtonPlus TEST",
+        "ntpserver": "",
+        "timezone": ""
+    },
+    "buttons": [
+        {
+            "id": 0,
+            "position": 7,
+            "buttonuid": "7-1",
+            "page": 1,
+            "label": "Open",
+            "topLabel": "Raam",
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00002/button_7/state",
+                    "payload": "",
+                    "eventtype": 0
+                },
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00002/button_7/state",
+                    "payload": "",
+                    "eventtype": 1
+                },
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00002/button_7/label",
+                    "payload": "",
+                    "eventtype": 11
+                },
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00002/button_7/top_label",
+                    "payload": "",
+                    "eventtype": 12
+                }
+            ]
+        },
+        {
+            "id": 1,
+            "position": 8,
+            "buttonuid": "8-1",
+            "page": 1,
+            "label": "Dicht",
+            "topLabel": "Raam",
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00002/button_8/state",
+                    "payload": "",
+                    "eventtype": 0
+                },
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00002/button_8/state",
+                    "payload": "",
+                    "eventtype": 1
+                },
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00002/button_8/label",
+                    "payload": "",
+                    "eventtype": 11
+                },
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00002/button_8/top_label",
+                    "payload": "",
+                    "eventtype": 12
+                }
+            ]
+        }
+    ],
+    "displayitems": [
+        {
+            "displayitemid": "1",
+            "x": 0,
+            "y": 0,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 4,
+            "align": 1,
+            "width": 50,
+            "label": "Home",
+            "unit": "",
+            "round": 0,
+            "topics": []
+        },
+        {
+            "displayitemid": "2",
+            "x": 0,
+            "y": 60,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 1,
+            "align": 1,
+            "width": 35,
+            "label": "",
+            "unit": "",
+            "round": 1,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/temperature",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        },
+        {
+            "displayitemid": "3",
+            "x": 0,
+            "y": 52,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 1,
+            "align": 1,
+            "width": 36,
+            "label": "",
+            "unit": "",
+            "round": 2,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/power",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        },
+        {
+            "displayitemid": "4",
+            "x": 0,
+            "y": 80,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 1,
+            "align": 1,
+            "width": 100,
+            "label": "Sonos",
+            "unit": "",
+            "round": 0,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/media_title",
+                    "payload": "",
+                    "eventtype": 15
+                },
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/media_artist",
+                    "payload": "",
+                    "eventtype": 16
+                },
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/volume_level_percent",
+                    "payload": "",
+                    "eventtype": 17
+                }
+            ]
+        },
+        {
+            "displayitemid": "5",
+            "x": 75,
+            "y": 5,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 3,
+            "align": 1,
+            "width": 20,
+            "label": "",
+            "unit": "",
+            "round": 0,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/outside_temperature",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        },
+        {
+            "displayitemid": "6",
+            "x": 0,
+            "y": 30,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 1,
+            "align": 1,
+            "width": 35,
+            "label": "",
+            "unit": "",
+            "round": 0,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/date",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        },
+        {
+            "displayitemid": "7",
+            "x": 0,
+            "y": 40,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 2,
+            "align": 1,
+            "width": 10,
+            "label": "",
+            "unit": "",
+            "round": 0,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/carbon_dioxide",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        },
+        {
+            "displayitemid": "8",
+            "x": 8,
+            "y": 40,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 2,
+            "align": 1,
+            "width": 10,
+            "label": "",
+            "unit": "",
+            "round": 0,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/humidity",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        },
+        {
+            "displayitemid": "9",
+            "x": 16,
+            "y": 40,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 2,
+            "align": 1,
+            "width": 10,
+            "label": "",
+            "unit": "",
+            "round": 0,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "buttonplus/btn_a00001/display/filter_status",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        },
+        {
+            "displayitemid": "10",
+            "x": 60,
+            "y": 0,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 4,
+            "align": 1,
+            "width": 30,
+            "label": "",
+            "unit": "",
+            "round": 0,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "home/weather/current/icon",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        },
+        {
+            "displayitemid": "11",
+            "x": 70,
+            "y": 20,
+            "page": 0,
+            "boxtype": 1,
+            "fontsize": 3,
+            "align": 1,
+            "width": 30,
+            "label": "",
+            "unit": "",
+            "round": 0,
+            "topics": [
+                {
+                    "brokerid": "ha-button-plus",
+                    "topic": "home/weather/forecast/today/1/icon",
+                    "payload": "",
+                    "eventtype": 15
+                }
+            ]
+        }
+    ],
+    "clocks": [],
+    "brokers": [
+        {
+            "brokerid": "ha-button-plus",
+            "url": "mqtt://192.168.1.10/",
+            "port": 1883,
+            "wsport": 9001,
+            "username": "",
+            "password": "",
+            "hassdiscovery": true
+        }
+    ],
+    "sensors": [
+        {
+            "sensorid": 1,
+            "interval": 10,
+            "topics": []
+        }
+    ]
+}

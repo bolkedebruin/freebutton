@@ -81,6 +81,38 @@ for (const [apiName, api] of Object.entries(stdlib.apis)) {
     }
 }
 
+// Supplemental parameter signatures for flat C-bound APIs.
+// The generated stdlib.json currently emits empty `params` for these methods
+// (the C introspection does not capture argument types for sensor/mqtt), so we
+// declare the known signatures here to enable literal argument type-checking.
+// Only applied where stdlib.json has no signature of its own.
+const SUPPLEMENTAL_API_SIGNATURES: Record<string, Record<string, string[]>> = {
+    sensor: {
+        getValue: ['number'],
+        getType: ['number'],
+        getInfo: ['number'],
+        onChange: ['number', 'function'],
+    },
+    mqtt: {
+        getBrokerName: ['number'],
+        isConnected: ['number'],
+        publish: ['number', 'string', 'string'],
+        subscribe: ['number', 'string', 'function'],
+        unsubscribe: ['number', 'string'],
+    },
+};
+
+for (const [apiName, methods] of Object.entries(SUPPLEMENTAL_API_SIGNATURES)) {
+    API_SIGNATURES[apiName] = API_SIGNATURES[apiName] || {};
+    for (const [methodName, params] of Object.entries(methods)) {
+        // Do not override a non-empty signature already sourced from stdlib.json
+        const existing = API_SIGNATURES[apiName][methodName];
+        if (!existing || existing.length === 0) {
+            API_SIGNATURES[apiName][methodName] = params;
+        }
+    }
+}
+
 // Forbidden value boxing constructors
 const VALUE_BOXING_CONSTRUCTORS = new Set(['Number', 'String', 'Boolean']);
 

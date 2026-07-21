@@ -130,10 +130,11 @@ export function isReady(): boolean {
 
 /**
  * Fetch the next available virtual address from the device
- * @param deviceUrl - The device URL (e.g., "http://192.168.1.100")
+ * @param deviceUrl - The device base URL. Defaults to "" (same origin) so the
+ *   IDE served from the device talks to that device without CORS.
  * @returns Virtual address information
  */
-export async function getDeviceVirtualAddress(deviceUrl: string): Promise<{
+export async function getDeviceVirtualAddress(deviceUrl: string = ''): Promise<{
     offset: string;
     virtual_addr: string;
     free_space: number;
@@ -151,10 +152,10 @@ export async function getDeviceVirtualAddress(deviceUrl: string): Promise<{
  * Compile JavaScript for a specific device
  * Automatically queries the device for the correct virtual memory address
  * @param sourceCode - The JavaScript source code
- * @param deviceUrl - The device URL (e.g., "http://192.168.1.100")
+ * @param deviceUrl - The device base URL. Defaults to "" (same origin).
  * @returns The compiled bytecode pre-relocated for the device
  */
-export async function compileForDevice(sourceCode: string, deviceUrl: string): Promise<Uint8Array> {
+export async function compileForDevice(sourceCode: string, deviceUrl: string = ''): Promise<Uint8Array> {
     // Get the target virtual address from the device
     const addressInfo = await getDeviceVirtualAddress(deviceUrl);
 

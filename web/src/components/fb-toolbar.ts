@@ -77,11 +77,10 @@ export class FbToolbar extends LitElement {
   }
 
   private _handleUpload() {
-    const input = this.querySelector<HTMLInputElement>('input');
-    const url = input?.value.trim();
-    if (url) {
-      emit('connection-request', { url });
-    }
+    // Deploy to the device that served this IDE (same-origin). No URL needed —
+    // fb-app handles the compile-for-device + upload flow. The ws:// input below
+    // is for the separate REPL WebSocket connection, not deployment.
+    emit('deploy-request');
   }
 
   private _handleDownload() {
@@ -116,7 +115,7 @@ export class FbToolbar extends LitElement {
         </div>
         <div class="w-px h-6 bg-border-default mx-4"></div>
         <div class="flex items-center gap-4">
-          ${this._iconBtn(UploadIcon(), 'Upload', () => this._handleUpload())}
+          ${this._iconBtn(UploadIcon(), 'Deploy to device', () => this._handleUpload())}
           ${this._iconBtn(DownloadIcon(), 'Download', () => this._handleDownload())}
         </div>
         <div class="w-px h-6 bg-border-default mx-4"></div>

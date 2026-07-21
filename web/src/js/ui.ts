@@ -124,10 +124,6 @@ export async function compileCode(): Promise<void> {
         return;
     }
 
-    // Check if device URL is provided for pre-relocation
-    const deviceUrlInput = document.getElementById('deviceUrl') as HTMLInputElement | null;
-    const deviceUrl = deviceUrlInput?.value.trim();
-
     showStatus('Compiling...', 'info');
     const compileBtn = document.getElementById('compileBtn') as HTMLButtonElement | null;
     if (compileBtn) compileBtn.disabled = true;
@@ -147,11 +143,10 @@ export async function compileCode(): Promise<void> {
         const downloadBtn = document.getElementById('downloadBtn') as HTMLButtonElement | null;
         if (downloadBtn) downloadBtn.disabled = false;
 
-        // Enable compile & upload if device URL is set
-        if (deviceUrl) {
-            const compileUploadBtn = document.getElementById('compileUploadBtn') as HTMLButtonElement | null;
-            if (compileUploadBtn) compileUploadBtn.disabled = false;
-        }
+        // Upload targets the serving device by default (same origin), so the
+        // compile & upload action is always available after a successful compile.
+        const compileUploadBtn = document.getElementById('compileUploadBtn') as HTMLButtonElement | null;
+        if (compileUploadBtn) compileUploadBtn.disabled = false;
 
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
@@ -234,13 +229,11 @@ export function downloadBytecode(): void {
  * Compile and upload bytecode to device
  */
 export async function compileAndUpload(): Promise<void> {
+    // Empty deviceUrl means same origin: the IDE served from the device uploads
+    // back to that device (fetch('/api/...')). An explicit URL still works for a
+    // dev build talking to a remote device.
     const deviceUrlInput = document.getElementById('deviceUrl') as HTMLInputElement | null;
-    const deviceUrl = deviceUrlInput?.value.trim();
-
-    if (!deviceUrl) {
-        showStatus('Please enter a device URL to upload', 'error');
-        return;
-    }
+    const deviceUrl = deviceUrlInput?.value.trim() ?? '';
 
     const sourceCode = getCode();
 

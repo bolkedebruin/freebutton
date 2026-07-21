@@ -59,6 +59,10 @@ declare global {
     'compile-result': CustomEvent<{ success: boolean; bytecode?: Uint8Array; error?: string; size?: number }>;
     'compiler-ready': CustomEvent<void>;
 
+    // Deploy events (compile-for-device + upload to the serving device, same-origin)
+    'deploy-request': CustomEvent<void>;
+    'deploy-result': CustomEvent<{ success: boolean; message: string; size?: number }>;
+
     // Connection events
     'connection-change': CustomEvent<{ connected: boolean; url: string }>;
     'connection-request': CustomEvent<{ url: string }>;

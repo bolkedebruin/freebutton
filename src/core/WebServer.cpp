@@ -22,57 +22,6 @@ extern freebutton::ConfigManager configManager;
 
 AsyncWebServer server(80);
 
-void handleHomepage(AsyncWebServerRequest *request) {
-    static constexpr std::string_view homepage_template = R"(
-<!doctype html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <link href="https://fonts.googleapis.com/css?family=Fira+Sans:400,600,700,800&display=swap" rel="stylesheet">
-    <title>Button +</title>
-    <script defer="defer" src="https://button.plus/cdn/@cdn/runtime.js?v=@VERSION"></script>
-    <script defer="defer" src="https://button.plus/cdn/@cdn/vendors.js?v=@VERSION"></script>
-    <script defer="defer" src="https://button.plus/cdn/@cdn/main.js?v=@VERSION"></script>
-    <script>window.esp32chipmodel="@model"</script>
-</head>
-<body>
-    <div id="root">
-        <div style="margin: 10px;">
-            <h3>Loading application...</h3>
-        </div>
-    </div>
-</body>
-</html>
-    )";
-
-    std::string content{homepage_template};
-    const std::string model = ESP.getChipModel();
-    const std::string cdn = CDN;
-    const std::string version = std::to_string(random(0, 10000));
-
-    // Replace placeholders
-    size_t pos = 0;
-    while ((pos = content.find("@model", pos)) != std::string::npos) {
-        content.replace(pos, 6, model);
-        pos += model.length();
-    }
-
-    pos = 0;
-    while ((pos = content.find("@cdn", pos)) != std::string::npos) {
-        content.replace(pos, 4, cdn);
-        pos += cdn.length();
-    }
-
-    pos = 0;
-    while ((pos = content.find("@VERSION", pos)) != std::string::npos) {
-        content.replace(pos, 8, version);
-        pos += version.length();
-    }
-
-    request->send(200, "text/html", content.c_str());
-}
-
 void handleConfig(AsyncWebServerRequest *request) {
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     AsyncJsonOutputStream stream(response);
@@ -436,24 +385,62 @@ void handleBytecodeDownload(AsyncWebServerRequest *request) {
 }
 
 void webserver_start() {
-    // Enable CORS for all responses
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
-    // Required for Private Network Access (PNA) - allows localhost to connect to private IPs
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Private-Network", "true");
+    // The web IDE is now served locally from LittleFS /www/ (same-origin), so the
+    // wildcard CORS + Private-Network-Access DefaultHeaders that the former
+    // externally-hosted (cross-origin) IDE required are no longer needed and
+    // have been removed.
+    // The HTTP_OPTIONS -> 200 preflight guard is kept in onNotFound for any
+    // remaining tooling that issues a CORS preflight against the API.
 
-    // Handle CORS preflight requests
+    // SPA fallback: any GET that is not an API/WebSocket route and does not map
+    // to a static file serves the gzipped app shell so client-side routing works.
     server.onNotFound([](AsyncWebServerRequest *request){
         if (request->method() == HTTP_OPTIONS) {
             request->send(200);
-        } else {
-            request->send(404);
+            return;
         }
+        const String& url = request->url();
+        if (request->method() == HTTP_GET &&
+            !url.startsWith("/api") && !url.startsWith("/ws")) {
+            static constexpr const char* SPA_SHELL = "/www/index.html.gz";
+            if (LittleFS.exists(SPA_SHELL)) {
+                AsyncWebServerResponse *response =
+                    request->beginResponse(LittleFS, SPA_SHELL, "text/html");
+                response->addHeader("Content-Encoding", "gzip");
+                request->send(response);
+                return;
+            }
+        }
+        request->send(404);
     });
 
-    server.on("/", HTTP_GET, handleHomepage);
+    // Serve the locally-built web IDE bundle (with .gz auto-negotiation) from
+    // LittleFS /www/. index.html is the default document for "/".
+    server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
+
     server.on("/config", HTTP_GET, handleConfig);
+
+    // Firmware/build metadata (defines injected by build_info_flags.py).
+    server.on("/api/version", HTTP_GET, [](AsyncWebServerRequest *request){
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION FIRMWARE
+#endif
+#ifndef GIT_COMMIT
+#define GIT_COMMIT "unknown"
+#endif
+#ifndef BUILD_DIRTY
+#define BUILD_DIRTY 0
+#endif
+        char body[256];
+        int n = snprintf(body, sizeof(body),
+            "{\"version\":\"%s\",\"git_commit\":\"%s\",\"dirty\":%s,\"model\":\"%s\"}",
+            FIRMWARE_VERSION, GIT_COMMIT, (BUILD_DIRTY ? "true" : "false"), MODEL);
+        if (n < 0 || n >= (int)sizeof(body)) {
+            request->send(500, "application/json", "{\"error\":\"version overflow\"}");
+            return;
+        }
+        request->send(200, "application/json", body);
+    });
     server.on("/resetWifi", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "text/plain", "Resetting WiFi settings and rebooting...");
         delay(1000);
@@ -472,6 +459,26 @@ void webserver_start() {
     });
 
     server.on("/api/bytecode/upload", HTTP_POST, handleBytecodeUpload, onBytecodeUpload);
+
+    // Reports where the next uploaded bytecode blob will land in the js_user
+    // partition. The registry mmaps the partition in its constructor, so use a
+    // function-local static (mapped once) and reload metadata on each request.
+    server.on("/api/bytecode/next_address", HTTP_GET, [](AsyncWebServerRequest *request){
+        static BytecodeRegistry registry;
+        registry.load();
+        const uint32_t offset = registry.getNextOffset();
+        const uint32_t virtual_addr = registry.getVirtualBaseAddress() + offset;
+        const size_t free_space = registry.getFreeSpace();
+        char body[160];
+        int n = snprintf(body, sizeof(body),
+            "{\"offset\":\"0x%lx\",\"virtual_addr\":\"0x%lx\",\"free_space\":%zu}",
+            (unsigned long)offset, (unsigned long)virtual_addr, free_space);
+        if (n < 0 || n >= (int)sizeof(body)) {
+            request->send(500, "application/json", "{\"error\":\"next_address overflow\"}");
+            return;
+        }
+        request->send(200, "application/json", body);
+    });
 
     // WebSocket test page (served from device to avoid browser PNA restrictions)
     server.on("/ws-test", HTTP_GET, handleWsTestPage);

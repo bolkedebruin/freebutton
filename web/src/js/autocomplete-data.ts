@@ -26,9 +26,9 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "console.log",
         "type": "method",
-        "detail": "(args: any) → void",
-        "info": "Outputs a message to the console",
-        "apply": "console.log(${1:args})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "console.log()"
       }
     ]
   },
@@ -37,58 +37,58 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "mqtt.getBrokerCount",
         "type": "method",
-        "detail": "() → number",
-        "info": "Get number of configured MQTT brokers",
+        "detail": "() → void",
+        "info": "",
         "apply": "mqtt.getBrokerCount()"
       },
       {
         "label": "mqtt.getBrokerName",
         "type": "method",
-        "detail": "(brokerId: number) → string",
-        "info": "Get MQTT broker name",
-        "apply": "mqtt.getBrokerName(${1:brokerId})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "mqtt.getBrokerName()"
       },
       {
         "label": "mqtt.isConnected",
         "type": "method",
-        "detail": "(brokerId: number) → boolean",
-        "info": "Check if MQTT broker is connected",
-        "apply": "mqtt.isConnected(${1:brokerId})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "mqtt.isConnected()"
       },
       {
         "label": "mqtt.publish",
         "type": "method",
-        "detail": "(brokerId: number, topic: string, payload: string, qos: number, retain: number) → void",
-        "info": "Publish MQTT message to topic",
-        "apply": "mqtt.publish(${1:brokerId}, ${2:topic}, ${3:payload}, ${4:qos}, ${5:retain})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "mqtt.publish()"
       },
       {
         "label": "mqtt.subscribe",
         "type": "method",
-        "detail": "(brokerId: number, topic: string, callback: Function, qos: number) → void",
-        "info": "Subscribe to MQTT topic with callback",
-        "apply": "mqtt.subscribe(${1:brokerId}, ${2:topic}, function() {\n\t${3}\n}, ${4:qos})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "mqtt.subscribe()"
       },
       {
         "label": "mqtt.unsubscribe",
         "type": "method",
-        "detail": "(brokerId: number, topic: string) → void",
-        "info": "Unsubscribe from MQTT topic",
-        "apply": "mqtt.unsubscribe(${1:brokerId}, ${2:topic})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "mqtt.unsubscribe()"
       },
       {
         "label": "mqtt.onConnect",
         "type": "method",
-        "detail": "(brokerId: number, callback: Function) → void",
-        "info": "Register callback for MQTT broker connection event",
-        "apply": "mqtt.onConnect(${1:brokerId}, function() {\n\t${2}\n})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "mqtt.onConnect()"
       },
       {
         "label": "mqtt.onDisconnect",
         "type": "method",
-        "detail": "(brokerId: number, callback: Function) → void",
-        "info": "Register callback for MQTT broker disconnection event",
-        "apply": "mqtt.onDisconnect(${1:brokerId}, function() {\n\t${2}\n})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "mqtt.onDisconnect()"
       }
     ]
   },
@@ -97,8 +97,8 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "performance.now",
         "type": "method",
-        "detail": "() → number",
-        "info": "Returns a high-resolution timestamp in milliseconds",
+        "detail": "() → void",
+        "info": "",
         "apply": "performance.now()"
       }
     ]
@@ -108,44 +108,44 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "sensor.count",
         "type": "method",
-        "detail": "() → number",
-        "info": "Get number of available sensors",
+        "detail": "() → void",
+        "info": "",
         "apply": "sensor.count()"
       },
       {
         "label": "sensor.getValue",
         "type": "method",
-        "detail": "(sensorId: number) → number",
-        "info": "Read current sensor value",
-        "apply": "sensor.getValue(${1:sensorId})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "sensor.getValue()"
       },
       {
         "label": "sensor.getType",
         "type": "method",
-        "detail": "(sensorId: number) → string",
-        "info": "Get sensor type name",
-        "apply": "sensor.getType(${1:sensorId})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "sensor.getType()"
       },
       {
         "label": "sensor.getInfo",
         "type": "method",
-        "detail": "(sensorId: number) → object",
-        "info": "Get sensor information object",
-        "apply": "sensor.getInfo(${1:sensorId})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "sensor.getInfo()"
       },
       {
         "label": "sensor.getAll",
         "type": "method",
-        "detail": "() → object[]",
-        "info": "Get array of all sensor information objects",
+        "detail": "() → void",
+        "info": "",
         "apply": "sensor.getAll()"
       },
       {
         "label": "sensor.onChange",
         "type": "method",
-        "detail": "(sensorId: number, callback: Function) → void",
-        "info": "Register change event handler for sensor value changes",
-        "apply": "sensor.onChange(${1:sensorId}, function() {\n\t${2}\n})"
+        "detail": "() → void",
+        "info": "",
+        "apply": "sensor.onChange()"
       }
     ]
   },
@@ -154,22 +154,22 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "system.uptime",
         "type": "method",
-        "detail": "() → number",
-        "info": "Get device uptime in seconds",
+        "detail": "() → void",
+        "info": "",
         "apply": "system.uptime()"
       },
       {
         "label": "system.freeHeap",
         "type": "method",
-        "detail": "() → number",
-        "info": "Get free heap memory in bytes",
+        "detail": "() → void",
+        "info": "",
         "apply": "system.freeHeap()"
       },
       {
         "label": "system.version",
         "type": "method",
-        "detail": "() → string",
-        "info": "Get firmware version string",
+        "detail": "() → void",
+        "info": "",
         "apply": "system.version()"
       }
     ]
@@ -179,9 +179,9 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "Array.isArray",
         "type": "method",
-        "detail": "(value: any) → boolean",
-        "info": "Determines whether the passed value is an Array",
-        "apply": "Array.isArray(${1:value})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Array.isArray()"
       }
     ]
   },
@@ -190,8 +190,8 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "Date.now",
         "type": "method",
-        "detail": "() → number",
-        "info": "Returns the number of milliseconds elapsed since January 1, 1970",
+        "detail": "() → any",
+        "info": "",
         "apply": "Date.now()"
       }
     ]
@@ -201,16 +201,16 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "JSON.parse",
         "type": "method",
-        "detail": "(text: string, reviver: Function) → any",
-        "info": "Parses a JSON string, constructing the JavaScript value or object",
-        "apply": "JSON.parse(${1:text}, function() {\n\t${2}\n})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "JSON.parse()"
       },
       {
         "label": "JSON.stringify",
         "type": "method",
-        "detail": "(value: any, replacer: Function|any[], space: string|number) → string",
-        "info": "Converts a JavaScript value to a JSON string",
-        "apply": "JSON.stringify(${1:value}, ${2:replacer}, ${3:space})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "JSON.stringify()"
       }
     ]
   },
@@ -219,177 +219,177 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "Math.min",
         "type": "method",
-        "detail": "(value: number) → number",
-        "info": "Returns the smallest of zero or more numbers",
-        "apply": "Math.min(${1:value})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.min()"
       },
       {
         "label": "Math.max",
         "type": "method",
-        "detail": "(value: number) → number",
-        "info": "Returns the largest of zero or more numbers",
-        "apply": "Math.max(${1:value})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.max()"
       },
       {
         "label": "Math.sign",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the sign of a number",
-        "apply": "Math.sign(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.sign()"
       },
       {
         "label": "Math.abs",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the absolute value of a number",
-        "apply": "Math.abs(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.abs()"
       },
       {
         "label": "Math.floor",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the largest integer less than or equal to a number",
-        "apply": "Math.floor(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.floor()"
       },
       {
         "label": "Math.ceil",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the smallest integer greater than or equal to a number",
-        "apply": "Math.ceil(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.ceil()"
       },
       {
         "label": "Math.round",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the value of a number rounded to the nearest integer",
-        "apply": "Math.round(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.round()"
       },
       {
         "label": "Math.sqrt",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the square root of a number",
-        "apply": "Math.sqrt(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.sqrt()"
       },
       {
         "label": "Math.sin",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the sine of a number",
-        "apply": "Math.sin(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.sin()"
       },
       {
         "label": "Math.cos",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the cosine of a number",
-        "apply": "Math.cos(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.cos()"
       },
       {
         "label": "Math.tan",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the tangent of a number",
-        "apply": "Math.tan(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.tan()"
       },
       {
         "label": "Math.asin",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the arcsine of a number",
-        "apply": "Math.asin(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.asin()"
       },
       {
         "label": "Math.acos",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the arccosine of a number",
-        "apply": "Math.acos(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.acos()"
       },
       {
         "label": "Math.atan",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the arctangent of a number",
-        "apply": "Math.atan(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.atan()"
       },
       {
         "label": "Math.atan2",
         "type": "method",
-        "detail": "(y: number, x: number) → number",
-        "info": "Returns the arctangent of the quotient of its arguments",
-        "apply": "Math.atan2(${1:y}, ${2:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.atan2()"
       },
       {
         "label": "Math.exp",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns E raised to the power of a number",
-        "apply": "Math.exp(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.exp()"
       },
       {
         "label": "Math.log",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the natural logarithm of a number",
-        "apply": "Math.log(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.log()"
       },
       {
         "label": "Math.pow",
         "type": "method",
-        "detail": "(base: number, exponent: number) → number",
-        "info": "Returns base to the exponent power",
-        "apply": "Math.pow(${1:base}, ${2:exponent})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.pow()"
       },
       {
         "label": "Math.random",
         "type": "method",
-        "detail": "() → number",
-        "info": "Returns a pseudo-random number between 0 and 1",
+        "detail": "() → any",
+        "info": "",
         "apply": "Math.random()"
       },
       {
         "label": "Math.imul",
         "type": "method",
-        "detail": "(a: number, b: number) → number",
-        "info": "Returns the result of the 32-bit integer multiplication",
-        "apply": "Math.imul(${1:a}, ${2:b})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.imul()"
       },
       {
         "label": "Math.clz32",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the number of leading zero bits in the 32-bit binary representation",
-        "apply": "Math.clz32(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.clz32()"
       },
       {
         "label": "Math.fround",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the nearest 32-bit single precision float representation",
-        "apply": "Math.fround(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.fround()"
       },
       {
         "label": "Math.trunc",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the integer part of a number",
-        "apply": "Math.trunc(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.trunc()"
       },
       {
         "label": "Math.log2",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the base 2 logarithm of a number",
-        "apply": "Math.log2(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.log2()"
       },
       {
         "label": "Math.log10",
         "type": "method",
-        "detail": "(x: number) → number",
-        "info": "Returns the base 10 logarithm of a number",
-        "apply": "Math.log10(${1:x})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Math.log10()"
       }
     ]
   },
@@ -398,16 +398,16 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "Number.parseInt",
         "type": "method",
-        "detail": "(string: string, radix: number) → number",
-        "info": "Parses a string argument and returns an integer",
-        "apply": "Number.parseInt(${1:string}, ${2:radix})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Number.parseInt()"
       },
       {
         "label": "Number.parseFloat",
         "type": "method",
-        "detail": "(string: string) → number",
-        "info": "Parses a string argument and returns a floating point number",
-        "apply": "Number.parseFloat(${1:string})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Number.parseFloat()"
       }
     ]
   },
@@ -416,37 +416,37 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "Object.defineProperty",
         "type": "method",
-        "detail": "(obj: object, prop: string, descriptor: object) → object",
-        "info": "Defines a new property or modifies an existing property on an object",
-        "apply": "Object.defineProperty(${1:obj}, ${2:prop}, ${3:descriptor})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.defineProperty()"
       },
       {
         "label": "Object.getPrototypeOf",
         "type": "method",
-        "detail": "(obj: object) → object",
-        "info": "Returns the prototype of the specified object",
-        "apply": "Object.getPrototypeOf(${1:obj})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.getPrototypeOf()"
       },
       {
         "label": "Object.setPrototypeOf",
         "type": "method",
-        "detail": "(obj: object, prototype: object) → object",
-        "info": "Sets the prototype of a specified object",
-        "apply": "Object.setPrototypeOf(${1:obj}, ${2:prototype})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.setPrototypeOf()"
       },
       {
         "label": "Object.create",
         "type": "method",
-        "detail": "(proto: object) → object",
-        "info": "Creates a new object with the specified prototype object",
-        "apply": "Object.create(${1:proto})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.create()"
       },
       {
         "label": "Object.keys",
         "type": "method",
-        "detail": "(obj: object) → string[]",
-        "info": "Returns an array of a given object's own enumerable property names",
-        "apply": "Object.keys(${1:obj})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "Object.keys()"
       },
       {
         "label": "Object.freeze",
@@ -497,16 +497,16 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "String.fromCharCode",
         "type": "method",
-        "detail": "(charCode: number) → string",
-        "info": "Returns a string created from the specified sequence of UTF-16 code units",
-        "apply": "String.fromCharCode(${1:charCode})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "String.fromCharCode()"
       },
       {
         "label": "String.fromCodePoint",
         "type": "method",
-        "detail": "(codePoint: number) → string",
-        "info": "Returns a string created from the specified sequence of code points",
-        "apply": "String.fromCodePoint(${1:codePoint})"
+        "detail": "() → any",
+        "info": "",
+        "apply": "String.fromCodePoint()"
       }
     ]
   },
@@ -898,65 +898,65 @@ export const globalCompletions: CompletionItem[] = [
   {
     "label": "parseInt",
     "type": "function",
-    "detail": "(string: string, radix: number) → number",
-    "info": "Parses a string argument and returns an integer",
-    "apply": "parseInt(${1:string}, ${2:radix})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "parseInt()"
   },
   {
     "label": "parseFloat",
     "type": "function",
-    "detail": "(string: string) → number",
-    "info": "Parses a string argument and returns a floating point number",
-    "apply": "parseFloat(${1:string})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "parseFloat()"
   },
   {
     "label": "eval",
     "type": "function",
-    "detail": "(code: string) → any",
-    "info": "Evaluates JavaScript code represented as a string",
-    "apply": "eval(${1:code})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "eval()"
   },
   {
     "label": "isNaN",
     "type": "function",
-    "detail": "(value: any) → boolean",
-    "info": "Determines whether a value is NaN (Not-A-Number)",
-    "apply": "isNaN(${1:value})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "isNaN()"
   },
   {
     "label": "isFinite",
     "type": "function",
-    "detail": "(value: any) → boolean",
-    "info": "Determines whether a value is a finite number",
-    "apply": "isFinite(${1:value})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "isFinite()"
   },
   {
     "label": "print",
     "type": "function",
-    "detail": "(args: any) → void",
-    "info": "Print values to console output",
-    "apply": "print(${1:args})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "print()"
   },
   {
     "label": "gc",
     "type": "function",
-    "detail": "() → void",
-    "info": "Triggers garbage collection (development/testing only)",
+    "detail": "() → any",
+    "info": "",
     "apply": "gc()"
   },
   {
     "label": "load",
     "type": "function",
-    "detail": "(filename: string) → any",
-    "info": "Loads and executes a JavaScript file",
-    "apply": "load(${1:filename})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "load()"
   },
   {
     "label": "loadMapped",
     "type": "function",
-    "detail": "(filename: string, offset: number, size: number) → any",
-    "info": "Loads a memory-mapped bytecode file for efficient execution",
-    "apply": "loadMapped(${1:filename}, ${2:offset}, ${3:size})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "loadMapped()"
   },
   {
     "label": "loadUserBytecode",
@@ -968,16 +968,16 @@ export const globalCompletions: CompletionItem[] = [
   {
     "label": "setTimeout",
     "type": "function",
-    "detail": "(callback: Function, delay: number) → number",
-    "info": "Executes a function after a specified delay in milliseconds",
-    "apply": "setTimeout(function() {\n\t${1}\n}, ${2:delay})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "setTimeout()"
   },
   {
     "label": "clearTimeout",
     "type": "function",
-    "detail": "(timeoutId: number) → void",
-    "info": "Cancels a timeout previously established by setTimeout",
-    "apply": "clearTimeout(${1:timeoutId})"
+    "detail": "() → any",
+    "info": "",
+    "apply": "clearTimeout()"
   },
   {
     "label": "throw_error",
