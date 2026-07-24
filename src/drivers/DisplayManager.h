@@ -4,7 +4,7 @@
 #include <LovyanGFX.hpp>
 #include <memory>
 #include <vector>
-#include <Adafruit_MCP23008.h>
+#include <Adafruit_MCP23X08.h>
 
 // Forward declaration to avoid circular dependency
 namespace FreeButton {
@@ -135,7 +135,7 @@ private:
         int position;
     };
     std::vector<SmallDisplayEntry> smallDisplays_;
-    std::vector<std::shared_ptr<Adafruit_MCP23008>> mcps_;
+    std::vector<std::shared_ptr<Adafruit_MCP23X08>> mcps_;
     int mainDisplayConnector_;
 
 public:
@@ -143,7 +143,7 @@ public:
     ~DisplayManager() = default;
 
     // Initialize displays based on detected hardware
-    bool initialize(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, int mainDisplayConnector);
+    bool initialize(const std::vector<std::shared_ptr<Adafruit_MCP23X08>>& mcps, int mainDisplayConnector);
 
     // Get main display (320x240)
     LGFX_ESP32_SPI* getMainDisplay() const { return mainDisplay_.get(); }
@@ -174,15 +174,15 @@ public:
     void deselectAllDisplays() const;
 
 private:
-    void initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector);
-    void initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector, int position);
+    void initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23X08>& mcp, int connector);
+    void initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23X08>& mcp, int connector, int position);
 };
 
 // Global display manager instance
 extern std::unique_ptr<DisplayManager> g_displayManager;
 
 // Global convenience functions
-bool initializeDisplays(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, int mainDisplayConnector);
+bool initializeDisplays(const std::vector<std::shared_ptr<Adafruit_MCP23X08>>& mcps, int mainDisplayConnector);
 DisplayManager& getDisplayManager();
 
 } // namespace FreeButton

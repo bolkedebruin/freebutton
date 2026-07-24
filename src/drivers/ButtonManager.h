@@ -39,7 +39,10 @@ public:
     void setUpdateInterval(const uint32_t intervalMs) { updateInterval_ = intervalMs; }
 
     // LED management for all detected physical buttons
-    void createLEDsForAllButtons(const std::string& deviceId, uint8_t brokerId = 0);
+    // connectorTypes[c]: 0=EMPTY, 1=BAR, 2=LARGE (per HardwareScanner::ConnectorType).
+    // Only BAR connectors get LEDs; each bar owns a 4-LED block packed by bar order.
+    void createLEDsForAllButtons(const std::string& deviceId, uint8_t brokerId,
+                                 const uint8_t connectorTypes[4]);
     void registerLEDsWithHomeAssistant() const;
 
     // Get LEDs for a specific button position
@@ -62,7 +65,8 @@ private:
     void updateAllButtons() const;
 
     // LED creation helpers
-    void createLEDsForButton(int position, const std::string& deviceId, uint8_t brokerId);
+    void createLEDsForButton(int position, int frontIndex, int wallIndex,
+                             const std::string& deviceId, uint8_t brokerId);
 
     // find lowest position of the button
     uint8_t getBaseButtonPosition() const;

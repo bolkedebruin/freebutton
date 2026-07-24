@@ -31,13 +31,6 @@ int device_hw_get_main_connector(void) {
     return FreeButton::getHardwareInitializer().getTft320Bar();
 }
 
-int device_hw_led_index(int buttonPos, int isWall) {
-    // Same formula as ButtonLed::calculateLedIndex (buttonPos is 1-based)
-    const int row = buttonPos / 4;
-    const bool isRight = (buttonPos % 4) >= 2;
-    return row * 4 + (isRight ? 2 : 0) + (isWall ? 1 : 0);
-}
-
 //
 // Build the fb object tree entirely in C.
 //
@@ -102,23 +95,26 @@ void device_hw_init_fb(void* ctx) {
     JSValue create_func = JS_GetPropertyStr(c, object_ctor, "create");
 
     // Helper: Object.create(proto) with _p = pos
+    // mquickjs JS_Call stack order is args-reversed, then func, then this_obj
+    // (see JS_Call docs in mquickjs.c). Object.create takes one arg (proto),
+    // so push: arg[0]=proto, func=create_func, this_obj=object_ctor.
     auto makeInst = [&](JSValue proto, int p) -> JSValue {
-        JS_PushArg(c, create_func);
-        JS_PushArg(c, object_ctor);  // this = Object
-        JS_PushArg(c, proto);        // arg: prototype
+        JS_PushArg(c, proto);        // arg[0]: prototype
+        JS_PushArg(c, create_func);  // func: Object.create
+        JS_PushArg(c, object_ctor);  // this: Object
         JSValue inst = JS_Call(c, 1);
         JS_SetPropertyStr(c, inst, "_p", JS_NewInt32(c, p));
         return inst;
     };
 
-    // Helper: build a "side" {led, backLed, button, display}
-    auto makeSide = [&](int buttonPos) -> JSValue {
-        int frontIdx = device_hw_led_index(buttonPos, 0);
-        int wallIdx  = device_hw_led_index(buttonPos, 1);
-
+    // Helper: build a "side" {led?, backLed?, button, display}.
+    // ledFront / ledWall are strip indices, or -1 to omit (main has no LEDs).
+    auto makeSide = [&](int buttonPos, int ledFront, int ledWall) -> JSValue {
         JSValue side = JS_NewObject(c);
-        JS_SetPropertyStr(c, side, "led",     makeInst(led_proto, frontIdx));
-        JS_SetPropertyStr(c, side, "backLed", makeInst(led_proto, wallIdx));
+        if (ledFront >= 0)
+            JS_SetPropertyStr(c, side, "led",     makeInst(led_proto, ledFront));
+        if (ledWall >= 0)
+            JS_SetPropertyStr(c, side, "backLed", makeInst(led_proto, ledWall));
         JS_SetPropertyStr(c, side, "button",  makeInst(btn_proto, buttonPos));
         JS_SetPropertyStr(c, side, "display", makeInst(disp_proto, buttonPos));
         return side;
@@ -140,18 +136,25 @@ void device_hw_init_fb(void* ctx) {
         int rightPos = conn * 2 + 2;
 
         if (type == 2 && mainConn == conn) {
-            // LARGE connector → fb.main
+            // LARGE connector → fb.main. The main display has NO LEDs, so its
+            // sides expose only button + display (no led/backLed).
             JSValue main_obj = JS_NewObject(c);
             JS_SetPropertyStr(c, main_obj, "display", makeInst(disp_items_proto, 0));
-            JS_SetPropertyStr(c, main_obj, "left",  makeSide(leftPos));
-            JS_SetPropertyStr(c, main_obj, "right", makeSide(rightPos));
+            JS_SetPropertyStr(c, main_obj, "left",  makeSide(leftPos,  -1, -1));
+            JS_SetPropertyStr(c, main_obj, "right", makeSide(rightPos, -1, -1));
             JS_SetPropertyStr(c, fb, "main", main_obj);
         } else if (type == 1) {
-            // BAR connector → fb.bars[n]
+            // BAR connector → fb.bars[n]. Each bar owns a contiguous block of 4
+            // strip LEDs, packed by bar order along the chain (main/empty
+            // connectors contribute none). Within a bar:
+            //   left.led = base+0, left.backLed = base+1,
+            //   right.led = base+2, right.backLed = base+3.
+            const int base = barCount * 4;
             JSValue bar = JS_NewObject(c);
-            JS_SetPropertyStr(c, bar, "left",  makeSide(leftPos));
-            JS_SetPropertyStr(c, bar, "right", makeSide(rightPos));
-            JS_SetPropertyUint32(c, bars, barCount++, bar);
+            JS_SetPropertyStr(c, bar, "left",  makeSide(leftPos,  base + 0, base + 1));
+            JS_SetPropertyStr(c, bar, "right", makeSide(rightPos, base + 2, base + 3));
+            JS_SetPropertyUint32(c, bars, barCount, bar);
+            barCount++;
         }
     }
 

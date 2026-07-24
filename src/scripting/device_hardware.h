@@ -18,9 +18,6 @@ int device_hw_get_connector_type(int connector);
 // Get connector number of LARGE display, or -1 if none
 int device_hw_get_main_connector(void);
 
-// Calculate NeoPixel strip index from button position (1-based) and wall flag
-int device_hw_led_index(int buttonPos, int isWall);
-
 // Initialize the fb object tree in a JSContext (built entirely in C, no JS parsing)
 void device_hw_init_fb(void* ctx);
 

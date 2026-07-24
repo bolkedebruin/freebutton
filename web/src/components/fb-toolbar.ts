@@ -11,6 +11,7 @@ export class FbToolbar extends LitElement {
   createRenderRoot() { return this; }
 
   @state() private _connected = false;
+  @state() private _url = '';
   private _unsubs: Array<() => void> = [];
 
   connectedCallback() {
@@ -18,6 +19,10 @@ export class FbToolbar extends LitElement {
     this._unsubs.push(
       on('connection-change', (e) => {
         this._connected = e.detail.connected;
+        // Reflect where we actually connected (e.g. the auto-connect target).
+        if (e.detail.connected && e.detail.url) {
+          this._url = e.detail.url;
+        }
       })
     );
   }
@@ -98,8 +103,7 @@ export class FbToolbar extends LitElement {
   }
 
   private _handleConnect() {
-    const input = this.querySelector<HTMLInputElement>('input');
-    const url = input?.value.trim();
+    const url = this._url.trim();
     if (url) {
       emit('connection-request', { url });
     }
@@ -126,6 +130,8 @@ export class FbToolbar extends LitElement {
           <input
             type="text"
             placeholder="ws://device.local"
+            .value=${this._url}
+            @input=${(e: Event) => { this._url = (e.target as HTMLInputElement).value; }}
             class="flex-1 h-full px-3 bg-transparent text-sm text-text-default placeholder:text-sm placeholder:text-gray-200 outline-none"
           />
           <button class="shrink-0 mr-2 w-8 h-8 rounded-lg flex items-center justify-center text-gray-100 hover:text-text-default hover:bg-white/10 transition-colors duration-200" title="Connect" @click=${() => this._handleConnect()}>

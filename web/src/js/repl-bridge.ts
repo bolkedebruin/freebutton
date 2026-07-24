@@ -20,10 +20,11 @@ export function initReplBridge(): void {
     }
   });
 
-  // Forward connection state changes
+  // Forward connection state changes. Include the resolved base URL so the UI
+  // can show where an auto-connect actually connected to.
   ws.onConnect(() => {
-    emit('connection-change', { connected: true, url: '' });
-    emit('console-line', { text: 'Connected to device', type: 'info' });
+    emit('connection-change', { connected: true, url: ws.connectionBaseUrl });
+    emit('console-line', { text: `Connected to ${ws.connectionBaseUrl}`, type: 'info' });
   });
 
   ws.onDisconnect(() => {
@@ -39,6 +40,11 @@ export function initReplBridge(): void {
   on('disconnect-request', () => {
     ws.disconnect();
   });
+
+  // Auto-connect to the device that served this IDE. When loaded from
+  // http://freebutton.local the REPL connects to ws://freebutton.local/ws/repl
+  // with no user action; the toolbar input can still override with an explicit URL.
+  ws.connect('');
 
   // Handle eval requests from console input
   on('console-eval', async (e) => {

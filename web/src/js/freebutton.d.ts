@@ -284,10 +284,10 @@ export interface FbLed {
 export interface FbMain {
     /** Main TFT display (display items) */
     readonly display: FbMainDisplay;
-    /** Left side */
-    readonly left: FbSide;
-    /** Right side */
-    readonly right: FbSide;
+    /** Left side (button + display; main has no LEDs) */
+    readonly left: FbMainSide;
+    /** Right side (button + display; main has no LEDs) */
+    readonly right: FbMainSide;
 }
 
 export interface FbMainDisplay {
@@ -311,6 +311,13 @@ export interface FbMainDisplay {
     setPosition(id: number, x: number, y: number): void;
     /** Set item page */
     setPage(id: number, page: number): void;
+}
+
+export interface FbMainSide {
+    /** Physical button */
+    readonly button: FbButton;
+    /** Button display */
+    readonly display: FbSmallDisplay;
 }
 
 export interface FbSide {

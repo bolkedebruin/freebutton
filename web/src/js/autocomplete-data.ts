@@ -583,48 +583,6 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.display.setPage(${1:id}, ${2:page})"
       },
       {
-        "label": "fb.main.left.led.setColor",
-        "type": "method",
-        "detail": "(r: number, g: number, b: number) → void",
-        "info": "Set LED RGB color",
-        "apply": "fb.main.left.led.setColor(${1:r}, ${2:g}, ${3:b})"
-      },
-      {
-        "label": "fb.main.left.led.on",
-        "type": "method",
-        "detail": "() → void",
-        "info": "Turn LED on (white)",
-        "apply": "fb.main.left.led.on()"
-      },
-      {
-        "label": "fb.main.left.led.off",
-        "type": "method",
-        "detail": "() → void",
-        "info": "Turn LED off",
-        "apply": "fb.main.left.led.off()"
-      },
-      {
-        "label": "fb.main.left.backLed.setColor",
-        "type": "method",
-        "detail": "(r: number, g: number, b: number) → void",
-        "info": "Set LED RGB color",
-        "apply": "fb.main.left.backLed.setColor(${1:r}, ${2:g}, ${3:b})"
-      },
-      {
-        "label": "fb.main.left.backLed.on",
-        "type": "method",
-        "detail": "() → void",
-        "info": "Turn LED on (white)",
-        "apply": "fb.main.left.backLed.on()"
-      },
-      {
-        "label": "fb.main.left.backLed.off",
-        "type": "method",
-        "detail": "() → void",
-        "info": "Turn LED off",
-        "apply": "fb.main.left.backLed.off()"
-      },
-      {
         "label": "fb.main.left.button.onClick",
         "type": "method",
         "detail": "(callback: Function) → void",
@@ -658,48 +616,6 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(text: string) → void",
         "info": "Set button display top label",
         "apply": "fb.main.left.display.setTopLabel(${1:text})"
-      },
-      {
-        "label": "fb.main.right.led.setColor",
-        "type": "method",
-        "detail": "(r: number, g: number, b: number) → void",
-        "info": "Set LED RGB color",
-        "apply": "fb.main.right.led.setColor(${1:r}, ${2:g}, ${3:b})"
-      },
-      {
-        "label": "fb.main.right.led.on",
-        "type": "method",
-        "detail": "() → void",
-        "info": "Turn LED on (white)",
-        "apply": "fb.main.right.led.on()"
-      },
-      {
-        "label": "fb.main.right.led.off",
-        "type": "method",
-        "detail": "() → void",
-        "info": "Turn LED off",
-        "apply": "fb.main.right.led.off()"
-      },
-      {
-        "label": "fb.main.right.backLed.setColor",
-        "type": "method",
-        "detail": "(r: number, g: number, b: number) → void",
-        "info": "Set LED RGB color",
-        "apply": "fb.main.right.backLed.setColor(${1:r}, ${2:g}, ${3:b})"
-      },
-      {
-        "label": "fb.main.right.backLed.on",
-        "type": "method",
-        "detail": "() → void",
-        "info": "Turn LED on (white)",
-        "apply": "fb.main.right.backLed.on()"
-      },
-      {
-        "label": "fb.main.right.backLed.off",
-        "type": "method",
-        "detail": "() → void",
-        "info": "Turn LED off",
-        "apply": "fb.main.right.backLed.off()"
       },
       {
         "label": "fb.main.right.button.onClick",

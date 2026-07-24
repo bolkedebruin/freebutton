@@ -15,6 +15,33 @@ export interface WSMessage {
 export type ConsoleHandler = (message: string) => void;
 export type ConnectionHandler = () => void;
 
+/** Minimal shape of `window.location` needed to derive a ws:// URL. */
+export interface WsLocation {
+    protocol: string;
+    host: string;
+}
+
+/**
+ * Resolve the REPL WebSocket URL.
+ *
+ * When `deviceUrl` is empty the IDE was served from the device itself, so we
+ * auto-connect to that same origin: loading the IDE from `http://freebutton.local`
+ * connects to `ws://freebutton.local/ws/repl` (and `https` → `wss`) with no user
+ * action. An explicit `deviceUrl` (e.g. a dev build talking to a remote device)
+ * is mapped `http`→`ws` / `https`→`wss` and keeps its `/ws/repl` suffix.
+ */
+export function resolveReplWsUrl(
+    deviceUrl: string,
+    loc: WsLocation = window.location,
+): string {
+    const trimmed = deviceUrl.trim();
+    if (trimmed) {
+        return trimmed.replace(/^http/, 'ws') + '/ws/repl';
+    }
+    const wsProtocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProtocol}//${loc.host}/ws/repl`;
+}
+
 interface PendingRequest {
     resolve: (result: { success: boolean; value?: string; error?: string }) => void;
     reject: (error: Error) => void;
@@ -34,16 +61,21 @@ export class ReplWebSocket {
     private disconnectHandlers: ConnectionHandler[] = [];
     private pendingRequests: Map<string, PendingRequest> = new Map();
     private _isConnected: boolean = false;
+    private _wantConnection: boolean = false;
 
     /**
-     * Connect to the device WebSocket endpoint
+     * Connect to the device WebSocket endpoint.
+     *
+     * With no argument (or an empty string) the client auto-connects to the
+     * device that served the IDE — the same origin the page was loaded from.
      */
-    connect(deviceUrl: string): void {
+    connect(deviceUrl: string = ''): void {
         this.disconnect();
         this.deviceUrl = deviceUrl;
+        this._wantConnection = true;
 
-        // Convert http(s) URL to ws(s) URL
-        const wsUrl = deviceUrl.replace(/^http/, 'ws') + '/ws/repl';
+        // Derive the ws(s):// endpoint (same origin when deviceUrl is empty).
+        const wsUrl = resolveReplWsUrl(deviceUrl);
 
         try {
             this.ws = new WebSocket(wsUrl);
@@ -89,6 +121,7 @@ export class ReplWebSocket {
         }
 
         this._isConnected = false;
+        this._wantConnection = false;
         this.deviceUrl = '';
 
         // Reject all pending requests
@@ -104,6 +137,20 @@ export class ReplWebSocket {
      */
     get isConnected(): boolean {
         return this._isConnected && this.ws?.readyState === WebSocket.OPEN;
+    }
+
+    /**
+     * The base URL this client connects to, for display (no /ws/repl suffix).
+     * For an auto-connect (empty deviceUrl) this is derived from the page origin,
+     * e.g. loading the IDE from http://freebutton.local → "ws://freebutton.local".
+     */
+    get connectionBaseUrl(): string {
+        const trimmed = this.deviceUrl.trim();
+        if (trimmed) {
+            return trimmed.replace(/^http/, 'ws');
+        }
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${wsProtocol}//${window.location.host}`;
     }
 
     /**
@@ -209,11 +256,13 @@ export class ReplWebSocket {
     }
 
     private scheduleReconnect(): void {
-        if (this.deviceUrl && this.reconnectTimer === null) {
+        // Reconnect whenever a connection is still wanted — including the
+        // same-origin auto-connect case where deviceUrl is an empty string.
+        if (this._wantConnection && this.reconnectTimer === null) {
             console.log(`Reconnecting in ${this.reconnectDelay / 1000}s...`);
             this.reconnectTimer = window.setTimeout(() => {
                 this.reconnectTimer = null;
-                if (this.deviceUrl) {
+                if (this._wantConnection) {
                     this.connect(this.deviceUrl);
                 }
             }, this.reconnectDelay);

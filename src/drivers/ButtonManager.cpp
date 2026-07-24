@@ -184,7 +184,7 @@ void ButtonManager::updateAllButtons() const {
     }
 
     // Group buttons by MCP to minimize I2C traffic
-    std::map<std::shared_ptr<Adafruit_MCP23008>, std::vector<PushButton*>> mcpButtons;
+    std::map<std::shared_ptr<Adafruit_MCP23X08>, std::vector<PushButton*>> mcpButtons;
 
     for (const auto& button : buttons_) {
         auto mcp = button->getMCP();
@@ -210,32 +210,47 @@ void ButtonManager::updateAllButtons() const {
     xSemaphoreGive(mcpMutex_);
 }
 
-void ButtonManager::createLEDsForAllButtons(const std::string& deviceId, uint8_t brokerId) {
-    ESP_LOGI(TAG, "Creating LEDs for all detected physical buttons");
+void ButtonManager::createLEDsForAllButtons(const std::string& deviceId, uint8_t brokerId,
+                                            const uint8_t connectorTypes[4]) {
+    ESP_LOGI(TAG, "Creating LEDs for detected bar buttons");
+
+    // Precompute each connector's bar index = number of BAR connectors before it.
+    // Only BAR (type 1) connectors carry LEDs; main (LARGE) / empty carry none.
+    int barIndexOf[4] = {0, 0, 0, 0};
+    int barCount = 0;
+    for (int c = 0; c < 4; ++c) {
+        barIndexOf[c] = barCount;
+        if (connectorTypes[c] == 1) ++barCount;  // BAR
+    }
 
     for (const auto& button : buttons_) {
-        int position = button->position();
-        createLEDsForButton(position, deviceId, brokerId);
+        const int position  = button->position();   // 0-based: connector*2 + side
+        const int connector = position / 2;
+        const int isRight   = position % 2;          // 0=left, 1=right
+
+        if (connector < 0 || connector >= 4 || connectorTypes[connector] != 1) {
+            ESP_LOGD(TAG, "Button %d on connector %d has no LEDs (not a bar) — skipping",
+                     position, connector);
+            continue;
+        }
+
+        const int base       = barIndexOf[connector] * 4;
+        const int frontIndex = base + (isRight ? 2 : 0);  // front LED
+        const int wallIndex  = frontIndex + 1;            // back/wall LED
+        createLEDsForButton(position, frontIndex, wallIndex, deviceId, brokerId);
     }
 
     ESP_LOGI(TAG, "Created %zu LEDs total for %zu buttons", leds_.size(), buttons_.size());
 }
 
-void ButtonManager::createLEDsForButton(int position, const std::string& deviceId, uint8_t brokerId) {
-    ESP_LOGD(TAG, "Creating LEDs for button at position %d", position);
+void ButtonManager::createLEDsForButton(int position, int frontIndex, int wallIndex,
+                                        const std::string& deviceId, uint8_t brokerId) {
+    ESP_LOGD(TAG, "Button %d LEDs: front=%d wall=%d", position, frontIndex, wallIndex);
 
-    // Create front LED for this button position
-    auto frontLed = std::make_unique<ButtonLed>(
-        position, LedPosition::FRONT, 0, deviceId, brokerId);
-
-    // Create wall LED for this button position
-    auto wallLed = std::make_unique<ButtonLed>(
-        position, LedPosition::WALL, 1, deviceId, brokerId);
-
-    ESP_LOGD(TAG, "Created front and wall LEDs for button %d", position);
-
-    leds_.push_back(std::move(frontLed));
-    leds_.push_back(std::move(wallLed));
+    leds_.push_back(std::make_unique<ButtonLed>(
+        position, LedPosition::FRONT, 0, frontIndex, deviceId, brokerId));
+    leds_.push_back(std::make_unique<ButtonLed>(
+        position, LedPosition::WALL, 1, wallIndex, deviceId, brokerId));
 }
 
 void ButtonManager::registerLEDsWithHomeAssistant() const {

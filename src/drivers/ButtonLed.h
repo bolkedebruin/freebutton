@@ -42,15 +42,20 @@ private:
     } state_;
 
 public:
+    // ledIndex is the physical NeoPixel strip index for this LED, computed by the
+    // caller from the live topology (see ButtonManager::createLEDsForAllButtons):
+    //   index = barIndex*4 + (isRight ? 2 : 0) + (isWall ? 1 : 0)
+    // where barIndex is the bar's order among LED-bearing (BAR) connectors. It is
+    // NOT derivable from buttonPosition alone, which is why it's passed in.
     explicit ButtonLed(uint8_t buttonPosition, LedPosition ledPosition,
-                      uint8_t ledNumber, const std::string& deviceId,
+                      uint8_t ledNumber, int ledIndex, const std::string& deviceId,
                       uint8_t brokerId) noexcept
         : buttonPosition_(buttonPosition)
         , ledPosition_(ledPosition)
         , ledNumber_(ledNumber)
         , deviceId_(deviceId)
         , brokerId_(brokerId)
-        , ledIndex_(calculateLedIndex(buttonPosition, ledPosition, ledNumber)) {}
+        , ledIndex_(ledIndex) {}
 
     // Home Assistant Discovery Integration
     void registerWithHomeAssistant() const;
@@ -114,24 +119,6 @@ public:
 
 private:
     void updateDisplay() const noexcept;
-
-    // Calculate physical LED strip index from button position and LED location
-    [[nodiscard]] static constexpr int calculateLedIndex(uint8_t buttonPosition,
-                                                       LedPosition ledPosition,
-                                                       uint8_t ledNumber) noexcept {
-        const int row = buttonPosition / 4;
-        const bool isRight = (buttonPosition % 4) >= 2;
-
-        // Determine if this is a wall LED based on position and number
-        bool isWall = false;
-        if (ledPosition == LedPosition::WALL) {
-            isWall = true;
-        } else if (ledPosition == LedPosition::BOTH) {
-            isWall = (ledNumber == 1);  // 0 = front, 1 = wall
-        }
-
-        return row * 4 + (isRight ? 2 : 0) + (isWall ? 1 : 0);
-    }
 
     // JSON serialization for MQTT publishing
     [[nodiscard]] std::string stateToJson() const;

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "Adafruit_MCP23008.h"
+#include "Adafruit_MCP23X08.h"
 #include "types.h"
 #include <functional>
 #include <memory>
@@ -16,7 +16,7 @@ public:
     using ButtonCallback = std::function<void(int position, EventType event)>;
     using LongPressCallback = std::function<void(int position, int ticksRemaining)>;
 
-    explicit PushButton(int id, int pin, std::shared_ptr<Adafruit_MCP23008> mcp);
+    explicit PushButton(int id, int pin, std::shared_ptr<Adafruit_MCP23X08> mcp);
     ~PushButton() = default;
 
     // Non-copyable, movable
@@ -50,7 +50,7 @@ public:
     void setLongPressRepeat(const uint8_t repeat) { longPressRepeat_ = repeat; }
 
     // MCP access
-    [[nodiscard]] std::shared_ptr<Adafruit_MCP23008> getMCP() const { return mcp_; }
+    [[nodiscard]] std::shared_ptr<Adafruit_MCP23X08> getMCP() const { return mcp_; }
 
 private:
     static constexpr auto TAG = "PushButton";
@@ -59,7 +59,7 @@ private:
 
     const int id_;
     const int pin_;
-    std::shared_ptr<Adafruit_MCP23008> mcp_;
+    std::shared_ptr<Adafruit_MCP23X08> mcp_;
     
     uint16_t history_;
     uint8_t longPressTicks_;

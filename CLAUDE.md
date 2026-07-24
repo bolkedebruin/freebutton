@@ -1,3 +1,10 @@
+# OpenWolf
+
+@.wolf/OPENWOLF.md
+
+This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
+
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -34,11 +41,14 @@ pio run -e esp32 -t upload
 
 ### Version Management
 ```bash
-# Get current firmware version
-python3 tools/scripts/update_version.py --get
+# Get current firmware version (repo-root VERSION is the source of truth)
+cat VERSION
 
-# Update firmware version
-python3 tools/scripts/update_version.py "3.2.0"
+# Update firmware version (propagates to include/config.h + web/package.json)
+python3 tools/scripts/sync_version.py "3.2.0"
+
+# Verify all locations are in lockstep
+python3 tools/scripts/sync_version.py --check
 ```
 
 ## Architecture Overview

@@ -12,7 +12,7 @@
 
 #if LV_USE_FONT_COMPRESSED
     #include "core/lv_global.h"
-    #include "font/lv_font_fmt_txt_private.h"
+    #include "font/fmt_txt/lv_font_fmt_txt_private.h"
 #endif
 
 LV_FONT_DECLARE(mnt_semibold_14);

@@ -13,8 +13,8 @@ mqtt.subscribe(0, "test/message", function(topic, payload) {
     print("Received on " + topic + ": " + payload);
 
     // Flash left LED green when message received
-    fb.main.left.led.setColor(0, 255, 0);
-    setTimeout(function() { fb.main.left.led.off(); }, 500);
+    fb.bars[0].left.led.setColor(0, 255, 0);
+    setTimeout(function() { fb.bars[0].left.led.off(); }, 500);
 });
 
 // Left button: Publish a test message
@@ -23,8 +23,8 @@ fb.main.left.button.onClick(function() {
     print("Published test message");
 
     // Flash left LED blue
-    fb.main.left.led.setColor(0, 0, 255);
-    setTimeout(function() { fb.main.left.led.off(); }, 300);
+    fb.bars[0].left.led.setColor(0, 0, 255);
+    setTimeout(function() { fb.bars[0].left.led.off(); }, 300);
 });
 
 print("Press left button to send test message");

@@ -7,7 +7,7 @@
 #include <memory>
 #include <functional>
 
-#include "Adafruit_MCP23008.h"
+#include "Adafruit_MCP23X08.h"
 
 #include "../drivers/HardwareScanner.h"
 #include "../drivers/ButtonManager.h"
@@ -49,7 +49,7 @@ private:
 
     HardwareScanner scanner_;
     ButtonManager buttonManager_;
-    std::vector<std::shared_ptr<Adafruit_MCP23008>> mcps_;
+    std::vector<std::shared_ptr<Adafruit_MCP23X08>> mcps_;
     
     InitCompleteCallback initCallback_;
     bool initialized_;
@@ -67,7 +67,7 @@ private:
     static void onDeviceDetected(const I2CDevice& device);
     void onConnectorDetected(int connector, ConnectorType type);
     
-    std::shared_ptr<Adafruit_MCP23008> getMCPForConnector(int connector);
+    std::shared_ptr<Adafruit_MCP23X08> getMCPForConnector(int connector);
 };
 
 // Global instance for easy access

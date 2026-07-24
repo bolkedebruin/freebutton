@@ -9,7 +9,7 @@
 namespace FreeButton {
 
 // PushButton Implementation
-PushButton::PushButton(const int id, const int pin, std::shared_ptr<Adafruit_MCP23008> mcp)
+PushButton::PushButton(const int id, const int pin, std::shared_ptr<Adafruit_MCP23X08> mcp)
     : id_(id)
     , pin_(pin)
     , mcp_(std::move(mcp))

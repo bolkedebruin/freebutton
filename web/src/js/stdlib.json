@@ -919,14 +919,14 @@
             "type": "FbMainDisplay"
           },
           {
-            "description": "Left side",
+            "description": "Left side (button + display; main has no LEDs)",
             "name": "left",
-            "type": "FbSide"
+            "type": "FbMainSide"
           },
           {
-            "description": "Right side",
+            "description": "Right side (button + display; main has no LEDs)",
             "name": "right",
-            "type": "FbSide"
+            "type": "FbMainSide"
           }
         ]
       },
@@ -1069,6 +1069,20 @@
               }
             ],
             "returns": "void"
+          }
+        ]
+      },
+      "FbMainSide": {
+        "properties": [
+          {
+            "description": "Physical button",
+            "name": "button",
+            "type": "FbButton"
+          },
+          {
+            "description": "Button display",
+            "name": "display",
+            "type": "FbSmallDisplay"
           }
         ]
       },

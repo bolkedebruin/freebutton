@@ -4,8 +4,11 @@
 //
 
 #include <Arduino.h>
+#include <esp_log.h>
 #include "drivers/NeoPixel.h"
 #include "led_hardware.h"
+
+static const char* LTAG = "led_hw";
 
 extern "C" {
 
@@ -17,6 +20,7 @@ int led_hw_get_count() {
 // Set LED color and show
 int led_hw_set_color(int position, uint8_t r, uint8_t g, uint8_t b) {
     if (position < 0 || position >= NeoPixelController::NUMBER_OF_LEDS) {
+        ESP_LOGW(LTAG, "set_color pos=%d OUT OF RANGE", position);
         return -1;  // Out of range
     }
 

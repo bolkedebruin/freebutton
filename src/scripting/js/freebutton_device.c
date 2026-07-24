@@ -22,7 +22,6 @@
 // Host build stubs for generator
 static inline int device_hw_get_connector_type(int connector) { return 0; }
 static inline int device_hw_get_main_connector(void) { return -1; }
-static inline int device_hw_led_index(int buttonPos, int isWall) { return 0; }
 static inline int led_hw_set_color(int pos, uint8_t r, uint8_t g, uint8_t b) { return 0; }
 #endif
 
@@ -68,20 +67,6 @@ JSValue js_freebutton_device_connectorType(JSContext *ctx, JSValue *this_val, in
 JSValue js_freebutton_device_mainConnector(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     return JS_NewInt32(ctx, device_hw_get_main_connector());
-}
-
-JSValue js_freebutton_device_ledIndex(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    int buttonPos = 0, isWall = 0;
-    if (argc >= 2) {
-        if (JS_ToInt32(ctx, &buttonPos, argv[0]))
-            return JS_EXCEPTION;
-        if (JS_ToInt32(ctx, &isWall, argv[1]))
-            return JS_EXCEPTION;
-    } else {
-        return JS_ThrowTypeError(ctx, "__fb.ledIndex() requires buttonPos, isWall arguments");
-    }
-    return JS_NewInt32(ctx, device_hw_led_index(buttonPos, isWall));
 }
 
 /*

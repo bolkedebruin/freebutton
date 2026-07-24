@@ -10,7 +10,7 @@ static auto TAG = "DisplayManager";
 // Global instance
 std::unique_ptr<DisplayManager> g_displayManager;
 
-bool DisplayManager::initialize(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, int mainDisplayConnector) {
+bool DisplayManager::initialize(const std::vector<std::shared_ptr<Adafruit_MCP23X08>>& mcps, int mainDisplayConnector) {
     ESP_LOGI(TAG, "Initializing displays...");
 
     mcps_ = mcps;
@@ -40,7 +40,7 @@ bool DisplayManager::initialize(const std::vector<std::shared_ptr<Adafruit_MCP23
     return true;
 }
 
-void DisplayManager::initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector) {
+void DisplayManager::initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23X08>& mcp, int connector) {
     ESP_LOGI(TAG, "Initializing main display on connector %d", connector);
 
     // CS pin is controlled by MCP, use proper backlight pin
@@ -66,7 +66,7 @@ void DisplayManager::initializeMainDisplay(const std::shared_ptr<Adafruit_MCP230
     mcp->digitalWrite(MCP320_CS, HIGH);
 }
 
-void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23008>& mcp, int connector, int position) {
+void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23X08>& mcp, int connector, int position) {
     ESP_LOGI(TAG, "Initializing small display on connector %d, position %d", connector, position);
 
     // CS pin is controlled by MCP (left or right)
@@ -308,7 +308,7 @@ void DisplayManager::setBacklight(const int displayIndex, const uint8_t brightne
 
 
 // Global convenience functions
-bool initializeDisplays(const std::vector<std::shared_ptr<Adafruit_MCP23008>>& mcps, const int mainDisplayConnector) {
+bool initializeDisplays(const std::vector<std::shared_ptr<Adafruit_MCP23X08>>& mcps, const int mainDisplayConnector) {
     if (!g_displayManager) {
         g_displayManager = std::make_unique<DisplayManager>();
     }

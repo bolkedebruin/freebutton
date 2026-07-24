@@ -151,10 +151,10 @@ bool HardwareInitializer::initializeMCPs() {
         const auto connectorType = scanner_.getConnectorType(connector);
         
         if (connectorType && *connectorType != ConnectorType::EMPTY) {
-            auto mcp = std::make_shared<Adafruit_MCP23008>();
+            auto mcp = std::make_shared<Adafruit_MCP23X08>();
             const uint8_t address = 0x20 + connector;
             
-            if (mcp->begin(address, &Wire1)) {
+            if (mcp->begin_I2C(address, &Wire1)) {
                 mcps_.push_back(mcp);
                 ESP_LOGI(TAG, "MCP23008 initialized for connector %d at address 0x%02X", 
                          connector, address);
@@ -171,10 +171,8 @@ bool HardwareInitializer::initializeMCPs() {
                 }
                 
                 // Configure button pins
-                mcp->pinMode(MCP_SWITCH_LEFT, INPUT);
-                mcp->pullUp(MCP_SWITCH_LEFT, HIGH);
-                mcp->pinMode(MCP_SWITCH_RIGHT, INPUT);
-                mcp->pullUp(MCP_SWITCH_RIGHT, HIGH);
+                mcp->pinMode(MCP_SWITCH_LEFT, INPUT_PULLUP);
+                mcp->pinMode(MCP_SWITCH_RIGHT, INPUT_PULLUP);
                 
             } else {
                 ESP_LOGE(TAG, "Failed to initialize MCP23008 for connector %d", connector);
@@ -265,7 +263,7 @@ void HardwareInitializer::onConnectorDetected(const int connector, const Connect
     }
 }
 
-std::shared_ptr<Adafruit_MCP23008> HardwareInitializer::getMCPForConnector(const int connector) {
+std::shared_ptr<Adafruit_MCP23X08> HardwareInitializer::getMCPForConnector(const int connector) {
     if (connector >= 0 && connector < static_cast<int>(mcps_.size())) {
         return mcps_[connector];
     }
@@ -275,8 +273,16 @@ std::shared_ptr<Adafruit_MCP23008> HardwareInitializer::getMCPForConnector(const
 bool HardwareInitializer::initializeLEDs() {
     ESP_LOGI(TAG, "Initializing LEDs for detected buttons...");
 
-    // Create LEDs for all detected physical buttons
-    buttonManager_.createLEDsForAllButtons(deviceId, 0); // Default broker ID 0
+    // Snapshot connector types (0=EMPTY, 1=BAR, 2=LARGE) so ButtonManager can map
+    // each button's LEDs onto the strip by bar order (only bars have LEDs).
+    uint8_t connectorTypes[4] = {0, 0, 0, 0};
+    for (int c = 0; c < 4; ++c) {
+        const auto t = scanner_.getConnectorType(c);
+        connectorTypes[c] = t.has_value() ? static_cast<uint8_t>(t.value()) : 0;
+    }
+
+    // Create LEDs for detected bar buttons
+    buttonManager_.createLEDsForAllButtons(deviceId, 0, connectorTypes); // Default broker ID 0
 
     // Register all LEDs with Home Assistant
     buttonManager_.registerLEDsWithHomeAssistant();

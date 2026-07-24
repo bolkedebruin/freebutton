@@ -611,14 +611,18 @@ public:
                     {{"name", "button"}, {"type", "FbButton"}, {"description", "Physical button"}},
                     {{"name", "display"}, {"type", "FbSmallDisplay"}, {"description", "Button display"}}
                 }}}},
+                {"FbMainSide", {{"properties", {
+                    {{"name", "button"}, {"type", "FbButton"}, {"description", "Physical button"}},
+                    {{"name", "display"}, {"type", "FbSmallDisplay"}, {"description", "Button display"}}
+                }}}},
                 {"FbBar", {{"properties", {
                     {{"name", "left"}, {"type", "FbSide"}, {"description", "Left side"}},
                     {{"name", "right"}, {"type", "FbSide"}, {"description", "Right side"}}
                 }}}},
                 {"FbMain", {{"properties", {
                     {{"name", "display"}, {"type", "FbMainDisplay"}, {"description", "Main TFT display (display items)"}},
-                    {{"name", "left"}, {"type", "FbSide"}, {"description", "Left side"}},
-                    {{"name", "right"}, {"type", "FbSide"}, {"description", "Right side"}}
+                    {{"name", "left"}, {"type", "FbMainSide"}, {"description", "Left side (button + display; main has no LEDs)"}},
+                    {{"name", "right"}, {"type", "FbMainSide"}, {"description", "Right side (button + display; main has no LEDs)"}}
                 }}}}
             }},
             {"root", {

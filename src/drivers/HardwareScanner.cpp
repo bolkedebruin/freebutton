@@ -4,7 +4,7 @@
 
 #include "HardwareScanner.h"
 #include "Sensors.h"
-#include "Adafruit_MCP23008.h"
+#include "Adafruit_MCP23X08.h"
 #include "pins.h"
 #include <algorithm>
 
@@ -89,14 +89,13 @@ void HardwareScanner::scanConnectors() {
         
         // Check if device exists on Wire1
         if (i2cDevices_.contains(virtual_address)) {
-            Adafruit_MCP23008 mcp;
-            mcp.begin(address, &Wire1);
+            Adafruit_MCP23X08 mcp;
+            mcp.begin_I2C(address, &Wire1);
             
             // Read signature to determine connector type
             uint8_t signature = 0;
             for (int pin = 0; pin < 8; ++pin) {
-                mcp.pinMode(pin, INPUT);
-                mcp.pullUp(pin, HIGH);
+                mcp.pinMode(pin, INPUT_PULLUP);
                 const uint8_t bit = mcp.digitalRead(pin);
                 signature |= (bit << pin);
             }
@@ -124,10 +123,8 @@ void HardwareScanner::scanConnectors() {
             }
             
             // Configure button pins
-            mcp.pinMode(MCP_SWITCH_LEFT, INPUT);
-            mcp.pullUp(MCP_SWITCH_LEFT, HIGH);
-            mcp.pinMode(MCP_SWITCH_RIGHT, INPUT);
-            mcp.pullUp(MCP_SWITCH_RIGHT, HIGH);
+            mcp.pinMode(MCP_SWITCH_LEFT, INPUT_PULLUP);
+            mcp.pinMode(MCP_SWITCH_RIGHT, INPUT_PULLUP);
             
             // Notify callback
             if (connectorCallback_) {

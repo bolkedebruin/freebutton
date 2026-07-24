@@ -14,8 +14,9 @@
  * - Broker ID 0 should be your primary broker
  */
 
-// Build sides array from fb topology (main + bars)
-var sides = [fb.main.left, fb.main.right];
+// Build sides array from fb topology. Only bars have LEDs/buttons; the main
+// display has none, so it is not included here.
+var sides = [];
 if (fb.bars) {
     for (var b = 0; b < fb.bars.length; b++) {
         sides.push(fb.bars[b].left);
