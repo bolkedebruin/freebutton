@@ -653,19 +653,29 @@ public:
 // ============================================================================
 
 int main(int argc, char** argv) {
+    // The generator runs from a scratch build dir (to avoid a repo-root VERSION
+    // shadowing <version>), so the doc source files must be located via dirs
+    // passed in: argv[1] = FreeButton JS source dir (freebutton_*.c),
+    //            argv[2] = tools/js dir (mqjs_stdlib_docs.json).
+    std::string jsDir    = (argc > 1) ? argv[1] : ".";
+    std::string toolsDir = (argc > 2) ? argv[2] : ".";
+    auto join = [](const std::string& d, const std::string& f) {
+        return (d.empty() || d == ".") ? f : d + "/" + f;
+    };
+
     StructureWalker walker;
 
     // Load class documentation
-    walker.loadClassDocs("mqjs_stdlib_docs.json");
+    walker.loadClassDocs(join(toolsDir, "mqjs_stdlib_docs.json"));
 
     // Convert console and performance from class docs to API docs
     walker.convertClassToAPIDocs("console", "console");
     walker.convertClassToAPIDocs("performance", "performance");
 
     // Parse documentation from source files (using regex)
-    walker.parseDocumentation("sensor", "freebutton_sensor.c");
-    walker.parseDocumentation("mqtt", "freebutton_mqtt.c");
-    walker.parseDocumentation("system", "freebutton_system.c");
+    walker.parseDocumentation("sensor", join(jsDir, "freebutton_sensor.c"));
+    walker.parseDocumentation("mqtt", join(jsDir, "freebutton_mqtt.c"));
+    walker.parseDocumentation("system", join(jsDir, "freebutton_system.c"));
 
     // Generate JSON output (walking structures directly)
     walker.generateJSON(cout);

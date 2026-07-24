@@ -90,13 +90,39 @@ void WebSocketREPL::onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client
 
         case WS_EVT_DISCONNECT:
             ESP_LOGI(TAG, "Client #%u disconnected", client->id());
+            rxBuffers_.erase(client->id());  // drop any partial message
             break;
 
         case WS_EVT_DATA: {
             auto* info = static_cast<AwsFrameInfo*>(arg);
-            if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
-                // Complete text message received
+
+            // Only handle text messages (eval/ping are text JSON).
+            if (info->message_opcode != WS_TEXT) {
+                break;
+            }
+
+            // Fast path: a whole message delivered in a single unfragmented frame.
+            if (info->final && info->index == 0 && info->len == len) {
                 handleMessage(client, std::string_view(reinterpret_cast<char*>(data), len));
+                break;
+            }
+
+            // Slow path: reassemble a message split across multiple frames and/or
+            // TCP packets. Chunks arrive in order, so we just append them.
+            std::string& buf = rxBuffers_[client->id()];
+            if (buf.size() + len > MAX_MESSAGE_BYTES) {
+                ESP_LOGW(TAG, "Client #%u message exceeds %u bytes, dropping",
+                         client->id(), (unsigned)MAX_MESSAGE_BYTES);
+                rxBuffers_.erase(client->id());
+                break;
+            }
+            buf.append(reinterpret_cast<char*>(data), len);
+
+            // Message is complete when this is the final frame and we have all of
+            // its bytes (index+len == this frame's total length).
+            if (info->final && (info->index + len) == info->len) {
+                handleMessage(client, std::string_view(buf));
+                rxBuffers_.erase(client->id());
             }
             break;
         }

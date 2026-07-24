@@ -6,6 +6,9 @@
 #pragma once
 
 #include <string_view>
+#include <string>
+#include <map>
+#include <cstdint>
 #include <ESPAsyncWebServer.h>
 
 namespace Scripting {
@@ -48,6 +51,13 @@ private:
 
     // WebSocket instance (lazy initialized)
     AsyncWebSocket* ws_{nullptr};
+
+    // Per-client receive buffers for reassembling a text message that arrives
+    // split across multiple WS frames / TCP packets. Capped tight — this is a
+    // memory-constrained device and the JS engine can only run small snippets;
+    // larger scripts go via compile+upload, not the REPL.
+    std::map<uint32_t, std::string> rxBuffers_;
+    static constexpr size_t MAX_MESSAGE_BYTES = 1024;  // drop oversized messages
 
     // Disable copy and move
     WebSocketREPL(const WebSocketREPL&) = delete;

@@ -5,152 +5,237 @@
  */
 
 export interface ConsoleAPI {
-    log(): void;
+    /** Outputs a message to the console */
+    log(args: any): void;
 
 }
 
 export interface MqttAPI {
-    getBrokerCount(): void;
+    /** Get number of configured MQTT brokers */
+    getBrokerCount(): number;
 
-    getBrokerName(): void;
+    /** Get MQTT broker name */
+    getBrokerName(brokerId: number): string;
 
-    isConnected(): void;
+    /** Check if MQTT broker is connected */
+    isConnected(brokerId: number): boolean;
 
-    publish(): void;
+    /** Publish MQTT message to topic */
+    publish(brokerId: number, topic: string, payload: string, qos: number, retain: number): void;
 
-    subscribe(): void;
+    /** Subscribe to MQTT topic with callback */
+    subscribe(brokerId: number, topic: string, callback: Function, qos: number): void;
 
-    unsubscribe(): void;
+    /** Unsubscribe from MQTT topic */
+    unsubscribe(brokerId: number, topic: string): void;
 
-    onConnect(): void;
+    /** Register callback for MQTT broker connection event */
+    onConnect(brokerId: number, callback: Function): void;
 
-    onDisconnect(): void;
+    /** Register callback for MQTT broker disconnection event */
+    onDisconnect(brokerId: number, callback: Function): void;
 
 }
 
 export interface PerformanceAPI {
-    now(): void;
+    /** Returns a high-resolution timestamp in milliseconds */
+    now(): number;
 
 }
 
 export interface SensorAPI {
-    count(): void;
+    /** Get number of available sensors */
+    count(): number;
 
-    getValue(): void;
+    /** Read current sensor value */
+    getValue(sensorId: number): number;
 
-    getType(): void;
+    /** Get sensor type name */
+    getType(sensorId: number): string;
 
-    getInfo(): void;
+    /** Get sensor information object */
+    getInfo(sensorId: number): object;
 
-    forEach(): void;
+    /** Iterate over every sensor, invoking callback(id, type) once per sensor. Memory-safe alternative to a getAll() array: it allocates nothing up front (important on the small script heap). Use sensor.getValue(id) / sensor.getInfo(id) inside the callback if you need more than id + type. */
+    forEach(callback: Function): void;
 
-    onChange(): void;
+    /** Register change event handler for sensor value changes */
+    onChange(sensorId: number, callback: Function): void;
 
 }
 
 export interface SystemAPI {
-    uptime(): void;
+    /** Get device uptime in seconds */
+    uptime(): number;
 
-    freeHeap(): void;
+    /** Get free heap memory in bytes */
+    freeHeap(): number;
 
-    version(): void;
+    /** Get firmware version string */
+    version(): string;
 
 }
 
 export interface ArrayConstructor {
-    isArray(): any;
+    /** Determines whether the passed value is an Array */
+    isArray(value: any): boolean;
 }
 
 export interface Array {
-    concat(): any;
-    push(): any;
+    /** Merges two or more arrays */
+    concat(array: any[]): any[];
+    /** Adds one or more elements to the end of an array */
+    push(element: any): number;
+    /** Removes the last element from an array and returns that element */
     pop(): any;
-    join(): any;
-    toString(): any;
-    reverse(): any;
+    /** Joins all elements of an array into a string */
+    join(separator: string): string;
+    /** Returns a string representing the specified array and its elements */
+    toString(): string;
+    /** Reverses an array in place */
+    reverse(): any[];
+    /** Removes the first element from an array and returns that element */
     shift(): any;
-    slice(): any;
-    splice(): any;
-    unshift(): any;
-    indexOf(): any;
-    lastIndexOf(): any;
-    every(): any;
-    some(): any;
-    forEach(): any;
-    map(): any;
-    filter(): any;
-    reduce(): any;
-    reduceRight(): any;
-    reduce(): any;
-    sort(): any;
+    /** Returns a shallow copy of a portion of an array */
+    slice(start: number, end: number): any[];
+    /** Changes the contents of an array by removing or replacing elements */
+    splice(start: number, deleteCount: number, item: any): any[];
+    /** Adds one or more elements to the beginning of an array */
+    unshift(element: any): number;
+    /** Returns the first index at which a given element can be found */
+    indexOf(searchElement: any, fromIndex: number): number;
+    /** Returns the last index at which a given element can be found */
+    lastIndexOf(searchElement: any, fromIndex: number): number;
+    /** Tests whether all elements pass the test implemented by the provided function */
+    every(callback: Function, thisArg: any): boolean;
+    /** Tests whether at least one element passes the test */
+    some(callback: Function, thisArg: any): boolean;
+    /** Executes a provided function once for each array element */
+    forEach(callback: Function, thisArg: any): void;
+    /** Creates a new array with the results of calling a function for every element */
+    map(callback: Function, thisArg: any): any[];
+    /** Creates a new array with all elements that pass the test */
+    filter(callback: Function, thisArg: any): any[];
+    /** Executes a reducer function on each element, resulting in a single output value */
+    reduce(callback: Function, initialValue: any): any;
+    /** Applies a function against an accumulator and each value (from right-to-left) */
+    reduceRight(callback: Function, initialValue: any): any;
+    /** Executes a reducer function on each element, resulting in a single output value */
+    reduce(callback: Function, initialValue: any): any;
+    /** Sorts the elements of an array in place */
+    sort(compareFunction: Function): any[];
 }
 
 export interface DateConstructor {
-    now(): any;
+    /** Returns the number of milliseconds elapsed since January 1, 1970 */
+    now(): number;
 }
 
 export interface Error {
-    toString(): any;
+    /** Returns a string representing the error */
+    toString(): string;
 }
 
 export interface Function {
-    call(): any;
-    apply(): any;
-    bind(): any;
-    toString(): any;
+    /** Calls a function with a given this value and arguments */
+    call(thisArg: any, arg: any): any;
+    /** Calls a function with a given this value and arguments provided as an array */
+    apply(thisArg: any, argsArray: any[]): any;
+    /** Creates a new function that has its this keyword set to the provided value */
+    bind(thisArg: any, arg: any): Function;
+    /** Returns a string representing the source code of the function */
+    toString(): string;
 }
 
 export interface JSONConstructor {
-    parse(): any;
-    stringify(): any;
+    /** Parses a JSON string, constructing the JavaScript value or object */
+    parse(text: string, reviver: Function): any;
+    /** Converts a JavaScript value to a JSON string */
+    stringify(value: any, replacer: Function|any[], space: string|number): string;
 }
 
 export interface MathConstructor {
-    min(): any;
-    max(): any;
-    sign(): any;
-    abs(): any;
-    floor(): any;
-    ceil(): any;
-    round(): any;
-    sqrt(): any;
-    sin(): any;
-    cos(): any;
-    tan(): any;
-    asin(): any;
-    acos(): any;
-    atan(): any;
-    atan2(): any;
-    exp(): any;
-    log(): any;
-    pow(): any;
-    random(): any;
-    imul(): any;
-    clz32(): any;
-    fround(): any;
-    trunc(): any;
-    log2(): any;
-    log10(): any;
+    /** Returns the smallest of zero or more numbers */
+    min(value: number): number;
+    /** Returns the largest of zero or more numbers */
+    max(value: number): number;
+    /** Returns the sign of a number */
+    sign(x: number): number;
+    /** Returns the absolute value of a number */
+    abs(x: number): number;
+    /** Returns the largest integer less than or equal to a number */
+    floor(x: number): number;
+    /** Returns the smallest integer greater than or equal to a number */
+    ceil(x: number): number;
+    /** Returns the value of a number rounded to the nearest integer */
+    round(x: number): number;
+    /** Returns the square root of a number */
+    sqrt(x: number): number;
+    /** Returns the sine of a number */
+    sin(x: number): number;
+    /** Returns the cosine of a number */
+    cos(x: number): number;
+    /** Returns the tangent of a number */
+    tan(x: number): number;
+    /** Returns the arcsine of a number */
+    asin(x: number): number;
+    /** Returns the arccosine of a number */
+    acos(x: number): number;
+    /** Returns the arctangent of a number */
+    atan(x: number): number;
+    /** Returns the arctangent of the quotient of its arguments */
+    atan2(y: number, x: number): number;
+    /** Returns E raised to the power of a number */
+    exp(x: number): number;
+    /** Returns the natural logarithm of a number */
+    log(x: number): number;
+    /** Returns base to the exponent power */
+    pow(base: number, exponent: number): number;
+    /** Returns a pseudo-random number between 0 and 1 */
+    random(): number;
+    /** Returns the result of the 32-bit integer multiplication */
+    imul(a: number, b: number): number;
+    /** Returns the number of leading zero bits in the 32-bit binary representation */
+    clz32(x: number): number;
+    /** Returns the nearest 32-bit single precision float representation */
+    fround(x: number): number;
+    /** Returns the integer part of a number */
+    trunc(x: number): number;
+    /** Returns the base 2 logarithm of a number */
+    log2(x: number): number;
+    /** Returns the base 10 logarithm of a number */
+    log10(x: number): number;
 }
 
 export interface NumberConstructor {
-    parseInt(): any;
-    parseFloat(): any;
+    /** Parses a string argument and returns an integer */
+    parseInt(string: string, radix: number): number;
+    /** Parses a string argument and returns a floating point number */
+    parseFloat(string: string): number;
 }
 
 export interface Number {
-    toExponential(): any;
-    toFixed(): any;
-    toPrecision(): any;
-    toString(): any;
+    /** Returns a string representing the number in exponential notation */
+    toExponential(fractionDigits: number): string;
+    /** Formats a number using fixed-point notation */
+    toFixed(digits: number): string;
+    /** Returns a string representing the number to a specified precision */
+    toPrecision(precision: number): string;
+    /** Returns a string representing the specified number object */
+    toString(radix: number): string;
 }
 
 export interface ObjectConstructor {
-    defineProperty(): any;
-    getPrototypeOf(): any;
-    setPrototypeOf(): any;
-    create(): any;
-    keys(): any;
+    /** Defines a new property or modifies an existing property on an object */
+    defineProperty(obj: object, prop: string, descriptor: object): object;
+    /** Returns the prototype of the specified object */
+    getPrototypeOf(obj: object): object;
+    /** Sets the prototype of a specified object */
+    setPrototypeOf(obj: object, prototype: object): object;
+    /** Creates a new object with the specified prototype object */
+    create(proto: object): object;
+    /** Returns an array of a given object's own enumerable property names */
+    keys(obj: object): string[];
     freeze(): any;
     seal(): any;
     preventExtensions(): any;
@@ -160,40 +245,65 @@ export interface ObjectConstructor {
 }
 
 export interface Object {
-    hasOwnProperty(): any;
-    toString(): any;
+    /** Returns a boolean indicating whether the object has the specified property */
+    hasOwnProperty(prop: string): boolean;
+    /** Returns a string representation of the object */
+    toString(): string;
 }
 
 export interface RegExp {
-    exec(): any;
-    test(): any;
+    /** Executes a search for a match in a specified string */
+    exec(str: string): any;
+    /** Tests for a match in a string */
+    test(str: string): boolean;
 }
 
 export interface StringConstructor {
-    fromCharCode(): any;
-    fromCodePoint(): any;
+    /** Returns a string created from the specified sequence of UTF-16 code units */
+    fromCharCode(charCode: number): string;
+    /** Returns a string created from the specified sequence of code points */
+    fromCodePoint(codePoint: number): string;
 }
 
 export interface String {
-    charAt(): any;
-    charCodeAt(): any;
-    codePointAt(): any;
-    slice(): any;
-    substring(): any;
-    concat(): any;
-    indexOf(): any;
-    lastIndexOf(): any;
-    match(): any;
-    replace(): any;
-    replaceAll(): any;
-    search(): any;
-    split(): any;
-    toLowerCase(): any;
-    toUpperCase(): any;
-    trim(): any;
-    trimEnd(): any;
-    trimStart(): any;
-    toString(): any;
+    /** Returns the character at the specified index */
+    charAt(index: number): string;
+    /** Returns the UTF-16 code unit at the given index */
+    charCodeAt(index: number): number;
+    /** Returns a non-negative integer that is the Unicode code point value */
+    codePointAt(index: number): number;
+    /** Extracts a section of a string and returns it as a new string */
+    slice(start: number, end: number): string;
+    /** Returns the part of the string between the start and end indexes */
+    substring(start: number, end: number): string;
+    /** Combines the text of two or more strings and returns a new string */
+    concat(str: string): string;
+    /** Returns the index of the first occurrence of a specified value */
+    indexOf(searchValue: string, fromIndex: number): number;
+    /** Returns the index of the last occurrence of a specified value */
+    lastIndexOf(searchValue: string, fromIndex: number): number;
+    /** Retrieves the result of matching a string against a regular expression */
+    match(regexp: RegExp): any;
+    /** Returns a new string with some or all matches of a pattern replaced */
+    replace(pattern: string|RegExp, replacement: string|Function): string;
+    /** Returns a new string with all matches of a pattern replaced */
+    replaceAll(pattern: string|RegExp, replacement: string|Function): string;
+    /** Executes a search for a match between a regular expression and this string */
+    search(regexp: RegExp): number;
+    /** Divides a string into an ordered list of substrings */
+    split(separator: string|RegExp, limit: number): string[];
+    /** Returns the calling string value converted to lowercase */
+    toLowerCase(): string;
+    /** Returns the calling string value converted to uppercase */
+    toUpperCase(): string;
+    /** Removes whitespace from both ends of a string */
+    trim(): string;
+    /** Removes whitespace from the end of a string */
+    trimEnd(): string;
+    /** Removes whitespace from the beginning of a string */
+    trimStart(): string;
+    /** Returns a string representing the specified object */
+    toString(): string;
     repeat(): any;
 }
 
@@ -230,18 +340,29 @@ declare global {
     const globalThis: object;
 
     // Global functions
-    function parseInt(): any;
-    function parseFloat(): any;
-    function eval(): any;
-    function isNaN(): any;
-    function isFinite(): any;
-    function print(): any;
-    function gc(): any;
-    function load(): any;
-    function loadMapped(): any;
+    /** Parses a string argument and returns an integer */
+    function parseInt(string: string, radix: number): number;
+    /** Parses a string argument and returns a floating point number */
+    function parseFloat(string: string): number;
+    /** Evaluates JavaScript code represented as a string */
+    function eval(code: string): any;
+    /** Determines whether a value is NaN (Not-A-Number) */
+    function isNaN(value: any): boolean;
+    /** Determines whether a value is a finite number */
+    function isFinite(value: any): boolean;
+    /** Print values to console output */
+    function print(args: any): void;
+    /** Triggers garbage collection (development/testing only) */
+    function gc(): void;
+    /** Loads and executes a JavaScript file */
+    function load(filename: string): any;
+    /** Loads a memory-mapped bytecode file for efficient execution */
+    function loadMapped(filename: string, offset: number, size: number): any;
     function loadUserBytecode(): any;
-    function setTimeout(): any;
-    function clearTimeout(): any;
+    /** Executes a function after a specified delay in milliseconds */
+    function setTimeout(callback: Function, delay: number): number;
+    /** Cancels a timeout previously established by setTimeout */
+    function clearTimeout(timeoutId: number): void;
 
     // Test utility functions
     /** Throws an error with the given message (test utility) */

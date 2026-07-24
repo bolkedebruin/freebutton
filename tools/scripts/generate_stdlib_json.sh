@@ -52,9 +52,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Run the generator and save output
+# Run the generator and save output. Pass the source dirs so it can find the
+# @jsapi doc comments (freebutton_*.c) and mqjs_stdlib_docs.json — it runs from
+# $BUILD_DIR, not the source tree.
 echo "Generating stdlib.json..."
-"$BUILD_DIR/generate_stdlib_json" > "$OUTPUT_DIR/stdlib.json"
+"$BUILD_DIR/generate_stdlib_json" "$JS_DIR" "$TOOLS_JS_DIR" > "$OUTPUT_DIR/stdlib.json"
 if [ $? -ne 0 ]; then
     echo "Error: Failed to generate stdlib.json"
     exit 1
