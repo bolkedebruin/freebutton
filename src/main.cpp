@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <map>
 #include <Wire.h>
 
 #include "config.h"
@@ -37,13 +36,6 @@ using namespace FreeButton;
 static const auto TAG = "main";
 
 const std::string deviceId(platform_create_id_string());
-
-const std::map<std::string_view, std::string_view> deviceInfo = {
-    {"name", "Button+ Base"},
-    {"manufacturer", "ButtonPlus"},
-    {"model", "Button+ " MACRO_TO_STRING(MODEL)},
-    {"sw_version", MACRO_TO_STRING(FIRMWARE)},
-};
 
 NeoPixelController neopixels(NEOPIN);
 auto& registry = MqttBrokerRegistry::instance();

@@ -2,6 +2,7 @@ import { LitElement, html } from 'lit';
 import { customElement } from 'lit/decorators.js';
 import { emit } from '../js/app-state';
 import { initReplBridge } from '../js/repl-bridge';
+import { initDeviceInfoPolling, stopDeviceInfoPolling } from '../js/device-info';
 import './fb-console-output.js';
 import './fb-console-input.js';
 
@@ -12,6 +13,14 @@ export class FbConsolePane extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     initReplBridge();
+    initDeviceInfoPolling();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    // Matches the init above: without this the module-level poller keeps its
+    // window listener (and any interval) alive after the pane is gone.
+    stopDeviceInfoPolling();
   }
 
   render() {

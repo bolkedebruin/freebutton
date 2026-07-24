@@ -68,16 +68,17 @@ void onDeviceInfoButtonEvent(ButtonEvent event) {
                 return;
             }
 
-            // Create device info collector on heap to avoid stack overflow
-            auto collector = std::make_unique<DeviceInfoCollector>();
-            DeviceInfo info = collector->collectInfo();
-            std::string deviceInfoText = collector->formatDeviceInfo(info);
+            // DeviceInfoCollector is stateless (sizeof == 1), so this costs one
+            // byte of stack -- no reason to heap-allocate it.
+            DeviceInfoCollector collector;
+            DeviceInfo info = collector.collectInfo();
+            std::string deviceInfoText = DeviceInfoCollector::formatDeviceInfo(info);
 
             // Store device info text and flag for modal display
             if (pendingDeviceInfoText) {
                 delete pendingDeviceInfoText;
             }
-            pendingDeviceInfoText = new std::string(deviceInfoText);
+            pendingDeviceInfoText = new std::string(std::move(deviceInfoText));
 
             // Ensure timer exists before setting flag
             ensureTimerExists();

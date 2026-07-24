@@ -1,18 +1,24 @@
 import { LitElement, html, svg } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { on, type PageConfig } from '../js/app-state.js';
+import { on, type PageConfig, type DeviceInfoData } from '../js/app-state.js';
 import { getConfig, loadDefaultConfig } from '../js/device-config.js';
+import { setDeviceInfoVisible } from '../js/device-info.js';
 import { SettingsIcon } from '../icons/index.js';
 
+// One point of the free-memory history, in BYTES (as reported by the device).
 interface MemorySample {
   heap: number;
   lvgl: number;
-  js: number;
 }
 
 const MAX_SAMPLES = 60;
 const GRAPH_W = 282;
 const GRAPH_H = 56;
+const DASH = '—'; // em dash placeholder when no device is connected
+
+function formatKB(bytes: number): string {
+  return `${Math.round(bytes / 1024)} KB`;
+}
 
 @customElement('fb-virtual-device')
 export class FbVirtualDevice extends LitElement {
@@ -23,70 +29,53 @@ export class FbVirtualDevice extends LitElement {
   @state() private _flipped = false;
   @state() private _deviceName = 'btn_fab028';
   @state() private _ntpServer = 'pool.ntp.org';
-  @state() private _uptimeSeconds = 720; // 12 minutes
+  // Live device info, or null when no device is connected (dev/simulator).
+  @state() private _info: DeviceInfoData | null = null;
   @state() private _memorySamples: MemorySample[] = [];
 
   private _unsub?: () => void;
-  private _uptimeInterval?: ReturnType<typeof setInterval>;
-  private _memoryInterval?: ReturnType<typeof setInterval>;
-
-  // Simulated base values (KB free)
-  private _heapBase = 180;
-  private _lvglBase = 48;
-  private _jsBase = 32;
+  private _unsubInfo?: () => void;
+  // The device name field mirrors the device on first contact, then stays under
+  // the user's control so live polling never clobbers what they typed.
+  private _deviceNameSeeded = false;
 
   connectedCallback() {
     super.connectedCallback();
     this._unsub = on('device-config', (e) => {
       this._pages = e.detail.pages;
     });
+    this._unsubInfo = on('device-info', (e) => this._applyInfo(e.detail.data));
     const cfg = getConfig();
     if (cfg.length > 0) {
       this._pages = cfg;
     } else {
       loadDefaultConfig();
     }
-    this._uptimeInterval = setInterval(() => {
-      this._uptimeSeconds++;
-    }, 1000);
-    // Seed initial samples and start updating
-    this._seedMemorySamples();
-    this._memoryInterval = setInterval(() => this._pushMemorySample(), 2000);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._unsub?.();
-    if (this._uptimeInterval) clearInterval(this._uptimeInterval);
-    if (this._memoryInterval) clearInterval(this._memoryInterval);
+    this._unsubInfo?.();
+    setDeviceInfoVisible(false);
   }
 
-  private _jitter(base: number, range: number): number {
-    return base + (Math.random() - 0.5) * range;
-  }
-
-  private _seedMemorySamples() {
-    const samples: MemorySample[] = [];
-    for (let i = 0; i < MAX_SAMPLES; i++) {
-      samples.push({
-        heap: this._jitter(this._heapBase, 20),
-        lvgl: this._jitter(this._lvglBase, 8),
-        js: this._jitter(this._jsBase, 6),
-      });
+  /** Apply a device-info update: null clears to placeholders, data appends a memory sample. */
+  private _applyInfo(data: DeviceInfoData | null) {
+    if (!data) {
+      // Already cleared: assigning a fresh [] would change identity and force a
+      // full re-render of byte-identical output on every failed poll.
+      if (this._info === null && this._memorySamples.length === 0) return;
+      this._info = null;
+      this._memorySamples = [];
+      return;
     }
-    this._memorySamples = samples;
-  }
-
-  private _pushMemorySample() {
-    const prev = this._memorySamples[this._memorySamples.length - 1];
-    // Random walk from previous value, clamped
-    const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
-    const sample: MemorySample = {
-      heap: clamp(prev.heap + (Math.random() - 0.5) * 8, 140, 220),
-      lvgl: clamp(prev.lvgl + (Math.random() - 0.5) * 4, 30, 64),
-      js: clamp(prev.js + (Math.random() - 0.5) * 3, 16, 48),
-    };
-    const next = [...this._memorySamples, sample];
+    this._info = data;
+    if (!this._deviceNameSeeded && data.deviceName) {
+      this._deviceName = data.deviceName;
+      this._deviceNameSeeded = true;
+    }
+    const next = [...this._memorySamples, { heap: data.heapFree, lvgl: data.lvglFree }];
     this._memorySamples = next.length > MAX_SAMPLES ? next.slice(next.length - MAX_SAMPLES) : next;
   }
 
@@ -96,6 +85,9 @@ export class FbVirtualDevice extends LitElement {
 
   private _toggleFlip() {
     this._flipped = !this._flipped;
+    // The back face is the only consumer of device info -- don't poll the
+    // device while the front face is showing.
+    setDeviceInfoVisible(this._flipped);
   }
 
   private _formatUptime(totalSeconds: number): string {
@@ -107,28 +99,32 @@ export class FbVirtualDevice extends LitElement {
 
   private _toPolyline(samples: MemorySample[], key: keyof MemorySample, maxVal: number): string {
     const stepX = GRAPH_W / (MAX_SAMPLES - 1);
+    // Each series is normalized to its OWN total, so Heap (~320 KB) and LVGL
+    // (~64 KB) are both fully visible; clamp to the plot so a value can never
+    // render above the chart.
     return samples
-      .map((s, i) => `${(i * stepX).toFixed(1)},${(GRAPH_H - (s[key] / maxVal) * GRAPH_H).toFixed(1)}`)
+      .map((s, i) => {
+        const frac = Math.max(0, Math.min(1, s[key] / maxVal));
+        return `${(i * stepX).toFixed(1)},${(GRAPH_H - frac * GRAPH_H).toFixed(1)}`;
+      })
       .join(' ');
   }
 
   private _renderMemoryGraph() {
     const samples = this._memorySamples;
-    if (samples.length < 2) return html``;
 
-    const maxVal = 320; // 320KB total heap
-    const latest = samples[samples.length - 1];
-
-    const lines: { key: keyof MemorySample; color: string; label: string }[] = [
-      { key: 'heap', color: '#6B26FF', label: 'Heap' },
-      { key: 'lvgl', color: '#19D95D', label: 'LVGL' },
-      { key: 'js', color: '#F2A359', label: 'JS' },
+    // Each line scales to its own total so both series use the full plot height.
+    const lines: { key: keyof MemorySample; color: string; label: string; total: number }[] = [
+      { key: 'heap', color: '#6B26FF', label: 'Heap', total: this._info?.heapTotal ?? 320 * 1024 },
+      { key: 'lvgl', color: '#19D95D', label: 'LVGL', total: this._info?.lvglTotal ?? 64 * 1024 },
     ];
+
+    const latest = samples[samples.length - 1];
 
     return html`
       <div class="flex flex-col gap-1" data-testid="memory-graph">
         <div class="flex items-center justify-between">
-          <span class="text-[11px] text-gray-200">Memory (KB free)</span>
+          <span class="text-[11px] text-gray-200">Memory (free)</span>
           <div class="flex gap-2.5">
             ${lines.map(l => html`
               <span class="flex items-center gap-1">
@@ -139,25 +135,30 @@ export class FbVirtualDevice extends LitElement {
           </div>
         </div>
         <div class="bg-white/5 rounded-lg p-1.5 border border-white/5">
-          <svg width="${GRAPH_W}" height="${GRAPH_H}" viewBox="0 0 ${GRAPH_W} ${GRAPH_H}" class="w-full" preserveAspectRatio="none">
-            <!-- Grid lines -->
-            ${[0.25, 0.5, 0.75].map(frac => svg`
-              <line x1="0" y1="${GRAPH_H * frac}" x2="${GRAPH_W}" y2="${GRAPH_H * frac}"
-                stroke="rgba(255,255,255,0.06)" stroke-width="1" />
-            `)}
-            <!-- Data lines -->
-            ${lines.map(l => svg`
-              <polyline
-                points="${this._toPolyline(samples, l.key, maxVal)}"
-                fill="none" stroke="${l.color}" stroke-width="1.5"
-                stroke-linejoin="round" stroke-linecap="round"
-                data-series="${l.key}" />
-            `)}
-          </svg>
+          ${samples.length < 1
+            ? html`<div class="h-[56px] flex items-center justify-center text-[11px] text-gray-200"
+                        data-testid="memory-empty">Waiting for device…</div>`
+            : html`
+              <svg width="${GRAPH_W}" height="${GRAPH_H}" viewBox="0 0 ${GRAPH_W} ${GRAPH_H}" class="w-full" preserveAspectRatio="none">
+                <!-- Grid lines -->
+                ${[0.25, 0.5, 0.75].map(frac => svg`
+                  <line x1="0" y1="${GRAPH_H * frac}" x2="${GRAPH_W}" y2="${GRAPH_H * frac}"
+                    stroke="rgba(255,255,255,0.06)" stroke-width="1" />
+                `)}
+                <!-- Data lines -->
+                ${lines.map(l => svg`
+                  <polyline
+                    points="${this._toPolyline(samples, l.key, l.total)}"
+                    fill="none" stroke="${l.color}" stroke-width="1.5"
+                    stroke-linejoin="round" stroke-linecap="round"
+                    data-series="${l.key}" />
+                `)}
+              </svg>
+            `}
         </div>
         <div class="flex gap-3 text-[10px] text-gray-200 font-mono">
           ${lines.map(l => html`
-            <span><span style="color:${l.color}">${Math.round(latest[l.key])}</span> ${l.label}</span>
+            <span><span style="color:${l.color}">${latest ? formatKB(latest[l.key]) : DASH}</span> ${l.label}</span>
           `)}
         </div>
       </div>
@@ -165,13 +166,15 @@ export class FbVirtualDevice extends LitElement {
   }
 
   private _renderSettingsCard() {
+    const i = this._info;
     const infoRows: [string, string][] = [
-      ['IPv4', '192.168.1.42'],
-      ['IPv6', 'fe80::1'],
-      ['SSID', 'HomeNetwork'],
-      ['MAC', 'AA:BB:CC:DD:EE:FF'],
-      ['Firmware', '3.2.0'],
-      ['Uptime', this._formatUptime(this._uptimeSeconds)],
+      ['IPv4', i?.ipv4 ?? DASH],
+      ['IPv6', i?.ipv6 ?? DASH],
+      ['SSID', i?.ssid ?? DASH],
+      ['MAC', i?.mac ?? DASH],
+      ['Signal', i ? `${i.rssi} dBm` : DASH],
+      ['Firmware', i?.firmware ?? DASH],
+      ['Uptime', i ? this._formatUptime(i.uptime) : DASH],
     ];
 
     return html`

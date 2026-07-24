@@ -332,6 +332,78 @@ describe('fb-virtual-device', () => {
     expect(fieldNames).toContain('Uptime');
   });
 
+  it('shows placeholders (not fake values) when no device is connected', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
+    gearBtn.click();
+    await nextFrame();
+
+    const ipv4 = el.querySelector('[data-field="IPv4"]');
+    const mac = el.querySelector('[data-field="MAC"]');
+    // Old hardcoded placeholders must be gone; unconnected shows an em dash.
+    expect(ipv4?.textContent?.trim()).toBe('—');
+    expect(mac?.textContent?.trim()).toBe('—');
+    expect(el.textContent).not.toContain('192.168.1.42');
+    expect(el.textContent).not.toContain('AA:BB:CC:DD:EE:FF');
+  });
+
+  it('renders real device info from a device-info event', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('device-info', {
+      detail: {
+        data: {
+          deviceName: 'btn_live01', ipv4: '10.0.0.7', ipv6: 'fe80::abcd', ssid: 'MyWifi',
+          rssi: -47, mac: '11:22:33:44:55:66', firmware: '9.9.9', uptime: 3661,
+          heapFree: 184320, heapTotal: 327680, heapMinFree: 153600,
+          lvglFree: 40960, lvglTotal: 61440,
+        },
+      },
+    }));
+    await nextFrame();
+
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
+    gearBtn.click();
+    await nextFrame();
+
+    expect(el.querySelector('[data-field="IPv4"]')?.textContent?.trim()).toBe('10.0.0.7');
+    expect(el.querySelector('[data-field="IPv6"]')?.textContent?.trim()).toBe('fe80::abcd');
+    expect(el.querySelector('[data-field="SSID"]')?.textContent?.trim()).toBe('MyWifi');
+    expect(el.querySelector('[data-field="MAC"]')?.textContent?.trim()).toBe('11:22:33:44:55:66');
+    expect(el.querySelector('[data-field="Firmware"]')?.textContent?.trim()).toBe('9.9.9');
+    expect(el.querySelector('[data-field="Signal"]')?.textContent?.trim()).toBe('-47 dBm');
+    // Uptime 3661s -> 0d 1h 1m
+    expect(el.querySelector('[data-field="Uptime"]')?.textContent?.trim()).toBe('0d 1h 1m');
+  });
+
+  it('memory graph shows real KB values with a quantifier', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('device-info', {
+      detail: {
+        data: {
+          deviceName: 'btn', ipv4: '1.1.1.1', ipv6: '::1', ssid: 's', rssi: -50,
+          mac: 'a', firmware: 'f', uptime: 1,
+          heapFree: 184320 /* 180 KB */, heapTotal: 327680, heapMinFree: 100000,
+          lvglFree: 40960 /* 40 KB */, lvglTotal: 61440,
+        },
+      },
+    }));
+    await nextFrame();
+
+    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
+    gearBtn.click();
+    await nextFrame();
+
+    const graph = el.querySelector('[data-testid="memory-graph"]');
+    expect(graph?.textContent).toContain('180 KB'); // heapFree in KB
+    expect(graph?.textContent).toContain('40 KB');  // lvglFree in KB
+  });
+
   it('device name input is present and editable', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();
@@ -353,8 +425,20 @@ describe('fb-virtual-device', () => {
     expect((el as any)._deviceName).toBe('my_device');
   });
 
-  it('renders memory graph with three SVG polylines', async () => {
+  it('renders real (heap + lvgl) SVG polylines once device data arrives', async () => {
     const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('device-info', {
+      detail: {
+        data: {
+          deviceName: 'btn', ipv4: '1.1.1.1', ipv6: '::1', ssid: 's', rssi: -50,
+          mac: 'a', firmware: 'f', uptime: 1,
+          heapFree: 184320, heapTotal: 327680, heapMinFree: 100000,
+          lvglFree: 40960, lvglTotal: 61440,
+        },
+      },
+    }));
     await nextFrame();
 
     // Flip to settings
@@ -369,10 +453,11 @@ describe('fb-virtual-device', () => {
     const series = Array.from(lines).map(l => l.getAttribute('data-series'));
     expect(series).toContain('heap');
     expect(series).toContain('lvgl');
-    expect(series).toContain('js');
+    // The fabricated "js" series (no firmware source) must be gone.
+    expect(series).not.toContain('js');
   });
 
-  it('memory graph legend shows current values', async () => {
+  it('memory graph shows a waiting placeholder before any device data', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();
 
@@ -383,7 +468,8 @@ describe('fb-virtual-device', () => {
     const graph = el.querySelector('[data-testid="memory-graph"]');
     expect(graph?.textContent).toContain('Heap');
     expect(graph?.textContent).toContain('LVGL');
-    expect(graph?.textContent).toContain('JS');
+    expect(graph?.querySelector('[data-testid="memory-empty"]')).not.toBeNull();
+    expect(graph?.querySelectorAll('polyline[data-series]').length).toBe(0);
   });
 });
 

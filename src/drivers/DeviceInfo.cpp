@@ -1,7 +1,8 @@
 #include "DeviceInfo.h"
 #include <WiFi.h>
 #include <esp_system.h>
-#include <ArduinoJson.h>
+#include <esp_heap_caps.h>
+#include <lvgl.h>
 
 #include "config.h"
 
@@ -13,12 +14,16 @@ DeviceInfo DeviceInfoCollector::collectInfo() const {
     info.deviceName = getDeviceName();
     info.ipv4Address = getIPv4Address();
     info.ipv6Address = getIPv6Address();
-    info.freeMemory = getFreeMemory();
     info.connectedSSID = getConnectedSSID();
     info.signalStrength = getSignalStrength();
     info.firmwareVersion = getFirmwareVersion();
     info.macAddress = getMacAddress();
     info.uptime = getUptime();
+
+    info.heapFree = getFreeMemory();
+    info.heapTotal = getTotalHeap();
+    info.heapMinFree = getMinFreeHeap();
+    getLvglMemory(info.lvglFree, info.lvglTotal);
     return info;
 }
 
@@ -40,7 +45,9 @@ std::string DeviceInfoCollector::getIPv6Address() {
 }
 
 size_t DeviceInfoCollector::getFreeMemory() {
-    return esp_get_free_heap_size();
+    // Internal SRAM free, matching getTotalHeap()/getMinFreeHeap()'s cap so the
+    // free/total ratio the web graph plots stays within [0, 1].
+    return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
 }
 
 std::string DeviceInfoCollector::getConnectedSSID() {
@@ -74,11 +81,26 @@ uint32_t DeviceInfoCollector::getUptime() {
     return millis() / 1000;  // Convert to seconds
 }
 
+size_t DeviceInfoCollector::getTotalHeap() {
+    return heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+}
+
+size_t DeviceInfoCollector::getMinFreeHeap() {
+    return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+}
+
+void DeviceInfoCollector::getLvglMemory(size_t& freeBytes, size_t& totalBytes) {
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    freeBytes = mon.free_size;
+    totalBytes = mon.total_size;
+}
+
 std::string DeviceInfoCollector::formatDeviceInfo(const DeviceInfo& info) {
     char buffer[500];  // Reduced buffer size
 
     // Format memory in KB
-    const size_t memoryKB = info.freeMemory / 1024;
+    const size_t memoryKB = info.heapFree / 1024;
 
     // Format uptime
     const uint32_t hours = info.uptime / 3600;

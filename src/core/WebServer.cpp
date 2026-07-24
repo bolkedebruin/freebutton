@@ -11,6 +11,7 @@
 #include "scripting/BytecodeWriter.h"
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/WebSocketREPL.h"
+#include "drivers/DeviceInfo.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
 #include <LittleFS.h>
@@ -441,6 +442,20 @@ void webserver_start() {
         }
         request->send(200, "application/json", body);
     });
+
+    // Live device info for the web IDE's device panel
+    server.on("/api/device", HTTP_GET, [](AsyncWebServerRequest *request){
+        FreeButton::DeviceInfoCollector collector;
+        FreeButton::DeviceInfo info = collector.collectInfo();
+        // Read-only device info; allow a cross-origin dev build (Vite talking to
+        // a remote device) to read it. The IDE is served same-origin in prod, so
+        // this only matters for the explicit-device-URL dev workflow.
+        AsyncWebServerResponse *response =
+            request->beginResponse(200, "application/json", FreeButton::toJson(info).c_str());
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        request->send(response);
+    });
+
     server.on("/resetWifi", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "text/plain", "Resetting WiFi settings and rebooting...");
         delay(1000);

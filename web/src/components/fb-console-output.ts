@@ -2,6 +2,11 @@ import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { on, type ConsoleLine, type LogLevel } from '../js/app-state';
 
+// The console renders into light DOM (one <div> per line, no virtualization),
+// so every retained line is ~150-400 B of live DOM on top of the array entry.
+// A device-side console.log in a loop would grow this without bound.
+const MAX_LINES = 1000;
+
 const colorMap: Record<LogLevel, string> = {
   input: 'text-[#4fc3f7]',
   result: 'text-status-green',
@@ -22,7 +27,8 @@ export class FbConsoleOutput extends LitElement {
     super.connectedCallback();
     this._unsubs.push(
       on('console-line', (e) => {
-        this._lines = [...this._lines, e.detail];
+        const next = [...this._lines, e.detail];
+        this._lines = next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
       }),
       on('console-clear', () => {
         this._lines = [];

@@ -45,6 +45,27 @@ export interface PageConfig {
   buttons: ButtonConfig[];
 }
 
+/**
+ * Live device info from the firmware's GET /api/device endpoint.
+ * Network fields are strings ("Not connected" when WiFi is down); memory fields
+ * are raw BYTES (the UI applies the KB quantifier).
+ */
+export interface DeviceInfoData {
+  deviceName: string;
+  ipv4: string;
+  ipv6: string;
+  ssid: string;
+  rssi: number;       // dBm
+  mac: string;
+  firmware: string;
+  uptime: number;     // seconds
+  heapFree: number;   // bytes
+  heapTotal: number;  // bytes
+  heapMinFree: number; // bytes
+  lvglFree: number;   // bytes
+  lvglTotal: number;  // bytes
+}
+
 // Typed custom event map
 declare global {
   interface WindowEventMap {
@@ -75,6 +96,8 @@ declare global {
 
     // Device events
     'device-config': CustomEvent<{ pages: PageConfig[] }>;
+    // Live device info; data is null when no device is reachable (simulator/dev).
+    'device-info': CustomEvent<{ data: DeviceInfoData | null }>;
 
     // File events
     'files-change': CustomEvent<{ files: FileEntry[]; used: number; total: number }>;

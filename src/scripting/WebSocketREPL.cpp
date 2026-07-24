@@ -4,6 +4,7 @@
 
 #include "WebSocketREPL.h"
 #include "ScriptEngine.h"
+#include "../json/JsonEscape.h"
 #include <esp_log.h>
 #include <cstring>
 #include <string>
@@ -34,23 +35,11 @@ static std::string unescapeJson(std::string_view input) {
     return result;
 }
 
-// Escape a string for JSON output (handles ", \, newlines)
-static std::string escapeJson(std::string_view input) {
-    std::string result;
-    result.reserve(input.size() + 10);
-
-    for (char c : input) {
-        switch (c) {
-            case '"':  result += "\\\""; break;
-            case '\\': result += "\\\\"; break;
-            case '\n': result += "\\n";  break;
-            case '\r': result += "\\r";  break;
-            case '\t': result += "\\t";  break;
-            default:   result += c;      break;
-        }
-    }
-    return result;
-}
+// JSON string escaping is shared with the /api/device serializer via
+// FreeButton::escapeJsonString (src/json/JsonEscape.h) — it also emits \u00XX
+// for control characters, which arbitrary REPL output / console.log text can
+// contain, so responses are always valid JSON.
+using FreeButton::escapeJsonString;
 
 namespace Scripting {
 
@@ -230,7 +219,7 @@ void WebSocketREPL::handleMessage(AsyncWebSocketClient* client, std::string_view
 void WebSocketREPL::sendResult(AsyncWebSocketClient* client, std::string_view id,
                                 bool success, std::string_view value) {
     // Escape value for JSON and truncate if needed
-    std::string escapedValue = escapeJson(value);
+    std::string escapedValue = escapeJsonString(value);
     if (escapedValue.size() > 150) {
         escapedValue = escapedValue.substr(0, 150) + "...";
     }
@@ -263,7 +252,7 @@ void WebSocketREPL::broadcastConsole(std::string_view message) {
     }
 
     // Escape message for JSON and truncate if needed
-    std::string escapedMsg = escapeJson(message);
+    std::string escapedMsg = escapeJsonString(message);
     if (escapedMsg.size() > 200) {
         escapedMsg = escapedMsg.substr(0, 200) + "...";
     }
