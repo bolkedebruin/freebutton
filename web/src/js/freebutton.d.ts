@@ -42,7 +42,7 @@ export interface SensorAPI {
 
     getInfo(): void;
 
-    getAll(): void;
+    forEach(): void;
 
     onChange(): void;
 
@@ -291,8 +291,8 @@ export interface FbMain {
 }
 
 export interface FbMainDisplay {
-    /** Create a display item */
-    create(type: string): number;
+    /** Create a display item; returns its id */
+    create(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number): number;
     /** Remove a display item */
     remove(id: number): boolean;
     /** Get number of display items */

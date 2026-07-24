@@ -85,8 +85,8 @@ JSValue js_freebutton_sensor_getInfo(JSContext *ctx, JSValue *this_val, int argc
     return JS_NewObject(ctx);
 }
 
-JSValue js_freebutton_sensor_getAll(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
-    return JS_NewArray(ctx, 0);
+JSValue js_freebutton_sensor_forEach(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_UNDEFINED;
 }
 
 JSValue js_freebutton_sensor_onChange(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {

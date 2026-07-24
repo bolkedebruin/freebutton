@@ -103,7 +103,7 @@
         },
         {
           "description": "",
-          "name": "getAll",
+          "name": "forEach",
           "params": [],
           "returns": "void"
         },
@@ -933,13 +933,58 @@
       "FbMainDisplay": {
         "methods": [
           {
-            "description": "Create a display item",
+            "description": "Create a display item; returns its id",
             "name": "create",
             "params": [
               {
-                "description": "Item type (text, number, gauge, etc.)",
-                "name": "type",
+                "description": "X position",
+                "name": "x",
+                "type": "number"
+              },
+              {
+                "description": "Y position",
+                "name": "y",
+                "type": "number"
+              },
+              {
+                "description": "Width",
+                "name": "width",
+                "type": "number"
+              },
+              {
+                "description": "Box type (0-3)",
+                "name": "boxType",
+                "type": "number"
+              },
+              {
+                "description": "Font size",
+                "name": "fontSize",
+                "type": "number"
+              },
+              {
+                "description": "0=left, 1=center, 2=right",
+                "name": "alignment",
+                "type": "number"
+              },
+              {
+                "description": "Label text",
+                "name": "label",
                 "type": "string"
+              },
+              {
+                "description": "Unit text",
+                "name": "unit",
+                "type": "string"
+              },
+              {
+                "description": "Decimal places",
+                "name": "round",
+                "type": "number"
+              },
+              {
+                "description": "Page number (1-based)",
+                "name": "page",
+                "type": "number"
               }
             ],
             "returns": "number"

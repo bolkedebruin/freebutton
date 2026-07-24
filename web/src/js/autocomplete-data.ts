@@ -134,11 +134,11 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "sensor.getInfo()"
       },
       {
-        "label": "sensor.getAll",
+        "label": "sensor.forEach",
         "type": "method",
         "detail": "() → void",
         "info": "",
-        "apply": "sensor.getAll()"
+        "apply": "sensor.forEach()"
       },
       {
         "label": "sensor.onChange",
@@ -515,9 +515,9 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "fb.main.display.create",
         "type": "method",
-        "detail": "(type: string) → number",
-        "info": "Create a display item",
-        "apply": "fb.main.display.create(${1:type})"
+        "detail": "(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number) → number",
+        "info": "Create a display item; returns its id",
+        "apply": "fb.main.display.create(${1:x}, ${2:y}, ${3:width}, ${4:boxType}, ${5:fontSize}, ${6:alignment}, ${7:label}, ${8:unit}, ${9:round}, ${10:page})"
       },
       {
         "label": "fb.main.display.remove",

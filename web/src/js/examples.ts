@@ -1,6 +1,7 @@
 import blinkRaw from '../../../data/scripts/examples/blink.js?raw';
 import sensorRaw from '../../../data/scripts/examples/sensor.js?raw';
 import buttonRaw from '../../../data/scripts/examples/button.js?raw';
+import displaysRaw from '../../../data/scripts/examples/displays.js?raw';
 import mqttSimpleRaw from '../../../data/scripts/examples/mqtt_simple.js?raw';
 import mqttDemoRaw from '../../../data/scripts/examples/mqtt_demo.js?raw';
 
@@ -33,6 +34,7 @@ export const examples: Example[] = [
     parseExample('blink', blinkRaw),
     parseExample('sensor', sensorRaw),
     parseExample('button', buttonRaw),
+    parseExample('displays', displaysRaw),
     parseExample('mqtt_simple', mqttSimpleRaw),
     parseExample('mqtt_demo', mqttDemoRaw),
 ];

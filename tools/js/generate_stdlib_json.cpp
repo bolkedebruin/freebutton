@@ -156,7 +156,7 @@ STUB_FUNC(js_freebutton_sensor_count);
 STUB_FUNC(js_freebutton_sensor_getValue);
 STUB_FUNC(js_freebutton_sensor_getType);
 STUB_FUNC(js_freebutton_sensor_getInfo);
-STUB_FUNC(js_freebutton_sensor_getAll);
+STUB_FUNC(js_freebutton_sensor_forEach);
 STUB_FUNC(js_freebutton_sensor_onChange);
 STUB_FUNC(js_freebutton_mqtt_getBrokerCount);
 STUB_FUNC(js_freebutton_mqtt_getBrokerName);
@@ -572,8 +572,17 @@ public:
              {"params", json::array({{{"name", "text"}, {"type", "string"}, {"description", "Top label text"}}})}}
         });
         json fbMainDisplay = json::array({
-            {{"name", "create"}, {"description", "Create a display item"}, {"returns", "number"},
-             {"params", json::array({{{"name", "type"}, {"type", "string"}, {"description", "Item type (text, number, gauge, etc.)"}}})}},
+            {{"name", "create"}, {"description", "Create a display item; returns its id"}, {"returns", "number"},
+             {"params", json::array({{{"name", "x"}, {"type", "number"}, {"description", "X position"}},
+                                     {{"name", "y"}, {"type", "number"}, {"description", "Y position"}},
+                                     {{"name", "width"}, {"type", "number"}, {"description", "Width"}},
+                                     {{"name", "boxType"}, {"type", "number"}, {"description", "Box type (0-3)"}},
+                                     {{"name", "fontSize"}, {"type", "number"}, {"description", "Font size"}},
+                                     {{"name", "alignment"}, {"type", "number"}, {"description", "0=left, 1=center, 2=right"}},
+                                     {{"name", "label"}, {"type", "string"}, {"description", "Label text"}},
+                                     {{"name", "unit"}, {"type", "string"}, {"description", "Unit text"}},
+                                     {{"name", "round"}, {"type", "number"}, {"description", "Decimal places"}},
+                                     {{"name", "page"}, {"type", "number"}, {"description", "Page number (1-based)"}}})}},
             {{"name", "remove"}, {"description", "Remove a display item"}, {"returns", "boolean"},
              {"params", json::array({{{"name", "id"}, {"type", "number"}, {"description", "Item ID to remove"}}})}},
             {{"name", "count"}, {"description", "Get number of display items"}, {"returns", "number"}, {"params", json::array()}},

@@ -190,35 +190,50 @@ JSValue js_freebutton_sensor_getInfo(JSContext *ctx, JSValue *this_val, int argc
 }
 
 /**
- * @jsapi sensor.getAll
- * @description Get array of all sensor information objects
- * @returns {object[]} Array of sensor info objects
+ * @jsapi sensor.forEach
+ * @description Iterate over every sensor, invoking callback(id, type) once per
+ *   sensor. Memory-safe alternative to a getAll() array: it allocates nothing
+ *   up front (important on the small script heap). Use sensor.getValue(id) /
+ *   sensor.getInfo(id) inside the callback if you need more than id + type.
+ * @param {Function} callback - function(id, type) called once per sensor
+ * @returns {void}
  */
-JSValue js_freebutton_sensor_getAll(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_freebutton_sensor_forEach(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    // Get all sensor IDs
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sensor.forEach() requires a callback function");
+    }
+
     int ids[MAX_SENSORS];
     int count = sensor_hw_get_all_ids(ids, MAX_SENSORS);
 
-    // Create JavaScript array
-    JSValue arr = JS_NewArray(ctx, count);
-
-    // Populate array with sensor info objects
     for (int i = 0; i < count; i++) {
-        const SensorInfo* info = sensor_hw_get_info(ids[i]);
-        if (info) {
-            JSValue obj = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, obj, "id", JS_NewInt32(ctx, info->id));
-            JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, info->name));
-            JS_SetPropertyStr(ctx, obj, "type", JS_NewString(ctx, info->type));
-            JS_SetPropertyStr(ctx, obj, "unit", JS_NewString(ctx, info->unit));
-            JS_SetPropertyStr(ctx, obj, "online", JS_NewBool(info->online));
+        const char* type = sensor_hw_get_type(ids[i]);
 
-            JS_SetPropertyUint32(ctx, arr, i, obj);
+        // Need 4 stack slots: 2 args + function + this
+        if (JS_StackCheck(ctx, 4))
+            break;
+
+        // Push in MQuickJS order: args reversed, then function, then this
+        JS_PushArg(ctx, JS_NewString(ctx, type ? type : ""));  // arg[1] = type
+        JS_PushArg(ctx, JS_NewInt32(ctx, ids[i]));             // arg[0] = id
+        JS_PushArg(ctx, argv[0]);                              // function
+        JS_PushArg(ctx, JS_NULL);                              // this
+
+        JSValue result = JS_Call(ctx, 2);
+        if (JS_IsException(result)) {
+            JSValue exception = JS_GetException(ctx);
+            JSCStringBuf buf;
+            size_t len;
+            const char* str = JS_ToCStringLen(ctx, &len, exception, &buf);
+            if (str) {
+                ESP_LOGW(TAG, "Exception in sensor.forEach() callback: %.*s", (int)len, str);
+            }
+            break;  // stop iterating on error
         }
     }
 
-    return arr;
+    return JS_UNDEFINED;
 }
 
 /**

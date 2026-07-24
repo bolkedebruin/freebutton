@@ -27,7 +27,7 @@
  *   sensor.getValue(sensorId)    - Read current sensor value
  *   sensor.getType(sensorId)     - Get sensor type name
  *   sensor.getInfo(sensorId)     - Get sensor information object
- *   sensor.getAll()              - Get array of all sensor information
+ *   sensor.forEach(callback)     - Iterate sensors: callback(id, type) per sensor
  *   sensor.onChange(sensorId, callback) - Register change event handler
  *
  * The actual function implementations are in freebutton_sensor.c which is
@@ -38,7 +38,7 @@ static const JSPropDef js_freebutton_sensor[] = {
     JS_CFUNC_DEF("getValue", 1, js_freebutton_sensor_getValue),
     JS_CFUNC_DEF("getType", 1, js_freebutton_sensor_getType),
     JS_CFUNC_DEF("getInfo", 1, js_freebutton_sensor_getInfo),
-    JS_CFUNC_DEF("getAll", 0, js_freebutton_sensor_getAll),
+    JS_CFUNC_DEF("forEach", 1, js_freebutton_sensor_forEach),
     JS_CFUNC_DEF("onChange", 2, js_freebutton_sensor_onChange),
     JS_PROP_END,
 };

@@ -140,14 +140,12 @@ mqtt.subscribe(BROKER_ID, DEVICE_TOPIC + "/led/#", function(topic, payload) {
 mqtt.subscribe(BROKER_ID, DEVICE_TOPIC + "/sensors/get", function(topic, payload) {
     print("Sensor data requested");
 
-    var sensors = sensor.getAll();
-    for (var i = 0; i < sensors.length; i++) {
-        var s = sensors[i];
-        var value = sensor.getValue(s.id);
-        var sensorTopic = DEVICE_TOPIC + "/sensors/" + s.type + "/" + s.id;
+    sensor.forEach(function(id, type) {
+        var value = sensor.getValue(id);
+        var sensorTopic = DEVICE_TOPIC + "/sensors/" + type + "/" + id;
         mqtt.publish(BROKER_ID, sensorTopic, value.toString());
-        print("Published sensor " + s.id + " (" + s.type + "): " + value);
-    }
+        print("Published sensor " + id + " (" + type + "): " + value);
+    });
 });
 
 // Button integration - publish button events to MQTT
@@ -175,17 +173,15 @@ for (var btnIdx = 0; btnIdx < sides.length; btnIdx++) {
     })(btnIdx);
 }
 
-// Sensor monitoring - publish changes to MQTT
-var sensorList = sensor.getAll();
-for (var i = 0; i < sensorList.length; i++) {
-    (function(sensorId, sensorType) {
-        sensor.onChange(sensorId, function(value) {
-            var sensorTopic = DEVICE_TOPIC + "/sensors/" + sensorType + "/" + sensorId;
-            mqtt.publish(BROKER_ID, sensorTopic, value.toString());
-            print("Sensor " + sensorId + " changed: " + value);
-        });
-    })(sensorList[i].id, sensorList[i].type);
-}
+// Sensor monitoring - publish changes to MQTT. forEach gives each callback its
+// own id/type, so no IIFE is needed to capture them per iteration.
+sensor.forEach(function(sensorId, sensorType) {
+    sensor.onChange(sensorId, function(value) {
+        var sensorTopic = DEVICE_TOPIC + "/sensors/" + sensorType + "/" + sensorId;
+        mqtt.publish(BROKER_ID, sensorTopic, value.toString());
+        print("Sensor " + sensorId + " changed: " + value);
+    });
+});
 
 // Periodic heartbeat using recursive setTimeout
 function heartbeat() {
