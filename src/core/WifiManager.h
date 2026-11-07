@@ -12,5 +12,7 @@ void setup_wifi_event_handler();
 
 bool is_wifi_connected();
 bool is_portal_started();
+// True while the WiFi configuration portal (AP + captive DNS) is running.
+bool is_captive_portal_active();
 
 #endif //WIFIMANAGER_H

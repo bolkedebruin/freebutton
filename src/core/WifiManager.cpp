@@ -14,6 +14,10 @@
 #include "../utils/helpers.h"
 #include "../drivers/LvglDisplay.h"
 
+// Declared in WifiManager.h (not included here: its wifi_event_handler
+// prototype clashes with this file's Arduino-style handler of the same name).
+bool is_captive_portal_active();
+
 static auto TAG = "wifi";
 
 extern AsyncWebServer server;
@@ -291,6 +295,13 @@ void start_wifimanager_portal() {
 
     // Add portal routes to existing webserver
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        // This route stays registered (and, being registered before the IDE's
+        // serveStatic, wins "/") after WiFi connects without a reboot. Once the
+        // portal has closed, hand "/" back to the web IDE.
+        if (!is_captive_portal_active()) {
+            request->redirect("/index.html");
+            return;
+        }
         request->send(200, "text/html", wifiConfigHTML);
     });
 
@@ -338,8 +349,11 @@ void start_wifimanager_portal() {
                     request->send(200, "application/json", "{\"success\":true,\"message\":\"Connected successfully\"}");
                     wifiConnected = true;
 
-                    // Hide QR modal on successful connection
+                    // Hide QR modal on successful connection. This runs in the
+                    // web server task: LVGL must only be touched under its lock.
+                    FreeButton::getLvglDisplay().lock();
                     hide_wifi_qr_modal();
+                    FreeButton::getLvglDisplay().unlock();
                     qrModalPending = false;
 
                     // Clean up portal
@@ -376,11 +390,17 @@ void wifi_manager_monitor(void* parameter) {
         // Show QR modal if pending and main screen is ready
         if (qrModalPending && FreeButton::getLvglDisplay().getMainDisplay()) {
             ESP_LOGI(TAG, "Showing delayed WiFi QR modal");
-            lv_obj_t* main_screen = lv_display_get_screen_active(FreeButton::getLvglDisplay().getMainDisplay());
+            // This is the WiFi monitor task, not the LVGL task: building the
+            // modal without the LVGL lock raced the LVGL refresh and crashed
+            // in the flex layout (LoadProhibited) on every unprovisioned boot.
+            auto& lvgl = FreeButton::getLvglDisplay();
+            lvgl.lock();
+            lv_obj_t* main_screen = lv_display_get_screen_active(lvgl.getMainDisplay());
             if (main_screen) {
                 show_wifi_qr_modal(main_screen, AP_SSID, AP_PASSWORD);
                 qrModalPending = false;
             }
+            lvgl.unlock();
         }
 
         // Check WiFi connection status
@@ -562,3 +582,4 @@ void setup_wifi_event_handler() {
 
 bool is_wifi_connected() {return wifiConnected;}
 bool is_portal_started() {return portalstarted;}
+bool is_captive_portal_active() { return dnsServer != nullptr; }

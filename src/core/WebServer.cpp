@@ -400,6 +400,14 @@ void webserver_start() {
             request->send(200);
             return;
         }
+        // Captive portal: OS connectivity probes (/hotspot-detect.html,
+        // /generate_204, /connecttest.txt, ...) resolve to us via the portal's
+        // DNS. Redirect every unknown GET to the WiFi setup page; without this
+        // the SPA fallback below answered them with the web IDE.
+        if (is_captive_portal_active() && request->method() == HTTP_GET) {
+            request->redirect("http://192.168.4.1/");
+            return;
+        }
         const String& url = request->url();
         if (request->method() == HTTP_GET &&
             !url.startsWith("/api") && !url.startsWith("/ws")) {
