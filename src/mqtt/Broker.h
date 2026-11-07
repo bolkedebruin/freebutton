@@ -46,6 +46,9 @@ public:
     // Connection state
     [[nodiscard]] constexpr bool isConnected() const noexcept { return connected_; }
 
+    // Bytes waiting in the esp-mqtt outbox (QoS>0 messages not yet acknowledged).
+    [[nodiscard]] int outboxSize() const { return client ? esp_mqtt_client_get_outbox_size(client) : 0; }
+
     // Event callbacks
     void setOnConnectedCallback(std::function<void(uint8_t)> callback);
     void setOnDisconnectedCallback(std::function<void(uint8_t)> callback);

@@ -385,12 +385,12 @@ export interface FbBar {
 }
 
 export interface FbButton {
-    /** Register click handler */
-    onClick(callback: Function): void;
-    /** Register long press handler */
-    onLongPress(callback: Function): void;
-    /** Register release handler */
-    onRelease(callback: Function): void;
+    /** Register click handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event). */
+    onClick(callback: () => boolean | void): void;
+    /** Register long press handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event). */
+    onLongPress(callback: () => boolean | void): void;
+    /** Register release handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event). */
+    onRelease(callback: () => boolean | void): void;
 }
 
 export interface FbLed {

@@ -558,12 +558,12 @@ public:
             {{"name", "off"}, {"description", "Turn LED off"}, {"returns", "void"}, {"params", json::array()}}
         });
         json fbButton = json::array({
-            {{"name", "onClick"}, {"description", "Register click handler"}, {"returns", "void"},
-             {"params", json::array({{{"name", "callback"}, {"type", "Function"}, {"description", "Function to call on click"}}})}},
-            {{"name", "onLongPress"}, {"description", "Register long press handler"}, {"returns", "void"},
-             {"params", json::array({{{"name", "callback"}, {"type", "Function"}, {"description", "Function to call on long press"}}})}},
-            {{"name", "onRelease"}, {"description", "Register release handler"}, {"returns", "void"},
-             {"params", json::array({{{"name", "callback"}, {"type", "Function"}, {"description", "Function to call on release"}}})}}
+            {{"name", "onClick"}, {"description", "Register click handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event)."}, {"returns", "void"},
+             {"params", json::array({{{"name", "callback"}, {"type", "() => boolean | void"}, {"description", "Function to call on click. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event)."}}})}},
+            {{"name", "onLongPress"}, {"description", "Register long press handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event)."}, {"returns", "void"},
+             {"params", json::array({{{"name", "callback"}, {"type", "() => boolean | void"}, {"description", "Function to call on long press. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event)."}}})}},
+            {{"name", "onRelease"}, {"description", "Register release handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event)."}, {"returns", "void"},
+             {"params", json::array({{{"name", "callback"}, {"type", "() => boolean | void"}, {"description", "Function to call on release. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event)."}}})}}
         });
         json fbSmallDisplay = json::array({
             {{"name", "setLabel"}, {"description", "Set button display label"}, {"returns", "void"},

@@ -128,24 +128,27 @@ void button_hw_register_release_callback(int position, ButtonReleaseCallback cal
 }
 
 // Dispatch click event to JavaScript (positions are 1-based: 1-8)
-void button_hw_dispatch_click(int position) {
+bool button_hw_dispatch_click(int position) {
     if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].click) {
-        callbacks[position - 1].click(position);
+        return callbacks[position - 1].click(position);
     }
+    return false;
 }
 
 // Dispatch long press event to JavaScript (positions are 1-based: 1-8)
-void button_hw_dispatch_long_press(int position) {
+bool button_hw_dispatch_long_press(int position) {
     if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].longPress) {
-        callbacks[position - 1].longPress(position);
+        return callbacks[position - 1].longPress(position);
     }
+    return false;
 }
 
 // Dispatch release event to JavaScript (positions are 1-based: 1-8)
-void button_hw_dispatch_release(int position) {
+bool button_hw_dispatch_release(int position) {
     if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].release) {
-        callbacks[position - 1].release(position);
+        return callbacks[position - 1].release(position);
     }
+    return false;
 }
 
 } // extern "C"

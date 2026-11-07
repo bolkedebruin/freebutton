@@ -585,23 +585,23 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "fb.main.left.button.onClick",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register click handler",
-        "apply": "fb.main.left.button.onClick(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register click handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.main.left.button.onClick(${1:callback})"
       },
       {
         "label": "fb.main.left.button.onLongPress",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register long press handler",
-        "apply": "fb.main.left.button.onLongPress(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register long press handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.main.left.button.onLongPress(${1:callback})"
       },
       {
         "label": "fb.main.left.button.onRelease",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register release handler",
-        "apply": "fb.main.left.button.onRelease(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register release handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.main.left.button.onRelease(${1:callback})"
       },
       {
         "label": "fb.main.left.display.setLabel",
@@ -620,23 +620,23 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "fb.main.right.button.onClick",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register click handler",
-        "apply": "fb.main.right.button.onClick(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register click handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.main.right.button.onClick(${1:callback})"
       },
       {
         "label": "fb.main.right.button.onLongPress",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register long press handler",
-        "apply": "fb.main.right.button.onLongPress(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register long press handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.main.right.button.onLongPress(${1:callback})"
       },
       {
         "label": "fb.main.right.button.onRelease",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register release handler",
-        "apply": "fb.main.right.button.onRelease(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register release handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.main.right.button.onRelease(${1:callback})"
       },
       {
         "label": "fb.main.right.display.setLabel",
@@ -697,23 +697,23 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "fb.bars[n].left.button.onClick",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register click handler",
-        "apply": "fb.bars[n].left.button.onClick(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register click handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.bars[n].left.button.onClick(${1:callback})"
       },
       {
         "label": "fb.bars[n].left.button.onLongPress",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register long press handler",
-        "apply": "fb.bars[n].left.button.onLongPress(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register long press handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.bars[n].left.button.onLongPress(${1:callback})"
       },
       {
         "label": "fb.bars[n].left.button.onRelease",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register release handler",
-        "apply": "fb.bars[n].left.button.onRelease(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register release handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.bars[n].left.button.onRelease(${1:callback})"
       },
       {
         "label": "fb.bars[n].left.display.setLabel",
@@ -774,23 +774,23 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "fb.bars[n].right.button.onClick",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register click handler",
-        "apply": "fb.bars[n].right.button.onClick(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register click handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.bars[n].right.button.onClick(${1:callback})"
       },
       {
         "label": "fb.bars[n].right.button.onLongPress",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register long press handler",
-        "apply": "fb.bars[n].right.button.onLongPress(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register long press handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.bars[n].right.button.onLongPress(${1:callback})"
       },
       {
         "label": "fb.bars[n].right.button.onRelease",
         "type": "method",
-        "detail": "(callback: Function) → void",
-        "info": "Register release handler",
-        "apply": "fb.bars[n].right.button.onRelease(function() {\n\t${1}\n})"
+        "detail": "(callback: () => boolean | void) → void",
+        "info": "Register release handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
+        "apply": "fb.bars[n].right.button.onRelease(${1:callback})"
       },
       {
         "label": "fb.bars[n].right.display.setLabel",

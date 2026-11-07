@@ -10,11 +10,13 @@
  *   button.onClick(position, callback)        - Register click event handler
  *   button.onLongPress(position, callback)    - Register long press event handler
  *   button.onRelease(position, callback)      - Register release event handler
+ *     (a handler returning `false` suppresses that press's MQTT publishing)
  *   button.count()                            - Get number of available buttons
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include "mquickjs.h"
 
 // Import the hardware abstraction layer (ESP32 only)
@@ -25,9 +27,9 @@
 static inline int button_hw_get_count(void) { return 0; }
 static inline int button_hw_set_label(int pos, const char* label) { return 0; }
 static inline int button_hw_set_top_label(int pos, const char* label) { return 0; }
-static inline void button_hw_register_click_callback(int pos, void (*cb)(int)) {}
-static inline void button_hw_register_long_press_callback(int pos, void (*cb)(int)) {}
-static inline void button_hw_register_release_callback(int pos, void (*cb)(int)) {}
+static inline void button_hw_register_click_callback(int pos, bool (*cb)(int)) {}
+static inline void button_hw_register_long_press_callback(int pos, bool (*cb)(int)) {}
+static inline void button_hw_register_release_callback(int pos, bool (*cb)(int)) {}
 #endif
 
 // Maximum number of buttons (library limit, actual count from button_hw_get_count())
@@ -47,24 +49,28 @@ static struct {
 
 /*
  * C callback wrappers - these are called from the hardware layer
- * and invoke the JavaScript callbacks
+ * and invoke the JavaScript callbacks.
+ *
+ * Return true when the handler returned strictly boolean `false`, which
+ * cancels the press's default action (MQTT publishing). Any other return
+ * value, or an exception, lets the default proceed.
  */
 
-static void js_button_click_wrapper(int position) {
+static bool js_button_click_wrapper(int position) {
     // Positions are 1-based (1-8)
-    if (position < 1 || position > MAX_BUTTONS) return;
+    if (position < 1 || position > MAX_BUTTONS) return false;
 
     int idx = position - 1;  // Convert to 0-based array index
-    if (!js_button_callbacks[idx].clickAllocated) return;
+    if (!js_button_callbacks[idx].clickAllocated) return false;
 
     JSContext *ctx = js_button_callbacks[idx].ctx;
     JSGCRef *callback = &js_button_callbacks[idx].clickCallback;
 
-    if (!ctx) return;
+    if (!ctx) return false;
 
     // Check stack space (2 slots: function + this)
     if (JS_StackCheck(ctx, 2))
-        return;
+        return false;
 
     // Push function and this
     JS_PushArg(ctx, callback->val);
@@ -73,26 +79,28 @@ static void js_button_click_wrapper(int position) {
     // Call the function
     JSValue result = JS_Call(ctx, 0);
 
-    // Check for exceptions but don't exit - just log
+    // Exception: default action proceeds
     if (JS_IsException(result)) {
-        // Exception occurred - could add logging here
+        return false;
     }
+    // JSValue is an integer; JS_FALSE = JS_VALUE_MAKE_SPECIAL(JS_TAG_BOOL, 0)
+    return result == JS_FALSE;
 }
 
-static void js_button_long_press_wrapper(int position) {
+static bool js_button_long_press_wrapper(int position) {
     // Positions are 1-based (1-8)
-    if (position < 1 || position > MAX_BUTTONS) return;
+    if (position < 1 || position > MAX_BUTTONS) return false;
 
     int idx = position - 1;  // Convert to 0-based array index
-    if (!js_button_callbacks[idx].longPressAllocated) return;
+    if (!js_button_callbacks[idx].longPressAllocated) return false;
 
     JSContext *ctx = js_button_callbacks[idx].ctx;
     JSGCRef *callback = &js_button_callbacks[idx].longPressCallback;
 
-    if (!ctx) return;
+    if (!ctx) return false;
 
     if (JS_StackCheck(ctx, 2))
-        return;
+        return false;
 
     JS_PushArg(ctx, callback->val);
     JS_PushArg(ctx, JS_NULL);
@@ -100,24 +108,25 @@ static void js_button_long_press_wrapper(int position) {
     JSValue result = JS_Call(ctx, 0);
 
     if (JS_IsException(result)) {
-        // Exception occurred
+        return false;
     }
+    return result == JS_FALSE;
 }
 
-static void js_button_release_wrapper(int position) {
+static bool js_button_release_wrapper(int position) {
     // Positions are 1-based (1-8)
-    if (position < 1 || position > MAX_BUTTONS) return;
+    if (position < 1 || position > MAX_BUTTONS) return false;
 
     int idx = position - 1;  // Convert to 0-based array index
-    if (!js_button_callbacks[idx].releaseAllocated) return;
+    if (!js_button_callbacks[idx].releaseAllocated) return false;
 
     JSContext *ctx = js_button_callbacks[idx].ctx;
     JSGCRef *callback = &js_button_callbacks[idx].releaseCallback;
 
-    if (!ctx) return;
+    if (!ctx) return false;
 
     if (JS_StackCheck(ctx, 2))
-        return;
+        return false;
 
     JS_PushArg(ctx, callback->val);
     JS_PushArg(ctx, JS_NULL);
@@ -125,8 +134,9 @@ static void js_button_release_wrapper(int position) {
     JSValue result = JS_Call(ctx, 0);
 
     if (JS_IsException(result)) {
-        // Exception occurred
+        return false;
     }
+    return result == JS_FALSE;
 }
 
 /*
@@ -212,7 +222,8 @@ JSValue js_freebutton_button_setTopLabel(JSContext *ctx, JSValue *this_val, int 
  * @jsapi button.onClick
  * @description Register click event handler for button
  * @param {number} position - Button position (1-based)
- * @param {Function} callback - Function to call on click
+ * @param {Function} callback - Function to call on click. Return false to suppress
+ *        this press's MQTT publishing (configured topics and the Home Assistant event).
  * @returns {void}
  */
 JSValue js_freebutton_button_onClick(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -260,7 +271,8 @@ JSValue js_freebutton_button_onClick(JSContext *ctx, JSValue *this_val, int argc
  * @jsapi button.onLongPress
  * @description Register long press event handler for button
  * @param {number} position - Button position (1-based)
- * @param {Function} callback - Function to call on long press
+ * @param {Function} callback - Function to call on long press. Return false to suppress
+ *        this press's MQTT publishing (configured topics and the Home Assistant event).
  * @returns {void}
  */
 JSValue js_freebutton_button_onLongPress(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -308,7 +320,8 @@ JSValue js_freebutton_button_onLongPress(JSContext *ctx, JSValue *this_val, int 
  * @jsapi button.onRelease
  * @description Register release event handler for button
  * @param {number} position - Button position (1-based)
- * @param {Function} callback - Function to call on release
+ * @param {Function} callback - Function to call on release. Return false to suppress
+ *        this press's MQTT publishing (configured topics and the Home Assistant event).
  * @returns {void}
  */
 JSValue js_freebutton_button_onRelease(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

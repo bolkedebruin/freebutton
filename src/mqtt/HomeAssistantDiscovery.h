@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <functional>
+#include <vector>
 #include <ArduinoJson.h>
 
 // Forward declarations
@@ -26,7 +27,14 @@ struct HomeAssistantDevice {
 
 struct HomeAssistantDiscoveryConfig {
     std::string component_type;    // sensor, binary_sensor, switch, etc.
-    std::string default_entity_id; // Home Assistant default entity ID
+    // Stable per-device object id (e.g. "button_7", "led_7_0"). It forms the
+    // discovery topic <prefix>/<component>/<device>/<object_id>/config and the
+    // default unique_id <device>_<object_id>, so it must never change for an
+    // existing entity. default_entity_id is derived from it as
+    // <component>.<slug(device friendly name)>_<object_id>, falling back to
+    // the device id when no name is set (see HaSlug.h).
+    std::string object_id;
+    std::string unique_id;         // Optional override of <device>_<object_id>
     std::string name;              // Human-readable name
     std::string device_class;      // Home Assistant device class
     std::string state_topic;       // MQTT topic for state (publishers)
@@ -34,8 +42,12 @@ struct HomeAssistantDiscoveryConfig {
     std::string unit_of_measurement;
     std::string value_template;    // Optional JSON value template
     std::map<std::string, std::string> additional_config; // Any additional HA config
+    std::vector<std::string> event_types; // MQTT event: emitted as a JSON array when non-empty
+    bool availability = false;     // Add availability on buttonplus/<device>/status (LWT)
     HomeAssistantDevice device;    // Device information
-    bool enabled = true;           // Per-component discovery enable/disable
+    // false: the entity must not exist; publishing removes it from Home
+    // Assistant (empty retained payload on its config topic).
+    bool enabled = true;
 };
 
 // Device automation trigger configuration (separate from entity discovery)
@@ -46,7 +58,8 @@ struct HomeAssistantTriggerConfig {
     std::string topic;             // MQTT topic to listen for trigger events
     std::string payload;           // Optional payload to match (e.g., "{\"event_type\":\"click\"}")
     HomeAssistantDevice device;    // Device information
-    bool enabled = true;           // Per-trigger enable/disable
+    // false: the trigger must not exist; publishing removes it (empty retained payload).
+    bool enabled = true;
 };
 
 // Callback function type for on-demand config generation
@@ -103,6 +116,11 @@ public:
     
     // Callback for when a broker connects (auto-publishes discovery if enabled)
     static void onBrokerConnected(uint8_t brokerId);
+
+    // Republish all discovery for a broker from a short-lived task after
+    // delayMs. Used for the Home Assistant birth message (<prefix>/status
+    // "online"). At most one pending republish per broker.
+    static void scheduleRepublish(uint8_t brokerId, uint32_t delayMs);
 
     static void setDeviceName(const std::string name);
 

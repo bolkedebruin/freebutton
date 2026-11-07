@@ -5,22 +5,116 @@
 
 #include "HomeAssistantDiscovery.h"
 
+#include <atomic>
 #include <ranges>
 
+#include "Component.h"
+#include "HaCompact.h"
+#include "HaSlug.h"
 #include "Registry.h"
+#include "config.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 
 static auto TAG = "ha_discovery";
+
+namespace {
+
+// Listens to Home Assistant's birth message (<prefix>/status). On "online",
+// all discovery is republished after a random 0-5 s delay so a fleet of
+// devices does not hit Home Assistant at the same instant.
+class HaStatusSubscriber final : public MqttSubscriber {
+public:
+    void onMessage(const uint8_t brokerId, std::string_view topic, const std::string_view data) override {
+        if (data == "online") {
+            const uint32_t delayMs = esp_random() % 5001;
+            ESP_LOGI(TAG, "Home Assistant online on broker %d, republishing discovery in %lu ms",
+                     brokerId, static_cast<unsigned long>(delayMs));
+            HomeAssistantDiscovery::scheduleRepublish(brokerId, delayMs);
+        }
+    }
+    const std::string getComponentType() const override { return "ha_status"; }
+};
+
+HaStatusSubscriber& statusSubscriber() {
+    static HaStatusSubscriber subscriber;
+    return subscriber;
+}
+
+// One bit per broker id: a republish task is pending.
+std::atomic<uint32_t> pendingRepublish{0};
+
+// Guards broker_configs_ (registration maps): the republish task walks them
+// while main() may still be registering. Recursive: publishAllDiscovery holds
+// it and calls helpers that take it again.
+SemaphoreHandle_t discoveryMutex() {
+    static SemaphoreHandle_t m = xSemaphoreCreateRecursiveMutex();
+    return m;
+}
+
+class DiscoveryLock {
+public:
+    DiscoveryLock() { xSemaphoreTakeRecursive(discoveryMutex(), portMAX_DELAY); }
+    ~DiscoveryLock() { xSemaphoreGiveRecursive(discoveryMutex()); }
+    DiscoveryLock(const DiscoveryLock&) = delete;
+    DiscoveryLock& operator=(const DiscoveryLock&) = delete;
+};
+
+// Pacing of the discovery burst. This firmware runs small lwIP/MQTT buffers
+// (TCP send buffer 2880 B, MQTT buffer 512 B). Publishing ~40 QoS 1 configs
+// back to back from the MQTT task stalled a socket write past esp-mqtt's 10 s
+// network timeout and dropped the connection. After each config, wait until
+// the outbox (unacknowledged QoS 1 data) is below kOutboxLowWaterBytes.
+constexpr int kOutboxLowWaterBytes = 1024;
+constexpr uint32_t kPaceTimeoutMs = 2000;
+constexpr uint32_t kPacePollMs = 10;
+
+// Must NOT run in the MQTT task: the MQTT task is what drains the outbox.
+void paceAfterPublish(const MqttBroker& broker) {
+    const TickType_t start = xTaskGetTickCount();
+    while (broker.isConnected() && broker.outboxSize() > kOutboxLowWaterBytes &&
+           (xTaskGetTickCount() - start) < pdMS_TO_TICKS(kPaceTimeoutMs)) {
+        vTaskDelay(pdMS_TO_TICKS(kPacePollMs));
+    }
+}
+
+struct RepublishArgs {
+    uint8_t brokerId;
+    uint32_t delayMs;
+};
+
+void republishTask(void* param) {
+    const auto* args = static_cast<RepublishArgs*>(param);
+    const uint8_t brokerId = args->brokerId;
+    const uint32_t delayMs = args->delayMs;
+    delete args;
+
+    vTaskDelay(pdMS_TO_TICKS(delayMs));
+    // Clear first: a birth message arriving while we publish schedules another round.
+    pendingRepublish.fetch_and(~(1u << brokerId));
+    HomeAssistantDiscovery::publishAllDiscovery(brokerId);
+    vTaskDelete(nullptr);
+}
+
+} // namespace
 
 // Static member definitions
 std::map<uint8_t, HomeAssistantDiscovery::BrokerDiscoveryConfig> HomeAssistantDiscovery::broker_configs_;
 HomeAssistantDevice HomeAssistantDiscovery::global_device_info_;
 
 void HomeAssistantDiscovery::configureBroker(const uint8_t brokerId, const bool enabled, const std::string& discovery_prefix) {
+    DiscoveryLock lock;
     auto& config = broker_configs_[brokerId];
     config.enabled = enabled;
     config.discovery_prefix = discovery_prefix;
-    
+
+    if (enabled) {
+        statusSubscriber().addSubscription(brokerId, discovery_prefix + "/status", 1);
+    }
+
     ESP_LOGI(TAG, "Configured discovery for broker %d: %s (prefix: %s)", 
              brokerId, enabled ? "enabled" : "disabled", discovery_prefix.c_str());
 }
@@ -49,6 +143,7 @@ void HomeAssistantDiscovery::removeDiscovery(uint8_t brokerId, const std::string
 }
 
 void HomeAssistantDiscovery::publishAllDiscovery(const uint8_t brokerId) {
+    DiscoveryLock lock;
     if (!isDiscoveryEnabled(brokerId)) {
         return;
     }
@@ -77,6 +172,7 @@ void HomeAssistantDiscovery::publishAllDiscovery(const uint8_t brokerId) {
 }
 
 uint16_t HomeAssistantDiscovery::registerComponent(uint8_t brokerId, DiscoveryConfigGenerator generator) {
+    DiscoveryLock lock;
     auto& broker_config = broker_configs_[brokerId];
     const uint16_t component_id = broker_config.next_component_id++;
 
@@ -87,29 +183,31 @@ uint16_t HomeAssistantDiscovery::registerComponent(uint8_t brokerId, DiscoveryCo
 
     broker_config.callbacks[component_id] = std::move(callback_info);
 
-    // Generate config once to get default_entity_id for logging
+    // Generate config once to get object_id for logging
     auto config = broker_config.callbacks[component_id].generator(brokerId);
-    ESP_LOGD(TAG, "Registered callback component %d (%s) for broker %d",
-             component_id, config.default_entity_id.c_str(), brokerId);
+    ESP_LOGD(TAG, "Registered callback component %d (%s/%s) for broker %d",
+             component_id, config.component_type.c_str(), config.object_id.c_str(), brokerId);
 
-    // Auto-publish if broker is enabled
+    // Publish via the coalesced, paced republish task rather than inline:
+    // many components register in a row, possibly right after connect.
     if (broker_config.enabled) {
-        publishCallbackDiscovery(brokerId, broker_config.callbacks[component_id]);
+        scheduleRepublish(brokerId, 300);
     }
 
     return component_id;
 }
 
 void HomeAssistantDiscovery::unregisterComponent(const uint8_t brokerId, const uint16_t component_id) {
+    DiscoveryLock lock;
     auto& broker_config = broker_configs_[brokerId];
     const auto it = broker_config.callbacks.find(component_id);
 
     if (it != broker_config.callbacks.end()) {
-        // Generate config to get component_type and default_entity_id for removal
+        // Generate config to get component_type and object_id for removal
         auto config = it->second.generator(brokerId);
 
         // Remove discovery from HA before unregistering
-        removeDiscovery(brokerId, config.component_type, config.default_entity_id);
+        removeDiscovery(brokerId, config.component_type, config.object_id);
         broker_config.callbacks.erase(it);
         ESP_LOGD(TAG, "Unregistered callback component %d from broker %d", component_id, brokerId);
     }
@@ -125,8 +223,30 @@ const HomeAssistantDevice& HomeAssistantDiscovery::getGlobalDeviceInfo() {
 }
 
 void HomeAssistantDiscovery::onBrokerConnected(uint8_t brokerId) {
-    ESP_LOGI(TAG, "Broker %d connected, publishing discovery configs", brokerId);
-    publishAllDiscovery(brokerId);
+    // Runs in the MQTT task (MQTT_EVENT_CONNECTED). Publishing the whole burst
+    // here would block the task that processes PUBACKs and drains the outbox;
+    // hand it to the paced republish task instead.
+    ESP_LOGI(TAG, "Broker %d connected, scheduling discovery publish", brokerId);
+    scheduleRepublish(brokerId, 200);
+}
+
+void HomeAssistantDiscovery::scheduleRepublish(const uint8_t brokerId, const uint32_t delayMs) {
+    if (brokerId >= 32) {
+        ESP_LOGW(TAG, "Broker id %d out of range for republish", brokerId);
+        return;
+    }
+    const uint32_t bit = 1u << brokerId;
+    if (pendingRepublish.fetch_or(bit) & bit) {
+        ESP_LOGD(TAG, "Discovery republish already pending for broker %d", brokerId);
+        return;
+    }
+
+    auto* args = new RepublishArgs{brokerId, delayMs};
+    if (xTaskCreate(republishTask, "ha_republish", 6144, args, 3, nullptr) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create discovery republish task for broker %d", brokerId);
+        delete args;
+        pendingRepublish.fetch_and(~bit);
+    }
 }
 
 std::string HomeAssistantDiscovery::generateDiscoveryTopic(const std::string& discovery_prefix, const std::string& component_type, const std::string& object_id) {
@@ -141,10 +261,23 @@ std::string HomeAssistantDiscovery::generateDiscoveryTopic(const std::string& di
 std::string HomeAssistantDiscovery::configToJson(const HomeAssistantDiscoveryConfig& config) {
     JsonDocument doc;
     
+    // Device information - use per-component device info if provided, otherwise global
+    const HomeAssistantDevice& device = config.device.name.empty() ? global_device_info_ : config.device;
+
     // Required fields
     doc["name"] = config.name;
-    if (!config.default_entity_id.empty()) {
-        doc["default_entity_id"] = config.default_entity_id;
+    if (!config.object_id.empty()) {
+        // Home Assistant expects <domain>.<object_id>; a bare object id makes it
+        // fall back to <domain>.unnamed_device. The object id part follows the
+        // device's friendly name (like Zigbee2MQTT), e.g. "ButtonPlus Garage"
+        // -> event.buttonplus_garage_button_7, falling back to the device id
+        // when no usable name is set. HA applies it only to NEW entities;
+        // unique_id stays device-id based so nothing is duplicated.
+        std::string prefix = haSlugify(device.name);
+        if (prefix.empty()) {
+            prefix = haSlugify(device.identifier);
+        }
+        doc["default_entity_id"] = std::format("{}.{}_{}", config.component_type, prefix, config.object_id);
     }
 
     // State topic (for publishers/sensors)
@@ -174,12 +307,26 @@ std::string HomeAssistantDiscovery::configToJson(const HomeAssistantDiscoveryCon
     for (const auto& [key, value] : config.additional_config) {
         doc[key] = value;
     }
-    
-    // Device information - use per-component device info if provided, otherwise global
-    const HomeAssistantDevice& device = config.device.name.empty() ? global_device_info_ : config.device;
 
-    // set unique id
-    doc["unique_id"] = std::format("{}_{}", device.identifier, config.default_entity_id);
+    if (!config.event_types.empty()) {
+        const auto types = doc["event_types"].to<JsonArray>();
+        for (const auto& type : config.event_types) {
+            types.add(type);
+        }
+    }
+
+    if (config.availability) {
+        // Matches MqttBroker: LWT "offline" and birth "online", both retained.
+        doc["availability_topic"] = std::string(BASE_TOPIC) + device.identifier + "/status";
+        doc["payload_available"] = "online";
+        doc["payload_not_available"] = "offline";
+    }
+
+    // Unique id stays <device>_<object_id> (unchanged from earlier firmware so
+    // existing entities keep their registry entry) unless explicitly overridden.
+    doc["unique_id"] = config.unique_id.empty()
+        ? std::format("{}_{}", device.identifier, config.object_id)
+        : config.unique_id;
 
     const auto name = !device.name.empty() ? device.name : device.identifier;;
 
@@ -202,7 +349,9 @@ std::string HomeAssistantDiscovery::configToJson(const HomeAssistantDiscoveryCon
 
     // Serialize to string
     std::string output;
-    serializeJson(doc, output);
+    // Abbreviated keys + "~" base topic: same entity in Home Assistant,
+    // smaller on the wire (see HaCompact.h).
+    serializeJson(freebutton::ha::compactDiscovery(doc), output);
     return output;
 }
 
@@ -227,11 +376,22 @@ void HomeAssistantDiscovery::publishCallbackDiscovery(uint8_t brokerId, const Di
     auto config = callback_info.generator(brokerId);
 
     const auto& broker_config = broker_configs_[brokerId];
-    const std::string topic = generateDiscoveryTopic(broker_config.discovery_prefix, config.component_type, config.default_entity_id);
+    const std::string topic = generateDiscoveryTopic(broker_config.discovery_prefix, config.component_type, config.object_id);
+
+    if (!config.enabled) {
+        // Entity must not exist (e.g. key not configured): clear any stale
+        // retained config so Home Assistant removes it.
+        ESP_LOGD(TAG, "Clearing discovery at %s", topic.c_str());
+        broker->publish(topic, "", 1, true);
+        paceAfterPublish(*broker);
+        return;
+    }
+
     const std::string json_payload = configToJson(config);
 
     ESP_LOGD(TAG, "Publishing callback discovery to %s", topic.c_str());
     broker->publish(topic, json_payload, 1, true);
+    paceAfterPublish(*broker);
 }
 
 void HomeAssistantDiscovery::setDeviceName(std::string name) {
@@ -239,6 +399,7 @@ void HomeAssistantDiscovery::setDeviceName(std::string name) {
 }
 
 uint16_t HomeAssistantDiscovery::registerTrigger(uint8_t brokerId, TriggerConfigGenerator generator) {
+    DiscoveryLock lock;
     auto& broker_config = broker_configs_[brokerId];
     const uint16_t trigger_id = broker_config.next_trigger_id++;
 
@@ -254,15 +415,16 @@ uint16_t HomeAssistantDiscovery::registerTrigger(uint8_t brokerId, TriggerConfig
     ESP_LOGD(TAG, "Registered trigger %d (%s) for broker %d",
              trigger_id, config.object_id.c_str(), brokerId);
 
-    // Auto-publish if broker is enabled
+    // Publish via the coalesced, paced republish task (see registerComponent).
     if (broker_config.enabled) {
-        publishTriggerDiscovery(brokerId, broker_config.triggers[trigger_id]);
+        scheduleRepublish(brokerId, 300);
     }
 
     return trigger_id;
 }
 
 void HomeAssistantDiscovery::unregisterTrigger(const uint8_t brokerId, const uint16_t trigger_id) {
+    DiscoveryLock lock;
     auto& broker_config = broker_configs_[brokerId];
     const auto it = broker_config.triggers.find(trigger_id);
 
@@ -363,8 +525,17 @@ void HomeAssistantDiscovery::publishTriggerDiscovery(uint8_t brokerId, const Tri
     const std::string topic = generateTriggerTopic(broker_config.discovery_prefix,
                                                    global_device_info_.identifier,
                                                    config.object_id);
+
+    if (!config.enabled) {
+        ESP_LOGD(TAG, "Clearing trigger discovery at %s", topic.c_str());
+        broker->publish(topic, "", 1, true);
+        paceAfterPublish(*broker);
+        return;
+    }
+
     const std::string json_payload = triggerToJson(config);
 
     ESP_LOGD(TAG, "Publishing trigger discovery to %s", topic.c_str());
     broker->publish(topic, json_payload, 1, true);
+    paceAfterPublish(*broker);
 }

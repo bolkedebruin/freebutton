@@ -1631,37 +1631,37 @@
       "FbButton": {
         "methods": [
           {
-            "description": "Register click handler",
+            "description": "Register click handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
             "name": "onClick",
             "params": [
               {
-                "description": "Function to call on click",
+                "description": "Function to call on click. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
                 "name": "callback",
-                "type": "Function"
+                "type": "() => boolean | void"
               }
             ],
             "returns": "void"
           },
           {
-            "description": "Register long press handler",
+            "description": "Register long press handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
             "name": "onLongPress",
             "params": [
               {
-                "description": "Function to call on long press",
+                "description": "Function to call on long press. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
                 "name": "callback",
-                "type": "Function"
+                "type": "() => boolean | void"
               }
             ],
             "returns": "void"
           },
           {
-            "description": "Register release handler",
+            "description": "Register release handler. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
             "name": "onRelease",
             "params": [
               {
-                "description": "Function to call on release",
+                "description": "Function to call on release. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event).",
                 "name": "callback",
-                "type": "Function"
+                "type": "() => boolean | void"
               }
             ],
             "returns": "void"

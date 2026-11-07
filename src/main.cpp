@@ -131,10 +131,14 @@ void setup() {
     // Start brokers and configure Home Assistant auto-discovery
     configManager.startBrokers(deviceId);
 
-    // Register sensors with Home Assistant Discovery (using first configured broker)
+    // Register Home Assistant discovery on every broker with "hassdiscovery"
     MqttBrokerRegistry::forEachBroker([](const uint8_t brokerId, const MqttBroker* broker) {
         if (broker && broker->isConfigured() && broker->hasAutoDiscovery()) {
+            auto& buttons = getHardwareInitializer().getButtonManager();
             registerSensorsWithDiscovery(brokerId);
+            buttons.registerButtonsWithHomeAssistant(brokerId);
+            buttons.registerLEDsWithHomeAssistant(brokerId);
+            buttons.subscribeHomeAssistantCommands(brokerId);
         }
     });
 

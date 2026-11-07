@@ -4,6 +4,8 @@
 //
 
 #include "Button.h"
+#include "ButtonEventPlan.h"
+#include "config.h"
 #include "mqtt/Registry.h"
 #include "drivers/LvglDisplay.h"
 #include "drivers/DisplayManager.h"
@@ -123,6 +125,16 @@ void Button::click() const {
 void Button::longPress() const {
     publishToTopic(LONG_PRESS, LONG_PRESS_PAYLOAD);
     ESP_LOGI(TAG, "Button %lu long pressed", id);
+}
+
+ha::ButtonEventPlan Button::homeAssistantPlan(const uint8_t haBrokerId) const {
+    std::vector<ha::PressTopic> pressTopics;
+    pressTopics.reserve(topics.size());
+    for (const auto& t : topics) {
+        pressTopics.push_back({t.brokerId, t.topic, t.payload, t.eventType});
+    }
+    const std::string canonical = ha::canonicalButtonStateTopic(deviceId, static_cast<int>(position_));
+    return ha::planButtonEvents(pressTopics, haBrokerId, canonical);
 }
 
 void Button::release() const {

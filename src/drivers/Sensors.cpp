@@ -347,7 +347,7 @@ void registerSensorsWithDiscovery(const uint8_t brokerId) {
             auto generator = [sensor, defaultEntityId, stateTopic](uint8_t broker_id) -> HomeAssistantDiscoveryConfig {
                 HomeAssistantDiscoveryConfig config;
                 config.component_type = "sensor";
-                config.default_entity_id = defaultEntityId;
+                config.object_id = defaultEntityId;
                 config.name = std::string(sensor->name);
                 config.device_class = std::string(sensor->deviceClass);
                 config.unit_of_measurement = std::string(sensor->unitOfMeasurement);

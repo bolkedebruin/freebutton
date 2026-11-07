@@ -215,7 +215,8 @@ int HardwareInitializer::initializeButtons() {
         }
     }
 
-    buttonManager_.registerButtonsWithHomeAssistant(0);
+    // Home Assistant discovery is registered per broker in main.cpp, after the
+    // brokers (and their "hassdiscovery" flags) are loaded from config.
 
     ESP_LOGI(TAG, "Button initialization completed. Created %d buttons", buttonCount);
     return buttonCount;
@@ -285,7 +286,6 @@ bool HardwareInitializer::initializeLEDs() {
     buttonManager_.createLEDsForAllButtons(deviceId, 0, connectorTypes); // Default broker ID 0
 
     // Register all LEDs with Home Assistant
-    buttonManager_.registerLEDsWithHomeAssistant();
 
     ESP_LOGI(TAG, "LED initialization completed successfully");
     return true;

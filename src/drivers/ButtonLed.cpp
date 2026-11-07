@@ -110,12 +110,12 @@ std::string ButtonLed::colorToJson() const {
     return result;
 }
 
-void ButtonLed::registerWithHomeAssistant() const {
+void ButtonLed::registerWithHomeAssistant(const uint8_t brokerId) const {
     // Convert to callback-based registration for memory efficiency
     auto generator = [this](uint8_t broker_id) -> HomeAssistantDiscoveryConfig {
         HomeAssistantDiscoveryConfig config;
         config.component_type = "light";
-        config.default_entity_id = getObjectId();  // "freebutton01_7_1"
+        config.object_id = getObjectId();  // e.g. "led_7_0" -> light.<device>_led_7_0
         config.name = getEntityName();           // "Button 7 Wall LED"
 
         // Core light functionality - runtime topic generation
@@ -147,7 +147,7 @@ void ButtonLed::registerWithHomeAssistant() const {
         return config;
     };
 
-    HomeAssistantDiscovery::registerComponent(brokerId_, std::move(generator));
+    HomeAssistantDiscovery::registerComponent(brokerId, std::move(generator));
 
     ESP_LOGI(TAG, "Registered %s with Home Assistant (callback)", getEntityName().c_str());
 }

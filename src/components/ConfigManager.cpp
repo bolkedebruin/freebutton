@@ -289,7 +289,14 @@ void ConfigManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {
         const char* username = brokerObj["username"] | "";
         const char* password = brokerObj["password"] | "";
 
-        bool autoDiscovery = brokerObj["autoDiscovery"] | true;
+        // Button+ configs (and Broker::toJson) use "hassdiscovery"; "autoDiscovery"
+        // is accepted as a legacy alias. Absent = enabled (previous behaviour).
+        bool autoDiscovery = true;
+        if (!brokerObj["hassdiscovery"].isNull()) {
+            autoDiscovery = brokerObj["hassdiscovery"].as<bool>();
+        } else if (!brokerObj["autoDiscovery"].isNull()) {
+            autoDiscovery = brokerObj["autoDiscovery"].as<bool>();
+        }
 
         // Check if broker already exists (auto-registered by components)
         uint8_t existingId = MqttBrokerRegistry::getBrokerId(brokerId);
@@ -357,11 +364,12 @@ void ConfigManager::startBrokers(const std::string& deviceId) {
                 HomeAssistantDiscovery::onBrokerConnected(connectedBrokerId);
             });
 
-            // Configure Home Assistant discovery for this broker
-            HomeAssistantDiscovery::configureBroker(brokerId);
+            // Configure Home Assistant discovery for this broker ("hassdiscovery")
+            HomeAssistantDiscovery::configureBroker(brokerId, broker->hasAutoDiscovery());
 
-            ESP_LOGI(TAG, "Configured broker %d: %.*s for Home Assistant discovery", brokerId,
-                    (int)broker->getName().length(), broker->getName().data());
+            ESP_LOGI(TAG, "Broker %d: %.*s, Home Assistant discovery %s", brokerId,
+                    (int)broker->getName().length(), broker->getName().data(),
+                    broker->hasAutoDiscovery() ? "enabled" : "disabled");
         } else {
             ESP_LOGW(TAG, "Skipping unconfigured broker at ID %d", brokerId);
         }

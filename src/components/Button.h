@@ -9,6 +9,7 @@
 #include "mqtt/Component.h"
 #include "types.h"
 #include "TopicHandler.h"
+#include "ButtonEventPlan.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -62,6 +63,10 @@ public:
     // Position and event handling
     uint32_t getPosition() const { return position_; }
     void handlePhysicalEvent(EventType event);
+
+    // How this key is exposed to Home Assistant (event entity, event_types,
+    // canonical-topic mirroring). Shared by discovery and the press publisher.
+    ha::ButtonEventPlan homeAssistantPlan(uint8_t haBrokerId) const;
 
     // UI button access for scripting
     lv_obj_t* getButtonObject() const { return button; }

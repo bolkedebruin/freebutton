@@ -13,10 +13,11 @@
 extern "C" {
 #endif
 
-// Callback types for button events
-typedef void (*ButtonClickCallback)(int position);
-typedef void (*ButtonLongPressCallback)(int position);
-typedef void (*ButtonReleaseCallback)(int position);
+// Callback types for button events. Return true to prevent the default
+// action (MQTT publishing for this press), i.e. the JS handler returned false.
+typedef bool (*ButtonClickCallback)(int position);
+typedef bool (*ButtonLongPressCallback)(int position);
+typedef bool (*ButtonReleaseCallback)(int position);
 
 // Set label for button at position
 // Returns 0 on success, -1 on error
@@ -35,10 +36,12 @@ void button_hw_register_click_callback(int position, ButtonClickCallback callbac
 void button_hw_register_long_press_callback(int position, ButtonLongPressCallback callback);
 void button_hw_register_release_callback(int position, ButtonReleaseCallback callback);
 
-// Called by ButtonManager to dispatch events to JavaScript
-void button_hw_dispatch_click(int position);
-void button_hw_dispatch_long_press(int position);
-void button_hw_dispatch_release(int position);
+// Called by ButtonManager to dispatch events to JavaScript.
+// Return true when the handler prevented the default action (returned false):
+// the caller must then skip MQTT publishing (configured topics + HA event).
+bool button_hw_dispatch_click(int position);
+bool button_hw_dispatch_long_press(int position);
+bool button_hw_dispatch_release(int position);
 
 #ifdef __cplusplus
 }

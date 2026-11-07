@@ -12,6 +12,8 @@
 #include <map>
 
 #include "mqtt/HomeAssistantDiscovery.h"
+#include "mqtt/Registry.h"
+#include "components/ButtonEventPlan.h"
 #include "components/ConfigManager.h"
 #include "scripting/button_hardware.h"
 
@@ -37,19 +39,26 @@ void ButtonManager::addButton(std::unique_ptr<PushButton> button) {
     button->onButtonEvent([this](const int pos, const EventType event) {
         ESP_LOGI(TAG, "Button at position %d with event %d", pos, event);
 
-        // Dispatch to JavaScript callbacks first
+        // Dispatch to JavaScript callbacks first. A handler returning `false`
+        // cancels the default action: no MQTT publishing for this press.
+        bool defaultPrevented = false;
         switch (event) {
             case CLICK:
-                button_hw_dispatch_click(pos);
+                defaultPrevented = button_hw_dispatch_click(pos);
                 break;
             case LONG_PRESS:
-                button_hw_dispatch_long_press(pos);
+                defaultPrevented = button_hw_dispatch_long_press(pos);
                 break;
             case RELEASE:
-                button_hw_dispatch_release(pos);
+                defaultPrevented = button_hw_dispatch_release(pos);
                 break;
             default:
                 break;
+        }
+
+        if (defaultPrevented) {
+            ESP_LOGI(TAG, "Button %d event %d: default prevented by script, not publishing", pos, event);
+            return;
         }
 
         // Find and trigger corresponding display button
@@ -60,6 +69,10 @@ void ButtonManager::addButton(std::unique_ptr<PushButton> button) {
         } else {
             ESP_LOGI(TAG, "No display button found for position %d", pos);
         }
+
+        // Home Assistant event entity: make sure the canonical topic carries
+        // the press, for configured and unconfigured keys alike.
+        mirrorToCanonicalTopic(pos, event);
     });
 
     buttons_.push_back(std::move(button));
@@ -88,37 +101,148 @@ PushButton* ButtonManager::getButton(int position) const {
     return it != buttons_.end() ? it->get() : nullptr;
 }
 
-void ButtonManager::registerButtonsWithHomeAssistant(const uint8_t brokerId) const {
-    for (const auto& button : buttons_) {
-        const int pos = button->position();
+namespace {
 
-        // Register click/short press trigger
-        auto clickGenerator = [pos](uint8_t broker_id) -> HomeAssistantTriggerConfig {
+// How a key position's presses reach the canonical topic. The config only
+// refines this (user topics already covering it, extra event types); a key
+// without a config Button still publishes click/longpress there.
+freebutton::ha::ButtonEventPlan planForPosition(const int pos, const uint8_t haBrokerId) {
+    namespace ha = freebutton::ha;
+    if (const auto* button = configManager.getButtonByPosition(pos)) {
+        return button->homeAssistantPlan(haBrokerId);
+    }
+    return ha::planButtonEvents({}, haBrokerId, ha::canonicalButtonStateTopic(deviceId, pos));
+}
+
+} // namespace
+
+void ButtonManager::mirrorToCanonicalTopic(const int pos, const EventType event) {
+    namespace ha = freebutton::ha;
+    if (event != CLICK && event != LONG_PRESS) {
+        return;
+    }
+    const std::string topic = ha::canonicalButtonStateTopic(deviceId, pos);
+    MqttBrokerRegistry::forEachBroker([&](const uint8_t brokerId, const MqttBroker* broker) {
+        if (!broker || !HomeAssistantDiscovery::isDiscoveryEnabled(brokerId)) {
+            return;
+        }
+        const auto plan = planForPosition(pos, brokerId);
+        if (!(event == CLICK ? plan.mirrorClick : plan.mirrorLongPress)) {
+            return;
+        }
+        // Not retained: Home Assistant ignores retained events, and a retained
+        // press would replay after a reconnect.
+        broker->publish(topic, ha::defaultPayloadFor(event), 0, false);
+    });
+}
+
+void ButtonManager::registerButtonsWithHomeAssistant(const uint8_t brokerId) const {
+    namespace ha = freebutton::ha;
+
+    // Every position, not just the physical ones: generators for positions
+    // without a physical button publish empty payloads, clearing configs left
+    // behind by earlier firmware or a different module layout.
+    for (int pos = 1; pos <= BUTTON_COUNT; ++pos) {
+        const std::string objectId = "button_" + std::to_string(pos);
+        const std::string name = "Button " + std::to_string(pos);
+
+        // MQTT event: physical presses (click / long press / ...)
+        HomeAssistantDiscovery::registerComponent(brokerId, [this, pos, objectId, name](const uint8_t haBroker) {
+            HomeAssistantDiscoveryConfig config;
+            config.component_type = "event";
+            config.object_id = objectId;
+            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
+            config.unique_id = config.device.identifier + "_" + objectId + "_event";
+            config.name = name;
+            config.device_class = "button";
+            config.state_topic = ha::canonicalButtonStateTopic(deviceId, pos);
+            config.availability = true;
+
+            const bool present = getButton(pos) != nullptr;
+            const auto plan = planForPosition(pos, haBroker);
+            if (present && !plan.announceEvent) {
+                ESP_LOGW(TAG, "Key %d: not announcing HA event entity: %s", pos, plan.problem.c_str());
+            }
+            config.enabled = present && plan.announceEvent;
+            config.event_types = plan.eventTypes;
+            return config;
+        });
+
+        // MQTT button: a press sent from Home Assistant acts as a short press
+        HomeAssistantDiscovery::registerComponent(brokerId, [this, pos, objectId, name](const uint8_t haBroker) {
+            HomeAssistantDiscoveryConfig config;
+            config.component_type = "button";
+            config.object_id = objectId;
+            config.name = name;
+            config.command_topic = ha::buttonCommandTopic(deviceId, pos);
+            config.availability = true;
+            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
+            config.enabled = getButton(pos) != nullptr;
+            return config;
+        });
+
+        // Device triggers, kept for existing automations. They match payloads
+        // on the canonical topic, which carries them for every announced key.
+        HomeAssistantDiscovery::registerTrigger(brokerId, [this, pos](const uint8_t haBroker) {
             HomeAssistantTriggerConfig config;
             config.object_id = "button_" + std::to_string(pos) + "_click";
             config.type = "button_short_press";
             config.subtype = "button_" + std::to_string(pos);
-            config.topic = std::string(PUBLICMQTTID) + "/" + deviceId + "/button_" + std::to_string(pos) + "/state";
-            config.payload = R"({"event_type":"click"})";
+            config.topic = ha::canonicalButtonStateTopic(deviceId, pos);
+            config.payload = CLICK_PAYLOAD;
             config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
-            config.enabled = true;
+            config.enabled = getButton(pos) != nullptr && planForPosition(pos, haBroker).announceEvent;
             return config;
-        };
-        HomeAssistantDiscovery::registerTrigger(brokerId, std::move(clickGenerator));
+        });
 
-        // Register long press trigger
-        auto longPressGenerator = [pos](uint8_t broker_id) -> HomeAssistantTriggerConfig {
+        HomeAssistantDiscovery::registerTrigger(brokerId, [this, pos](const uint8_t haBroker) {
             HomeAssistantTriggerConfig config;
             config.object_id = "button_" + std::to_string(pos) + "_long";
             config.type = "button_long_press";
             config.subtype = "button_" + std::to_string(pos);
-            config.topic = std::string(PUBLICMQTTID) + "/" + deviceId + "/button_" + std::to_string(pos) + "/state";
-            config.payload = R"({"event_type":"longpress"})";
+            config.topic = ha::canonicalButtonStateTopic(deviceId, pos);
+            config.payload = LONG_PRESS_PAYLOAD;
             config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
-            config.enabled = true;
+            config.enabled = getButton(pos) != nullptr && planForPosition(pos, haBroker).announceEvent;
             return config;
-        };
-        HomeAssistantDiscovery::registerTrigger(brokerId, std::move(longPressGenerator));
+        });
+    }
+}
+
+void ButtonManager::subscribeHomeAssistantCommands(const uint8_t brokerId) const {
+    if (!HomeAssistantDiscovery::isDiscoveryEnabled(brokerId)) {
+        return;
+    }
+    for (int pos = 1; pos <= BUTTON_COUNT; ++pos) {
+        if (getButton(pos)) {
+            commandSubscriber_->addSubscription(brokerId, freebutton::ha::buttonCommandTopic(deviceId, pos));
+        }
+    }
+}
+
+void HaButtonCommandSubscriber::onMessage(uint8_t brokerId, const std::string_view topic, std::string_view data) {
+    for (int pos = 1; pos <= BUTTON_COUNT; ++pos) {
+        if (topic == freebutton::ha::buttonCommandTopic(deviceId, pos)) {
+            pending_.fetch_or(1u << (pos - 1));
+            return;
+        }
+    }
+}
+
+void ButtonManager::processHomeAssistantCommands() const {
+    const uint32_t pending = commandSubscriber_->takePending();
+    if (!pending) {
+        return;
+    }
+    for (int pos = 1; pos <= BUTTON_COUNT; ++pos) {
+        if (pending & (1u << (pos - 1))) {
+            if (const auto* button = getButton(pos)) {
+                ESP_LOGI(TAG, "Home Assistant press on button %d", pos);
+                // Same path as a short physical press: down (click), then release.
+                button->injectEvent(CLICK);
+                button->injectEvent(RELEASE);
+            }
+        }
     }
 }
 
@@ -166,6 +290,7 @@ void ButtonManager::buttonTask() {
 
     while (monitoring_) {
         updateAllButtons();
+        processHomeAssistantCommands();
         vTaskDelay(pdMS_TO_TICKS(updateInterval_));
     }
 
@@ -253,11 +378,11 @@ void ButtonManager::createLEDsForButton(int position, int frontIndex, int wallIn
         position, LedPosition::WALL, 1, wallIndex, deviceId, brokerId));
 }
 
-void ButtonManager::registerLEDsWithHomeAssistant() const {
+void ButtonManager::registerLEDsWithHomeAssistant(const uint8_t brokerId) const {
     ESP_LOGI(TAG, "Registering %zu LEDs with Home Assistant", leds_.size());
 
     for (const auto& led : leds_) {
-        led->registerWithHomeAssistant();
+        led->registerWithHomeAssistant(brokerId);
     }
 
     ESP_LOGI(TAG, "Home Assistant registration completed for all LEDs");

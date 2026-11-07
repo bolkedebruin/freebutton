@@ -43,6 +43,14 @@ public:
 
     // Callback registration
     void onButtonEvent(ButtonCallback callback);
+
+    // Deliver an event as if it came from the hardware (e.g. a press sent from
+    // Home Assistant). Call from the button monitoring task only.
+    void injectEvent(EventType event) const {
+        if (buttonCallback_) {
+            buttonCallback_(position(), event);
+        }
+    }
     void onLongPress(LongPressCallback callback);
 
     // Long press configuration

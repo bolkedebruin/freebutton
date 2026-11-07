@@ -58,7 +58,7 @@ public:
         , ledIndex_(ledIndex) {}
 
     // Home Assistant Discovery Integration
-    void registerWithHomeAssistant() const;
+    void registerWithHomeAssistant(uint8_t brokerId) const;
 
     // Get state for publishing (to be called by Button component)
     [[nodiscard]] std::string getStateJson() const;
