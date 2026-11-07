@@ -18,10 +18,12 @@ namespace FreeButton {
 namespace FreeButton {
 
 // ---------------------------------------------------------------------------
-// SPI write clocks. DMA stays enabled on both panel types (owner requirement);
-// only the clock is lowered, from 80 MHz. ESP32-S3 SPI clocks are APB
-// (80 MHz) / n. All panels share SPI2 and run on ONE clock: 40 MHz is the
-// configuration verified on hardware (2026-11-07).
+// SPI write clocks. DMA stays enabled on both panel types (owner requirement).
+// All panels share SPI2 and run on ONE clock.
+// NOTE: LovyanGFX < 1.2.28 computed the divider against a fixed 80 MHz base,
+// so on ESP32-S3 (Arduino) the real SCLK was up to 2x the request: a 40 MHz
+// setting ran at ~80 MHz (lovyan03/LovyanGFX#899). Since 1.2.28 (we pin
+// 1.3.0) the request is the real clock, so 40 MHz here really is 40 MHz.
 // ---------------------------------------------------------------------------
 
 // Main panel (ILI9341). The datasheet twc >= 100 ns (10 MHz) is conservative;
