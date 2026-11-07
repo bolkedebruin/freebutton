@@ -6,6 +6,7 @@
 #include "WifiManager.h"
 #include "components/ConfigManager.h"
 #include "json/StreamWrappers.h"
+#include "json/WindowOutputStream.h"
 #include "Update.h"
 #include "OtaManager.h"
 #include "scripting/BytecodeWriter.h"
@@ -23,13 +24,23 @@ extern freebutton::ConfigManager configManager;
 
 AsyncWebServer server(80);
 
+// Streams the config without buffering it. AsyncResponseStream grows one
+// buffer a byte at a time (the JSON writer Puts single chars), which needs
+// old + new block per step: on a fragmented heap it stopped at ~3.8 KB,
+// truncating the JSON and draining the heap to a few hundred bytes. Instead,
+// measure once, then re-run the writer per TCP chunk and keep only that
+// chunk's window (WindowOutputStream). Peak RAM is the server's chunk buffer.
 void handleConfig(AsyncWebServerRequest *request) {
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    AsyncJsonOutputStream stream(response);
+    WindowOutputStream counter;
+    configManager.write(counter);
 
-    // Write the configuration using ConfigManager's write method
-    configManager.write(stream);
-
+    AsyncWebServerResponse *response = request->beginResponse(
+        "application/json", counter.total(),
+        [](uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
+            WindowOutputStream window(buffer, index, maxLen);
+            configManager.write(window);
+            return window.copied();
+        });
     request->send(response);
 }
 
