@@ -96,6 +96,12 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
         return false;
     }
 
+    // The panels take RGB565 big-endian; the flush sends the buffer as-is
+    // (LovyanGFX treats uint16_t* as pre-swapped). LVGL 9 dropped
+    // LV_COLOR_16_SWAP, so render byte-swapped directly. Without this every
+    // colour is byte-swapped on the wire (green 0x07E0 -> 0xE007, purple).
+    lv_display_set_color_format(main_display_, LV_COLOR_FORMAT_RGB565_SWAPPED);
+
     // Set flush callback
     lv_display_set_flush_cb(main_display_, flush_cb);
 
@@ -307,6 +313,7 @@ void LvglDisplay::initializeSmallDisplays(DisplayManager& displayManager) {
             continue;
         }
 
+        lv_display_set_color_format(small_disp, LV_COLOR_FORMAT_RGB565_SWAPPED);  // see main display
         lv_display_set_flush_cb(small_disp, flush_small_cb);
         small_displays_.push_back(small_disp);
 

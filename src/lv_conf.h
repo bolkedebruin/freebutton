@@ -5,7 +5,9 @@
    COLOR SETTINGS
  *====================*/
 #define LV_COLOR_DEPTH 16
-#define LV_COLOR_16_SWAP 1
+/* LV_COLOR_16_SWAP is gone in LVGL 9: the displays are set to
+ * LV_COLOR_FORMAT_RGB565_SWAPPED in LvglDisplay.cpp instead. */
+#define LV_DRAW_SW_SUPPORT_RGB565_SWAPPED 1
 
 /*====================
    MEMORY SETTINGS
