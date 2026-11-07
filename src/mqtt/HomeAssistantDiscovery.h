@@ -135,10 +135,10 @@ private:
     };
 
     // Helper to publish single callback-based discovery config
-    static void publishCallbackDiscovery(uint8_t brokerId, const DiscoveryCallbackInfo &callback_info);
+    static void publishCallbackDiscovery(uint8_t brokerId, uint16_t componentId);
 
     // Helper to publish single trigger discovery config
-    static void publishTriggerDiscovery(uint8_t brokerId, const TriggerCallbackInfo &trigger_info);
+    static void publishTriggerDiscovery(uint8_t brokerId, uint16_t triggerId);
 
     static std::map<uint8_t, BrokerDiscoveryConfig> broker_configs_;
     static HomeAssistantDevice global_device_info_;

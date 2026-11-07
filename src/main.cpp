@@ -126,6 +126,14 @@ void setup() {
     NtpClient::initialize(ntpServer, timezone);
     NtpClient::syncTime();
 
+    // Create the JavaScript engine (its heap is one ~10 KB allocation) BEFORE
+    // MQTT starts. Allocated later, it raced the Home Assistant discovery
+    // burst after connect, failed under heap pressure, and with
+    // -fno-exceptions the failed new() aborted the boot. The user script
+    // still runs at the same point as before, below.
+    ESP_LOGI(TAG, "Initializing JavaScript engine...");
+    const bool scriptEngineReady = scriptEngine.init();
+
     progressBar->update(65, "Starting MQTT brokers...");
 
     // Start brokers and configure Home Assistant auto-discovery
@@ -143,10 +151,8 @@ void setup() {
     });
 
     progressBar->update(75, "Starting scripting engine..");
-    // Initialize JavaScript Engine (singleton)
-    ESP_LOGI(TAG, "Initializing JavaScript engine...");
 
-    if (scriptEngine.init()) {
+    if (scriptEngineReady) {
         ESP_LOGI(TAG, "ScriptEngine initialized successfully");
 
         // Load and execute user script from flash if it exists

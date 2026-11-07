@@ -143,31 +143,42 @@ void HomeAssistantDiscovery::removeDiscovery(uint8_t brokerId, const std::string
 }
 
 void HomeAssistantDiscovery::publishAllDiscovery(const uint8_t brokerId) {
-    DiscoveryLock lock;
-    if (!isDiscoveryEnabled(brokerId)) {
-        return;
-    }
-
-    const auto it = broker_configs_.find(brokerId);
-    if (it == broker_configs_.end()) {
-        return;
+    // Snapshot only the IDs (2 bytes each) under the lock. Each config is
+    // then generated under the lock and published + paced WITHOUT it: the
+    // paced publish is network-bound and can take seconds, and holding the
+    // lock that long blocked main() mid-registration at boot (which pushed
+    // the JS engine's heap allocation into the discovery burst -> abort).
+    // Copying the generators instead would cost ~2 KB of heap at the worst
+    // moment; one payload at a time exists either way.
+    std::vector<uint16_t> componentIds;
+    std::vector<uint16_t> triggerIds;
+    {
+        DiscoveryLock lock;
+        if (!isDiscoveryEnabled(brokerId)) {
+            return;
+        }
+        const auto it = broker_configs_.find(brokerId);
+        if (it == broker_configs_.end()) {
+            return;
+        }
+        componentIds.reserve(it->second.callbacks.size());
+        triggerIds.reserve(it->second.triggers.size());
+        for (const auto& [id, info] : it->second.callbacks) {
+            if (info.enabled) componentIds.push_back(id);
+        }
+        for (const auto& [id, info] : it->second.triggers) {
+            if (info.enabled) triggerIds.push_back(id);
+        }
     }
 
     ESP_LOGI(TAG, "Publishing all discovery configs for broker %d (%zu components, %zu triggers)",
-             brokerId, it->second.callbacks.size(), it->second.triggers.size());
+             brokerId, componentIds.size(), triggerIds.size());
 
-    // Publish component discoveries
-    for (const auto &callback_info: it->second.callbacks | std::views::values) {
-        if (callback_info.enabled) {
-            publishCallbackDiscovery(brokerId, callback_info);
-        }
+    for (const uint16_t id : componentIds) {
+        publishCallbackDiscovery(brokerId, id);
     }
-
-    // Publish trigger discoveries
-    for (const auto &trigger_info: it->second.triggers | std::views::values) {
-        if (trigger_info.enabled) {
-            publishTriggerDiscovery(brokerId, trigger_info);
-        }
+    for (const uint16_t id : triggerIds) {
+        publishTriggerDiscovery(brokerId, id);
     }
 }
 
@@ -355,42 +366,40 @@ std::string HomeAssistantDiscovery::configToJson(const HomeAssistantDiscoveryCon
     return output;
 }
 
-void HomeAssistantDiscovery::publishCallbackDiscovery(uint8_t brokerId, const DiscoveryCallbackInfo &callback_info) {
-    if (!isDiscoveryEnabled(brokerId) || !callback_info.enabled) {
-        return;
-    }
-
+void HomeAssistantDiscovery::publishCallbackDiscovery(const uint8_t brokerId, const uint16_t componentId) {
     auto* broker = MqttBrokerRegistry::getBroker(brokerId);
     if (!broker) {
         ESP_LOGE(TAG, "Broker %d not found", brokerId);
         return;
     }
-
-    // Only publish if broker is connected
+    // Only publish if broker is connected (connect schedules a full republish)
     if (!broker->isConnected()) {
-        ESP_LOGD(TAG, "Broker %d not connected, discovery will be published on connection", brokerId);
         return;
     }
 
-    // Generate config on-demand
-    auto config = callback_info.generator(brokerId);
-
-    const auto& broker_config = broker_configs_[brokerId];
-    const std::string topic = generateDiscoveryTopic(broker_config.discovery_prefix, config.component_type, config.object_id);
-
-    if (!config.enabled) {
-        // Entity must not exist (e.g. key not configured): clear any stale
-        // retained config so Home Assistant removes it.
-        ESP_LOGD(TAG, "Clearing discovery at %s", topic.c_str());
-        broker->publish(topic, "", 1, true);
-        paceAfterPublish(*broker);
-        return;
+    // Generate topic + payload under the lock (the component may be
+    // unregistered concurrently), publish outside it.
+    std::string topic;
+    std::string payload;  // empty = entity must not exist: clears stale retained config
+    {
+        DiscoveryLock lock;
+        if (!isDiscoveryEnabled(brokerId)) {
+            return;
+        }
+        auto& broker_config = broker_configs_[brokerId];
+        const auto it = broker_config.callbacks.find(componentId);
+        if (it == broker_config.callbacks.end() || !it->second.enabled) {
+            return;
+        }
+        const auto config = it->second.generator(brokerId);
+        topic = generateDiscoveryTopic(broker_config.discovery_prefix, config.component_type, config.object_id);
+        if (config.enabled) {
+            payload = configToJson(config);
+        }
     }
 
-    const std::string json_payload = configToJson(config);
-
-    ESP_LOGD(TAG, "Publishing callback discovery to %s", topic.c_str());
-    broker->publish(topic, json_payload, 1, true);
+    ESP_LOGD(TAG, "%s discovery at %s", payload.empty() ? "Clearing" : "Publishing", topic.c_str());
+    broker->publish(topic, payload, 1, true);
     paceAfterPublish(*broker);
 }
 
@@ -501,41 +510,36 @@ std::string HomeAssistantDiscovery::triggerToJson(const HomeAssistantTriggerConf
     return output;
 }
 
-void HomeAssistantDiscovery::publishTriggerDiscovery(uint8_t brokerId, const TriggerCallbackInfo &trigger_info) {
-    if (!isDiscoveryEnabled(brokerId) || !trigger_info.enabled) {
-        return;
-    }
-
+void HomeAssistantDiscovery::publishTriggerDiscovery(const uint8_t brokerId, const uint16_t triggerId) {
     auto* broker = MqttBrokerRegistry::getBroker(brokerId);
     if (!broker) {
         ESP_LOGE(TAG, "Broker %d not found", brokerId);
         return;
     }
-
-    // Only publish if broker is connected
     if (!broker->isConnected()) {
-        ESP_LOGD(TAG, "Broker %d not connected, trigger discovery will be published on connection", brokerId);
         return;
     }
 
-    // Generate config on-demand
-    auto config = trigger_info.generator(brokerId);
-
-    const auto& broker_config = broker_configs_[brokerId];
-    const std::string topic = generateTriggerTopic(broker_config.discovery_prefix,
-                                                   global_device_info_.identifier,
-                                                   config.object_id);
-
-    if (!config.enabled) {
-        ESP_LOGD(TAG, "Clearing trigger discovery at %s", topic.c_str());
-        broker->publish(topic, "", 1, true);
-        paceAfterPublish(*broker);
-        return;
+    std::string topic;
+    std::string payload;  // empty = trigger must not exist
+    {
+        DiscoveryLock lock;
+        if (!isDiscoveryEnabled(brokerId)) {
+            return;
+        }
+        auto& broker_config = broker_configs_[brokerId];
+        const auto it = broker_config.triggers.find(triggerId);
+        if (it == broker_config.triggers.end() || !it->second.enabled) {
+            return;
+        }
+        const auto config = it->second.generator(brokerId);
+        topic = generateTriggerTopic(broker_config.discovery_prefix, global_device_info_.identifier, config.object_id);
+        if (config.enabled) {
+            payload = triggerToJson(config);
+        }
     }
 
-    const std::string json_payload = triggerToJson(config);
-
-    ESP_LOGD(TAG, "Publishing trigger discovery to %s", topic.c_str());
-    broker->publish(topic, json_payload, 1, true);
+    ESP_LOGD(TAG, "%s trigger discovery at %s", payload.empty() ? "Clearing" : "Publishing", topic.c_str());
+    broker->publish(topic, payload, 1, true);
     paceAfterPublish(*broker);
 }
