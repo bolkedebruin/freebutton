@@ -39,7 +39,12 @@ LvglDisplay::LvglDisplay()
       , small_buffer_mutex_(nullptr)
       , initialized_(false)
       , main_screen_(nullptr)
-      , create_hello_button_pending_(false) {
+      , create_hello_button_pending_(false)
+      , heal_timer_(nullptr)
+      , heal_next_index_(0)
+      , heal_pending_(0)
+      , heal_last_sweep_tick_(0)
+      , heal_seen_cs_failures_(0) {
 }
 
 LvglDisplay::~LvglDisplay() {
@@ -126,10 +131,11 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
 
     // Create main screen
     if (g_display_mgr) {
-        g_display_mgr->selectMainDisplay();
-        auto* main_gfx = g_display_mgr->getMainDisplay();
-        if (main_gfx) {
-            main_gfx->fillScreen(0x0000); // Clear to black
+        if (g_display_mgr->selectMainDisplay()) {
+            auto* main_gfx = g_display_mgr->getMainDisplay();
+            if (main_gfx) {
+                main_gfx->fillScreen(0x0000); // Clear to black
+            }
         }
         g_display_mgr->deselectAllDisplays();
     }
@@ -144,6 +150,18 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     ESP_LOGI(TAG, "LVGL filesystem interface initialized");
 
     init_fonts();
+
+    // Mini-panel self-heal. Created here, in setup(), before the LVGL task
+    // starts, so no lock is needed yet. The callback later runs inside
+    // lv_timer_handler() in the LVGL task, with lvgl_mutex_ held, in the same
+    // context as the flush callbacks, so it never races a flush on SPI or CS.
+    // heal_seen_cs_failures_ starts at 0, so CS failures during boot trigger
+    // a heal on the first run.
+    heal_last_sweep_tick_ = lv_tick_get();
+    heal_timer_ = lv_timer_create(heal_timer_cb, kSmallPanelHealStepMs, this);
+    if (!heal_timer_) {
+        ESP_LOGW(TAG, "Failed to create mini display self-heal timer");
+    }
 
     initialized_ = true;
     ESP_LOGI(TAG, "LVGL display initialization completed successfully");
@@ -163,8 +181,14 @@ void LvglDisplay::flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* p
         return;
     }
 
-    // Select main display before operations
-    g_display_mgr->selectMainDisplay();
+    // Select main display before operations. If a CS write failed, the CS
+    // state is unknown: send nothing, so pixels cannot land on another panel.
+    // The self-heal timer sees the failure count change and repaints.
+    if (!g_display_mgr->selectMainDisplay()) {
+        g_display_mgr->deselectAllDisplays();
+        lv_display_flush_ready(disp);
+        return;
+    }
 
     // Calculate area dimensions
     const uint32_t width = area->x2 - area->x1 + 1;
@@ -320,8 +344,13 @@ void LvglDisplay::flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint
         return;
     }
 
-    // Select the specific small display using DisplayManager's method
-    g_display_mgr->selectSmallDisplay(connector, position);
+    // Select the specific small display using DisplayManager's method. On a
+    // CS write failure send nothing (see flush_cb); the self-heal repaints.
+    if (!g_display_mgr->selectSmallDisplay(connector, position)) {
+        g_display_mgr->deselectAllDisplays();
+        lv_display_flush_ready(disp);
+        return;
+    }
 
     // Calculate area dimensions
     const uint32_t width = area->x2 - area->x1 + 1;
@@ -337,6 +366,108 @@ void LvglDisplay::flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint
     g_display_mgr->deselectAllDisplays();
 
     lv_display_flush_ready(disp);
+}
+
+// Runs inside lv_timer_handler() in the LVGL task, which already holds
+// lvgl_mutex_ (see task()). Do not call lock() here: the mutex is not
+// recursive. Same context as the flush callbacks, so SPI and CS use stay
+// serialised with flushing.
+void LvglDisplay::heal_timer_cb(lv_timer_t* timer) {
+    auto* self = static_cast<LvglDisplay*>(lv_timer_get_user_data(timer));
+    if (self) {
+        self->healStep();
+    }
+}
+
+void LvglDisplay::healStep() {
+    if (!g_display_mgr) {
+        return;
+    }
+
+    const size_t count = small_displays_.size();
+    const uint32_t csFailures = g_display_mgr->getCsWriteFailureCount();
+
+    if (csFailures != heal_seen_cs_failures_) {
+        // A CS write failed: a panel may have been left selected and taken in
+        // traffic meant for another one, and flushes were skipped. Heal every
+        // mini panel (continuing the round-robin, so a steady stream of
+        // failures cannot starve the later panels) and repaint the main screen.
+        ESP_LOGW(TAG, "CS write failures %lu -> %lu, scheduling display self-heal",
+                 static_cast<unsigned long>(heal_seen_cs_failures_),
+                 static_cast<unsigned long>(csFailures));
+        heal_seen_cs_failures_ = csFailures;
+        heal_pending_ = count;
+        if (main_display_) {
+            if (lv_obj_t* scr = lv_display_get_screen_active(main_display_)) {
+                lv_obj_invalidate(scr);
+            }
+        }
+    } else if (heal_pending_ == 0 &&
+               lv_tick_elaps(heal_last_sweep_tick_) >= kSmallPanelHealIntervalMs) {
+        heal_pending_ = count;
+    }
+
+    if (heal_pending_ == 0 || count == 0) {
+        return;
+    }
+
+    if (heal_next_index_ >= count) {
+        heal_next_index_ = 0;
+    }
+    healSmallDisplay(heal_next_index_);
+    heal_next_index_ = (heal_next_index_ + 1) % count;
+
+    if (--heal_pending_ == 0) {
+        heal_last_sweep_tick_ = lv_tick_get();
+    }
+}
+
+bool LvglDisplay::healSmallDisplay(const size_t index) {
+    lv_display_t* disp = getSmallDisplay(static_cast<int>(index));
+    if (!disp) {
+        return false;
+    }
+
+    // Same index lookup as flush_small_cb.
+    const int dmIndex = static_cast<int>(reinterpret_cast<intptr_t>(lv_display_get_user_data(disp)));
+    auto* small_gfx = g_display_mgr->getSmallDisplay(dmIndex);
+    int connector, position;
+    if (!small_gfx || !g_display_mgr->getSmallDisplayInfo(dmIndex, connector, position)) {
+        return false;
+    }
+
+    if (!g_display_mgr->selectSmallDisplay(connector, position)) {
+        // The failure count went up; healStep() schedules another sweep.
+        g_display_mgr->deselectAllDisplays();
+        ESP_LOGW(TAG, "Self-heal: CS select failed for small display %d", dmIndex);
+        return false;
+    }
+
+    // Re-send the register setup without SWRESET or clear: nothing visible
+    // changes on a healthy panel.
+    small_gfx->refreshPanelRegisters();
+
+    // A mini display without a Button never got an LVGL draw buffer (see
+    // acquireSmallDisplayBuffer). Invalidating it would make LVGL render with
+    // no buffer, so restore its boot state (black) directly instead.
+    const bool hasLvglBuffer = lv_display_get_buf_active(disp) != nullptr;
+    if (!hasLvglBuffer) {
+        small_gfx->fillScreen(0x0000);
+    }
+
+    g_display_mgr->deselectAllDisplays();
+
+    if (hasLvglBuffer) {
+        // Full repaint on this display's next refresh, which also overwrites
+        // any garbage in the panel's frame memory.
+        if (lv_obj_t* scr = lv_display_get_screen_active(disp)) {
+            lv_obj_invalidate(scr);
+        }
+    }
+
+    ESP_LOGD(TAG, "Self-heal: refreshed small display %d (connector %d, position %d)",
+             dmIndex, connector, position);
+    return true;
 }
 
 lv_display_t* LvglDisplay::getSmallDisplay(const int index) const {
@@ -407,8 +538,11 @@ void LvglDisplay::clearAllSmallDisplays() const {
         ESP_LOGD(TAG, "Clearing small display %zu (connector %d, position %d)", i, connector, position);
 
         // Use DisplayManager's selectSmallDisplay method
-        g_display_mgr->selectSmallDisplay(connector, position);
-        //vTaskDelay(pdMS_TO_TICKS(10)); // Small delay for CS setup
+        if (!g_display_mgr->selectSmallDisplay(connector, position)) {
+            ESP_LOGW(TAG, "CS select failed, not clearing small display %zu", i);
+            g_display_mgr->deselectAllDisplays();
+            continue;
+        }
 
         // Clear to black
         small_gfx->fillScreen(0x0000);

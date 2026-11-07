@@ -8,6 +8,15 @@
 
 namespace FreeButton {
 
+// Mini-panel self-heal (bug-016). Nothing else ever re-initialises a mini
+// panel, so one corrupted SPI/CS transfer would stay on screen indefinitely.
+// Every kSmallPanelHealIntervalMs, and soon after any chip-select write
+// failure, each mini panel gets its registers re-sent (no SWRESET, no clear)
+// and its active screen invalidated so LVGL repaints it. The timer runs every
+// kSmallPanelHealStepMs and heals at most one panel per run.
+inline constexpr uint32_t kSmallPanelHealIntervalMs = 10u * 60u * 1000u;
+inline constexpr uint32_t kSmallPanelHealStepMs = 1000u;
+
 class LvglDisplay {
 private:
     lv_display_t* main_display_;
@@ -20,6 +29,14 @@ private:
     bool initialized_;
     lv_obj_t* main_screen_;
     bool create_hello_button_pending_;
+
+    // Self-heal state. Only touched from the heal lv_timer callback, which
+    // runs in the LVGL task inside lv_timer_handler() with lvgl_mutex_ held.
+    lv_timer_t* heal_timer_;
+    size_t heal_next_index_;          // round-robin position in small_displays_
+    size_t heal_pending_;             // panels left to heal in the current sweep
+    uint32_t heal_last_sweep_tick_;   // lv_tick_get() when the last sweep ended
+    uint32_t heal_seen_cs_failures_;  // DisplayManager CS failure count last seen
 
 public:
     LvglDisplay();
@@ -57,6 +74,11 @@ private:
     static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
     static void flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
     void initializeSmallDisplays(DisplayManager& displayManager);
+
+    // Self-heal (LVGL task, lvgl_mutex_ already held: do not call lock()).
+    static void heal_timer_cb(lv_timer_t* timer);
+    void healStep();
+    bool healSmallDisplay(size_t index);
 };
 
 // Global LVGL display instance

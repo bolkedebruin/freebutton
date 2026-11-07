@@ -1,6 +1,7 @@
 #include "DisplayManager.h"
 #include "BusAwareFileSystem.h"
 #include "pins.h"
+#include <Adafruit_BusIO_Register.h>
 #include <esp_log.h>
 
 namespace FreeButton {
@@ -10,15 +11,81 @@ static auto TAG = "DisplayManager";
 // Global instance
 std::unique_ptr<DisplayManager> g_displayManager;
 
+namespace {
+
+// Every CS line the firmware drives on an MCP23008 (active low). BAR
+// connectors use LEFT and RIGHT; the LARGE connector uses MCP320_CS (the same
+// pin as LEFT). The MCP ignores OLAT bits of input pins, so driving the whole
+// mask high on every MCP is safe.
+constexpr uint8_t kAllCsMask = static_cast<uint8_t>(
+    (1u << MCP160_CS_LEFT) | (1u << MCP160_CS_RIGHT) | (1u << MCP320_CS));
+
+// A failed OLAT write is retried this many times (1 + kCsWriteRetries
+// attempts in total) before it counts as a failure.
+constexpr int kCsWriteRetries = 3;
+constexpr uint32_t kCsWriteRetryDelayMs = 1;
+
+// Log the 1st failure and then every Nth, so a dead connector cannot flood
+// the log from the flush path.
+constexpr uint32_t kCsFailureLogEvery = 64;
+
+// Adafruit_MCP23XXX keeps its Adafruit_I2CDevice in a protected member, and
+// its digitalWrite()/writeGPIO() return void. A derived class may form a
+// pointer to that protected member, and applying it to the base object is
+// well-defined C++. This gives access to Adafruit_BusIO_Register::write(),
+// which returns the TwoWire::endTransmission() result as a bool.
+struct McpI2cAccess : Adafruit_MCP23XXX {
+    static Adafruit_I2CDevice* device(Adafruit_MCP23XXX& mcp) {
+        return mcp.*(&McpI2cAccess::i2c_dev);
+    }
+};
+
+// RAII holder for csMutex_.
+class CsLock {
+public:
+    explicit CsLock(SemaphoreHandle_t m) : m_(m) {
+        if (m_) xSemaphoreTake(m_, portMAX_DELAY);
+    }
+    ~CsLock() {
+        if (m_) xSemaphoreGive(m_);
+    }
+    CsLock(const CsLock&) = delete;
+    CsLock& operator=(const CsLock&) = delete;
+
+private:
+    SemaphoreHandle_t m_;
+};
+
+uint8_t csMaskForPosition(const int position) {
+    return static_cast<uint8_t>(1u << ((position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT));
+}
+
+} // namespace
+
+DisplayManager::DisplayManager()
+    : csMutex_(xSemaphoreCreateMutex()) {
+    if (!csMutex_) {
+        ESP_LOGE(TAG, "Failed to create chip-select mutex");
+    }
+}
+
+DisplayManager::~DisplayManager() {
+    if (csMutex_) {
+        vSemaphoreDelete(csMutex_);
+    }
+}
+
 bool DisplayManager::initialize(const std::vector<std::shared_ptr<Adafruit_MCP23X08>>& mcps, int mainDisplayConnector) {
     ESP_LOGI(TAG, "Initializing displays...");
 
     mcps_ = mcps;
     mainDisplayConnector_ = mainDisplayConnector;
 
+    initChipSelectShadow();
+
     // Initialize main display if connector specified
     if (mainDisplayConnector >= 0 && mainDisplayConnector < mcps_.size() && mcps_[mainDisplayConnector]) {
-        initializeMainDisplay(mcps_[mainDisplayConnector], mainDisplayConnector);
+        initializeMainDisplay(mainDisplayConnector);
     }
 
     // Initialize small displays on remaining connectors
@@ -29,18 +96,109 @@ bool DisplayManager::initialize(const std::vector<std::shared_ptr<Adafruit_MCP23
         }
 
         // Each connector can have 2 small displays
-        initializeSmallDisplay(mcps_[connector], connector, 0); // Left display
-        initializeSmallDisplay(mcps_[connector], connector, 1); // Right display
+        initializeSmallDisplay(connector, 0); // Left display
+        initializeSmallDisplay(connector, 1); // Right display
         displayIndex += 2;
     }
 
-    ESP_LOGI(TAG, "Display initialization completed. Main: %s, Small displays: %zu",
-             mainDisplay_ ? "Yes" : "No", smallDisplays_.size());
+    ESP_LOGI(TAG, "Display initialization completed. Main: %s, Small displays: %zu, CS write failures: %lu",
+             mainDisplay_ ? "Yes" : "No", smallDisplays_.size(),
+             static_cast<unsigned long>(getCsWriteFailureCount()));
 
     return true;
 }
 
-void DisplayManager::initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23X08>& mcp, int connector) {
+void DisplayManager::initChipSelectShadow() {
+    CsLock lock(csMutex_);
+
+    // 0xFF = every CS deselected; the MCP ignores OLAT bits of input pins.
+    olatShadow_.assign(mcps_.size(), 0xFF);
+
+    for (size_t connector = 0; connector < mcps_.size(); ++connector) {
+        if (!mcps_[connector]) continue;
+        Adafruit_I2CDevice* dev = McpI2cAccess::device(*mcps_[connector]);
+        if (!dev) continue;
+
+        // Start from the real latch so non-CS output bits are preserved.
+        Adafruit_BusIO_Register olat(dev, MCP23XXX_OLAT, 1);
+        uint8_t value = 0;
+        if (olat.read(&value)) {
+            olatShadow_[connector] = value;
+        } else {
+            ESP_LOGW(TAG, "Could not read OLAT of MCP on connector %u, assuming 0xFF",
+                     static_cast<unsigned>(connector));
+        }
+    }
+}
+
+bool DisplayManager::writeOlatLocked(const size_t connector, const uint8_t value) const {
+    Adafruit_I2CDevice* dev = (connector < mcps_.size() && mcps_[connector])
+        ? McpI2cAccess::device(*mcps_[connector]) : nullptr;
+
+    if (dev) {
+        // One I2C transaction: [addr][OLAT][value], STOP.
+        Adafruit_BusIO_Register olat(dev, MCP23XXX_OLAT, 1);
+        for (int attempt = 0; attempt <= kCsWriteRetries; ++attempt) {
+            if (attempt > 0) {
+                csWriteRetries_.fetch_add(1, std::memory_order_relaxed);
+                vTaskDelay(pdMS_TO_TICKS(kCsWriteRetryDelayMs));
+            }
+            if (olat.write(value)) {
+                // Updated only on an ACKed write. Every call rewrites all CS
+                // bits, so a stale shadow cannot keep a panel selected.
+                olatShadow_[connector] = value;
+                return true;
+            }
+        }
+    }
+
+    const uint32_t failures = csWriteFailures_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (failures == 1 || failures % kCsFailureLogEvery == 0) {
+        ESP_LOGW(TAG, "CS write to MCP on connector %u failed after %d attempts (value 0x%02X); "
+                      "%lu failures, %lu retries so far",
+                 static_cast<unsigned>(connector), kCsWriteRetries + 1, value,
+                 static_cast<unsigned long>(failures),
+                 static_cast<unsigned long>(getCsWriteRetryCount()));
+    }
+    return false;
+}
+
+bool DisplayManager::applyChipSelect(const int selectConnector, const uint8_t selectMask) const {
+    CsLock lock(csMutex_);
+
+    if (olatShadow_.size() != mcps_.size()) {
+        olatShadow_.resize(mcps_.size(), 0xFF);
+    }
+
+    // Deselect every other MCP first, then select the target, so two panels
+    // are never selected together.
+    bool othersDeselected = true;
+    for (size_t connector = 0; connector < mcps_.size(); ++connector) {
+        if (!mcps_[connector] || static_cast<int>(connector) == selectConnector) continue;
+        if (!writeOlatLocked(connector, olatShadow_[connector] | kAllCsMask)) {
+            othersDeselected = false;
+        }
+    }
+
+    if (selectConnector < 0) {
+        return othersDeselected;
+    }
+    if (selectConnector >= static_cast<int>(mcps_.size()) || !mcps_[selectConnector]) {
+        return false;
+    }
+
+    const auto target = static_cast<size_t>(selectConnector);
+    const auto deselected = static_cast<uint8_t>(olatShadow_[target] | kAllCsMask);
+    if (!othersDeselected) {
+        // Another panel may still be selected: keep this MCP deselected too
+        // and report failure, so the caller sends no SPI data.
+        writeOlatLocked(target, deselected);
+        return false;
+    }
+    return writeOlatLocked(target, static_cast<uint8_t>(deselected & ~selectMask));
+}
+
+void DisplayManager::initializeMainDisplay(const int connector) {
     ESP_LOGI(TAG, "Initializing main display on connector %d", connector);
 
     // CS pin is controlled by MCP, use proper backlight pin
@@ -50,10 +208,14 @@ void DisplayManager::initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23X
     // Select main display before initialization
     deselectAllDisplays();
     vTaskDelay(pdMS_TO_TICKS(10));
-    mcp->digitalWrite(MCP320_CS, LOW);  // Select main display
+    if (!selectMainDisplay()) {
+        ESP_LOGW(TAG, "Main display CS select failed; init commands may not reach the panel");
+    }
 
-    // Initialize the display with proper timing
-    if (mainDisplay_->init()) {
+    // Stock init list at kMainPanelInitSpiHz, then kMainPanelRunSpiHz.
+    // Note: LGFX init() always returns true, and there is no MISO to read
+    // the panel back, so a failed init cannot be detected here.
+    if (mainDisplay_->initWithClockRamp()) {
         mainDisplay_->setBrightness(128);
         mainDisplay_->fillScreen(0x0000); // Black
         ESP_LOGI(TAG, "Main display initialized successfully");
@@ -63,10 +225,10 @@ void DisplayManager::initializeMainDisplay(const std::shared_ptr<Adafruit_MCP23X
     }
 
     // Deselect after initialization
-    mcp->digitalWrite(MCP320_CS, HIGH);
+    deselectAllDisplays();
 }
 
-void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23X08>& mcp, int connector, int position) {
+void DisplayManager::initializeSmallDisplay(const int connector, const int position) {
     ESP_LOGI(TAG, "Initializing small display on connector %d, position %d", connector, position);
 
     // CS pin is controlled by MCP (left or right)
@@ -74,9 +236,10 @@ void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23
     auto smallDisplay = std::make_unique<LGFX_ESP32_SPI_Small>(virtualCs, TFT_DC);
 
     // Select the display before initialization
-    deselectAllDisplays();
-    int csPin = (position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT;
-    mcp->digitalWrite(csPin, LOW);
+    if (!selectSmallDisplay(connector, position)) {
+        ESP_LOGW(TAG, "Small display CS select failed (connector %d, position %d); init may not reach the panel",
+                 connector, position);
+    }
 
     auto cfg = smallDisplay->panel()->config();
 
@@ -108,7 +271,7 @@ void DisplayManager::initializeSmallDisplay(const std::shared_ptr<Adafruit_MCP23
     }
 
     // Deselect after initialization
-    mcp->digitalWrite(csPin, HIGH);
+    deselectAllDisplays();
 }
 
 LGFX_ESP32_SPI_Small* DisplayManager::getSmallDisplay(const int index) const {
@@ -150,32 +313,32 @@ int DisplayManager::getSmallDisplayIndexByPosition(const int buttonPosition) con
     return -1;
 }
 
-void DisplayManager::selectMainDisplay() const {
-    deselectAllDisplays();
-    if (mainDisplayConnector_ >= 0 && mainDisplayConnector_ < mcps_.size() && mcps_[mainDisplayConnector_]) {
-        // Main display uses MCP320_CS pin
-        mcps_[mainDisplayConnector_]->digitalWrite(MCP320_CS, LOW);
-        ESP_LOGD(TAG, "Selected main display on connector %d", mainDisplayConnector_);
+bool DisplayManager::selectMainDisplay() const {
+    if (mainDisplayConnector_ < 0 || mainDisplayConnector_ >= static_cast<int>(mcps_.size()) ||
+        !mcps_[mainDisplayConnector_]) {
+        deselectAllDisplays();
+        return false;
     }
+    // Main display uses MCP320_CS pin
+    const bool ok = applyChipSelect(mainDisplayConnector_, static_cast<uint8_t>(1u << MCP320_CS));
+    ESP_LOGD(TAG, "Selected main display on connector %d (%s)", mainDisplayConnector_, ok ? "ok" : "FAILED");
+    return ok;
 }
 
-void DisplayManager::selectSmallDisplay(const int connector, const int position) const {
-    deselectAllDisplays();
-    if (connector >= 0 && connector < mcps_.size() && mcps_[connector]) {
-        const int csPin = (position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT;
-        mcps_[connector]->digitalWrite(csPin, LOW);
-        ESP_LOGD(TAG, "Selected small display on connector %d, position %d", connector, position);
+bool DisplayManager::selectSmallDisplay(const int connector, const int position) const {
+    if (connector < 0 || connector >= static_cast<int>(mcps_.size()) || !mcps_[connector]) {
+        deselectAllDisplays();
+        return false;
     }
+    const bool ok = applyChipSelect(connector, csMaskForPosition(position));
+    ESP_LOGD(TAG, "Selected small display on connector %d, position %d (%s)",
+             connector, position, ok ? "ok" : "FAILED");
+    return ok;
 }
 
-void DisplayManager::deselectAllDisplays() const {
-    for (const auto & mcp : mcps_) {
-        if (mcp) {
-            mcp->digitalWrite(MCP160_CS_LEFT, HIGH);
-            mcp->digitalWrite(MCP160_CS_RIGHT, HIGH);
-            mcp->digitalWrite(MCP320_CS, HIGH);  // Also deselect main display
-        }
-    }
+bool DisplayManager::deselectAllDisplays() const {
+    // One OLAT write per MCP (was three read-modify-writes per MCP).
+    return applyChipSelect(-1, 0);
 }
 
 void DisplayManager::showHelloWorld() const {
@@ -220,7 +383,6 @@ void DisplayManager::showRotationTestPattern() const {
 
         int connector = entry.connector;
         int position  = entry.position;
-        int csPin     = (position == 0) ? MCP160_CS_LEFT : MCP160_CS_RIGHT;
 
         ESP_LOGI(TAG, "Updating small display %zu (connector %d, pos %d)", i, connector, position);
 
@@ -229,8 +391,10 @@ void DisplayManager::showRotationTestPattern() const {
             continue;
         }
 
-        deselectAllDisplays();
-        mcps_[connector]->digitalWrite(csPin, LOW);
+        if (!selectSmallDisplay(connector, position)) {
+            ESP_LOGW(TAG, "CS select failed for small display %zu, skipping", i);
+            continue;
+        }
 
         int w = 160, h = 80;
         display->fillScreen(0x0000);
@@ -254,7 +418,7 @@ void DisplayManager::showRotationTestPattern() const {
         display->setCursor(w / 2 - 12, h / 2 - 8);
         display->printf("%zu", i + 1);
 
-        mcps_[connector]->digitalWrite(csPin, HIGH);
+        deselectAllDisplays();
     }
 }
 

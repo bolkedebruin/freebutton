@@ -42,7 +42,7 @@ static void modalCheckTimerCallback(lv_timer_t* timer) {
     }
 }
 
-// Create timer lazily when needed
+// Create timer lazily when needed. Caller must hold the LVGL lock.
 static void ensureTimerExists() {
     if (!modalCheckTimer) {
         modalCheckTimer = lv_timer_create(modalCheckTimerCallback, 50, nullptr);
@@ -50,14 +50,22 @@ static void ensureTimerExists() {
     }
 }
 
+// Runs in the factory-button task, not the LVGL task. Every LVGL call here,
+// and the state shared with modalCheckTimerCallback (which runs in the LVGL
+// task with the lock held), is accessed under the LVGL lock.
 void onDeviceInfoButtonEvent(ButtonEvent event) {
     ESP_LOGD(TAG, "Factory button event: %d", static_cast<int>(event));
+
+    auto& lvglDisplay = getLvglDisplay();
 
     switch (event) {
         case ButtonEvent::LONG_PRESS_START: {
             ESP_LOGI(TAG, "Long press detected - showing device info");
 
+            lvglDisplay.lock();
+
             if (isDisplaying) {
+                lvglDisplay.unlock();
                 return; // Already displaying
             }
 
@@ -65,11 +73,13 @@ void onDeviceInfoButtonEvent(ButtonEvent event) {
             auto* screen = lv_scr_act();
             if (!screen) {
                 ESP_LOGE(TAG, "LVGL screen not available");
+                lvglDisplay.unlock();
                 return;
             }
 
             // DeviceInfoCollector is stateless (sizeof == 1), so this costs one
             // byte of stack -- no reason to heap-allocate it.
+            // collectInfo() calls lv_mem_monitor(), so it stays under the lock.
             DeviceInfoCollector collector;
             DeviceInfo info = collector.collectInfo();
             std::string deviceInfoText = DeviceInfoCollector::formatDeviceInfo(info);
@@ -83,13 +93,17 @@ void onDeviceInfoButtonEvent(ButtonEvent event) {
             // Ensure timer exists before setting flag
             ensureTimerExists();
             shouldShowModal = true;
+
+            lvglDisplay.unlock();
             break;
         }
 
         case ButtonEvent::LONG_PRESS_END:
             ESP_LOGI(TAG, "Long press ended - hiding device info");
+            lvglDisplay.lock();
             ensureTimerExists();
             shouldHideModal = true;
+            lvglDisplay.unlock();
             break;
 
         case ButtonEvent::SHORT_PRESS:
@@ -128,10 +142,14 @@ void stopDeviceInfoButton() {
     ESP_LOGI(TAG, "Stopping device info button");
     g_factoryButton.stop();
 
+    // Must not be called from the LVGL task (the LVGL mutex is not recursive).
+    auto& lvglDisplay = getLvglDisplay();
+    lvglDisplay.lock();
     if (isDisplaying) {
         hide_device_info_modal();
         isDisplaying = false;
     }
+    lvglDisplay.unlock();
 }
 
 } // namespace FreeButton

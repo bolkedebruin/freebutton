@@ -204,10 +204,19 @@ void Button::createButton() {
         return;
     }
 
-    // Acquire buffer for the small display
+    // Lock first: everything below is LVGL state the LVGL task also uses.
+    // lv_display_set_default() is global and lv_scr_act() in the LVGL task
+    // (e.g. the device info modal) reads it, so it must only change, and be
+    // restored, while the lock is held.
+    lvglDisplay.lock();
+
+    // Acquire buffer for the small display. It waits at most 100 ms for the
+    // shared-buffer mutex, whose holders never wait for the LVGL lock, so
+    // holding the LVGL lock here cannot deadlock.
     if (!lvglDisplay.acquireSmallDisplayBuffer(smallDisplayIndex)) {
         ESP_LOGW(TAG, "Failed to acquire buffer for small display %d, Button position %u",
                  smallDisplayIndex, position_);
+        lvglDisplay.unlock();
         return;
     }
 
@@ -215,25 +224,29 @@ void Button::createButton() {
     lv_display_t* original_default_disp = lv_display_get_default();
     lv_display_set_default(smallDisplay);
 
+    // Every exit after this point must release the buffer, restore the
+    // default display and unlock, in that order.
+    auto finish = [&]() {
+        lvglDisplay.releaseSmallDisplayBuffer(smallDisplayIndex);
+        lv_display_set_default(original_default_disp);
+        lvglDisplay.unlock();
+    };
+
     // Get the screen from the small display
     lv_obj_t* parent = lv_display_get_screen_active(smallDisplay);
 
     if (!parent) {
         ESP_LOGE(TAG, "Screen not available for Button position %u on small display %d", position_, smallDisplayIndex);
-        lv_display_set_default(original_default_disp);
-        lvglDisplay.releaseSmallDisplayBuffer(smallDisplayIndex);
+        finish();
         return;
     }
-
-    // Lock screen access for thread safety
-    lvglDisplay.lock();
 
     // If button already exists, just redraw it with new configuration
     if (button != nullptr) {
         ESP_LOGI(TAG, "Redrawing existing button for Button %lu", id);
         ui_button_set_title(button, topLabel.c_str());
         ui_button_set_text(button, label.c_str());
-        lvglDisplay.unlock();
+        finish();
         return;
     }
 
@@ -248,9 +261,7 @@ void Button::createButton() {
     button = ui_button_create(parent);
     if (!button) {
         ESP_LOGE(TAG, "Failed to create UI button for Button position %u", position_);
-        lvglDisplay.unlock();
-        lvglDisplay.releaseSmallDisplayBuffer(smallDisplayIndex);
-        lv_display_set_default(original_default_disp);
+        finish();
         return;
     }
 
@@ -264,13 +275,7 @@ void Button::createButton() {
     ESP_LOGI(TAG, "Created UI button for position %u (Button id %lu) on small display %d",
              position_, id, smallDisplayIndex);
 
-    lvglDisplay.unlock();
-
-    // Release the buffer after setting up the UI
-    lvglDisplay.releaseSmallDisplayBuffer(smallDisplayIndex);
-
-    // Restore original default display
-    lv_display_set_default(original_default_disp);
+    finish();
 }
 
 void Button::destroyButton() {
