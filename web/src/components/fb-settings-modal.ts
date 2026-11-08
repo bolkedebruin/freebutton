@@ -2,6 +2,14 @@ import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { on } from '../js/app-state.js';
 import { XIcon } from '../icons/index.js';
+import {
+  clearCredentials, deviceOrigin, getCredentials, normalizeCredentials, parseFbcred, setCredentials,
+  validateCredentials,
+} from '../js/auth.js';
+import { workspace } from '../js/workspace.js';
+
+const INPUT_CLASS = 'w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-text-default font-mono outline-none focus:border-purple-80';
+const BUTTON_CLASS = 'px-3 py-1.5 rounded-md text-xs transition-colors disabled:opacity-50';
 
 @customElement('fb-settings-modal')
 export class FbSettingsModal extends LitElement {
@@ -11,13 +19,26 @@ export class FbSettingsModal extends LitElement {
   @state() private _mcpEnabled = false;
   @state() private _rippleEnabled = true;
 
+  // Device access (SigV4 credentials, src/js/auth.ts)
+  @state() private _akid = '';
+  @state() private _secret = '';
+  @state() private _showSecret = false;
+  @state() private _fbcred = '';
+  /** Why Settings opened by itself (the device refused a request). */
+  @state() private _authAlert = '';
+  @state() private _authStatus: { text: string; error: boolean } | null = null;
+
   private _unsubs: Array<() => void> = [];
 
   connectedCallback() {
     super.connectedCallback();
     this._rippleEnabled = document.body.style.animation !== 'none';
     this._unsubs.push(
-      on('open-settings', () => { this._open = true; })
+      on('open-settings', () => { this._openSettings(); }),
+      on('auth-required', (e) => {
+        this._openSettings();
+        this._authAlert = e.detail.message || 'The device requires access credentials.';
+      }),
     );
   }
 
@@ -27,8 +48,142 @@ export class FbSettingsModal extends LitElement {
     this._unsubs = [];
   }
 
+  /** Origin of the device the IDE talks to (same origin unless the REPL URL points elsewhere). */
+  private get _deviceOrigin(): string {
+    return deviceOrigin(workspace.deviceBase);
+  }
+
+  private _openSettings() {
+    if (!this._open) {
+      const stored = getCredentials(this._deviceOrigin);
+      this._akid = stored?.accessKeyId ?? '';
+      this._secret = stored?.secretAccessKey ?? '';
+      this._showSecret = false;
+      this._fbcred = '';
+      this._authStatus = null;
+      this._authAlert = '';
+    }
+    this._open = true;
+  }
+
   private _close() {
     this._open = false;
+    this._authAlert = '';
+  }
+
+  private _onFbcredInput(value: string) {
+    this._fbcred = value;
+    if (!value.trim()) { this._authStatus = null; return; }
+    const creds = parseFbcred(value);
+    if (creds) {
+      this._akid = creds.accessKeyId;
+      this._secret = creds.secretAccessKey;
+      this._authStatus = { text: 'Read the access key id and secret. Save to use them.', error: false };
+    } else {
+      this._authStatus = { text: 'Not a valid FBCRED:<access key id>:<secret> string.', error: true };
+    }
+  }
+
+  private _onAkidInput(value: string) {
+    // Pasting the whole FBCRED string into the first field works too.
+    if (/^\s*FBCRED:/i.test(value)) { this._onFbcredInput(value); return; }
+    this._akid = value;
+  }
+
+  private _saveCredentials() {
+    const creds = normalizeCredentials(this._akid, this._secret);
+    const error = validateCredentials(creds);
+    if (error) { this._authStatus = { text: error, error: true }; return; }
+    try {
+      setCredentials(creds, this._deviceOrigin);
+    } catch (err) {
+      this._authStatus = { text: err instanceof Error ? err.message : String(err), error: true };
+      return;
+    }
+    this._akid = creds.accessKeyId;
+    this._secret = creds.secretAccessKey;
+    this._fbcred = '';
+    this._authAlert = '';
+    this._authStatus = { text: 'Saved. Requests to the device are now signed.', error: false };
+  }
+
+  private _clearCredentials() {
+    clearCredentials(this._deviceOrigin);
+    this._akid = '';
+    this._secret = '';
+    this._fbcred = '';
+    this._authStatus = { text: 'Credentials removed from this browser.', error: false };
+  }
+
+  private _renderDeviceAccess() {
+    const origin = this._deviceOrigin;
+    const stored = getCredentials(origin);
+    return html`
+      <section class="flex flex-col gap-2" data-testid="device-access">
+        <div>
+          <div class="text-sm text-text-default">Device access</div>
+          <div class="text-xs text-gray-200 mt-0.5" data-testid="device-access-state">
+            ${stored ? html`Signing requests to ${origin} as <span class="font-mono">${stored.accessKeyId}</span>`
+                     : html`No credentials stored for ${origin}`}
+          </div>
+        </div>
+
+        ${this._authAlert ? html`
+          <div class="text-xs leading-snug rounded-md px-2 py-1.5 bg-status-red/10 text-status-red" role="alert"
+            data-testid="device-access-alert">${this._authAlert}</div>
+        ` : ''}
+
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-gray-100">Paste FBCRED (from the QR code)</span>
+          <input type="text" data-testid="fbcred-input" class=${INPUT_CLASS} autocomplete="off" spellcheck="false"
+            placeholder="FBCRED:FB...:..."
+            .value=${this._fbcred}
+            @input=${(e: Event) => this._onFbcredInput((e.target as HTMLInputElement).value)} />
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-gray-100">Access key id</span>
+          <input type="text" data-testid="akid-input" class=${INPUT_CLASS} autocomplete="off" spellcheck="false"
+            placeholder="FB + 18 characters"
+            .value=${this._akid}
+            @input=${(e: Event) => this._onAkidInput((e.target as HTMLInputElement).value)} />
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-gray-100">Secret</span>
+          <div class="flex gap-2">
+            <input type=${this._showSecret ? 'text' : 'password'} data-testid="secret-input" class=${INPUT_CLASS}
+              autocomplete="off" spellcheck="false" placeholder="40 characters"
+              .value=${this._secret}
+              @input=${(e: Event) => { this._secret = (e.target as HTMLInputElement).value; }} />
+            <button type="button" data-testid="secret-toggle"
+              class="${BUTTON_CLASS} shrink-0 text-gray-100 bg-white/5 hover:bg-white/10"
+              @click=${() => { this._showSecret = !this._showSecret; }}>${this._showSecret ? 'Hide' : 'Show'}</button>
+          </div>
+        </label>
+
+        <div class="flex items-center gap-2">
+          <button type="button" data-testid="credentials-save"
+            class="${BUTTON_CLASS} bg-purple-90 text-white hover:bg-purple-80"
+            ?disabled=${!this._akid.trim() || !this._secret.trim()}
+            @click=${() => this._saveCredentials()}>Save</button>
+          <button type="button" data-testid="credentials-clear"
+            class="${BUTTON_CLASS} text-gray-100 hover:bg-white/10"
+            ?disabled=${!stored && !this._akid && !this._secret}
+            @click=${() => this._clearCredentials()}>Clear</button>
+        </div>
+
+        ${this._authStatus ? html`
+          <div class="text-xs ${this._authStatus.error ? 'text-status-red' : 'text-gray-100'}"
+            data-testid="device-access-status">${this._authStatus.text}</div>
+        ` : ''}
+
+        <div class="text-[11px] leading-snug text-gray-200">
+          The device shows its access key id and secret on its display, as text and as a QR code.
+          They are stored in this browser only. The connection to the device is not encrypted:
+          signing proves that the requests come from you, but others on the network can read the traffic.
+        </div>
+      </section>
+      <div class="h-px bg-border-default"></div>
+    `;
   }
 
   private _onBackdropClick(e: MouseEvent) {
@@ -52,7 +207,7 @@ export class FbSettingsModal extends LitElement {
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
         @click=${this._onBackdropClick}
       >
-        <div class="w-[420px] rounded-xl border border-border-default bg-bg-primary shadow-2xl">
+        <div class="w-[420px] max-w-[calc(100vw-32px)] rounded-xl border border-border-default bg-bg-primary shadow-2xl">
           <!-- Header -->
           <div class="flex items-center justify-between px-5 py-4 border-b border-border-default">
             <h2 class="text-sm font-semibold text-text-default">Settings</h2>
@@ -63,7 +218,9 @@ export class FbSettingsModal extends LitElement {
           </div>
 
           <!-- Body -->
-          <div class="px-5 py-4 flex flex-col gap-4">
+          <div class="px-5 py-4 flex flex-col gap-4 max-h-[80vh] overflow-y-auto">
+            ${this._renderDeviceAccess()}
+
             <!-- MCP Server -->
             <label class="flex items-center justify-between cursor-pointer group">
               <div>

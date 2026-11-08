@@ -3,6 +3,7 @@
  */
 import { on, emit } from './app-state';
 import { getWebSocket } from './websocket';
+import { deviceOrigin, getCredentials } from './auth';
 
 let initialized = false;
 
@@ -27,9 +28,24 @@ export function initReplBridge(): void {
     emit('console-line', { text: `Connected to ${ws.connectionBaseUrl}`, type: 'info' });
   });
 
+  // A refused WebSocket upgrade (403) is indistinguishable from an offline
+  // device in the browser; hint once at credentials when none are stored.
+  let credentialHintShown = false;
   ws.onDisconnect(() => {
     emit('connection-change', { connected: false, url: '' });
     emit('console-line', { text: 'Disconnected from device', type: 'info' });
+    if (!ws.everOpened && !credentialHintShown && !getCredentials(ws.connectionBaseUrl)) {
+      credentialHintShown = true;
+      emit('console-line', {
+        text: 'If the device requires access credentials, enter them in Settings → Device access.',
+        type: 'info',
+      });
+    }
+  });
+
+  // New credentials: the next upgrade must carry a signature made with them.
+  on('device-credentials-change', (e) => {
+    if (e.detail.origin === deviceOrigin(ws.connectionBaseUrl)) ws.reconnect();
   });
 
   // Handle connection requests from toolbar

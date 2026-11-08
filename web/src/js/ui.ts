@@ -6,6 +6,7 @@
 import { getCode, clearEditor as clearEditorContent, loadExample } from './editor';
 import { compile, validate } from './compiler';
 import { validateCode, formatValidationErrors } from './validator';
+import { signedFetch } from './auth';
 
 type StatusType = 'info' | 'success' | 'error';
 
@@ -270,7 +271,7 @@ export async function compileAndUpload(): Promise<void> {
         const blob = new Blob([compiledBytecode as BlobPart], { type: 'application/octet-stream' });
         formData.append('file', blob, 'script.jsc');
 
-        const uploadResponse = await fetch(`${deviceUrl}/api/bytecode/upload`, {
+        const uploadResponse = await signedFetch(`${deviceUrl}/api/bytecode/upload`, {
             method: 'POST',
             body: formData
         });

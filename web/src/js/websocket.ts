@@ -2,6 +2,7 @@
  * WebSocket REPL Client
  * Handles WebSocket connection to the ESP32 for JavaScript REPL
  */
+import { getCredentials, presignUrl } from './auth';
 
 export interface WSMessage {
     type: string;
@@ -62,6 +63,9 @@ export class ReplWebSocket {
     private pendingRequests: Map<string, PendingRequest> = new Map();
     private _isConnected: boolean = false;
     private _wantConnection: boolean = false;
+    /** Bumped by connect/disconnect: a presign that finishes late is dropped. */
+    private generation: number = 0;
+    private _everOpened: boolean = false;
 
     /**
      * Connect to the device WebSocket endpoint.
@@ -73,16 +77,48 @@ export class ReplWebSocket {
         this.disconnect();
         this.deviceUrl = deviceUrl;
         this._wantConnection = true;
+        const generation = ++this.generation;
 
         // Derive the ws(s):// endpoint (same origin when deviceUrl is empty).
         const wsUrl = resolveReplWsUrl(deviceUrl);
 
+        // The device authenticates the upgrade with a presigned query string
+        // (browsers cannot set headers on a WebSocket). Signed right before
+        // each (re)connect, since the URL expires.
+        if (!getCredentials(wsUrl)) {
+            this.open(wsUrl, wsUrl);
+            return;
+        }
+        presignUrl(wsUrl).then(
+            (signedUrl) => {
+                if (generation === this.generation && this._wantConnection) this.open(signedUrl, wsUrl);
+            },
+            (err: unknown) => {
+                console.error('Failed to sign the REPL WebSocket URL:', err);
+                if (generation === this.generation && this._wantConnection) this.open(wsUrl, wsUrl);
+            },
+        );
+    }
+
+    /** Reconnect to the same device (e.g. after new credentials were saved). */
+    reconnect(): void {
+        if (this._wantConnection) this.connect(this.deviceUrl);
+    }
+
+    /** True when a connection was made at least once (vs. refused from the start). */
+    get everOpened(): boolean {
+        return this._everOpened;
+    }
+
+    /** @param displayUrl logged instead of the signed URL */
+    private open(url: string, displayUrl: string): void {
         try {
-            this.ws = new WebSocket(wsUrl);
+            this.ws = new WebSocket(url);
 
             this.ws.onopen = (): void => {
-                console.log('REPL WebSocket connected to', wsUrl);
+                console.log('REPL WebSocket connected to', displayUrl);
                 this._isConnected = true;
+                this._everOpened = true;
                 this.connectHandlers.forEach(h => h());
             };
 
@@ -123,6 +159,7 @@ export class ReplWebSocket {
         this._isConnected = false;
         this._wantConnection = false;
         this.deviceUrl = '';
+        this.generation++;
 
         // Reject all pending requests
         this.pendingRequests.forEach((request) => {

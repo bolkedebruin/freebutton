@@ -6,6 +6,7 @@ import { compile, compileForDevice } from '../js/compiler.js';
 import { validateCode, formatValidationErrors } from '../js/validator.js';
 import { workspace } from '../js/workspace.js';
 import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
+import { signedFetch } from '../js/auth.js';
 
 @customElement('fb-app')
 export class FbApp extends LitElement {
@@ -26,6 +27,8 @@ export class FbApp extends LitElement {
         getCode,
         open: (content, kind, opts) => openDocument(content, kind, opts),
       },
+      // POST /api/reboot is protected: sign it (SigV4, src/js/auth.ts).
+      fetchImpl: signedFetch,
     });
   }
 
@@ -158,11 +161,16 @@ export class FbApp extends LitElement {
       const blob = new Blob([bytecode as BlobPart], { type: 'application/octet-stream' });
       formData.append('file', blob, MAIN_BYTECODE_NAME);
 
-      const response = await fetch(base + '/api/bytecode/upload', {
+      // Multipart body: signed with x-amz-content-sha256 UNSIGNED-PAYLOAD.
+      const response = await signedFetch(base + '/api/bytecode/upload', {
         method: 'POST',
         body: formData
       });
 
+      if (response.status === 403 && response.headers.get('x-freebutton-auth') === 'required') {
+        // signedFetch already opened Settings → Device access.
+        throw new Error('Upload refused: the device requires valid access credentials (Settings → Device access)');
+      }
       if (!response.ok) {
         throw new Error('Upload failed: ' + response.status + ' ' + response.statusText);
       }

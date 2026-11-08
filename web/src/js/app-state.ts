@@ -170,6 +170,13 @@ declare global {
     'load-example': CustomEvent<{ name: string }>;
     'nav-select': CustomEvent<{ item: string }>;
     'open-settings': CustomEvent<void>;
+
+    // Device access (SigV4, src/js/auth.ts)
+    // The device refused a request (403 + x-freebutton-auth: required);
+    // Settings opens at "Device access" with the message.
+    'auth-required': CustomEvent<{ origin: string; code: string; message: string }>;
+    // Credentials for a device origin were saved or cleared.
+    'device-credentials-change': CustomEvent<{ origin: string; configured: boolean }>;
   }
 }
 

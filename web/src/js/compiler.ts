@@ -4,6 +4,7 @@
  */
 
 import type { MQuickJSCompiler, CompileOptions, CompilerVersion } from './types';
+import { signedFetch } from './auth';
 
 let compilerInstance: MQuickJSCompiler | null = null;
 let initializationPromise: Promise<void> | null = null;
@@ -139,7 +140,7 @@ export async function getDeviceVirtualAddress(deviceUrl: string = ''): Promise<{
     virtual_addr: string;
     free_space: number;
 }> {
-    const response = await fetch(`${deviceUrl}/api/bytecode/next_address`);
+    const response = await signedFetch(`${deviceUrl}/api/bytecode/next_address`);
 
     if (!response.ok) {
         throw new Error(`Failed to get virtual address: ${response.statusText}`);
