@@ -107,6 +107,12 @@ export interface WorkspaceSnapshot {
   dirty: boolean;
   /** The open file does not exist in storage yet (e.g. template main.js). */
   isNew: boolean;
+  /**
+   * Listings of the device's read-only buckets (examples, web, fonts), keyed
+   * by bucket. A bucket is absent until something asked for it
+   * (Workspace.loadReadOnly); its objects are never downloaded.
+   */
+  readOnly?: Partial<Record<'examples' | 'web' | 'fonts', WorkspaceFile[]>>;
 }
 
 // Typed custom event map

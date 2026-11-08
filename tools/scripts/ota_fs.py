@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Over-the-air update of a device's LittleFS image, keeping the user's files.
 
-The filesystem holds both the web IDE bundle (www/), the fonts, and the
-user's files (config.json, scripts/, the bytecode registry index
+The filesystem holds both the web IDE bundle (www/), the fonts, the examples
+and the user's files (config.json, scripts/, the bytecode registry index
 js_bytecode_meta.json, ...). A plain `uploadfs` or filesystem upload writes a
 whole new image and so wipes the user's files. This tool:
 
-  1. downloads every object outside www/ and fonts/ from the device's S3 API
-     (GET /fs?list-type=2, GET /fs/<key>) into
-     devices/<deviceName>/backup/fs-<timestamp>/ (git-ignored),
+  1. downloads every object of the device's S3 bucket `app` (the user's
+     files: the LittleFS root without www/, fonts/ and scripts/examples/,
+     which are the read-only buckets web, fonts and examples and come from
+     the build) with GET /app?list-type=2, GET /app/<key> into
+     devices/<deviceName>/backup/fs-<timestamp>/ (git-ignored). An `app` key
+     is the LittleFS path without the leading slash;
   2. assembles the image staging dir like the build does
      (tools/scripts/assemble_littlefs.py: data/ + web/dist/ gzipped), then
      puts the device's files on top (they win, except config.json when
@@ -47,7 +50,7 @@ STAGING = os.path.join(PROJECT, ".pio", "staging_data")
 PARTITIONS = os.path.join(PROJECT, "tools", "partition_tables", "button_v1.csv")
 MKLITTLEFS = os.path.expanduser("~/.platformio/packages/tool-mklittlefs/mklittlefs")
 S3NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
-SYSTEM_PREFIXES = ("www/", "fonts/")
+BUCKET = "app"  # the user's files; key = LittleFS path without the leading "/"
 
 
 def http(method, url, data=None, headers=None, timeout=60):
@@ -62,12 +65,10 @@ def list_user_keys(base):
         q = {"list-type": "2"}
         if token:
             q["continuation-token"] = token
-        _, body = http("GET", f"{base}/fs?{urllib.parse.urlencode(q)}")
+        _, body = http("GET", f"{base}/{BUCKET}?{urllib.parse.urlencode(q)}")
         root = ET.fromstring(body)
         for c in root.iter(f"{S3NS}Contents"):
-            key = c.find(f"{S3NS}Key").text
-            if not key.startswith(SYSTEM_PREFIXES):
-                keys.append(key)
+            keys.append(c.find(f"{S3NS}Key").text)
         if root.findtext(f"{S3NS}IsTruncated") != "true":
             return keys
         token = root.findtext(f"{S3NS}NextContinuationToken")
@@ -118,11 +119,11 @@ def main():
     try:
         keys = list_user_keys(base)
     except urllib.error.HTTPError as e:
-        sys.exit(f"the device has no S3 storage API ({e.code}); update its firmware first")
+        sys.exit(f"the device has no S3 bucket '{BUCKET}' ({e.code}); update its firmware first")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     backup = os.path.join(PROJECT, "devices", name, "backup", f"fs-{stamp}")
     for key in keys:
-        _, body = http("GET", f"{base}/fs/" + "/".join(urllib.parse.quote(s) for s in key.split("/")))
+        _, body = http("GET", f"{base}/{BUCKET}/" + "/".join(urllib.parse.quote(s) for s in key.split("/")))
         dst = os.path.join(backup, key)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(dst, "wb") as f:

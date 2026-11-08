@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  normalizeKey, fileKind, isSystemKey, isEditableKey, canDeleteKey, validateKey, validateJson,
+  normalizeKey, fileKind, isSystemKey, otherBucketOf, isEditableKey, canDeleteKey, validateKey, validateJson,
   validateBody, validateConfigShape, resolveNewFileKey, initialContentFor, lineColumnAt, findJsonErrorOffset,
   MAX_BODY_BYTES, CONFIG_KEY, MAIN_SCRIPT_KEY,
 } from '../fs-rules';
@@ -19,10 +19,17 @@ describe('path rules', () => {
     expect(fileKind('Makefile')).toBe('other');
   });
 
-  it('treats www/ and fonts/ as system (read-only)', () => {
+  it('treats the read-only buckets\' directories as not editable', () => {
     expect(isSystemKey('www/index.html.gz')).toBe(true);
     expect(isSystemKey('/fonts/a.json')).toBe(true);
+    expect(isSystemKey('scripts/examples/button.js')).toBe(true);
     expect(isSystemKey('wwwx/a.js')).toBe(false);
+    expect(isSystemKey('scripts/examplesx.js')).toBe(false);
+    expect(otherBucketOf('www/index.html.gz')).toBe('web');
+    expect(otherBucketOf('fonts/a.bin')).toBe('fonts');
+    expect(otherBucketOf('scripts/examples/a.js')).toBe('examples');
+    expect(otherBucketOf('scripts/main.js')).toBeNull();
+    expect(isEditableKey('scripts/examples/a.js')).toBe(false);
     expect(isEditableKey('www/app.js')).toBe(false);
     expect(isEditableKey('fonts/x.txt')).toBe(false);
   });
@@ -48,6 +55,7 @@ describe('path rules', () => {
     expect(validateKey('/config.json')).toMatch(/must not start/);
     expect(validateKey('www/index.js')).toMatch(/read-only/);
     expect(validateKey('fonts/a.txt')).toMatch(/read-only/);
+    expect(validateKey('scripts/examples/x.js')).toMatch(/read-only \(device bucket "examples"\)/);
     expect(validateKey('a.png')).toMatch(/Only \.js/);
     expect(validateKey('scripts/../x.js')).toMatch(/relative/);
     expect(validateKey('scripts//x.js')).toMatch(/empty/);

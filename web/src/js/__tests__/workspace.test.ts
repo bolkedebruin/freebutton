@@ -13,16 +13,30 @@ function sdkError(name: string, status: number) {
   return err;
 }
 
-/** In-memory S3 "device" behind the SDK wrapper. */
-function fakeDevice(initial: Record<string, string>) {
+/**
+ * In-memory S3 "device" behind the SDK wrapper: `initial` is bucket `app`,
+ * `readOnly` the other buckets (listing only). Calls on another bucket than
+ * `app` are logged with the bucket name ("ListObjectsV2 web").
+ */
+function fakeDevice(initial: Record<string, string>, readOnly: Record<string, Record<string, string>> = {}) {
   const files = new Map(Object.entries(initial));
   const calls: string[] = [];
   const bases: string[] = [];
   const client: S3Like = {
     async send(command: unknown) {
       const name = (command as object).constructor.name.replace('Command', '');
-      const input = (command as { input: { Key?: string; Body?: string } }).input;
-      calls.push(`${name}${input.Key ? ' ' + input.Key : ''}`);
+      const input = (command as { input: { Bucket?: string; Key?: string; Body?: string } }).input;
+      const bucket = input.Bucket ?? '';
+      calls.push(`${name}${bucket !== 'app' ? ' ' + bucket : ''}${input.Key ? ' ' + input.Key : ''}`);
+      if (bucket !== 'app') {
+        const other = readOnly[bucket];
+        if (!other) throw sdkError('NoSuchBucket', 404);
+        if (name !== 'ListObjectsV2') throw new Error(`unexpected ${name} on ${bucket}`);
+        return {
+          KeyCount: Object.keys(other).length, IsTruncated: false,
+          Contents: Object.entries(other).map(([Key, v]) => ({ Key, Size: v.length })),
+        };
+      }
       switch (name) {
         case 'ListObjectsV2':
           return {
@@ -183,13 +197,47 @@ describe('workspace on a device', () => {
     expect(ed.content).toBe('changed');
   });
 
-  it('refuses to open system files and to delete config.json', async () => {
-    const dev = fakeDevice({ 'config.json': CONFIG, 'www/index.html.gz': 'x' });
+  it('refuses to open other buckets\' paths and to delete config.json', async () => {
+    const dev = fakeDevice({ 'config.json': CONFIG });
     await start();
     expect(await ws.open('www/index.html.gz')).toBe(false);
+    expect(await ws.open('scripts/examples/button.js')).toBe(false);
     expect(await ws.remove('config.json')).toBe(false);
-    expect(dev.calls.some(c => c.includes('www/'))).toBe(false);
+    expect(dev.calls.some(c => c.includes('www/') || c.includes('examples'))).toBe(false);
     expect(dev.calls).not.toContain('DeleteObject config.json');
+  });
+
+  it('lists read-only buckets only when asked, once, and again on refresh', async () => {
+    const dev = fakeDevice({ 'config.json': CONFIG }, {
+      examples: { 'button.js': '// b', 'blink.js': '// bl' },
+      web: { 'index.html.gz': 'xxxx' },
+      fonts: { 'mnt_medium_14.bin': 'ff' },
+    });
+    await start();
+    expect(dev.calls.some(c => / (examples|web|fonts)/.test(c))).toBe(false);
+    expect(ws.snapshot().readOnly).toEqual({});
+
+    await ws.loadReadOnly(['examples']);
+    expect(ws.snapshot().readOnly?.examples?.map(f => f.key)).toEqual(['blink.js', 'button.js']);
+    await ws.loadReadOnly(['examples', 'web', 'fonts']);
+    expect(dev.calls.filter(c => c.startsWith('ListObjectsV2 '))).toEqual([
+      'ListObjectsV2 examples', 'ListObjectsV2 web', 'ListObjectsV2 fonts',
+    ]);
+    expect(ws.snapshot().readOnly?.web).toEqual([{ key: 'index.html.gz', size: 4 }]);
+    // Never downloaded.
+    expect(dev.calls.some(c => c.startsWith('GetObject ') && / (examples|web|fonts) /.test(c))).toBe(false);
+
+    dev.calls.length = 0;
+    await ws.refresh();
+    expect(dev.calls).toEqual(['ListObjectsV2', 'ListObjectsV2 examples', 'ListObjectsV2 web', 'ListObjectsV2 fonts']);
+  });
+
+  it('explains a firmware without the app bucket', async () => {
+    const client: S3Like = { send: async () => { throw sdkError('NoSuchBucket', 404); } };
+    _setClientFactory(() => client);
+    await start();
+    expect(ws.snapshot().mode).toBe('device');
+    expect(ws.snapshot().message).toMatch(/no "app" storage bucket/);
   });
 
   it('creates a file in scripts/ (HEAD first, never clobbering) and opens it', async () => {

@@ -1,8 +1,9 @@
 //
 // S3Logic - the pure parts of the minimal S3-compatible file API (S3Server):
-// key validation, the aws-chunked body decoder, XML/URL escaping written on
-// the fly into a sink, ETag / date formatting and the ListObjects roll-up
-// rules for the "/" delimiter.
+// the bucket table (bucket -> LittleFS directory), URL -> bucket/key parsing,
+// key validation and key -> path mapping, the aws-chunked body decoder,
+// XML/URL escaping written on the fly into a sink, ETag / date formatting and
+// the ListObjects roll-up rules for the "/" delimiter.
 //
 // No Arduino / ESP headers and no heap: every helper writes into a sink with
 // a Put(char) member (WindowOutputStream, or a test string) or into a caller
@@ -23,8 +24,11 @@ namespace s3 {
 constexpr size_t kNameMax = 64;
 // Longest key a client may write: "/" + key fits in 64 bytes.
 constexpr size_t kWriteKeyMax = 63;
-// Longest key the listing / GetObject handle (existing files, e.g. under www/).
+// Longest key (relative to its bucket's directory) the listing / GetObject
+// handle (existing files, e.g. in bucket web).
 constexpr size_t kReadKeyMax = 96;
+// Longest bucket directory ("scripts/examples").
+constexpr size_t kDirMax = 16;
 // Largest object a PutObject accepts (decoded size) = MAX_JS_SOURCE_SIZE.
 constexpr size_t kMaxObjectSize = 64 * 1024;
 constexpr const char* kTmpSuffix = ".tmp";
@@ -36,8 +40,10 @@ constexpr size_t kTmpSuffixLen = 4;
 
 enum class KeyCheck : uint8_t {
     Ok,
-    Invalid,    // 400 InvalidArgument / KeyTooLong
-    Forbidden,  // 403 AccessDenied
+    Invalid,      // 400 InvalidArgument / KeyTooLong
+    Forbidden,    // 403 AccessDenied (protected path)
+    ReadOnly,     // 403 AccessDenied (read-only bucket)
+    OtherBucket,  // 400 InvalidArgument (the key lies in another bucket's directory)
 };
 
 inline bool startsWith(const char* s, size_t len, const char* prefix) {
@@ -48,6 +54,139 @@ inline bool startsWith(const char* s, size_t len, const char* prefix) {
 inline bool endsWith(const char* s, size_t len, const char* suffix) {
     const size_t slen = strlen(suffix);
     return len >= slen && memcmp(s + len - slen, suffix, slen) == 0;
+}
+
+// ---------------------------------------------------------------------------
+// Buckets
+// ---------------------------------------------------------------------------
+//
+// One bucket per kind of content, each a directory on the LittleFS partition
+// (later each may move to its own partition without changing the API).
+// Object keys are relative to the bucket's directory. A bucket's directory
+// tree excludes the directories of the other buckets below it, so every
+// object is reachable through exactly one bucket: in `app` (the root) the
+// subtrees www/, fonts/ and scripts/examples/ are not listed, not readable
+// (404) and not writable (400).
+
+constexpr size_t cLen(const char* s) {
+    size_t n = 0;
+    while (s[n]) ++n;
+    return n;
+}
+
+struct Bucket {
+    const char* name;
+    const char* dir;  // relative to the mount point, no leading/trailing '/'; "" = root
+    uint8_t nameLen;
+    uint8_t dirLen;
+    bool writable;
+    // "/<name>/..." is also a URL of the web IDE (serveStatic from /www):
+    // only requests from S3 clients go to the bucket.
+    bool sharesStaticPath;
+
+    constexpr Bucket(const char* n, const char* d, bool w, bool s)
+        : name(n), dir(d), nameLen(static_cast<uint8_t>(cLen(n))), dirLen(static_cast<uint8_t>(cLen(d))),
+          writable(w), sharesStaticPath(s) {}
+};
+
+inline constexpr Bucket kBuckets[] = {
+    {"app", "", true, false},                         // user data: config.json, scripts/, bytecode index
+    {"web", "www", false, false},                     // the IDE bundle (gzipped)
+    {"examples", "scripts/examples", false, false},   // example scripts
+    {"fonts", "fonts", false, true},                  // device fonts; the IDE loads /fonts/*.woff2 itself
+};
+inline constexpr size_t kBucketCount = sizeof(kBuckets) / sizeof(kBuckets[0]);
+
+constexpr bool bucketTableValid() {
+    for (const Bucket& b : kBuckets) {
+        if (b.dirLen > kDirMax || b.nameLen == 0) return false;
+        if (b.dirLen && (b.dir[0] == '/' || b.dir[b.dirLen - 1] == '/')) return false;
+    }
+    return true;
+}
+static_assert(bucketTableValid(), "bucket directories: at most kDirMax, no leading/trailing '/'");
+
+// ListAllMyBucketsResult for kBuckets (the native tests check they match).
+inline constexpr char kListBucketsXml[] =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+    "<Owner><ID>freebutton</ID><DisplayName>freebutton</DisplayName></Owner><Buckets>"
+    "<Bucket><Name>app</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>"
+    "<Bucket><Name>web</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>"
+    "<Bucket><Name>examples</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>"
+    "<Bucket><Name>fonts</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>"
+    "</Buckets></ListAllMyBucketsResult>";
+
+inline const Bucket* findBucket(const char* name, size_t len) {
+    for (const Bucket& b : kBuckets) {
+        if (b.nameLen == len && memcmp(b.name, name, len) == 0) return &b;
+    }
+    return nullptr;
+}
+
+// The bucket other than b whose directory holds b's key (a file key, or a
+// directory key ending in '/'), or nullptr when the key belongs to b. Used to
+// reject such keys and to prune the walk before opening those directories.
+inline const Bucket* keyOwner(const Bucket& b, const char* key, size_t len) {
+    for (const Bucket& c : kBuckets) {
+        if (&c == &b || c.dirLen <= b.dirLen) continue;
+        // c.dir relative to b.dir, if c lies below b.
+        size_t off = 0;
+        if (b.dirLen) {
+            if (memcmp(c.dir, b.dir, b.dirLen) != 0 || c.dir[b.dirLen] != '/') continue;
+            off = b.dirLen + 1u;
+        }
+        const size_t subLen = c.dirLen - off;
+        if (len > subLen && memcmp(key, c.dir + off, subLen) == 0 && key[subLen] == '/') return &c;
+    }
+    return nullptr;
+}
+
+// "<mount>/" or "<mount>/<dir>/" into out (NUL-terminated); returns the
+// length, or 0 when it does not fit. The mount point may be empty (the
+// firmware mounts LittleFS at ""), giving "/" and "/www/".
+inline size_t bucketBase(const Bucket& b, const char* mount, size_t mountLen, char* out, size_t cap) {
+    const size_t n = mountLen + 1 + (b.dirLen ? b.dirLen + 1u : 0);
+    if (n + 1 > cap) return 0;
+    memcpy(out, mount, mountLen);
+    out[mountLen] = '/';
+    if (b.dirLen) {
+        memcpy(out + mountLen + 1, b.dir, b.dirLen);
+        out[n - 1] = '/';
+    }
+    out[n] = '\0';
+    return n;
+}
+
+// "<base><key><suffix>" into out; returns the length, or 0 when it does not fit.
+inline size_t objectPath(const Bucket& b, const char* mount, size_t mountLen, const char* key, size_t keyLen,
+                         const char* suffix, char* out, size_t cap) {
+    const size_t base = bucketBase(b, mount, mountLen, out, cap);
+    if (!base) return 0;
+    const size_t slen = strlen(suffix);
+    if (base + keyLen + slen + 1 > cap) return 0;
+    memcpy(out + base, key, keyLen);
+    memcpy(out + base + keyLen, suffix, slen + 1);
+    return base + keyLen + slen;
+}
+
+// Path-style request target (the server has already URL-decoded the path).
+struct UrlTarget {
+    enum Type : uint8_t { Root, BucketRoot, Object, Unknown } type;
+    const Bucket* bucket;  // BucketRoot / Object
+    const char* key;       // Object: points into the URL
+    size_t keyLen;
+};
+
+inline UrlTarget parseUrl(const char* u, size_t len) {
+    if (len == 1 && u[0] == '/') return {UrlTarget::Root, nullptr, nullptr, 0};
+    if (len < 2 || u[0] != '/') return {UrlTarget::Unknown, nullptr, nullptr, 0};
+    size_t end = 1;
+    while (end < len && u[end] != '/') ++end;
+    const Bucket* b = findBucket(u + 1, end - 1);
+    if (!b) return {UrlTarget::Unknown, nullptr, nullptr, 0};
+    if (end + 1 >= len) return {UrlTarget::BucketRoot, b, nullptr, 0};  // "/app" or "/app/"
+    return {UrlTarget::Object, b, u + end + 1, len - end - 1};
 }
 
 // Structural checks shared by reads and writes: non-empty, no leading or
@@ -70,21 +209,24 @@ inline bool keyWellFormed(const char* key, size_t len, size_t maxLen) {
     return true;
 }
 
-inline bool keyReadable(const char* key, size_t len) {
-    return keyWellFormed(key, len, kReadKeyMax);
+// GetObject / HeadObject: well-formed and not in another bucket's directory.
+inline bool keyReadable(const Bucket& b, const char* key, size_t len) {
+    return keyWellFormed(key, len, kReadKeyMax) && !keyOwner(b, key, len);
 }
 
-// Paths under these prefixes are firmware-owned (web IDE bundle, fonts) or
-// internal metadata: never written or deleted through the API.
-inline bool keyProtected(const char* key, size_t len) {
-    return startsWith(key, len, "www/") || startsWith(key, len, "fonts/") ||
-           (len == 21 && memcmp(key, "js_bytecode_meta.json", 21) == 0);
+// Internal metadata in bucket app: never written or deleted through the API.
+inline bool keyProtected(const Bucket& b, const char* key, size_t len) {
+    return b.dirLen == 0 && len == 21 && memcmp(key, "js_bytecode_meta.json", 21) == 0;
 }
 
-// PutObject / DeleteObject rules.
-inline KeyCheck checkWriteKey(const char* key, size_t len) {
+// PutObject / DeleteObject rules. kWriteKeyMax bounds the whole path below
+// the mount point, so writable buckets must be the root (static_assert in
+// S3Server).
+inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len) {
+    if (!b.writable) return KeyCheck::ReadOnly;
     if (!keyWellFormed(key, len, kWriteKeyMax)) return KeyCheck::Invalid;
-    if (keyProtected(key, len)) return KeyCheck::Forbidden;
+    if (keyOwner(b, key, len)) return KeyCheck::OtherBucket;
+    if (keyProtected(b, key, len)) return KeyCheck::Forbidden;
     for (size_t i = 0; i < len; ++i) {
         const char c = key[i];
         const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -101,8 +243,8 @@ inline KeyCheck checkWriteKey(const char* key, size_t len) {
     return KeyCheck::Ok;
 }
 
-inline bool keyIsConfig(const char* key, size_t len) {
-    return len == 11 && memcmp(key, "config.json", 11) == 0;
+inline bool keyIsConfig(const Bucket& b, const char* key, size_t len) {
+    return b.dirLen == 0 && len == 11 && memcmp(key, "config.json", 11) == 0;
 }
 
 inline const char* contentTypeFor(const char* key, size_t len) {

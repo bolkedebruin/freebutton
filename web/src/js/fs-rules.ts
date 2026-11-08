@@ -1,13 +1,16 @@
 /**
  * Device file rules (pure).
  *
- * The device exposes LittleFS as a single S3 bucket (`fs`); an object key is
- * the LittleFS path without the leading slash ("config.json",
- * "scripts/main.js"). These helpers mirror the device's write rules so the IDE
- * rejects a bad save before it costs a request (the device enforces the same
- * rules and stays the authority):
+ * The IDE edits the device's S3 bucket `app`: the LittleFS root minus the
+ * directories of the read-only buckets (`web` = www/, `fonts` = fonts/,
+ * `examples` = scripts/examples/). An `app` object key is the LittleFS path
+ * without the leading slash ("config.json", "scripts/main.js"). These helpers
+ * mirror the device's write rules so the IDE rejects a bad save before it
+ * costs a request (the device enforces the same rules and stays the
+ * authority):
  *   - extensions .js .json .txt only
- *   - not under www/ (the IDE bundle) or fonts/
+ *   - not under www/, fonts/ or scripts/examples/ (those belong to the
+ *     read-only buckets; the device answers 400 for such `app` keys)
  *   - key <= 63 chars, body <= 64 KiB
  *   - config.json must be valid JSON (and cannot be deleted)
  */
@@ -22,7 +25,12 @@ export const MAIN_BYTECODE_NAME = 'main.jsc';
 export const CONFIG_KEY = 'config.json';
 
 const EDITABLE_EXTENSIONS = ['js', 'json', 'txt'] as const;
-const SYSTEM_PREFIXES = ['www/', 'fonts/'];
+/** `app` key prefixes that are the directories of the read-only buckets. */
+const OTHER_BUCKET_PREFIXES: ReadonlyArray<readonly [prefix: string, bucket: string]> = [
+  ['www/', 'web'],
+  ['fonts/', 'fonts'],
+  ['scripts/examples/', 'examples'],
+];
 
 export type FileKind = 'js' | 'json' | 'text' | 'other';
 
@@ -45,10 +53,18 @@ export function fileKind(key: string): FileKind {
   return 'other';
 }
 
-/** www/ (the IDE's own bundle) and fonts/: read-only, potentially large. */
-export function isSystemKey(key: string): boolean {
+/**
+ * The read-only bucket whose directory holds this LittleFS path (www/ -> web,
+ * fonts/ -> fonts, scripts/examples/ -> examples), or null for an `app` key.
+ */
+export function otherBucketOf(key: string): string | null {
   const k = normalizeKey(key);
-  return SYSTEM_PREFIXES.some(p => k.startsWith(p));
+  return OTHER_BUCKET_PREFIXES.find(([p]) => k.startsWith(p))?.[1] ?? null;
+}
+
+/** Not an `app` key: lies in a read-only bucket's directory. */
+export function isSystemKey(key: string): boolean {
+  return otherBucketOf(key) !== null;
 }
 
 /** The IDE may open/save this key (user content with an allowed extension). */
@@ -71,7 +87,11 @@ export function validateKey(key: string): string | null {
   if (/[\u0000-\u001f\u007f\\]/.test(key)) return 'Path contains invalid characters';
   const segments = key.split('/');
   if (segments.some(s => s === '' || s === '.' || s === '..')) return 'Path has an empty or relative segment';
-  if (isSystemKey(key)) return `${key.split('/')[0]}/ is read-only (IDE bundle / fonts)`;
+  const other = otherBucketOf(key);
+  if (other) {
+    const prefix = OTHER_BUCKET_PREFIXES.find(([, b]) => b === other)![0];
+    return `${prefix} is read-only (device bucket "${other}")`;
+  }
   if (!isEditableKey(key)) return 'Only .js, .json and .txt files can be saved';
   return null;
 }

@@ -246,8 +246,6 @@ describe('fb-file-drawer', () => {
       { key: 'config.json', size: 10082 },
       { key: 'scripts/main.js', size: 1200 },
       { key: 'scripts/util.js', size: 300 },
-      { key: 'www/index.html.gz', size: 250000 },
-      { key: 'fonts/mdi_24.bin', size: 40000 },
     ],
     busy: false,
     currentKey: 'scripts/main.js',
@@ -264,17 +262,43 @@ describe('fb-file-drawer', () => {
     return el;
   }
 
-  it('lists user files and groups www/ + fonts/ collapsed', async () => {
+  it('lists the app files and the read-only buckets as collapsed groups', async () => {
     const el = await drawerWith(snapshot());
     const keys = Array.from(el.querySelectorAll('[data-testid="user-files"] [data-key]')).map(n => n.getAttribute('data-key'));
     expect(keys).toEqual(['config.json', 'scripts/main.js', 'scripts/util.js']);
-    const system = el.querySelector('[data-testid="system-files"]')!;
-    expect(system.textContent).toContain('2 files');
-    // Collapsed: individual system files are not rendered.
-    expect(system.textContent).not.toContain('index.html.gz');
+    // Not listed yet: no counts.
+    expect(el.querySelector('[data-testid="examples-files"]')!.textContent).toContain('read-only');
+    expect(el.querySelector('[data-testid="system-files"]')!.textContent).toContain('read-only');
   });
 
-  it('offers delete only for deletable files (not config.json, not system files)', async () => {
+  it('shows listed read-only buckets with counts, entries only when expanded', async () => {
+    const el = await drawerWith(snapshot({
+      readOnly: {
+        examples: [{ key: 'button.js', size: 900 }],
+        web: [{ key: 'index.html.gz', size: 250000 }],
+        fonts: [{ key: 'mnt_medium_14.bin', size: 40000 }],
+      },
+    }));
+    const system = el.querySelector('[data-testid="system-files"]')!;
+    expect(system.textContent).toContain('2 files');
+    expect(system.textContent).not.toContain('index.html.gz');
+    expect(el.querySelector('[data-testid="examples-files"]')!.textContent).toContain('1 files');
+
+    (el.querySelector('[data-testid="system-toggle"]') as HTMLButtonElement).click();
+    await nextFrame();
+    expect(system.textContent).toContain('web/index.html.gz');
+    expect(system.textContent).toContain('fonts/mnt_medium_14.bin');
+    // Read-only entries are not openable files.
+    expect(system.querySelector('[data-key]')).toBeNull();
+  });
+
+  it('hides the read-only groups without a device', async () => {
+    const el = await drawerWith(snapshot({ mode: 'local', message: LOCAL_MESSAGE, files: [] }));
+    expect(el.querySelector('[data-testid="system-files"]')).toBeNull();
+    expect(el.querySelector('[data-testid="examples-files"]')).toBeNull();
+  });
+
+  it('offers delete only for deletable files (not config.json)', async () => {
     const el = await drawerWith(snapshot());
     const deletable = Array.from(el.querySelectorAll('[data-testid="delete-file"]'))
       .map(b => b.closest('[data-key]')!.getAttribute('data-key'));
@@ -300,7 +324,7 @@ describe('fb-file-drawer', () => {
 
   it('shows storage totals', async () => {
     const el = await drawerWith(snapshot());
-    expect(el.textContent).toContain('5 files');
+    expect(el.textContent).toContain('3 files');
     expect(el.textContent).toContain('KB used');
   });
 });

@@ -1,21 +1,38 @@
 //
 // S3Server - minimal S3-compatible API over LittleFS.
 //
-// Path-style addressing, one bucket "fs" = the LittleFS root; object key =
-// path without the leading slash ("config.json", "scripts/main.js").
+// Path-style addressing, one bucket per kind of content, each a directory on
+// the LittleFS partition (table: s3::kBuckets in S3Logic.h):
+//
+//   app       /  minus the other buckets' directories   read/write
+//   web       /www (the IDE bundle, gzipped)             read-only
+//   examples  /scripts/examples                          read-only
+//   fonts     /fonts (device fonts)                      read-only
+//
+// Object key = path relative to the bucket's directory ("config.json",
+// "scripts/main.js" in app; "index.html.gz" in web; "button.js" in examples).
+// Every object is reachable through exactly one bucket: app does not list
+// www/, fonts/ or scripts/examples/ (the walk skips them without opening
+// them), answers 404 NoSuchKey for reads and 400 InvalidArgument for writes
+// of such keys.
 //
 //   GET  /                      ListBuckets (only for S3 clients: Authorization
 //                               AWS*, any x-amz-* header, or ?x-id=...; browsers
 //                               keep getting the web IDE)
-//   HEAD /fs[/]                 HeadBucket
-//   GET  /fs[/]?list-type=2     ListObjectsV2 (prefix, delimiter "/", max-keys,
+//   HEAD /<b>[/]                HeadBucket
+//   GET  /<b>[/]?list-type=2    ListObjectsV2 (prefix, delimiter "/", max-keys,
 //                               continuation-token, start-after, encoding-type)
-//   GET  /fs[/]                 ListObjects v1 (marker)
-//   GET  /fs[/]?location        GetBucketLocation
-//   GET|HEAD /fs/<key>          GetObject / HeadObject (Range ignored)
-//   PUT  /fs/<key>              PutObject (plain or aws-chunked body)
-//   DELETE /fs/<key>            DeleteObject
-//   OPTIONS /fs[/...]           CORS preflight
+//   GET  /<b>[/]                ListObjects v1 (marker)
+//   GET  /<b>[/]?location       GetBucketLocation
+//   GET|HEAD /<b>/<key>         GetObject / HeadObject (Range ignored)
+//   PUT  /<b>/<key>             PutObject (plain or aws-chunked body; app only,
+//                               read-only buckets answer 403 AccessDenied)
+//   DELETE /<b>/<key>           DeleteObject (app only, as PUT)
+//   OPTIONS /<b>[/...]          CORS preflight
+//
+// /fonts/... is also the URL of the IDE's own web fonts (www/fonts/*.woff2):
+// GET/HEAD there reach bucket fonts only from S3 clients (see isS3Request);
+// a browser gets the IDE file. Unknown buckets: 404 NoSuchBucket (S3 clients).
 //
 // No authentication: Authorization headers are accepted and ignored.
 //
@@ -69,12 +86,14 @@ constexpr int kMaxDepth = 6;       // directory levels walked by a listing
 constexpr uint8_t kMaxGets = 2;    // concurrent GetObject file handles
 constexpr int kSearchesPerFill = 4;
 
-static constexpr char kListBucketsXml[] =
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-    "<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
-    "<Owner><ID>freebutton</ID><DisplayName>freebutton</DisplayName></Owner>"
-    "<Buckets><Bucket><Name>fs</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket></Buckets>"
-    "</ListAllMyBucketsResult>";
+// PutState::path and kWriteKeyMax assume writes go to the LittleFS root.
+constexpr bool writableBucketsAtRoot() {
+    for (const s3::Bucket& b : s3::kBuckets) {
+        if (b.writable && b.dirLen) return false;
+    }
+    return true;
+}
+static_assert(writableBucketsAtRoot(), "a writable bucket below the root needs a larger PutState::path");
 
 static constexpr char kLocationXml[] =
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
@@ -144,7 +163,7 @@ struct ListState {
     bool haveBest = false;
     bool bestIsPrefix = false;
     bool itemIsPrefix = false;
-    uint8_t mountLen = 0;
+    uint8_t baseLen = 0;  // "<mount>/" or "<mount>/<dir>/"
     uint8_t prefixLen = 0;
     uint16_t maxKeys = 1000;
     uint16_t emitted = 0;
@@ -153,13 +172,14 @@ struct ListState {
     uint32_t itemSize = 0;
     int64_t itemMtime = 0;
     int64_t startedUs = 0;
+    const s3::Bucket* bucket = nullptr;
     char prefix[s3::kReadKeyMax + 1] = {};
     char marker[s3::kReadKeyMax + 1] = {};
     char best[s3::kReadKeyMax + 1] = {};
-    // "<mount>/<rel>": the walk appends names to rel in place.
-    char path[kMountMax + 1 + s3::kReadKeyMax + 2] = {};
+    // "<mount>/[<dir>/]<rel>": the walk appends names to rel (= the key) in place.
+    char path[kMountMax + 1 + s3::kDirMax + 1 + s3::kReadKeyMax + 2] = {};
 
-    char* rel() { return path + mountLen + 1; }
+    char* rel() { return path + baseLen; }
 };
 
 template <class T>
@@ -227,17 +247,13 @@ int mountPoint(char* out) {
     return static_cast<int>(n);
 }
 
-// "<mount>/<key><suffix>" into out; returns the length or 0.
-size_t buildPath(char* out, size_t cap, const char* key, size_t keyLen, const char* suffix = "") {
-    const int mp = mountPoint(out);
+// "<mount>/[<dir>/]<key><suffix>" into out; returns the length or 0.
+size_t buildPath(const s3::Bucket& b, char* out, size_t cap, const char* key, size_t keyLen,
+                 const char* suffix = "") {
+    char mount[kMountMax + 1];
+    const int mp = mountPoint(mount);
     if (mp < 0) return 0;
-    const size_t m = static_cast<size_t>(mp);
-    const size_t slen = strlen(suffix);
-    if (m + 1 + keyLen + slen + 1 > cap) return 0;
-    out[m] = '/';
-    memcpy(out + m + 1, key, keyLen);
-    memcpy(out + m + 1 + keyLen, suffix, slen + 1);
-    return m + 1 + keyLen + slen;
+    return s3::objectPath(b, mount, static_cast<size_t>(mp), key, keyLen, suffix, out, cap);
 }
 
 void addCommonHeaders(AsyncWebServerResponse* response) {
@@ -300,27 +316,23 @@ const char* headerValue(AsyncWebServerRequest* request, const char* name) {
     return h ? h->value().c_str() : nullptr;
 }
 
+// An S3 client, or a request only an S3 client sends (SDK GetObject & co add
+// ?x-id=..., listings carry list-type / location).
+bool isS3Request(AsyncWebServerRequest* request) {
+    return request->hasParam("x-id") || request->hasParam("list-type") || request->hasParam("location") ||
+           isS3Client(request);
+}
+
 const String* paramValue(AsyncWebServerRequest* request, const char* name) {
     const AsyncWebParameter* p = request->getParam(name);
     return p ? &p->value() : nullptr;
 }
 
-struct Target {
-    enum Type : uint8_t { Root, Bucket, Object, OtherBucket } type;
-    const char* key;
-    size_t keyLen;
-};
+using Target = s3::UrlTarget;
 
 // The server has already URL-decoded the path.
 Target parseTarget(const String& url) {
-    const char* u = url.c_str();
-    const size_t len = url.length();
-    if (len == 1 && u[0] == '/') return {Target::Root, nullptr, 0};
-    if (len >= 3 && memcmp(u, "/fs", 3) == 0 && (len == 3 || u[3] == '/')) {
-        if (len <= 4) return {Target::Bucket, nullptr, 0};
-        return {Target::Object, u + 4, len - 4};
-    }
-    return {Target::OtherBucket, nullptr, 0};
+    return s3::parseUrl(url.c_str(), url.length());
 }
 
 void formatStatHeaders(AsyncWebServerResponse* response, const struct stat& st) {
@@ -348,8 +360,8 @@ DIR* openRelDir(ListState* s, size_t relLen) {
     char* rel = s->rel();
     DIR* d;
     if (relLen == 0) {
-        // Root: "<mount>" or, with an empty mount point, "/".
-        const size_t end = s->mountLen ? s->mountLen : 1;
+        // Bucket root: "<mount>", "/" (empty mount point) or "<mount>/<dir>".
+        const size_t end = s->baseLen > 1 ? s->baseLen - 1u : 1u;
         const char saved = s->path[end];
         s->path[end] = '\0';
         d = opendir(s->path);
@@ -364,6 +376,12 @@ DIR* openRelDir(ListState* s, size_t relLen) {
 
 bool isDot(const char* n) {
     return n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'));
+}
+
+// The directory key rel[0..len) is another bucket's directory (app: www/,
+// fonts/, scripts/examples/): never opened by this bucket's walk.
+bool otherBucketsDir(const ListState* s, const char* rel, size_t len) {
+    return s3::keyOwner(*s->bucket, rel, len) != nullptr;
 }
 
 // True when the directory rel[0..relLen) contains at least one file.
@@ -384,6 +402,7 @@ bool dirHasFile(ListState* s, size_t relLen, int depth) {
             if (relLen + n + 1 > s3::kReadKeyMax) continue;
             memcpy(rel + relLen, e->d_name, n);
             rel[relLen + n] = '/';
+            if (otherBucketsDir(s, rel, relLen + n + 1)) continue;
             found = dirHasFile(s, relLen + n + 1, depth + 1);
         }
     }
@@ -423,6 +442,7 @@ void scanDir(ListState* s, size_t relLen, int depth) {
 
         if (isDir) {
             if (depth + 1 >= kMaxDepth) continue;
+            if (otherBucketsDir(s, rel, keyLen)) continue;
             if (s->hasMarker && s3::subtreeNotAbove(rel, keyLen, s->marker)) continue;
             if (s->haveBest && s3::subtreeAbove(rel, keyLen, s->best)) continue;
             size_t rolled = 0;
@@ -471,7 +491,9 @@ void renderPiece(const ListState* s, S& w) {
             put(w, kXmlDecl);
             put(w, "<ListBucketResult");
             put(w, kXmlNs);
-            put(w, "><Name>fs</Name><Prefix>");
+            put(w, "><Name>");
+            put(w, s->bucket->name);
+            put(w, "</Name><Prefix>");
             putText(s, w, s->prefix, s->prefixLen);
             put(w, "</Prefix>");
             if (!s->v2) {
@@ -613,7 +635,7 @@ size_t listFill(AsyncWebServerRequest* request, uint8_t* buffer, size_t maxLen) 
     return out;
 }
 
-void handleList(AsyncWebServerRequest* request) {
+void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
     const String* listType = paramValue(request, "list-type");
     const bool v2 = listType && *listType == "2";
     const String* prefix = paramValue(request, "prefix");
@@ -644,16 +666,18 @@ void handleList(AsyncWebServerRequest* request) {
         return;
     }
     s->startedUs = esp_timer_get_time();
+    s->bucket = &bucket;
     s->v2 = v2;
     s->delimiter = delim && *delim == "/";
     s->urlEncode = enc && *enc == "url";
-    const int mount = mountPoint(s->path);
-    s->mountLen = static_cast<uint8_t>(mount < 0 ? 0 : mount);
-    if (mount < 0) {
+    char mount[kMountMax + 1];
+    const int mountLen = mountPoint(mount);
+    if (mountLen < 0) {
         sendXmlError(request, 503, "ServiceUnavailable", "filesystem not mounted");
         return;
     }
-    s->path[s->mountLen] = '/';
+    s->baseLen = static_cast<uint8_t>(
+        s3::bucketBase(bucket, mount, static_cast<size_t>(mountLen), s->path, sizeof(s->path)));
     if (prefix) {
         if (prefix->length() > s3::kReadKeyMax) {
             s->noMatch = true;  // no key can be that long
@@ -692,12 +716,16 @@ void handleList(AsyncWebServerRequest* request) {
 // ---------------------------------------------------------------------------
 
 void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
-    if (!s3::keyReadable(t.key, t.keyLen)) {
+    if (!s3::keyWellFormed(t.key, t.keyLen, s3::kReadKeyMax)) {
         sendXmlError(request, 400, "InvalidArgument", "invalid key");
         return;
     }
-    char path[kMountMax + 1 + s3::kReadKeyMax + 1];
-    if (!buildPath(path, sizeof path, t.key, t.keyLen)) {
+    if (!s3::keyReadable(*t.bucket, t.key, t.keyLen)) {  // in another bucket's directory
+        sendXmlError(request, 404, "NoSuchKey", "The specified key does not exist.");
+        return;
+    }
+    char path[kMountMax + 1 + s3::kDirMax + 1 + s3::kReadKeyMax + 1];
+    if (!buildPath(*t.bucket, path, sizeof path, t.key, t.keyLen)) {
         sendXmlError(request, 503, "ServiceUnavailable", "filesystem not mounted");
         return;
     }
@@ -744,33 +772,47 @@ void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
     request->send(response);
 }
 
-bool writeKeyAllowed(AsyncWebServerRequest* request, const Target& t) {
-    switch (s3::checkWriteKey(t.key, t.keyLen)) {
+constexpr const char* kKeyRulesMsg =
+    "key must be [A-Za-z0-9._-/], no '..' or empty segments, and end in .js, .json or .txt";
+
+// Status, code and message of a refused write key (status 0: allowed).
+struct WriteRefusal {
+    uint16_t status;
+    const char* code;
+    const char* msg;
+};
+
+WriteRefusal checkWrite(const Target& t) {
+    switch (s3::checkWriteKey(*t.bucket, t.key, t.keyLen)) {
         case s3::KeyCheck::Ok:
-            return true;
+            return {0, nullptr, nullptr};
+        case s3::KeyCheck::ReadOnly:
+            return {403, "AccessDenied", "bucket is read-only"};
         case s3::KeyCheck::Forbidden:
-            sendXmlError(request, 403, "AccessDenied", "this path is read-only");
-            return false;
+            return {403, "AccessDenied", "this path is read-only"};
+        case s3::KeyCheck::OtherBucket:
+            return {400, "InvalidArgument", "key lies in another bucket's directory (see ListBuckets)"};
         case s3::KeyCheck::Invalid:
-            if (t.keyLen > s3::kWriteKeyMax) {
-                sendXmlError(request, 400, "KeyTooLongError", "key longer than 63 characters");
-            } else {
-                sendXmlError(request, 400, "InvalidArgument",
-                             "key must be [A-Za-z0-9._-/], no '..' or empty segments, and end in .js, .json or .txt");
-            }
-            return false;
+            break;
     }
-    return false;
+    if (t.keyLen > s3::kWriteKeyMax) return {400, "KeyTooLongError", "key longer than 63 characters"};
+    return {400, "InvalidArgument", kKeyRulesMsg};
+}
+
+bool writeKeyAllowed(AsyncWebServerRequest* request, const Target& t) {
+    const WriteRefusal r = checkWrite(t);
+    if (r.status) sendXmlError(request, r.status, r.code, r.msg);
+    return r.status == 0;
 }
 
 void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
     if (!writeKeyAllowed(request, t)) return;
-    if (s3::keyIsConfig(t.key, t.keyLen)) {
+    if (s3::keyIsConfig(*t.bucket, t.key, t.keyLen)) {
         sendXmlError(request, 403, "AccessDenied", "config.json cannot be deleted");
         return;
     }
     char path[kMountMax + 1 + s3::kWriteKeyMax + 1];
-    if (!buildPath(path, sizeof path, t.key, t.keyLen)) {
+    if (!buildPath(*t.bucket, path, sizeof path, t.key, t.keyLen)) {
         sendXmlError(request, 503, "ServiceUnavailable", "filesystem not mounted");
         return;
     }
@@ -831,23 +873,15 @@ PutState* putBegin(AsyncWebServerRequest* request) {
     watchState(request);
 
     const Target t = parseTarget(request->url());
-    switch (s3::checkWriteKey(t.key, t.keyLen)) {
-        case s3::KeyCheck::Ok:
-            break;
-        case s3::KeyCheck::Forbidden:
-            st->fail(403, "AccessDenied", "this path is read-only");
-            return st;
-        case s3::KeyCheck::Invalid:
-            if (t.keyLen > s3::kWriteKeyMax) st->fail(400, "KeyTooLongError", "key longer than 63 characters");
-            else st->fail(400, "InvalidArgument",
-                          "key must be [A-Za-z0-9._-/], no '..' or empty segments, and end in .js, .json or .txt");
-            return st;
+    if (const WriteRefusal r = checkWrite(t); r.status) {
+        st->fail(r.status, r.code, r.msg);
+        return st;
     }
     if (request->hasParam("uploads") || request->hasParam("uploadId") || request->hasHeader("x-amz-copy-source")) {
         st->fail(501, "NotImplemented", "multipart upload and copy are not supported");
         return st;
     }
-    st->isConfig = s3::keyIsConfig(t.key, t.keyLen);
+    st->isConfig = s3::keyIsConfig(*t.bucket, t.key, t.keyLen);
 
     const char* encoding = headerValue(request, "Content-Encoding");
     const char* sha = headerValue(request, "x-amz-content-sha256");
@@ -886,7 +920,7 @@ PutState* putBegin(AsyncWebServerRequest* request) {
         st->fail(503, "SlowDown", "another upload is in progress, retry");
         return st;
     }
-    const size_t finalLen = buildPath(st->path, sizeof st->path, t.key, t.keyLen, s3::kTmpSuffix);
+    const size_t finalLen = buildPath(*t.bucket, st->path, sizeof st->path, t.key, t.keyLen, s3::kTmpSuffix);
     if (!finalLen) {
         st->path[0] = '\0';
         st->fail(503, "ServiceUnavailable", "filesystem not mounted");
@@ -1062,12 +1096,18 @@ class S3Handler final : public AsyncWebHandler {
 public:
     bool canHandle(AsyncWebServerRequest* request) const override {
         const Target t = parseTarget(request->url());
-        if (t.type == Target::Bucket || t.type == Target::Object) {
+        if (t.type == Target::BucketRoot || t.type == Target::Object) {
+            // /fonts/... is also an IDE URL: browsers' GET/HEAD go to serveStatic.
+            const auto method = request->method();
+            if (t.bucket->sharesStaticPath && (method == HTTP_GET || method == HTTP_HEAD) &&
+                !isS3Request(request)) {
+                return false;
+            }
             // A PUT body sent as text/plain (the SDK's .txt / "text/plain;
             // charset=utf-8") or form-urlencoded would be parsed by the server
             // as form fields instead of reaching handleBody. Relabel it before
             // the body arrives; the content type is not stored anyway.
-            if (request->method() == HTTP_PUT) {
+            if (method == HTTP_PUT) {
                 const String& ct = request->contentType();
                 if (ct.equalsIgnoreCase("text/plain") ||
                     ct.startsWith("application/x-www-form-urlencoded")) {
@@ -1093,12 +1133,12 @@ public:
         }
         switch (t.type) {
             case Target::Root:
-                sendConstXml(request, kListBucketsXml, sizeof(kListBucketsXml) - 1);
+                sendConstXml(request, s3::kListBucketsXml, sizeof(s3::kListBucketsXml) - 1);
                 return;
-            case Target::OtherBucket:
+            case Target::Unknown:
                 sendXmlError(request, 404, "NoSuchBucket", "The specified bucket does not exist.");
                 return;
-            case Target::Bucket:
+            case Target::BucketRoot:
                 if (method == HTTP_HEAD) {
                     AsyncWebServerResponse* response = request->beginResponse(200);
                     response->addHeader("x-amz-bucket-region", "us-east-1");
@@ -1107,7 +1147,7 @@ public:
                 } else if (method == HTTP_GET && request->hasParam("location")) {
                     sendConstXml(request, kLocationXml, sizeof(kLocationXml) - 1);
                 } else if (method == HTTP_GET && !request->hasParam("uploads")) {
-                    handleList(request);
+                    handleList(request, *t.bucket);
                 } else {
                     sendXmlError(request, 501, "NotImplemented", "operation not supported");
                 }

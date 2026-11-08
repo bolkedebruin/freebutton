@@ -1,15 +1,18 @@
 /**
  * Workspace - the device's files and the file open in the editor.
  *
- * Talks to the device's S3 storage API (s3-fs.ts) when it is reachable
- * ('device' mode); otherwise it falls back to the in-browser virtual FS
- * ('local' mode: dev without hardware, older firmware), so editing keeps
- * working and the UI says files are not on a device.
+ * Talks to the device's S3 storage API (device-storage.ts) when it is
+ * reachable ('device' mode); otherwise it falls back to the in-browser
+ * virtual FS ('local' mode: dev without hardware, older firmware), so editing
+ * keeps working and the UI says files are not on a device.
  *
- * Request discipline (the firmware has very little RAM): the file list is
+ * The editable files are bucket `app`. The read-only buckets (examples, web,
+ * fonts) are listed only on request (loadReadOnly, when the Assets panel
+ * expands their group), cached per device, and never downloaded.
+ *
+ * Request discipline (the firmware has very little RAM): the `app` list is
  * fetched on start, on refresh, after save/create/delete, and when the REPL
- * connects to a different device -- never on a timer. www/ and fonts/ are
- * listed but never downloaded.
+ * connects to a different device -- never on a timer.
  *
  * State changes are published as `workspace-change` snapshots on the
  * app-state bus; progress/errors also go to the console pane.
@@ -22,6 +25,7 @@ import {
 } from './fs-rules';
 import {
   S3Error, StorageUnavailableError, deleteObject, getObject, headObject, listObjects, putObject, rebootDevice,
+  type ListResult, type ReadOnlyBucket,
 } from './device-storage';
 import { virtualFS } from './virtual-fs';
 import { parseConfigText } from './config-model';
@@ -66,6 +70,12 @@ export function describeError(err: unknown): string {
 
 export const LOCAL_MESSAGE = 'No device storage reachable: files are kept in this browser session only.';
 
+function toFiles(result: ListResult): WorkspaceFile[] {
+  return result.objects
+    .map(o => ({ key: o.key, size: o.size, ...(o.lastModified ? { lastModified: o.lastModified } : {}) }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
 function displayPath(key: string): string {
   return '/' + key;
 }
@@ -78,6 +88,7 @@ export class Workspace {
   private currentKey = MAIN_SCRIPT_KEY;
   private dirty = false;
   private isNew = false;
+  private readOnly: Partial<Record<ReadOnlyBucket, WorkspaceFile[]>> = {};
 
   private base = '';
   private deps: WorkspaceDeps | null = null;
@@ -100,6 +111,7 @@ export class Workspace {
       currentKey: this.currentKey,
       dirty: this.dirty,
       isNew: this.isNew,
+      readOnly: this.readOnly,
     };
   }
 
@@ -129,6 +141,7 @@ export class Workspace {
         const base = deviceHttpBase(e.detail.url);
         if (base === this.base) return; // same device (incl. auto-reconnects)
         this.base = base;
+        this.readOnly = {};
         void this.reload();
       }),
     );
@@ -149,13 +162,34 @@ export class Workspace {
     this.currentKey = MAIN_SCRIPT_KEY;
     this.dirty = false;
     this.isNew = false;
+    this.readOnly = {};
     this.base = '';
     this.revision = 0;
   }
 
-  /** Re-list files (Assets "refresh"). */
+  /** Re-list files (Assets "refresh"), and the read-only buckets already loaded. */
   async refresh(): Promise<void> {
-    await this.withBusy(() => this.probe());
+    const loaded = Object.keys(this.readOnly) as ReadOnlyBucket[];
+    await this.withBusy(async () => {
+      await this.probe();
+      if (this.mode !== 'device') {
+        this.readOnly = {};
+        return;
+      }
+      for (const bucket of loaded) await this.listReadOnly(bucket);
+    });
+  }
+
+  /**
+   * List read-only buckets not listed yet (device mode only; one request
+   * each, sequentially). Contents are never downloaded.
+   */
+  async loadReadOnly(buckets: readonly ReadOnlyBucket[]): Promise<void> {
+    const missing = buckets.filter(b => !this.readOnly[b]);
+    if (this.mode !== 'device' || missing.length === 0) return;
+    await this.withBusy(async () => {
+      for (const bucket of missing) await this.listReadOnly(bucket);
+    });
   }
 
   /** Open a file in the editor. Returns false if it was not opened. */
@@ -264,7 +298,7 @@ export class Workspace {
     return created;
   }
 
-  /** Delete a file (after confirmation). config.json, www/, fonts/ are refused. */
+  /** Delete a file (after confirmation). config.json and other buckets' keys are refused. */
   async remove(rawKey: string, opts: { skipConfirm?: boolean } = {}): Promise<boolean> {
     const key = normalizeKey(rawKey);
     if (!canDeleteKey(key)) {
@@ -331,9 +365,7 @@ export class Workspace {
       const result = await listObjects(this.base);
       this.mode = 'device';
       this.message = '';
-      this.files = result.objects
-        .map(o => ({ key: o.key, size: o.size, ...(o.lastModified ? { lastModified: o.lastModified } : {}) }))
-        .sort((a, b) => a.key.localeCompare(b.key));
+      this.files = toFiles(result);
     } catch (err) {
       if (err instanceof StorageUnavailableError) {
         if (this.mode !== 'local') {
@@ -345,7 +377,9 @@ export class Workspace {
       } else {
         // The device answered with an S3 error: storage exists but failed.
         this.mode = 'device';
-        this.message = `File list failed: ${describeError(err)}`;
+        this.message = err instanceof S3Error && err.code === 'NoSuchBucket'
+          ? 'File list failed: this firmware has no "app" storage bucket (update the device firmware)'
+          : `File list failed: ${describeError(err)}`;
         emit('console-line', { text: this.message, type: 'error' });
       }
     }
@@ -359,11 +393,18 @@ export class Workspace {
     }
     try {
       const result = await listObjects(this.base);
-      this.files = result.objects
-        .map(o => ({ key: o.key, size: o.size, ...(o.lastModified ? { lastModified: o.lastModified } : {}) }))
-        .sort((a, b) => a.key.localeCompare(b.key));
+      this.files = toFiles(result);
     } catch (err) {
       this.message = `File list failed: ${describeError(err)}`;
+    }
+  }
+
+  private async listReadOnly(bucket: ReadOnlyBucket): Promise<void> {
+    try {
+      const files = toFiles(await listObjects(this.base, { bucket }));
+      this.readOnly = { ...this.readOnly, [bucket]: files };
+    } catch (err) {
+      this.note(`Listing bucket ${bucket} failed: ${describeError(err)}`, 'warn');
     }
   }
 

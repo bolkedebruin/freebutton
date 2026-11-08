@@ -18,7 +18,147 @@ struct StrSink {
     void Put(char c) { s += c; }
 };
 
-static s3::KeyCheck wk(const char* k) { return s3::checkWriteKey(k, strlen(k)); }
+static const s3::Bucket& bucket(const char* name) {
+    const s3::Bucket* b = s3::findBucket(name, strlen(name));
+    TEST_ASSERT_NOT_NULL(b);
+    return *b;
+}
+static s3::KeyCheck wk(const char* k) { return s3::checkWriteKey(bucket("app"), k, strlen(k)); }
+static bool readable(const char* b, const char* k) { return s3::keyReadable(bucket(b), k, strlen(k)); }
+static const char* owner(const char* b, const char* k) {
+    const s3::Bucket* o = s3::keyOwner(bucket(b), k, strlen(k));
+    return o ? o->name : "";
+}
+
+// --- buckets ----------------------------------------------------------------
+
+void test_bucket_table() {
+    TEST_ASSERT_EQUAL(4, s3::kBucketCount);
+    TEST_ASSERT_EQUAL_STRING("", bucket("app").dir);
+    TEST_ASSERT_TRUE(bucket("app").writable);
+    TEST_ASSERT_EQUAL_STRING("www", bucket("web").dir);
+    TEST_ASSERT_EQUAL(3, bucket("web").dirLen);
+    TEST_ASSERT_EQUAL_STRING("scripts/examples", bucket("examples").dir);
+    TEST_ASSERT_EQUAL(16, bucket("examples").dirLen);
+    TEST_ASSERT_EQUAL_STRING("fonts", bucket("fonts").dir);
+    TEST_ASSERT_FALSE(bucket("web").writable);
+    TEST_ASSERT_FALSE(bucket("examples").writable);
+    TEST_ASSERT_FALSE(bucket("fonts").writable);
+    TEST_ASSERT_TRUE(bucket("fonts").sharesStaticPath);
+    TEST_ASSERT_FALSE(bucket("app").sharesStaticPath);
+    TEST_ASSERT_NULL(s3::findBucket("fs", 2));
+    TEST_ASSERT_NULL(s3::findBucket("ap", 2));
+    TEST_ASSERT_NULL(s3::findBucket("apps", 4));
+    TEST_ASSERT_NULL(s3::findBucket("", 0));
+}
+
+void test_list_buckets_xml_matches_table() {
+    const std::string xml = s3::kListBucketsXml;
+    size_t pos = 0;
+    for (const s3::Bucket& b : s3::kBuckets) {
+        const std::string tag = std::string("<Bucket><Name>") + b.name + "</Name>";
+        const size_t at = xml.find(tag, pos);
+        TEST_ASSERT_TRUE_MESSAGE(at != std::string::npos, b.name);  // present, in table order
+        pos = at + tag.size();
+    }
+    size_t count = 0;
+    for (size_t at = xml.find("<Bucket>"); at != std::string::npos; at = xml.find("<Bucket>", at + 1)) ++count;
+    TEST_ASSERT_EQUAL(s3::kBucketCount, count);
+    TEST_ASSERT_TRUE(xml.find("<Name>fs</Name>") == std::string::npos);
+}
+
+void test_parse_url() {
+    auto t = s3::parseUrl("/", 1);
+    TEST_ASSERT_TRUE(t.type == s3::UrlTarget::Root);
+    t = s3::parseUrl("/app", 4);
+    TEST_ASSERT_TRUE(t.type == s3::UrlTarget::BucketRoot);
+    TEST_ASSERT_EQUAL_STRING("app", t.bucket->name);
+    t = s3::parseUrl("/examples/", 10);
+    TEST_ASSERT_TRUE(t.type == s3::UrlTarget::BucketRoot);
+    TEST_ASSERT_EQUAL_STRING("examples", t.bucket->name);
+    t = s3::parseUrl("/app/scripts/main.js", 20);
+    TEST_ASSERT_TRUE(t.type == s3::UrlTarget::Object);
+    TEST_ASSERT_EQUAL_STRING("app", t.bucket->name);
+    TEST_ASSERT_EQUAL(15, t.keyLen);
+    TEST_ASSERT_EQUAL_MEMORY("scripts/main.js", t.key, 15);
+    t = s3::parseUrl("/web/index.html.gz", 18);
+    TEST_ASSERT_TRUE(t.type == s3::UrlTarget::Object);
+    TEST_ASSERT_EQUAL_STRING("web", t.bucket->name);
+    TEST_ASSERT_EQUAL_MEMORY("index.html.gz", t.key, 13);
+    // "//x" after the bucket stays in the key (rejected by the key checks).
+    t = s3::parseUrl("/app//x.js", 10);
+    TEST_ASSERT_TRUE(t.type == s3::UrlTarget::Object);
+    TEST_ASSERT_EQUAL(5, t.keyLen);
+    TEST_ASSERT_TRUE(s3::parseUrl("/fs", 3).type == s3::UrlTarget::Unknown);
+    TEST_ASSERT_TRUE(s3::parseUrl("/fs/config.json", 15).type == s3::UrlTarget::Unknown);
+    TEST_ASSERT_TRUE(s3::parseUrl("/app.css", 8).type == s3::UrlTarget::Unknown);
+    TEST_ASSERT_TRUE(s3::parseUrl("/apps/x", 7).type == s3::UrlTarget::Unknown);
+    TEST_ASSERT_TRUE(s3::parseUrl("", 0).type == s3::UrlTarget::Unknown);
+}
+
+void test_key_owner() {
+    // app: the other buckets' directories, file and directory keys.
+    TEST_ASSERT_EQUAL_STRING("web", owner("app", "www/index.html.gz"));
+    TEST_ASSERT_EQUAL_STRING("web", owner("app", "www/"));
+    TEST_ASSERT_EQUAL_STRING("fonts", owner("app", "fonts/mnt_medium_14.bin"));
+    TEST_ASSERT_EQUAL_STRING("examples", owner("app", "scripts/examples/button.js"));
+    TEST_ASSERT_EQUAL_STRING("examples", owner("app", "scripts/examples/"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "scripts/"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "scripts/main.js"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "scripts/examplesx/a.js"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "scripts/examples"));  // a file of that name
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "www"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "wwwx/a.js"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "fontsx/a.js"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "config.json"));
+    // The other buckets own their whole tree.
+    TEST_ASSERT_EQUAL_STRING("", owner("web", "fonts/dm-sans-var.woff2"));
+    TEST_ASSERT_EQUAL_STRING("", owner("web", "www/x"));
+    TEST_ASSERT_EQUAL_STRING("", owner("examples", "examples/x.js"));
+    TEST_ASSERT_EQUAL_STRING("", owner("fonts", "fonts/x"));
+}
+
+void test_bucket_paths() {
+    char out[64];
+    // Empty mount point (as mounted by the firmware).
+    TEST_ASSERT_EQUAL(1, s3::bucketBase(bucket("app"), "", 0, out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("/", out);
+    TEST_ASSERT_EQUAL(5, s3::bucketBase(bucket("web"), "", 0, out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("/www/", out);
+    TEST_ASSERT_EQUAL(18, s3::bucketBase(bucket("examples"), "", 0, out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("/scripts/examples/", out);
+    TEST_ASSERT_EQUAL(12, s3::objectPath(bucket("app"), "", 0, "config.json", 11, "", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("/config.json", out);
+    TEST_ASSERT_EQUAL_STRING("/scripts/main.js.tmp",
+                             (s3::objectPath(bucket("app"), "", 0, "scripts/main.js", 15, ".tmp", out, sizeof out), out));
+    s3::objectPath(bucket("web"), "", 0, "index.html.gz", 13, "", out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("/www/index.html.gz", out);
+    s3::objectPath(bucket("examples"), "", 0, "button.js", 9, "", out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("/scripts/examples/button.js", out);
+    s3::objectPath(bucket("fonts"), "", 0, "mnt_medium_14.bin", 17, "", out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("/fonts/mnt_medium_14.bin", out);
+    // A real mount point.
+    s3::objectPath(bucket("web"), "/littlefs", 9, "a.gz", 4, "", out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("/littlefs/www/a.gz", out);
+    TEST_ASSERT_EQUAL(10, s3::bucketBase(bucket("app"), "/littlefs", 9, out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("/littlefs/", out);
+    // Too small: 0, nothing promised about out.
+    TEST_ASSERT_EQUAL(0, s3::objectPath(bucket("app"), "", 0, "config.json", 11, "", out, 12));
+    TEST_ASSERT_EQUAL(12, s3::objectPath(bucket("app"), "", 0, "config.json", 11, "", out, 13));
+    TEST_ASSERT_EQUAL(0, s3::bucketBase(bucket("examples"), "", 0, out, 18));
+}
+
+void test_write_rules_per_bucket() {
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("web"), "a.js", 4) == s3::KeyCheck::ReadOnly);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("examples"), "button.js", 9) == s3::KeyCheck::ReadOnly);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "x.txt", 5) == s3::KeyCheck::ReadOnly);
+    // Read-only even for keys that would be invalid anyway.
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("web"), "../x", 4) == s3::KeyCheck::ReadOnly);
+    // config.json / the bytecode index are special in app only.
+    TEST_ASSERT_TRUE(s3::keyIsConfig(bucket("app"), "config.json", 11));
+    TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("examples"), "config.json", 11));
+    TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("app"), "scripts/config.json", 19));
+}
 
 // --- keys -------------------------------------------------------------------
 
@@ -26,7 +166,7 @@ void test_write_key_accepts_plain_paths() {
     TEST_ASSERT_TRUE(wk("config.json") == s3::KeyCheck::Ok);
     TEST_ASSERT_TRUE(wk("scripts/main.js") == s3::KeyCheck::Ok);
     TEST_ASSERT_TRUE(wk("notes/a-b_c.txt") == s3::KeyCheck::Ok);
-    TEST_ASSERT_TRUE(wk("scripts/examples/x.js") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(wk("scripts/examplesx.js") == s3::KeyCheck::Ok);
 }
 
 void test_write_key_rejects_traversal_and_shape() {
@@ -49,11 +189,13 @@ void test_write_key_extensions() {
     TEST_ASSERT_TRUE(wk("json") == s3::KeyCheck::Invalid);
 }
 
-void test_write_key_protected_prefixes() {
-    TEST_ASSERT_TRUE(wk("www/index.js") == s3::KeyCheck::Forbidden);
-    TEST_ASSERT_TRUE(wk("fonts/x.json") == s3::KeyCheck::Forbidden);
+void test_write_key_other_buckets_and_protected() {
+    TEST_ASSERT_TRUE(wk("www/index.js") == s3::KeyCheck::OtherBucket);
+    TEST_ASSERT_TRUE(wk("fonts/x.json") == s3::KeyCheck::OtherBucket);
+    TEST_ASSERT_TRUE(wk("scripts/examples/x.js") == s3::KeyCheck::OtherBucket);
     TEST_ASSERT_TRUE(wk("js_bytecode_meta.json") == s3::KeyCheck::Forbidden);
     TEST_ASSERT_TRUE(wk("wwwx/a.js") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(wk("scripts/js_bytecode_meta.json") == s3::KeyCheck::Ok);
 }
 
 void test_write_key_lengths() {
@@ -71,12 +213,20 @@ void test_write_key_lengths() {
 }
 
 void test_read_key() {
-    TEST_ASSERT_TRUE(s3::keyReadable("www/assets/index-abc.js.gz", 26));
-    TEST_ASSERT_FALSE(s3::keyReadable("www/../config.json", 18));
-    TEST_ASSERT_FALSE(s3::keyReadable("", 0));
-    TEST_ASSERT_FALSE(s3::keyReadable("a//b", 4));
+    TEST_ASSERT_TRUE(readable("web", "assets/index-abc.js.gz"));
+    TEST_ASSERT_TRUE(readable("app", "config.json"));
+    TEST_ASSERT_TRUE(readable("app", "js_bytecode_meta.json"));
+    TEST_ASSERT_TRUE(readable("examples", "button.js"));
+    TEST_ASSERT_FALSE(readable("web", "../config.json"));
+    TEST_ASSERT_FALSE(readable("app", "www/../config.json"));
+    TEST_ASSERT_FALSE(readable("app", ""));
+    TEST_ASSERT_FALSE(readable("app", "a//b"));
+    // Reachable through exactly one bucket.
+    TEST_ASSERT_FALSE(readable("app", "www/index.html.gz"));
+    TEST_ASSERT_FALSE(readable("app", "fonts/mnt_medium_14.bin"));
+    TEST_ASSERT_FALSE(readable("app", "scripts/examples/button.js"));
     std::string longk(97, 'a');
-    TEST_ASSERT_FALSE(s3::keyReadable(longk.c_str(), longk.size()));
+    TEST_ASSERT_FALSE(readable("web", longk.c_str()));
 }
 
 void test_content_types() {
@@ -365,10 +515,16 @@ void test_json_validator_bounds() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_bucket_table);
+    RUN_TEST(test_list_buckets_xml_matches_table);
+    RUN_TEST(test_parse_url);
+    RUN_TEST(test_key_owner);
+    RUN_TEST(test_bucket_paths);
+    RUN_TEST(test_write_rules_per_bucket);
     RUN_TEST(test_write_key_accepts_plain_paths);
     RUN_TEST(test_write_key_rejects_traversal_and_shape);
     RUN_TEST(test_write_key_extensions);
-    RUN_TEST(test_write_key_protected_prefixes);
+    RUN_TEST(test_write_key_other_buckets_and_protected);
     RUN_TEST(test_write_key_lengths);
     RUN_TEST(test_read_key);
     RUN_TEST(test_content_types);

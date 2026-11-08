@@ -146,9 +146,19 @@ The project uses Rollup with TypeScript to bundle CodeMirror 6 and application c
 
 ## Device Files (Assets panel)
 
-The device serves LittleFS as a minimal S3-compatible API. It uses path-style
-URLs and one bucket `fs`, which is the LittleFS root. An object key is the path
-without the leading slash, for example `config.json` or `scripts/main.js`.
+The device serves LittleFS as a minimal S3-compatible API with path-style
+URLs and one bucket per kind of content. Each bucket is a directory on the
+device, and an object key is the path relative to that directory:
+
+| Bucket | Directory on the device | Access | Example key |
+|---|---|---|---|
+| `app` | `/`, without the directories of the other buckets | read/write | `config.json`, `scripts/main.js` |
+| `examples` | `/scripts/examples` | read-only | `button.js` |
+| `web` | `/www` (the IDE bundle, gzipped) | read-only | `index.html.gz` |
+| `fonts` | `/fonts` (the device fonts) | read-only | `mnt_medium_14.bin` |
+
+Each file is in exactly one bucket: `app` does not contain `www/`, `fonts/` or
+`scripts/examples/`. A write to a read-only bucket gets 403 AccessDenied.
 `src/js/device-storage.ts` is the only module that imports the AWS SDK. It uses
 dummy credentials and a no-op signer, because the device ignores signatures,
 and it does no retries. `src/js/workspace.ts` owns the file list and the file
@@ -157,9 +167,10 @@ that is open in the editor.
 - **Boot script**: the editor opens `/scripts/main.js` at start. If that file
   is not on the device yet, the editor starts from a template, and the first
   Save creates the file.
-- **Save** (toolbar or Ctrl/Cmd+S): stores the source on the device. Before the
-  request, the IDE checks the same rules as the device: the extension must be
-  `.js`, `.json` or `.txt`; the file must not be under `www/` or `fonts/`; the
+- **Save** (toolbar or Ctrl/Cmd+S): stores the source in bucket `app`. Before
+  the request, the IDE checks the same rules as the device: the extension must
+  be `.js`, `.json` or `.txt`; the file must not be under `www/`, `fonts/` or
+  `scripts/examples/` (those are the read-only buckets); the
   key can be at most 63 bytes and the body at most 64 KiB. `.json` files must be
   valid JSON. For `config.json` the IDE also checks the structure, then offers
   a reboot, because the device applies the config at boot.
@@ -167,16 +178,23 @@ that is open in the editor.
   `scripts/main.js` only, it validates the source, compiles it for the device
   and uploads the bytecode as `main.jsc`, which is the file the firmware runs at
   boot. Deploy only saves other files and does not compile them.
-- **Assets**: lists all files. `www/` (the IDE bundle) and `fonts/` are grouped
-  and collapsed. They are read-only, and the IDE never downloads them. You
-  cannot delete `config.json`. The IDE requests the list when it starts, when
-  you click refresh, after a save, create or delete, and when the REPL connects
-  to a different device. It never polls.
+- **Assets**: lists the files of bucket `app`. You cannot delete
+  `config.json`. The IDE requests this list when it starts, when you click
+  refresh, after a save, create or delete, and when the REPL connects to a
+  different device. It never polls.
+- **Examples** and **System** (in Assets): two collapsed, read-only groups.
+  Examples shows bucket `examples`; System shows buckets `web` and `fonts`.
+  The IDE lists a group's buckets only when you first expand it, lists them
+  again on refresh, and never downloads them. To load an example into the
+  editor, use the Examples panel. It has the same files, bundled into the IDE
+  at build time from `data/scripts/examples`.
 - **Virtual device**: the key labels and top labels (`toplabel`, or `topLabel`
   in older files) come from the device's `config.json`. The connector layout
   comes from `info.connectors`.
-- **No device** (dev without hardware, or older firmware without `/fs`): files
-  are kept in browser memory only, and the Assets panel says so.
+- **No device** (dev without hardware, or firmware without the S3 API): files
+  are kept in browser memory only, and the Assets panel says so. Firmware with
+  the older single bucket `fs` answers NoSuchBucket for `app`; the Assets panel
+  then says that the device firmware must be updated.
 
 ### Build Dependencies
 - `rollup@^4.0.0` - Module bundler

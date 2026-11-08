@@ -538,8 +538,9 @@ void webserver_start() {
         request->send(404);
     });
 
-    // S3-compatible file API (bucket "fs" = LittleFS root). Registered before
-    // serveStatic so "/fs/..." and S3 ListBuckets on "/" reach it first.
+    // S3-compatible file API (buckets app, web, examples, fonts). Registered
+    // before serveStatic so "/<bucket>/..." and S3 ListBuckets on "/" reach it
+    // first (browser GETs of /fonts/... still fall through to the IDE).
     s3_register(server);
 
     // Serve the locally-built web IDE bundle (with .gz auto-negotiation) from

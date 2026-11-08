@@ -1,10 +1,16 @@
 /**
  * Device storage - thin wrapper around the AWS SDK v3 S3 client.
  *
- * The device exposes LittleFS as a minimal S3-compatible API: path-style, one
- * bucket `fs` = LittleFS root, object key = path without the leading slash
- * ("config.json", "scripts/main.js"). The rest of the IDE talks to this module
- * only, never to the SDK directly.
+ * The device exposes LittleFS as a minimal S3-compatible API, path-style, with
+ * one bucket per kind of content (each a directory on the device):
+ *   - `app`      the user's files: LittleFS root minus the other buckets'
+ *                directories; key = LittleFS path without the leading slash
+ *                ("config.json", "scripts/main.js"). Read/write.
+ *   - `examples` /scripts/examples ("button.js"). Read-only.
+ *   - `web`      /www, the IDE bundle ("index.html.gz"). Read-only.
+ *   - `fonts`    /fonts, the device fonts. Read-only.
+ * Every function takes the bucket as an option and defaults to `app`. The
+ * rest of the IDE talks to this module only, never to the SDK directly.
  *
  * SDK configuration:
  *   - endpoint = device base URL (same origin by default), forcePathStyle,
@@ -29,7 +35,12 @@ import {
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 
-export const BUCKET = 'fs';
+/** The user's files (read/write). */
+export const APP_BUCKET = 'app';
+/** Read-only buckets: device examples, the IDE bundle, the device fonts. */
+export const READ_ONLY_BUCKETS = ['examples', 'web', 'fonts'] as const;
+export type ReadOnlyBucket = typeof READ_ONLY_BUCKETS[number];
+export type Bucket = typeof APP_BUCKET | ReadOnlyBucket;
 
 export interface FsObject {
   key: string;
@@ -63,8 +74,8 @@ export class S3Error extends Error {
 }
 
 /**
- * The endpoint does not speak the storage API at all: network failure, older
- * firmware without /fs, or a dev server answering with HTML. Callers fall
+ * The endpoint does not speak the storage API at all: network failure,
+ * firmware without the S3 API, or a dev server answering with HTML. Callers fall
  * back to the in-browser file store.
  */
 export class StorageUnavailableError extends Error {
@@ -195,7 +206,7 @@ function parseLastModified(d: Date | undefined): Date | undefined {
 /** List all objects, following NextContinuationToken while IsTruncated. */
 export async function listObjects(
   baseUrl: string,
-  opts: { prefix?: string; delimiter?: string } = {},
+  opts: { prefix?: string; delimiter?: string; bucket?: Bucket } = {},
 ): Promise<ListResult> {
   const client = clientFor(baseUrl);
   const objects: FsObject[] = [];
@@ -205,7 +216,7 @@ export async function listObjects(
     let out: ListObjectsV2CommandOutput;
     try {
       out = await client.send(new ListObjectsV2Command({
-        Bucket: BUCKET,
+        Bucket: opts.bucket ?? APP_BUCKET,
         ...(opts.prefix ? { Prefix: opts.prefix } : {}),
         ...(opts.delimiter ? { Delimiter: opts.delimiter } : {}),
         ...(token ? { ContinuationToken: token } : {}),
@@ -238,9 +249,13 @@ export async function listObjects(
 }
 
 /** Fetch an object's text. Returns null when it does not exist. */
-export async function getObject(baseUrl: string, key: string): Promise<{ text: string; etag?: string } | null> {
+export async function getObject(
+  baseUrl: string,
+  key: string,
+  bucket: Bucket = APP_BUCKET,
+): Promise<{ text: string; etag?: string } | null> {
   try {
-    const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: BUCKET, Key: key })) as {
+    const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as {
       Body?: { transformToString(): Promise<string> };
       ETag?: string;
     };
@@ -253,9 +268,9 @@ export async function getObject(baseUrl: string, key: string): Promise<{ text: s
 }
 
 /** Whether an object exists (HEAD). */
-export async function headObject(baseUrl: string, key: string): Promise<boolean> {
+export async function headObject(baseUrl: string, key: string, bucket: Bucket = APP_BUCKET): Promise<boolean> {
   try {
-    await clientFor(baseUrl).send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+    await clientFor(baseUrl).send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
     return true;
   } catch (err) {
     // HEAD has no body, so a 404 arrives without an S3 code.
@@ -272,13 +287,13 @@ export function contentTypeFor(key: string): string {
 }
 
 /**
- * Store `body` at `key`. config.json responses carry
+ * Store `body` at `key` in bucket `app` (the only writable one). config.json responses carry
  * `x-freebutton-reboot-required: true` (config is applied at boot).
  */
 export async function putObject(baseUrl: string, key: string, body: string): Promise<PutResult> {
   try {
     const out = await clientFor(baseUrl).send(new PutObjectCommand({
-      Bucket: BUCKET,
+      Bucket: APP_BUCKET,
       Key: key,
       Body: body,
       ContentType: contentTypeFor(key),
@@ -294,7 +309,7 @@ export async function putObject(baseUrl: string, key: string, body: string): Pro
 
 export async function deleteObject(baseUrl: string, key: string): Promise<void> {
   try {
-    await clientFor(baseUrl).send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
+    await clientFor(baseUrl).send(new DeleteObjectCommand({ Bucket: APP_BUCKET, Key: key }));
   } catch (err) {
     throw mapError(err);
   }

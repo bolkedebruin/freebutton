@@ -7,7 +7,7 @@ import {
 import {
   _setClientFactory, createS3Client, listObjects, getObject, putObject, deleteObject, headObject,
   rebootDevice, mapError, endpointFor, rebootHeaderMiddleware, contentTypeFor,
-  S3Error, StorageUnavailableError, BUCKET, REBOOT_FIELD,
+  S3Error, StorageUnavailableError, APP_BUCKET, REBOOT_FIELD,
 } from '../device-storage';
 
 /** An SDK-style service error as the client throws it. */
@@ -34,34 +34,46 @@ describe('device-storage with the S3 client mocked', () => {
   afterAll(() => s3.restore());
 
   it('lists all pages, following NextContinuationToken', async () => {
-    s3.on(ListObjectsV2Command, { Bucket: BUCKET, ContinuationToken: undefined }).resolves({
+    s3.on(ListObjectsV2Command, { Bucket: APP_BUCKET, ContinuationToken: undefined }).resolves({
       KeyCount: 2, IsTruncated: true, NextContinuationToken: 'p2',
       Contents: [
         { Key: 'config.json', Size: 10082, LastModified: new Date('2026-11-08T12:00:00Z'), ETag: '"a"' },
         { Key: 'scripts/main.js', Size: 120 },
       ],
     });
-    s3.on(ListObjectsV2Command, { Bucket: BUCKET, ContinuationToken: 'p2' }).resolves({
+    s3.on(ListObjectsV2Command, { Bucket: APP_BUCKET, ContinuationToken: 'p2' }).resolves({
       KeyCount: 1, IsTruncated: false,
-      Contents: [{ Key: 'www/index.html.gz', Size: 250000 }],
+      Contents: [{ Key: 'scripts/util.js', Size: 250 }],
     });
 
     const result = await listObjects('');
-    expect(result.objects.map(o => o.key)).toEqual(['config.json', 'scripts/main.js', 'www/index.html.gz']);
+    expect(result.objects.map(o => o.key)).toEqual(['config.json', 'scripts/main.js', 'scripts/util.js']);
     expect(result.objects[0]).toEqual({ key: 'config.json', size: 10082, lastModified: new Date('2026-11-08T12:00:00Z'), etag: '"a"' });
     expect(s3.commandCalls(ListObjectsV2Command)).toHaveLength(2);
-    expect(s3.commandCalls(ListObjectsV2Command)[1].args[0].input).toMatchObject({ Bucket: 'fs', ContinuationToken: 'p2' });
+    expect(s3.commandCalls(ListObjectsV2Command)[1].args[0].input).toMatchObject({ Bucket: 'app', ContinuationToken: 'p2' });
   });
 
   it('passes prefix/delimiter and returns CommonPrefixes', async () => {
     s3.on(ListObjectsV2Command).resolves({
       KeyCount: 1, IsTruncated: false,
       Contents: [{ Key: 'config.json', Size: 5 }],
-      CommonPrefixes: [{ Prefix: 'scripts/' }, { Prefix: 'www/' }],
+      CommonPrefixes: [{ Prefix: 'notes/' }, { Prefix: 'scripts/' }],
     });
     const result = await listObjects('', { prefix: '', delimiter: '/' });
-    expect(result.prefixes).toEqual(['scripts/', 'www/']);
-    expect(s3.commandCalls(ListObjectsV2Command)[0].args[0].input).toEqual({ Bucket: 'fs', Delimiter: '/' });
+    expect(result.prefixes).toEqual(['notes/', 'scripts/']);
+    expect(s3.commandCalls(ListObjectsV2Command)[0].args[0].input).toEqual({ Bucket: 'app', Delimiter: '/' });
+  });
+
+  it('lists and reads a read-only bucket when asked', async () => {
+    s3.on(ListObjectsV2Command, { Bucket: 'web' }).resolves({
+      KeyCount: 1, IsTruncated: false, Contents: [{ Key: 'index.html.gz', Size: 9000 }],
+    });
+    s3.on(GetObjectCommand, { Bucket: 'examples', Key: 'button.js' }).resolves({
+      Body: { transformToString: async () => '// button' } as never,
+    });
+    expect((await listObjects('', { bucket: 'web' })).objects).toEqual([{ key: 'index.html.gz', size: 9000 }]);
+    expect(await getObject('', 'button.js', 'examples')).toEqual({ text: '// button' });
+    expect(s3.commandCalls(ListObjectsV2Command)[0].args[0].input).toEqual({ Bucket: 'web' });
   });
 
   it('drops 1970 mtimes (device without a clock)', async () => {
@@ -100,7 +112,7 @@ describe('device-storage with the S3 client mocked', () => {
   });
 
   it('reads an object as text', async () => {
-    s3.on(GetObjectCommand, { Bucket: 'fs', Key: 'scripts/main.js' }).resolves({
+    s3.on(GetObjectCommand, { Bucket: 'app', Key: 'scripts/main.js' }).resolves({
       Body: { transformToString: async () => 'print(1);' } as never,
       ETag: '"e1"',
     });
@@ -124,13 +136,13 @@ describe('device-storage with the S3 client mocked', () => {
     const res = await putObject('', 'config.json', '{"a":1}');
     expect(res).toEqual({ etag: '"x"', rebootRequired: true });
     expect(s3.commandCalls(PutObjectCommand)[0].args[0].input).toEqual({
-      Bucket: 'fs', Key: 'config.json', Body: '{"a":1}', ContentType: 'application/json',
+      Bucket: 'app', Key: 'config.json', Body: '{"a":1}', ContentType: 'application/json',
     });
   });
 
   it('surfaces device rule violations (403 / 413 / 400)', async () => {
-    s3.on(PutObjectCommand).rejects(sdkError('AccessDenied', 403, 'www/ is read-only'));
-    await expect(putObject('', 'www/x.js', '')).rejects.toThrow('AccessDenied: www/ is read-only');
+    s3.on(PutObjectCommand).rejects(sdkError('AccessDenied', 403, 'this path is read-only'));
+    await expect(putObject('', 'js_bytecode_meta.json', '')).rejects.toThrow('AccessDenied: this path is read-only');
     s3.on(PutObjectCommand).rejects(sdkError('EntityTooLarge', 413, 'too big'));
     await expect(putObject('', 'a.txt', '')).rejects.toThrow('EntityTooLarge');
     s3.on(PutObjectCommand).rejects(sdkError('InvalidArgument', 400, 'invalid JSON at offset 3'));
@@ -140,7 +152,7 @@ describe('device-storage with the S3 client mocked', () => {
   it('deletes an object', async () => {
     s3.on(DeleteObjectCommand).resolves({});
     await deleteObject('', 'scripts/old.js');
-    expect(s3.commandCalls(DeleteObjectCommand)[0].args[0].input).toEqual({ Bucket: 'fs', Key: 'scripts/old.js' });
+    expect(s3.commandCalls(DeleteObjectCommand)[0].args[0].input).toEqual({ Bucket: 'app', Key: 'scripts/old.js' });
   });
 
   it('reuses one client per endpoint', async () => {
@@ -221,9 +233,15 @@ describe('device-storage on the wire', () => {
     const result = await listObjects('http://10.0.0.5');
     expect(result.objects).toEqual([{ key: 'config.json', size: 5 }]);
     expect(seen[0].hostname).toBe('10.0.0.5');
-    expect(seen[0].path).toBe('/fs/');
+    expect(seen[0].path).toBe('/app/');
     expect(seen[0].query).toMatchObject({ 'list-type': '2' });
     expect(Object.keys(seen[0].headers).map(h => h.toLowerCase())).not.toContain('authorization');
+  });
+
+  it('addresses a read-only bucket path-style', async () => {
+    respond(200, '<ListBucketResult><KeyCount>1</KeyCount><Contents><Key>index.html.gz</Key><Size>9</Size></Contents><IsTruncated>false</IsTruncated></ListBucketResult>');
+    expect((await listObjects('', { bucket: 'web' })).objects).toEqual([{ key: 'index.html.gz', size: 9 }]);
+    expect(seen[0].path).toBe('/web/');
   });
 
   it('parses XML pagination and CommonPrefixes', async () => {
@@ -241,7 +259,7 @@ describe('device-storage on the wire', () => {
   it('encodes each key segment', async () => {
     respond(404, '<Error><Code>NoSuchKey</Code><Message>not found</Message></Error>');
     expect(await getObject('', 'scripts/my file#1.js')).toBeNull();
-    expect(seen[0].path).toBe('/fs/scripts/my%20file%231.js');
+    expect(seen[0].path).toBe('/app/scripts/my%20file%231.js');
   });
 
   it('PUT sends a plain string body (no aws-chunked) and reads the reboot header', async () => {
@@ -250,7 +268,7 @@ describe('device-storage on the wire', () => {
     expect(res).toEqual({ etag: '"abc"', rebootRequired: true });
     const req = seen[0];
     expect(req.method).toBe('PUT');
-    expect(req.path).toBe('/fs/config.json');
+    expect(req.path).toBe('/app/config.json');
     expect(req.body).toBe('{"a":1}');
     expect(req.headers['content-type']).toBe('application/json');
     expect(req.headers['content-encoding'] ?? '').not.toContain('aws-chunked');

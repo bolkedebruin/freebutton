@@ -4,21 +4,45 @@ import { XIcon, PlusIcon, ChevronDownIcon } from '../icons/index.js';
 import { on, type WorkspaceFile, type WorkspaceSnapshot } from '../js/app-state.js';
 import { formatFileSize } from '../js/virtual-fs.js';
 import { workspace, LOCAL_MESSAGE } from '../js/workspace.js';
-import { canDeleteKey, isEditableKey, isSystemKey, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
+import { canDeleteKey, isEditableKey, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
+import type { ReadOnlyBucket } from '../js/device-storage.js';
+
+interface ReadOnlyGroup {
+  id: 'examples' | 'system';
+  title: string;
+  tooltip: string;
+  buckets: readonly ReadOnlyBucket[];
+}
+
+const READ_ONLY_GROUPS: readonly ReadOnlyGroup[] = [
+  {
+    id: 'examples',
+    title: 'Examples',
+    tooltip: 'Device bucket "examples" (/scripts/examples, read-only). Load one into the editor from the Examples panel.',
+    buckets: ['examples'],
+  },
+  {
+    id: 'system',
+    title: 'System',
+    tooltip: 'Device buckets "web" (the IDE bundle) and "fonts" (read-only)',
+    buckets: ['web', 'fonts'],
+  },
+];
 
 /**
- * Assets panel: the files really on the device (LittleFS via the S3 storage
- * API), or the in-browser fallback store when no device is reachable.
- * www/ (the IDE bundle) and fonts/ are grouped, collapsed and read-only;
- * everything else with a .js/.json/.txt extension can be opened, saved and
- * deleted (config.json cannot be deleted).
+ * Assets panel: the files really on the device (bucket `app` of the S3
+ * storage API), or the in-browser fallback store when no device is
+ * reachable. Every .js/.json/.txt file there can be opened, saved and deleted
+ * (config.json cannot be deleted). The read-only buckets are two collapsed
+ * groups, Examples (`examples`) and System (`web` + `fonts`); a group's
+ * buckets are listed when it is first expanded, never downloaded.
  */
 @customElement('fb-file-drawer')
 export class FbFileDrawer extends LitElement {
   createRenderRoot() { return this; }
 
   @state() private _ws: WorkspaceSnapshot = workspace.snapshot();
-  @state() private _systemOpen = false;
+  @state() private _openGroups: Record<string, boolean> = {};
   @state() private _creating = false;
   @state() private _newName = '';
 
@@ -120,20 +144,36 @@ export class FbFileDrawer extends LitElement {
     `;
   }
 
-  private _renderSystem(files: WorkspaceFile[]) {
-    if (files.length === 0) return '';
-    const total = files.reduce((n, f) => n + f.size, 0);
+  private _toggleGroup(group: ReadOnlyGroup) {
+    const open = !this._openGroups[group.id];
+    this._openGroups = { ...this._openGroups, [group.id]: open };
+    if (open) void workspace.loadReadOnly(group.buckets);
+  }
+
+  private _renderGroup(group: ReadOnlyGroup) {
+    const ws = this._ws;
+    if (ws.mode !== 'device') return '';
+    const listed = group.buckets.map(b => ({ bucket: b, files: ws.readOnly?.[b] }));
+    const loaded = listed.every(l => l.files !== undefined);
+    // Several buckets in one group: show each key with its bucket name.
+    const entries = listed.flatMap(l => (l.files ?? []).map(f => ({
+      label: group.buckets.length > 1 ? `${l.bucket}/${f.key}` : f.key,
+      title: `${l.bucket}: ${f.key} (read-only)`,
+      size: f.size,
+    })));
+    const total = entries.reduce((n, f) => n + f.size, 0);
+    const open = !!this._openGroups[group.id];
     return html`
-      <div class="flex flex-col gap-0.5" data-testid="system-files">
+      <div class="flex flex-col gap-0.5" data-testid="${group.id}-files">
         <button class="flex items-center gap-1 px-2 py-1 text-[10px] text-gray-200 hover:text-text-default uppercase tracking-wider"
-          title="IDE bundle and fonts (read-only)"
-          @click=${() => { this._systemOpen = !this._systemOpen; }}>
-          <span class="w-3 h-3 flex items-center justify-center [&>svg]:w-3 [&>svg]:h-3 transition-transform ${this._systemOpen ? '' : '-rotate-90'}">${ChevronDownIcon()}</span>
-          System · ${files.length} files · ${formatFileSize(total)}
+          title=${group.tooltip} data-testid="${group.id}-toggle"
+          @click=${() => this._toggleGroup(group)}>
+          <span class="w-3 h-3 flex items-center justify-center [&>svg]:w-3 [&>svg]:h-3 transition-transform ${open ? '' : '-rotate-90'}">${ChevronDownIcon()}</span>
+          ${group.title}${loaded ? ` · ${entries.length} files · ${formatFileSize(total)}` : ' · read-only'}
         </button>
-        ${this._systemOpen ? files.map(f => html`
-          <div class="flex items-center gap-2 px-2 py-1 text-[10px] text-gray-200" title="/${f.key} (read-only)">
-            <span class="flex-1 min-w-0 truncate">${f.key}</span>
+        ${open ? entries.map(f => html`
+          <div class="flex items-center gap-2 px-2 py-1 text-[10px] text-gray-200" title=${f.title}>
+            <span class="flex-1 min-w-0 truncate">${f.label}</span>
             <span class="shrink-0">${formatFileSize(f.size)}</span>
           </div>
         `) : ''}
@@ -143,8 +183,7 @@ export class FbFileDrawer extends LitElement {
 
   render() {
     const ws = this._ws;
-    const userFiles = ws.files.filter(f => !isSystemKey(f.key));
-    const systemFiles = ws.files.filter(f => isSystemKey(f.key));
+    const userFiles = ws.files;
     const usedBytes = ws.files.reduce((n, f) => n + f.size, 0);
     const source = ws.mode === 'device' ? 'Device' : ws.mode === 'local' ? 'Browser (no device)' : 'Connecting…';
 
@@ -194,7 +233,7 @@ export class FbFileDrawer extends LitElement {
             : ''}
         </div>
 
-        ${this._renderSystem(systemFiles)}
+        ${READ_ONLY_GROUPS.map(g => this._renderGroup(g))}
 
         <!-- Storage summary -->
         <div class="flex items-center justify-between pt-2 border-t border-border-default text-[10px] text-gray-200">
