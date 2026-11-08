@@ -55,13 +55,17 @@ class MQuickJSCompiler {
         const targetAddr = options.targetAddr || 0;
         const use32Bit = options.use32Bit !== false; // Default true
 
-        // Allocate memory for source code
-        const sourceLen = sourceCode.length;
+        // Allocate memory for the UTF-8 source. sourceCode.length counts
+        // UTF-16 code units, which is too small for non-ASCII text (MDI icon
+        // labels are 4 UTF-8 bytes): stringToUTF8 then truncated the script.
+        const sourceBytes = new TextEncoder().encode(sourceCode);
+        const sourceLen = sourceBytes.length;
         const sourcePtr = this.module._malloc(sourceLen + 1);
 
         try {
-            // Copy source code to WASM memory
-            this.module.stringToUTF8(sourceCode, sourcePtr, sourceLen + 1);
+            // Copy source code to WASM memory (NUL-terminated)
+            this.module.HEAPU8.set(sourceBytes, sourcePtr);
+            this.module.HEAPU8[sourcePtr + sourceLen] = 0;
 
             // Call compilation function
             const result = this.module._compile_js_to_bytecode(
