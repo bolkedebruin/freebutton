@@ -77,7 +77,7 @@ lv_obj_t* ui_create_text_container(lv_obj_t *parent)
     lv_obj_set_style_border_width(txt, 0, 0);
     lv_obj_set_style_pad_all(txt, lv_dpx(0), 0);
 
-    //lv_obj_add_flag(txt, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    //lv_obj_set_flex_in_new_track(txt, true);
     //lv_obj_set_flex_grow(txt, 1);
 
     return txt;
@@ -104,7 +104,7 @@ lv_obj_t* ui_box_create(lv_obj_t* parent)
 
     /* create the text container */
     b->text = ui_create_text_container(box);
-    lv_obj_add_flag(b->text, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    lv_obj_set_flex_in_new_track(b->text, true);
     lv_obj_set_flex_grow(b->text, 1);
 	lv_obj_add_style(b->text, &style_text, 0);
 

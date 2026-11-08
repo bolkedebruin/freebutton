@@ -67,8 +67,8 @@ void ProgressBar::create_ui() {
     lv_obj_set_style_border_width(progress_bar_, 0, LV_PART_MAIN);
     lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
 
-    lv_obj_add_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(progress_label_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(progress_bar_, true);
+    lv_obj_set_hidden(progress_label_, true);
 
     create_blur_overlay();
 
@@ -115,8 +115,8 @@ void ProgressBar::create_blur_overlay() {
     lv_obj_set_style_bg_opa(blur_overlay_, config_.blur_opacity, 0);
     lv_obj_set_style_border_width(blur_overlay_, 0, 0);
     lv_obj_set_style_radius(blur_overlay_, 0, 0);
-    lv_obj_remove_flag(blur_overlay_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(blur_overlay_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_scrollable(blur_overlay_, false);
+    lv_obj_set_hidden(blur_overlay_, true);
 
     // Move to back so progress bar and label are on top
     lv_obj_move_to_index(blur_overlay_, 0);
@@ -133,10 +133,10 @@ void ProgressBar::show(std::string_view message) {
     lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
 
     if (blur_overlay_) {
-        lv_obj_clear_flag(blur_overlay_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(blur_overlay_, false);
     }
-    lv_obj_clear_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(progress_label_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(progress_bar_, false);
+    lv_obj_set_hidden(progress_label_, false);
 
     visible_ = true;
 
@@ -170,10 +170,10 @@ void ProgressBar::hide() {
 
     FreeButton::getLvglDisplay().lock();
 
-    lv_obj_add_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(progress_label_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(progress_bar_, true);
+    lv_obj_set_hidden(progress_label_, true);
     if (blur_overlay_) {
-        lv_obj_add_flag(blur_overlay_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(blur_overlay_, true);
     }
 
     visible_ = false;
@@ -184,7 +184,7 @@ void ProgressBar::hide() {
 }
 
 bool ProgressBar::is_visible() const noexcept {
-    return visible_ && progress_bar_ && !lv_obj_has_flag(progress_bar_, LV_OBJ_FLAG_HIDDEN);
+    return visible_ && progress_bar_ && !lv_obj_is_hidden(progress_bar_);
 }
 
 std::int32_t ProgressBar::get_progress() const noexcept {

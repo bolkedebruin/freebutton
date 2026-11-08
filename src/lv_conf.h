@@ -4,7 +4,8 @@
 /*====================
    COLOR SETTINGS
  *====================*/
-#define LV_COLOR_DEPTH 16
+/* LVGL 9.6: LV_COLOR_DEPTH is deprecated; LVGL derives it (16) from this. */
+#define LV_COLOR_FORMAT_DEFAULT LV_COLOR_FORMAT_RGB565
 /* LV_COLOR_16_SWAP is gone in LVGL 9: the displays are set to
  * LV_COLOR_FORMAT_RGB565_SWAPPED in LvglDisplay.cpp instead. */
 #define LV_DRAW_SW_SUPPORT_RGB565_SWAPPED 1

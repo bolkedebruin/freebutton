@@ -124,7 +124,7 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
     // CONTENT => BOTTOM => ICON (initially hidden)
     lv_obj_t* icon = lv_image_create(botobj);
     b->icon = icon;
-    lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);  // Hidden by default
+    lv_obj_set_hidden(icon, true);  // Hidden by default
     lv_obj_align(icon, LV_ALIGN_CENTER, 0, 0);
 
     return cont;
@@ -167,11 +167,11 @@ void ui_button_set_icon(lv_obj_t* button, const char* icon_name)
 
     // Empty or NULL icon_name hides the icon
     if (!icon_name || icon_name[0] == '\0') {
-        lv_obj_add_flag(b->icon, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(b->icon, true);
         return;
     }
 
     // Image loading not yet implemented
     printf("ui_button_set_icon: image loading not implemented for '%s'\n", icon_name);
-    lv_obj_add_flag(b->icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(b->icon, true);
 }
