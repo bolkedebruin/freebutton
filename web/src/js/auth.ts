@@ -129,6 +129,11 @@ export function importCredentialsFromLocation(
   return creds;
 }
 
+/** The credentials imported from the QR link at startup, without consuming them. */
+export function peekImportedCredentials(): DeviceCredentials | null {
+  return imported;
+}
+
 /** Credentials imported from the QR link at startup, once (Settings shows them). */
 export function takeImportedCredentials(): DeviceCredentials | null {
   const creds = imported;

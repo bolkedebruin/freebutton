@@ -237,7 +237,7 @@ export class FbSettingsModal extends LitElement {
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
         @click=${this._onBackdropClick}
       >
-        <div class="w-[420px] max-w-[calc(100vw-32px)] rounded-xl border border-border-default bg-bg-primary shadow-2xl">
+        <div class="w-[420px] max-w-[calc(100vw-32px)] max-h-[calc(100dvh-32px)] overflow-y-auto rounded-xl border border-border-default bg-bg-primary shadow-2xl">
           <!-- Header -->
           <div class="flex items-center justify-between px-5 py-4 border-b border-border-default">
             <h2 class="text-sm font-semibold text-text-default">Settings</h2>

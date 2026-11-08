@@ -1,23 +1,20 @@
 import './app.css';
+import { importCredentialsFromLocation } from './js/auth.js';
 
-// First: credentials from the device's QR link (before any request).
-import './js/boot-credentials.js';
+// First, before any request: credentials from the device's QR link
+// (http://<device>/#fbcred=...), removed from the address bar right away.
+const imported = importCredentialsFromLocation();
 
-// Component registrations
-import './components/fb-app.js';
-import './components/fb-navbar.js';
-import './components/fb-nav-item.js';
-import './components/fb-resize-handle.js';
-import './components/fb-editor-pane.js';
-import './components/fb-toolbar.js';
-import './components/fb-code-editor.js';
-import './components/fb-status-bar.js';
-import './components/fb-right-pane.js';
-import './components/fb-virtual-device.js';
-import './components/fb-tft-display.js';
-import './components/fb-button-grid.js';
-import './components/fb-console-pane.js';
-import './components/fb-console-output.js';
-import './components/fb-console-input.js';
-import './components/fb-file-drawer.js';
-import './components/fb-settings-modal.js';
+// A phone that scanned the QR code gets a small "Device access" page (copy,
+// save to the password manager) instead of the desktop IDE, which does not
+// fit a phone screen; the IDE chunk is then not even downloaded from the
+// device. Everything else loads the IDE.
+const phone = typeof matchMedia === 'function' && matchMedia('(max-width: 767px)').matches;
+if (imported && phone) {
+  void import('./components/fb-access-page.js').then(() => {
+    document.querySelector('fb-app')?.replaceWith(document.createElement('fb-access-page'));
+    document.body.classList.add('ready');
+  });
+} else {
+  void import('./ide.js');
+}
