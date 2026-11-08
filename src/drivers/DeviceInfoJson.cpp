@@ -21,7 +21,7 @@ namespace FreeButton {
 
 namespace {
 
-void appendString(std::string& out, const char* key, const std::string& value) {
+void appendString(std::string& out, const char* key, std::string_view value) {
     out += '"';
     out += key;
     out += "\":\"";
@@ -42,8 +42,9 @@ std::string toJson(const DeviceInfo& info) {
     std::string out;
     // Worst case is 325 B (153 B of fixed keys/punctuation + a fully expanded
     // IPv6, a 32-char SSID and 6-digit memory figures) plus <= 106 B of
-    // topology (mainConnector + 4 connectors), so 448 never reallocates.
-    out.reserve(448);
+    // topology (mainConnector + 4 connectors) and <= 70 B of build identity
+    // (commit, dirty, model), so 512 never reallocates.
+    out.reserve(512);
     out += '{';
     appendString(out, "deviceName", info.deviceName);   out += ',';
     appendString(out, "ipv4", info.ipv4Address);         out += ',';
@@ -52,6 +53,9 @@ std::string toJson(const DeviceInfo& info) {
     appendNumber(out, "rssi", info.signalStrength);      out += ',';
     appendString(out, "mac", info.macAddress);           out += ',';
     appendString(out, "firmware", info.firmwareVersion); out += ',';
+    appendString(out, "commit", info.gitCommit ? info.gitCommit : "");  out += ',';
+    out += info.dirty ? "\"dirty\":true," : "\"dirty\":false,";
+    appendString(out, "model", info.model ? info.model : "");          out += ',';
     appendNumber(out, "uptime", info.uptime);            out += ',';
     // Memory breakdown, bytes.
     appendNumber(out, "heapFree", static_cast<long long>(info.heapFree));       out += ',';

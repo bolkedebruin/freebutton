@@ -475,6 +475,30 @@ describe('fb-virtual-device', () => {
     expect(el.querySelector('[data-field="Uptime"]')?.textContent?.trim()).toBe('0d 1h 1m');
   });
 
+  it('shows firmware with commit, the model and the heap low-water mark', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+
+    window.dispatchEvent(new CustomEvent('device-info', {
+      detail: {
+        data: {
+          deviceName: 'btn_live02', ipv4: '10.0.0.8', ipv6: '', ssid: 'w',
+          rssi: -50, mac: 'aa', firmware: '3.1.0-alpha.1', uptime: 10,
+          commit: '30df729', dirty: true, model: 'Model 1 Version 9',
+          heapFree: 72620, heapTotal: 270028, heapMinFree: 35852,
+          lvglFree: 20496, lvglTotal: 57164,
+        },
+      },
+    }));
+    await nextFrame();
+    expect(el.querySelector('[data-testid="heap-min"]')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('min 35 KB');
+
+    (el.querySelector('[data-testid="gear-icon"]') as HTMLElement).click();
+    await nextFrame();
+    expect(el.querySelector('[data-field="Firmware"]')?.textContent?.trim()).toBe('3.1.0-alpha.1 (30df729-dirty)');
+    expect(el.querySelector('[data-field="Model"]')?.textContent?.trim()).toBe('Model 1 Version 9');
+  });
+
   it('memory graph shows real KB values with a quantifier', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();

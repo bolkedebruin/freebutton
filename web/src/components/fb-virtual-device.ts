@@ -25,6 +25,12 @@ function formatKB(bytes: number): string {
   return `${Math.round(bytes / 1024)} KB`;
 }
 
+/** "3.1.0-alpha.1 (30df729-dirty)"; just the version for older firmware. */
+export function formatFirmware(info: { firmware: string; commit?: string; dirty?: boolean }): string {
+  if (!info.commit) return info.firmware;
+  return `${info.firmware} (${info.commit}${info.dirty ? '-dirty' : ''})`;
+}
+
 @customElement('fb-virtual-device')
 export class FbVirtualDevice extends LitElement {
   createRenderRoot() { return this; }
@@ -172,6 +178,8 @@ export class FbVirtualDevice extends LitElement {
           ${lines.map(l => html`
             <span><span style="color:${l.color}">${latest ? formatKB(latest[l.key]) : DASH}</span> ${l.label}</span>
           `)}
+          <span title="Lowest free internal heap since boot" data-testid="heap-min">min
+            <span style="color:#6B26FF">${this._info ? formatKB(this._info.heapMinFree) : DASH}</span></span>
         </div>
       </div>
     `;
@@ -185,7 +193,8 @@ export class FbVirtualDevice extends LitElement {
       ['SSID', i?.ssid ?? DASH],
       ['MAC', i?.mac ?? DASH],
       ['Signal', i ? `${i.rssi} dBm` : DASH],
-      ['Firmware', i?.firmware ?? DASH],
+      ['Firmware', i ? formatFirmware(i) : DASH],
+      ['Model', i?.model || DASH],
       ['Uptime', i ? this._formatUptime(i.uptime) : DASH],
     ];
 

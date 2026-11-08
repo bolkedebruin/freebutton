@@ -74,6 +74,10 @@ export interface DeviceInfoData {
   heapMinFree: number; // bytes
   lvglFree: number;   // bytes
   lvglTotal: number;  // bytes
+  /** Build identity (newer firmware; absent before). */
+  commit?: string;    // short git hash
+  dirty?: boolean;    // built from a working tree with uncommitted changes
+  model?: string;
   /** Hardware topology (firmware with S3 storage and newer; absent before). */
   mainConnector?: number;                     // -1 = no main display
   connectors?: { id: number; type: number }[]; // type 1 = bar, 2 = large display

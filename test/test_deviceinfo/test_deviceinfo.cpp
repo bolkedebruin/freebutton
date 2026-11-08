@@ -88,7 +88,7 @@ void test_exact_key_set() {
              "\"deviceName\"", "\"ipv4\"", "\"ipv6\"", "\"ssid\"", "\"rssi\"",
              "\"mac\"", "\"firmware\"", "\"uptime\"", "\"heapFree\"", "\"heapTotal\"",
              "\"heapMinFree\"", "\"lvglFree\"", "\"lvglTotal\"",
-             "\"mainConnector\"", "\"connectors\"" }) {
+             "\"mainConnector\"", "\"connectors\"", "\"commit\"", "\"dirty\"", "\"model\"" }) {
         TEST_ASSERT_TRUE_MESSAGE(contains(json, key), key);
     }
 }
@@ -101,6 +101,17 @@ void test_connectors_list_only_present_ones() {
     const std::string json = toJson(info);
     TEST_ASSERT_TRUE(contains(json, "\"mainConnector\":2,"));
     TEST_ASSERT_TRUE(contains(json, "\"connectors\":[{\"id\":2,\"type\":2},{\"id\":3,\"type\":1}]}"));
+}
+
+void test_build_identity() {
+    DeviceInfo info = makeSample();
+    info.gitCommit = "30df729";
+    info.dirty = true;
+    info.model = "Model 1 Version 9";
+    const std::string json = toJson(info);
+    TEST_ASSERT_TRUE(contains(json, "\"firmware\":\"3.1.0-alpha.1\",\"commit\":\"30df729\",\"dirty\":true,\"model\":\"Model 1 Version 9\","));
+    const std::string none = toJson(makeSample());
+    TEST_ASSERT_TRUE(contains(none, "\"commit\":\"\",\"dirty\":false,\"model\":\"\","));
 }
 
 void test_no_connectors_is_empty_list() {
@@ -124,6 +135,7 @@ int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_contains_network_fields);
     RUN_TEST(test_connectors_list_only_present_ones);
+    RUN_TEST(test_build_identity);
     RUN_TEST(test_no_connectors_is_empty_list);
     RUN_TEST(test_contains_numeric_fields);
     RUN_TEST(test_memory_is_bytes_not_kb);

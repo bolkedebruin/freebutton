@@ -27,6 +27,11 @@ struct DeviceInfo {
     // Hardware topology from the I2C scan at boot: type per connector 0..3
     // (0 = empty, 1 = bar, 2 = large display; same encoding as config.json
     // info.connectors) and the connector of the main display (-1 = none).
+    // Build identity (static strings from the build defines; no heap).
+    const char* gitCommit = "";  // short hash, "unknown" outside a checkout
+    bool dirty = false;          // built from a working tree with changes
+    const char* model = "";
+
     static constexpr int kConnectors = 4;
     int8_t connectorTypes[kConnectors] = {};
     int8_t mainConnector = -1;

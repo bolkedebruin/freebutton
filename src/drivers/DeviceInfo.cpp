@@ -20,6 +20,15 @@ DeviceInfo DeviceInfoCollector::collectInfo() const {
     info.signalStrength = getSignalStrength();
     info.firmwareVersion = getFirmwareVersion();
     info.macAddress = getMacAddress();
+#ifdef GIT_COMMIT
+    info.gitCommit = GIT_COMMIT;
+#endif
+#ifdef BUILD_DIRTY
+    info.dirty = BUILD_DIRTY != 0;
+#endif
+#ifdef MODEL
+    info.model = MODEL;
+#endif
     info.uptime = getUptime();
 
     info.heapFree = getFreeMemory();
@@ -71,11 +80,13 @@ int DeviceInfoCollector::getSignalStrength() {
 }
 
 std::string DeviceInfoCollector::getFirmwareVersion() const {
-    // Get version from build defines or return default
-    #ifdef VERSION
-        return VERSION;
+    // FIRMWARE_VERSION comes from the repo-root VERSION file via
+    // tools/scripts/build_info_flags.py. (This used to test an undefined
+    // VERSION macro, so /api/device always said "1.0.0".)
+    #ifdef FIRMWARE_VERSION
+        return FIRMWARE_VERSION;
     #else
-        return "1.0.0";
+        return "unknown";
     #endif
 }
 

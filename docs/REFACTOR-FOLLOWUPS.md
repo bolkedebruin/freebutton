@@ -68,3 +68,24 @@ Refactor committed in workstream chunks; **pre-existing uncommitted work is left
 3. version SoT + reproducible deps + build cleanup (`VERSION`, `sync_version.py`, `build_info_flags.py`, `platformio.ini` deps, `sdkconfig.defaults` TLS fix, dead-file deletions)
 4. device serves web IDE + wasm (`WebServer.cpp`, `config.h` CDN removal, partition csv, `web/*`, real `web/public/assets/mquickjs.*`, `build_wasm.sh`, `assemble_littlefs.py`, `data/fonts/*`, `data/config.json`, `data/virt.json`) + the Lit upload wiring + validator feature
 5. unified CI/release (`.github/workflows/*`, retire `update_version.py`, `tools/README.md`)
+
+---
+
+## 6. TODO — Updating the web IDE without losing user data
+
+**Problem:** the IDE bundle (`www/`), the fonts and the user's files all live in the one LittleFS `data` partition, and the only way to update the IDE today is `uploadfs`, which writes a whole new image. That wipes everything the user created on the device: `scripts/main.js` (and other scripts), `config.json` as edited in the IDE, and `js_bytecode_meta.json` (the bytecode registry index, so `main.jsc` no longer boots). On 2026-11-08 this was worked around by hand (S3 PUT of `scripts/main.js`, bytecode re-upload as `main.jsc`).
+
+**Options:**
+1. **Save + restore around `uploadfs`** (cheapest): a PlatformIO pre/post hook or `tools/` script that, before `uploadfs`, downloads every user object through the S3 API (`GET /fs?list-type=2`, skipping `www/` and `fonts/`) and the bytecode names (`/api/bytecode/list`), and afterwards puts them back (S3 PUT, and the bytecode via `/api/bytecode/upload` or a fresh compile of `scripts/main.js`). Works only while the device is on the network; serial-only flashes still lose data.
+2. **Update `www/` through the S3 API**: allow writes to `www/` (and `fonts/`) for an authenticated client (needs the SigV4 / shared-key auth that is not there yet), and ship IDE updates as object uploads (`aws s3 sync web/dist s3://fs/www/` after gzipping). User files are never touched. Mind LittleFS space during the update (old + new bundle) and that the IDE serves itself while it is replaced.
+3. **Separate partition for the IDE**: put `www/` (and `fonts/`) in their own read-only image (e.g. the unused `img_data` partition, 1 MB, or a new one), flashed independently of the user `data` partition. Clean separation, but changes the partition table (serial flash once per device, like the other layout migration).
+
+**Leaning:** 1 now (no firmware change, removes the trap), then 3 when the partition table is touched anyway; 2 only together with real auth. Also make the firmware recover from a missing registry index (rebuild it from the partition, or at least run `scripts/main.js`' bytecode if present).
+
+## 7. TODO — Heap low point while the IDE loads
+
+btn_a00002 reported `heapMinFree` 35.9 KB after a session of IDE use and S3 tests, against 70.3 KB right after boot (and 57.4 KB after the S3 test series alone). Suspect: the browser loading the ~315 KB gzipped bundle with several parallel connections (each with lwIP buffers and an AsyncWebServer request), plus the 2 s `/api/device` poll. Measure with the IDE open (serial heap probes or `/api/device` `heapMinFree` after each step), then consider: serving `www/` with fewer parallel connections (one bundle file, `Connection: keep-alive`), a cap on concurrent static responses, and replacing the poll by a push (see the device-info discussion).
+
+## 8. TODO — Push device info instead of polling
+
+The IDE polls `GET /api/device` every 2 s while the device-info face of the virtual device is shown: a new HTTP request (often a new TCP connection, then a TIME_WAIT pcb in lwIP) each time. SSE (`AsyncEventSource`) would add a second permanent connection with its own per-client queue. Instead push it over the WebSocket the IDE already holds open (`/ws/repl`): a `{"type":"device",...}` frame (~500 B, freed after sending) every ~5 s while a client is connected, with the static parts (topology, build identity) sent once on connect. Cleaner variant at the same cost: turn the socket into one device channel (`/ws`) carrying REPL, device info and later events as message types. Keep the HTTP endpoint for clients without the socket (slow fallback poll, only while the panel is visible).
