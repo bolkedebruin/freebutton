@@ -7,6 +7,8 @@
 
 #include "mqtt/Component.h"
 #include "TopicHandler.h"
+#include "ui/PendingRender.h"
+#include "utils/TextSlot.h"
 #include <string>
 #include <vector>
 
@@ -19,7 +21,7 @@ extern "C" {
 
 namespace freebutton {
 
-class DisplayItem final : public MqttSubscriber, public TopicHandler<DisplayItem> {
+class DisplayItem final : public MqttSubscriber, public TopicHandler<DisplayItem>, public ui::PendingRender {
 public:
     static unsigned long next_id;
 
@@ -41,7 +43,26 @@ public:
     DisplayItem() : DisplayItem(0, 0, 100, 0, 14, 0, "", "", 0, 1, {}) {}
 
 private:
-    lv_obj_t* box = nullptr;  // UI box element
+    lv_obj_t* box = nullptr;  // UI box element; written only with the LVGL lock held
+
+    // Text set from other tasks (MQTT, JS), rendered by the LVGL task in
+    // applyPending(). Sizes are whole footprints (see TextSlot.h):
+    //  * value, 64 B (58 text bytes): one full 320 px line of the smallest
+    //    font (~45 glyphs at ~7 px) plus a \cRRGGBB colour code and an MDI
+    //    icon. Longer text would not fit on screen anyway and would cost
+    //    ~76 B of LVGL pool per byte to render.
+    //  * caption and unit, 32 B (26 text bytes) each. Plain members, so
+    //    nothing is ever allocated (or freed) on the message path.
+    // The configured label / unit strings above stay the defaults that
+    // createBox() draws; these slots are the runtime state.
+    static constexpr size_t kValueSlotBytes = 64;
+    static constexpr size_t kCaptionSlotBytes = 32;
+    static constexpr size_t kUnitSlotBytes = 32;
+    TextSlot<kValueSlotBytes> valueSlot_;
+    TextSlot<kCaptionSlotBytes> captionSlot_;
+    TextSlot<kUnitSlotBytes> unitSlot_;
+
+    void invalidatePending();
 
 public:
 
@@ -122,10 +143,14 @@ public:
     void createBox();
     void destroyBox();
 
-    // Direct UI update methods (for programmatic control)
-    void setDisplayLabel(const char* text) const;
-    void setDisplayValue(const char* text) const;
-    void setDisplayUnit(const char* text) const;
+    // Programmatic updates (JS). Any task: they only store the text; the
+    // LVGL task renders it on its next tick. No LVGL lock is taken.
+    void setDisplayLabel(std::string_view text);
+    void setDisplayValue(std::string_view text);
+    void setDisplayUnit(std::string_view text);
+
+    // PendingRender (LVGL task, LVGL lock held)
+    bool applyPending() override;
 
 };
 

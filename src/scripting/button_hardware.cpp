@@ -28,7 +28,10 @@ static struct {
 
 extern "C" {
 
-// Set button label with LVGL locking
+// Set button label / top label. Like the MQTT path, these only store the text
+// in the button; the LVGL task renders it on its next tick. No LVGL lock is
+// taken: JS mqtt.subscribe() callbacks call these from the MQTT task, which
+// must not wait for the display.
 int button_hw_set_label(int position, const char* label) {
     if (!label) {
         ESP_LOGE(TAG, "NULL label pointer");
@@ -43,27 +46,17 @@ int button_hw_set_label(int position, const char* label) {
         return -1;
     }
 
-    lv_obj_t* buttonObj = button->getButtonObject();
-    if (!buttonObj) {
+    if (!button->getButtonObject()) {
         ESP_LOGW(TAG, "Button at position %d has no UI element", position);
         return -1;
     }
 
-    // CRITICAL: Acquire LVGL lock before any display operation
-    auto& lvglDisplay = FreeButton::getLvglDisplay();
-    lvglDisplay.lock();
-
-    // Update the UI
-    ui_button_set_text(buttonObj, label);
-
-    // CRITICAL: Release lock after operation
-    lvglDisplay.unlock();
+    button->setLabelText(label);
 
     ESP_LOGD(TAG, "Set label for button %d to: %s", position, label);
     return 0;
 }
 
-// Set button top label with LVGL locking
 int button_hw_set_top_label(int position, const char* topLabel) {
     if (!topLabel) {
         ESP_LOGE(TAG, "NULL topLabel pointer");
@@ -78,21 +71,12 @@ int button_hw_set_top_label(int position, const char* topLabel) {
         return -1;
     }
 
-    lv_obj_t* buttonObj = button->getButtonObject();
-    if (!buttonObj) {
+    if (!button->getButtonObject()) {
         ESP_LOGW(TAG, "Button at position %d has no UI element", position);
         return -1;
     }
 
-    // CRITICAL: Acquire LVGL lock before any display operation
-    auto& lvglDisplay = FreeButton::getLvglDisplay();
-    lvglDisplay.lock();
-
-    // Update the UI
-    ui_button_set_title(buttonObj, topLabel);
-
-    // CRITICAL: Release lock after operation
-    lvglDisplay.unlock();
+    button->setTopLabelText(topLabel);
 
     ESP_LOGD(TAG, "Set top label for button %d to: %s", position, topLabel);
     return 0;

@@ -37,9 +37,13 @@ Button::Button(std::string label, std::string  topLabel,
 }
 
 Button::~Button() {
-    // Destroy UI button first, then unregister subscriptions
-    destroyButton();
+    // Unsubscribe first, so no new message is dispatched to this button, then
+    // take the UI button off the LVGL task's list and delete it. onMessage may
+    // still be in flight on an MQTT task until the unsubscribe has
+    // synchronised with it; destroying buttons at runtime (config reload)
+    // while MQTT is connected is not supported.
     unregisterTopics();
+    destroyButton();
 }
 
 void Button::registerTopics() {
@@ -67,52 +71,85 @@ void Button::registerTopics() {
     }
 }
 
-void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) {
-    if (!button) {
-        ESP_LOGD(TAG, "No UI button for Button %lu (no display available), ignoring UI message", id);
-        return;
-    }
+namespace {
 
+// Store text for the LVGL task. Any task; no heap, no LVGL lock.
+template <size_t Bytes>
+void storeText(TextSlot<Bytes>& slot, const std::string_view text, const unsigned long id, const char* field) {
+    if (slot.write(text).firstTruncation) {
+        ESP_LOGW("Button", "Button %lu: %s of %u bytes cut to %u (logged once per button)",
+                 id, field, static_cast<unsigned>(text.size()),
+                 static_cast<unsigned>(TextSlot<Bytes>::kCapacity));
+    }
+    ui::requestPendingRender();
+}
+
+} // namespace
+
+// Runs in the MQTT task. Right after connect the broker sends the retained
+// label and top label of every button in a burst, so this must not block: it
+// only copies the payload into the button's slot and returns. The LVGL task
+// renders it (applyPending), and repeated updates coalesce into one render.
+void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) {
     for (const auto& topicConfig : topics) {
         if (brokerId == topicConfig.brokerId && topic == topicConfig.topic) {
-            ESP_LOGI(TAG, "Button %lu: topic=%.*s value=%.*s eventType=%d",
+            ESP_LOGD(TAG, "Button %lu: topic=%.*s value=%.*s eventType=%d",
                      id, (int)topic.length(), topic.data(), (int)data.length(), data.data(), topicConfig.eventType);
 
-            // Lock screen access for thread safety
-            auto& lvglDisplay = FreeButton::getLvglDisplay();
-            lvglDisplay.lock();
-
-            // No need to assign labels / top labels as these are copied by lvgl
-            // and no need to spend the memory
-            std::string value(data.data(), data.size());
-
-            // Handle specific message types and update UI
             switch (topicConfig.eventType) {
                 case LABEL:
-                    ui_button_set_text(button, value.c_str());
-                    ESP_LOGI(TAG, "Button %lu label updated to: %s", id, label.c_str());
+                    storeText(labelSlot_, data, id, "label");
                     break;
 
                 case TOP_LABEL:
-                    ui_button_set_title(button, value.c_str());
-                    ESP_LOGI(TAG, "Button %lu top label updated to: %s", id, topLabel.c_str());
+                    storeText(topLabelSlot_, data, id, "top label");
                     break;
 
                 case LED_FRONT_RGB:
                 case LED_WALL_RGB:
                     // LED messages will be handled by physical LEDs managed by ButtonManager
-                    ESP_LOGD(TAG, "Button %lu: LED message ignored (handled by ButtonManager): %s", id, value.c_str());
                     break;
 
                 default:
                     ESP_LOGW(TAG, "Button %lu: Unknown event type: %d", id, static_cast<int>(topicConfig.eventType));
                     break;
             }
-
-            lvglDisplay.unlock();
             break;
         }
     }
+}
+
+// LVGL task, LVGL lock held. Each slot hands over a stable stack copy of its
+// text (at most 27 bytes), rendered once; lv_label_set_text() copies it.
+bool Button::applyPending() {
+    if (!button) {
+        return false;  // createButton() requests a render once the button exists
+    }
+    bool again = false;
+    again |= labelSlot_.apply([this](const char* text) { ui_button_set_text(button, text); })
+             == TextSlotApply::Busy;
+    again |= topLabelSlot_.apply([this](const char* text) { ui_button_set_title(button, text); })
+             == TextSlotApply::Busy;
+    return again;
+}
+
+// LVGL lock held, button exists. The configured label and top label were just
+// drawn; render the last text received for each over them on the next tick.
+void Button::invalidatePending() {
+    labelSlot_.invalidate();
+    topLabelSlot_.invalidate();
+    linkPending();
+    ui::requestPendingRender();
+}
+
+// JS bindings. These run in the JS task, or in an MQTT task when called from a
+// JS mqtt.subscribe() callback, so like onMessage they only store the text.
+void Button::setLabelText(const std::string_view text) {
+    storeText(labelSlot_, text, id, "label");
+}
+
+void Button::setTopLabelText(const std::string_view text) {
+    storeText(topLabelSlot_, text, id, "top label");
 }
 
 const std::string Button::getComponentType() const {
@@ -266,6 +303,7 @@ void Button::createButton() {
         ESP_LOGI(TAG, "Redrawing existing button for Button %lu", id);
         ui_button_set_title(button, topLabel.c_str());
         ui_button_set_text(button, label.c_str());
+        invalidatePending();
         finish();
         return;
     }
@@ -288,6 +326,7 @@ void Button::createButton() {
     // Apply the initial configuration
     ui_button_set_title(button, topLabel.c_str());
     ui_button_set_text(button, label.c_str());
+    invalidatePending();
 
     // Force refresh the small display
     lv_obj_invalidate(parent);
@@ -307,6 +346,8 @@ void Button::destroyButton() {
     auto& lvglDisplay = FreeButton::getLvglDisplay();
     lvglDisplay.lock();
 
+    // Off the LVGL task's list before the button (and later this object) goes.
+    unlinkPending();
     lv_obj_del(button);
     button = nullptr;
     ESP_LOGI(TAG, "Destroyed UI button for Button %lu", id);

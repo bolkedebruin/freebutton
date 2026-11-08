@@ -103,6 +103,12 @@ const DisplayItemInfo* displayitem_get_info(unsigned long id)
     return &cachedInfo;
 }
 
+// The text setters only store the text in the item's slot; the LVGL task
+// renders it on its next tick. They take no LVGL lock and allocate nothing,
+// which matters because JS mqtt.subscribe() callbacks call them from the MQTT
+// task. They do not change item->label / item->unit: those std::strings are
+// the configured defaults (read by createBox() and the config writer in other
+// tasks); the slot is the runtime state.
 bool displayitem_set_label(const unsigned long id, const char* label)
 {
     freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
@@ -111,7 +117,6 @@ bool displayitem_set_label(const unsigned long id, const char* label)
         return false;
     }
 
-    item->label = label ? label : "";
     item->setDisplayLabel(label ? label : "");
 
     return true;
@@ -119,7 +124,7 @@ bool displayitem_set_label(const unsigned long id, const char* label)
 
 bool displayitem_set_value(const unsigned long id, const char* value)
 {
-    const freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
+    freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
     if (!item) {
         ESP_LOGW(TAG, "DisplayItem %lu not found", id);
         return false;
@@ -138,7 +143,6 @@ bool displayitem_set_unit(unsigned long id, const char* unit)
         return false;
     }
 
-    item->unit = unit ? unit : "";
     item->setDisplayUnit(unit ? unit : "");
 
     return true;

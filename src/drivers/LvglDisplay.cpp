@@ -1,6 +1,7 @@
 #include "LvglDisplay.h"
 #include "../ui/wifi_qr_modal.h"
 #include "../ui/ota_modal.h"
+#include "../ui/PendingRender.h"
 #include "../ui/ui_button.h"
 #include "../core/FileSystem.h"
 #include <esp_log.h>
@@ -234,6 +235,12 @@ void LvglDisplay::task() {
         createGoogleHelloButton();
         lock(); // Re-lock for the rest of the function
     }
+
+    // Text that MQTT / JS tasks stored since the last tick (display item
+    // values, button labels). Rendered here, under the lock this task already
+    // holds, so those tasks never wait for the LVGL lock; lv_timer_handler()
+    // then draws it in this same tick.
+    freebutton::ui::applyPendingRenders();
 
     lv_timer_handler();
 

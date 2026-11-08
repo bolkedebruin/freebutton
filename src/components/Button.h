@@ -10,6 +10,8 @@
 #include "types.h"
 #include "TopicHandler.h"
 #include "ButtonEventPlan.h"
+#include "ui/PendingRender.h"
+#include "utils/TextSlot.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -23,7 +25,7 @@ extern "C" {
 
 namespace freebutton {
 
-class Button final : public MqttSubscriber, public MqttPublisher, public TopicHandler<Button> {
+class Button final : public MqttSubscriber, public MqttPublisher, public TopicHandler<Button>, public ui::PendingRender {
 public:
     static unsigned long next_id;
     unsigned long id = 0;
@@ -42,7 +44,21 @@ public:
     ~Button();
 
 private:
-    lv_obj_t* button = nullptr;  // UI button element
+    lv_obj_t* button = nullptr;  // UI button element; written only with the LVGL lock held
+
+    // Label / top label set from other tasks (MQTT, JS), rendered by the LVGL
+    // task in applyPending(). 32 B footprint each (26 text bytes, see
+    // TextSlot.h): the mini panel is 160 px wide; the label (32 px font,
+    // wraps) shows ~9 glyphs per line and the top label (18 px) ~16, so 26
+    // bytes covers two lines of ASCII label or a full top label (an MDI icon
+    // is 4 bytes). lv_label_set_text() does not parse colour escapes, so
+    // there is no escape overhead here.
+    static constexpr size_t kLabelSlotBytes = 32;
+    static constexpr size_t kTopLabelSlotBytes = 32;
+    TextSlot<kLabelSlotBytes> labelSlot_;
+    TextSlot<kTopLabelSlotBytes> topLabelSlot_;
+
+    void invalidatePending();
 
     // Button position and device information
     uint32_t position_{0};
@@ -70,6 +86,14 @@ public:
 
     // UI button access for scripting
     lv_obj_t* getButtonObject() const { return button; }
+
+    // Programmatic updates (JS). Any task: they only store the text; the
+    // LVGL task renders it on its next tick. No LVGL lock is taken.
+    void setLabelText(std::string_view text);
+    void setTopLabelText(std::string_view text);
+
+    // PendingRender (LVGL task, LVGL lock held)
+    bool applyPending() override;
 
     static std::unique_ptr<Button> fromJson(const JsonObject& config) {
         auto button = std::make_unique<Button>();
