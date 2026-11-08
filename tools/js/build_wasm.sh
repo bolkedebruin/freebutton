@@ -80,7 +80,11 @@ emcc \
     -DCONFIG_FREEBUTTON_MQTT \
     -DCONFIG_FREEBUTTON_DISPLAY
 
+# Fingerprint of the stdlib / atoms / engine this wasm was built from. CI
+# (wasm_stdlib_fingerprint.py --check) compares it with the firmware's.
+python3 "$TOOLS_JS/wasm_stdlib_fingerprint.py" "$BUILD" > "$OUT/mquickjs.stdlib.txt"
+
 echo ""
 echo "✓ Built:"
-ls -lh "$OUT/mquickjs.js" "$OUT/mquickjs.wasm"
+ls -lh "$OUT/mquickjs.js" "$OUT/mquickjs.wasm" "$OUT/mquickjs.stdlib.txt"
 echo "Commit these real files in web/public/assets (they replace the old symlinks)."

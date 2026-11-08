@@ -56,6 +56,11 @@ jobs:
       # in web/public/assets are committed real files, so CI does NOT install
       # lv_font_conv, run generatefonts.sh, or run emcc.
 
+      - name: Check web IDE wasm compiler matches the firmware stdlib
+        # Bytecode refers to stdlib ROM atoms by offset: a stale committed
+        # wasm compiles scripts that misbehave on this firmware (bug-036).
+        run: python3 tools/js/wasm_stdlib_fingerprint.py --check
+
       - name: Web install
         working-directory: web
         run: npm ci
