@@ -78,6 +78,12 @@ void ProgressBar::create_ui() {
 }
 
 void ProgressBar::cleanup() {
+    // Deleting LVGL objects outside the LVGL lock races the LVGL task's
+    // render and corrupts the LVGL pool (TLSF "next_free field cannot be
+    // null" assert, then a hang). The destructor runs when setup() returns,
+    // exactly while the LVGL task renders the retained MQTT values.
+    // Callers must NOT hold the (non-recursive) lock.
+    FreeButton::getLvglDisplay().lock();
     if (progress_bar_) {
         lv_obj_del(progress_bar_);
         progress_bar_ = nullptr;
@@ -91,6 +97,7 @@ void ProgressBar::cleanup() {
         blur_overlay_ = nullptr;
     }
     visible_ = false;
+    FreeButton::getLvglDisplay().unlock();
 }
 
 void ProgressBar::create_blur_overlay() {

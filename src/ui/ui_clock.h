@@ -29,6 +29,6 @@ typedef struct {
 void clock_init(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, lv_align_t align);
 analog_clock_t* clock_create(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, lv_align_t align);
 
-void clock_destroy();
+void clock_destroy(void);
 
 #endif //FREEBUTTON_CLOCK_H

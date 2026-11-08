@@ -53,7 +53,12 @@ void Clock::createClock() const {
 }
 
 void Clock::destroyClock() {
+    // Deletes LVGL objects and a timer: must hold the (non-recursive) LVGL
+    // lock, so ~Clock must not run while the caller holds it.
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lvglDisplay.lock();
     clock_destroy();
+    lvglDisplay.unlock();
 }
 
 

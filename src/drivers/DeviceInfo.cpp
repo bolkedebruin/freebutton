@@ -3,6 +3,7 @@
 #include <esp_system.h>
 #include <esp_heap_caps.h>
 #include <lvgl.h>
+#include "LvglDisplay.h"
 
 #include "config.h"
 
@@ -90,10 +91,9 @@ size_t DeviceInfoCollector::getMinFreeHeap() {
 }
 
 void DeviceInfoCollector::getLvglMemory(size_t& freeBytes, size_t& totalBytes) {
-    lv_mem_monitor_t mon;
-    lv_mem_monitor(&mon);
-    freeBytes = mon.free_size;
-    totalBytes = mon.total_size;
+    // Snapshot from the LVGL task: lv_mem_monitor() itself walks the pool and
+    // must not run outside the LVGL lock (this is called from async_tcp).
+    getLvglDisplay().getLvglMemory(freeBytes, totalBytes);
 }
 
 std::string DeviceInfoCollector::formatDeviceInfo(const DeviceInfo& info) {

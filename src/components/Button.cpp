@@ -103,13 +103,16 @@ void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_vie
                     storeText(topLabelSlot_, data, id, "top label");
                     break;
 
+                case LED_RGB:
                 case LED_FRONT_RGB:
                 case LED_WALL_RGB:
-                    // LED messages will be handled by physical LEDs managed by ButtonManager
+                    // Subscribed in registerTopics() but not rendered by the
+                    // button UI. Silent: every retained message lands here
+                    // while the broker's subscription lock is held.
                     break;
 
                 default:
-                    ESP_LOGW(TAG, "Button %lu: Unknown event type: %d", id, static_cast<int>(topicConfig.eventType));
+                    ESP_LOGD(TAG, "Button %lu: Unhandled event type: %d", id, static_cast<int>(topicConfig.eventType));
                     break;
             }
             break;

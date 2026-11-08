@@ -79,7 +79,7 @@ void onDeviceInfoButtonEvent(ButtonEvent event) {
 
             // DeviceInfoCollector is stateless (sizeof == 1), so this costs one
             // byte of stack -- no reason to heap-allocate it.
-            // collectInfo() calls lv_mem_monitor(), so it stays under the lock.
+            // collectInfo() only reads the LVGL memory snapshot; the lock is for lv_scr_act() above.
             DeviceInfoCollector collector;
             DeviceInfo info = collector.collectInfo();
             std::string deviceInfoText = DeviceInfoCollector::formatDeviceInfo(info);

@@ -164,19 +164,20 @@ void MqttBroker::publish(std::string_view topic, std::string_view data, const in
         return;
     }
 
-    ESP_LOGI(TAG, "topic: %.*s data: %.*s", topic.length(), topic.data(), data.length(), data.data());
+    ESP_LOGD(TAG, "topic: %.*s data: %.*s", topic.length(), topic.data(), data.length(), data.data());
 
     if (enabled) {
-        // ensure null terminated with no heap allocation
+        // Only the topic needs NUL termination (small stack copy, no heap);
+        // the payload goes by explicit length, so it is not copied here.
         char topic_buf[topic.length() + 1];
-        char data_buf[data.length() + 1];
-
         std::memcpy(topic_buf, topic.data(), topic.length());
-        std::memcpy(data_buf, data.data(), data.length());
         topic_buf[topic.length()] = '\0';
-        data_buf[data.length()] = '\0';
 
-        if (int ret = esp_mqtt_client_publish(client, topic_buf, data_buf, 0, qos, retain); ret < 0) {
+        // len 0 would make esp-mqtt strlen() the payload, which a string_view
+        // need not terminate: send an empty payload as "" explicitly.
+        const char* payload = data.empty() ? "" : data.data();
+        if (int ret = esp_mqtt_client_publish(client, topic_buf, payload, static_cast<int>(data.length()), qos, retain);
+            ret < 0) {
             ESP_LOGW(TAG, "Failed to enqueue message: %d", ret);
         }
     }

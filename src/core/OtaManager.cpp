@@ -55,10 +55,15 @@ static void ota_task(void* pvParameter) {
     int firmware_id = (int)(intptr_t)pvParameter;
     ESP_LOGI(TAG, "OTA task started with firmware_id=%d", firmware_id);
 
-    // Show OTA modal
-    lv_obj_t* main_screen = FreeButton::getLvglDisplay().getMainScreen();
+    // Show OTA modal. show_ota_modal() creates and deletes LVGL objects, so
+    // it must hold the LVGL lock (this is the OTA task, not the LVGL task);
+    // update/hide are deferred to the LVGL task and need no lock here.
+    auto& lvglDisplay = FreeButton::getLvglDisplay();
+    lv_obj_t* main_screen = lvglDisplay.getMainScreen();
     if (main_screen) {
+        lvglDisplay.lock();
         show_ota_modal(main_screen, "Connecting to server...");
+        lvglDisplay.unlock();
     }
 
     // Build API URL

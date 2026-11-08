@@ -76,7 +76,8 @@ void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic
                     storeText(unitSlot_, data, id, "unit");
                     break;
                 default:
-                    ESP_LOGW(TAG, "DisplayItem %lu: Unknown event type: %d", id, topicConfig.eventType);
+                    // Debug only: runs under the broker's subscription lock.
+                    ESP_LOGD(TAG, "DisplayItem %lu: Unhandled event type: %d", id, topicConfig.eventType);
                     break;
             }
             break;

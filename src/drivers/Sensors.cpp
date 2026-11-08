@@ -1,6 +1,7 @@
 #include "Sensors.h"
 #include <string_view>
 #include <lvgl.h>
+#include "LvglDisplay.h"
 #include "../mqtt/Registry.h"
 #include <cstdio>
 #include "../scripting/sensor_binding.h"
@@ -259,9 +260,10 @@ void initializeSensors() {
         "data_size"sv,
         "B"sv,
         []() {
-            lv_mem_monitor_t mon;
-            lv_mem_monitor(&mon);
-            return static_cast<float>(mon.total_size - mon.free_size);
+            // Snapshot from the LVGL task (lv_mem_monitor needs the LVGL lock).
+            size_t free = 0, total = 0;
+            getLvglDisplay().getLvglMemory(free, total);
+            return static_cast<float>(total - free);
         }
     );
 
@@ -281,9 +283,10 @@ void initializeSensors() {
         "data_size"sv,
         "B"sv,
         []() {
-            lv_mem_monitor_t mon;
-            lv_mem_monitor(&mon);
-            return static_cast<float>(mon.free_size);
+            // Snapshot from the LVGL task (lv_mem_monitor needs the LVGL lock).
+            size_t free = 0, total = 0;
+            getLvglDisplay().getLvglMemory(free, total);
+            return static_cast<float>(free);
         }
     );
 

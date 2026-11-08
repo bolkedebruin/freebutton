@@ -2,6 +2,7 @@
 #define LVGLDISPLAY_H
 
 #include <lvgl.h>
+#include <atomic>
 #include <memory>
 #include <vector>
 #include "DisplayManager.h"
@@ -28,7 +29,12 @@ private:
     SemaphoreHandle_t small_buffer_mutex_;
     bool initialized_;
     lv_obj_t* main_screen_;
-    bool create_hello_button_pending_;
+
+    // LVGL pool usage, sampled once a second by task() (lock held). Read from
+    // any task without the lock via getLvglMemory().
+    uint32_t mem_sample_tick_ = 0;
+    std::atomic<size_t> lvgl_mem_free_{0};
+    std::atomic<size_t> lvgl_mem_total_{0};
 
     // Self-heal state. Only touched from the heal lv_timer callback, which
     // runs in the LVGL task inside lv_timer_handler() with lvgl_mutex_ held.
@@ -66,9 +72,9 @@ public:
     // Utility
     bool isInitialized() const { return initialized_; }
 
-    // Example UI functions
-    void requestGoogleHelloButton();
-    void createGoogleHelloButton();
+    // Last LVGL pool snapshot (free/total bytes). Safe from any task: it
+    // never touches the pool, unlike lv_mem_monitor().
+    void getLvglMemory(size_t& freeBytes, size_t& totalBytes) const;
 
 private:
     static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);

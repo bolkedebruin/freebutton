@@ -2,7 +2,6 @@
 #include "../ui/wifi_qr_modal.h"
 #include "../ui/ota_modal.h"
 #include "../ui/PendingRender.h"
-#include "../ui/ui_button.h"
 #include "../core/FileSystem.h"
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -40,7 +39,6 @@ LvglDisplay::LvglDisplay()
       , small_buffer_mutex_(nullptr)
       , initialized_(false)
       , main_screen_(nullptr)
-      , create_hello_button_pending_(false)
       , heal_timer_(nullptr)
       , heal_next_index_(0)
       , heal_pending_(0)
@@ -228,14 +226,6 @@ void LvglDisplay::task() {
 
     lock();
 
-    // Handle pending UI creation requests
-    if (create_hello_button_pending_) {
-        create_hello_button_pending_ = false;
-        unlock(); // Unlock before creating UI to avoid deadlocks
-        createGoogleHelloButton();
-        lock(); // Re-lock for the rest of the function
-    }
-
     // Text that MQTT / JS tasks stored since the last tick (display item
     // values, button labels). Rendered here, under the lock this task already
     // holds, so those tasks never wait for the LVGL lock; lv_timer_handler()
@@ -250,7 +240,23 @@ void LvglDisplay::task() {
     // Process any pending OTA modal operations
     ota_modal_process_pending();
 
+    // lv_mem_monitor() walks the LVGL pool, so only this task (lock held)
+    // may call it; other tasks read the snapshot via getLvglMemory().
+    const uint32_t now = lv_tick_get();
+    if (now - mem_sample_tick_ >= 1000u || lvgl_mem_total_.load(std::memory_order_relaxed) == 0) {
+        mem_sample_tick_ = now;
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        lvgl_mem_free_.store(mon.free_size, std::memory_order_relaxed);
+        lvgl_mem_total_.store(mon.total_size, std::memory_order_relaxed);
+    }
+
     unlock();
+}
+
+void LvglDisplay::getLvglMemory(size_t& freeBytes, size_t& totalBytes) const {
+    freeBytes = lvgl_mem_free_.load(std::memory_order_relaxed);
+    totalBytes = lvgl_mem_total_.load(std::memory_order_relaxed);
 }
 
 void LvglDisplay::lock() const {
@@ -568,96 +574,6 @@ void LvglDisplay::clearAllSmallDisplays() const {
     }
 
     ESP_LOGI(TAG, "All small displays cleared");
-}
-
-void LvglDisplay::requestGoogleHelloButton() {
-    ESP_LOGI(TAG, "Requesting Google Hello button creation");
-    create_hello_button_pending_ = true;
-}
-
-void LvglDisplay::createGoogleHelloButton() {
-    // Get the first small display
-    auto* first_small_disp = getSmallDisplay(0);
-    if (!first_small_disp) {
-        ESP_LOGW(TAG, "No first small display available for Hello button");
-        return;
-    }
-
-    // Acquire buffer for the first small display
-    if (!acquireSmallDisplayBuffer(0)) {
-        ESP_LOGW(TAG, "Failed to acquire buffer for first small display");
-        return;
-    }
-
-    // Save current default display and temporarily set to small display
-    lv_display_t* original_default_disp = lv_display_get_default();
-    lv_display_set_default(first_small_disp);
-
-    // Initialize button styles
-    ui_button_styles();
-
-    // Create a screen for the small display
-    lv_obj_t* small_scr = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(small_scr, lv_color_hex(0x000000), 0);
-    lv_scr_load_anim(small_scr, LV_SCR_LOAD_ANIM_NONE, 0, 0, false);
-
-    // Create the button using our ui_button
-    lv_obj_t* hello_button = ui_button_create(small_scr);
-    if (!hello_button) {
-        ESP_LOGE(TAG, "Failed to create Hello button");
-        releaseSmallDisplayBuffer(1);
-        // Restore original default display before returning
-        lv_display_set_default(original_default_disp);
-        return;
-    }
-
-    // Set the parent to our small screen
-    lv_obj_set_parent(hello_button, small_scr);
-
-    // Position the button to fit nicely on the 160x80 display
-    lv_obj_set_size(hello_button, 150, 70);
-    lv_obj_center(hello_button);
-
-    // Create a colored "Hello" text using Google colors
-    // We'll use different colors for each letter: H-e-l-l-o
-    // Google colors: Blue #4285F4, Red #EA4335, Yellow #FBBC05, Green #34A853
-
-    // For now, let's set the title and main text
-    ui_button_set_title(hello_button, "");  // No title to maximize space for Hello
-
-    // Create individual labels for each letter with Google colors
-    const char letters[] = {'H', 'e', 'l', 'l', 'o'};
-    const uint32_t google_colors[] = {0x4285F4, 0xEA4335, 0xFBBC05, 0x34A853, 0x4285F4}; // Blue, Red, Yellow, Green, Blue
-
-    lv_obj_t* hello_container = lv_obj_create(hello_button);
-    lv_obj_set_style_bg_opa(hello_container, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(hello_container, 0, 0);
-    lv_obj_set_style_pad_all(hello_container, 0, 0);
-    lv_obj_set_size(hello_container, lv_pct(100), lv_pct(100));
-    lv_obj_set_layout(hello_container, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(hello_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(hello_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_center(hello_container);
-
-    // Create labels for each letter
-    for (int i = 0; i < 5; i++) {
-        lv_obj_t* letter_label = lv_label_create(hello_container);
-        char letter_str[2] = {letters[i], '\0'};
-        lv_label_set_text(letter_label, letter_str);
-        lv_obj_set_style_text_color(letter_label, lv_color_hex(google_colors[i]), 0);
-        lv_obj_set_style_text_font(letter_label, &lv_font_montserrat_14, 0);
-    }
-
-    // Force refresh the small display
-    lv_obj_invalidate(small_scr);
-
-    // Release the buffer after setting up the UI
-    releaseSmallDisplayBuffer(1);
-
-    // Restore original default display to prevent affecting other UI elements (like modals)
-    lv_display_set_default(original_default_disp);
-
-    ESP_LOGI(TAG, "Google-colored Hello button created on first small display");
 }
 
 } // namespace FreeButton

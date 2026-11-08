@@ -193,20 +193,24 @@ void clock_update(analog_clock_t* clock)
     ESP_LOGD(TAG, "Updating clock with time %02d:%02d:%02d", hour, minute, second);
 }
 
-void clock_destroy(analog_clock_t* clock)
+// Destroys the single clock created by clock_init(). Caller must hold the
+// LVGL lock. The header declares this without parameters (and C++ calls it
+// that way), so it must not take the clock as an argument: it used to, read a
+// garbage pointer, and free()d the static clock instance.
+void clock_destroy(void)
 {
-    if (!clock) return;
-
     if (g_timer != NULL) {
-        lv_timer_del(g_timer);
+        lv_timer_delete(g_timer);
+        g_timer = NULL;
     }
-
-    if (clock->scale) {
-        lv_obj_del(clock->scale);
+    if (g_clock != NULL) {
+        // The container owns the scale, hands and labels.
+        if (g_clock->container) {
+            lv_obj_delete(g_clock->container);
+        }
+        memset(g_clock, 0, sizeof(*g_clock));  // static instance: never free()
+        g_clock = NULL;
     }
-
-    // Free the dynamically allocated clock instance
-    free(clock);
 }
 
 static void update_time_labels(analog_clock_t* clock)

@@ -149,7 +149,10 @@ void ButtonManager::mirrorToCanonicalTopic(const int pos, const EventType event)
         }
         // Not retained: Home Assistant ignores retained events, and a retained
         // press would replay after a reconnect.
-        broker->publish(std::string_view(topic, topicLength), ha::defaultPayloadFor(event), 0, false);
+        // Zero-copy: topic is NUL-terminated in this frame, the payload is a
+        // string literal (CLICK_PAYLOAD / LONG_PRESS_PAYLOAD).
+        const std::string_view payload = ha::defaultPayloadFor(event);
+        broker->publish(topic, payload.data(), payload.size(), 0, 0);
     });
 }
 
