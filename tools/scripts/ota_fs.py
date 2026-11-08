@@ -167,6 +167,9 @@ def main():
     try:
         keys = list_user_keys(base)
     except urllib.error.HTTPError as e:
+        if e.code == 403 and e.headers.get("x-freebutton-auth"):
+            sys.exit("the device requires a signature: pass --access-key/--secret-key or set "
+                     "FB_ACCESS_KEY_ID/FB_SECRET_ACCESS_KEY (hold the factory button 6 s to show them)")
         sys.exit(f"the device has no S3 bucket '{BUCKET}' ({e.code}); update its firmware first")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     backup = os.path.join(PROJECT, "devices", name, "backup", f"fs-{stamp}")

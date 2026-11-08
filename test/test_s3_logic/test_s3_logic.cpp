@@ -3,6 +3,7 @@
 // streaming JSON validator (src/json/JsonValidator.h).
 //
 #include <unity.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -513,6 +514,63 @@ void test_json_validator_bounds() {
     TEST_ASSERT_TRUE(valid(big.c_str(), &off));
 }
 
+// Signed aws-chunked (STREAMING-AWS4-HMAC-SHA256-PAYLOAD): every chunk's
+// signature is handed over once its data is complete, the final empty chunk
+// included; data still streams zero-copy.
+static void test_chunked_signatures() {
+    const std::string sigA(64, 'a'), sigB(64, 'b'), sigZ(64, 'f');
+    const std::string body = "5;chunk-signature=" + sigA + "\r\nhello\r\n" +
+                             "3;chunk-signature=" + sigB + "\r\nabc\r\n" +
+                             "0;chunk-signature=" + sigZ + "\r\n\r\n";
+    for (size_t split = 1; split <= body.size(); split += 7) {  // arbitrary TCP splits
+        s3::AwsChunkedDecoder d;
+        std::string data, events;
+        auto onData = [&](const uint8_t* p, size_t n) { data.append(reinterpret_cast<const char*>(p), n); };
+        auto onEnd = [&](const char* sig, size_t n) {
+            events += std::to_string(data.size()) + ":" + std::string(sig, n).substr(0, 1) + std::to_string(n) + " ";
+            return true;
+        };
+        const uint8_t* b = reinterpret_cast<const uint8_t*>(body.data());
+        for (size_t off = 0; off < body.size(); off += split) {
+            TEST_ASSERT_TRUE(d.feed(b + off, std::min(split, body.size() - off), onData, onEnd));
+        }
+        TEST_ASSERT_TRUE(d.done());
+        TEST_ASSERT_EQUAL_STRING("helloabc", data.c_str());
+        TEST_ASSERT_EQUAL_STRING("5:a64 8:b64 8:f64 ", events.c_str());
+    }
+    {   // a refusal stops the decoder
+        s3::AwsChunkedDecoder d;
+        const uint8_t* b = reinterpret_cast<const uint8_t*>(body.data());
+        TEST_ASSERT_FALSE(d.feed(b, body.size(), [](const uint8_t*, size_t) {},
+                                 [](const char*, size_t) { return false; }));
+        TEST_ASSERT_TRUE(d.failed());
+    }
+    {   // no / other / oversized extension: empty signature
+        const std::string other = "2;foo=bar\r\nhi\r\n2\r\nho\r\n2;chunk-signature=" + std::string(65, 'c') +
+                                  "\r\nhu\r\n0\r\n\r\n";
+        s3::AwsChunkedDecoder d;
+        std::string lens;
+        TEST_ASSERT_TRUE(d.feed(reinterpret_cast<const uint8_t*>(other.data()), other.size(),
+                                [](const uint8_t*, size_t) {},
+                                [&](const char*, size_t n) { lens += std::to_string(n) + ","; return true; }));
+        TEST_ASSERT_TRUE(d.done());
+        TEST_ASSERT_EQUAL_STRING("0,0,0,0,", lens.c_str());
+    }
+}
+
+// Which S3 requests need no signature.
+static void test_anonymous_access() {
+    TEST_ASSERT_TRUE(s3::anonymousAllowed(nullptr, true));    // ListBuckets, unknown bucket
+    TEST_ASSERT_FALSE(s3::anonymousAllowed(nullptr, false));
+    TEST_ASSERT_FALSE(s3::anonymousAllowed(&bucket("app"), true));   // config.json holds secrets
+    TEST_ASSERT_FALSE(s3::anonymousAllowed(&bucket("app"), false));
+    for (const char* b : {"web", "examples", "fonts"}) {
+        TEST_ASSERT_TRUE(s3::anonymousAllowed(&bucket(b), true));
+        TEST_ASSERT_FALSE(s3::anonymousAllowed(&bucket(b), false));
+    }
+}
+
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_bucket_table);
@@ -546,5 +604,7 @@ int main() {
     RUN_TEST(test_chunked_errors);
     RUN_TEST(test_json_validator);
     RUN_TEST(test_json_validator_bounds);
+    RUN_TEST(test_chunked_signatures);
+    RUN_TEST(test_anonymous_access);
     return UNITY_END();
 }

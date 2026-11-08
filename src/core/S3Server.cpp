@@ -54,6 +54,7 @@
 
 #include "S3Server.h"
 
+#include "Auth.h"
 #include "S3Logic.h"
 #include "json/JsonValidator.h"
 #include "json/WindowOutputStream.h"
@@ -80,7 +81,8 @@ using s3::put;
 
 constexpr const char* kXmlDecl = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
 constexpr const char* kXmlNs = " xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"";
-constexpr const char* kExposeHeaders = "ETag, x-amz-checksum-crc32, x-freebutton-reboot-required";
+constexpr const char* kExposeHeaders =
+    "ETag, x-amz-checksum-crc32, x-freebutton-reboot-required, x-freebutton-auth, Date, x-amz-date";
 constexpr size_t kMountMax = 15;   // ESP_VFS_PATH_MAX
 constexpr int kMaxDepth = 6;       // directory levels walked by a listing
 constexpr uint8_t kMaxGets = 2;    // concurrent GetObject file handles
@@ -122,6 +124,9 @@ struct PutState {
     bool isConfig = false;
     bool ownsSlot = false;
     bool committed = false;
+    bool authFailed = false;  // the error is an authentication refusal
+    bool shaLive = true;      // sha needs mbedtls_sha256_free (the memory is free()d, no destructor)
+    fbauth::Payload payload = fbauth::Payload::Unsigned;
     uint16_t status = 0;  // != 0: request failed, respond with this
     const char* errCode = nullptr;
     const char* errMsg = nullptr;
@@ -135,6 +140,9 @@ struct PutState {
     uint8_t finalLen = 0;  // path length without ".tmp"
     s3::AwsChunkedDecoder dec;
     mbedtls_md5_context md5;
+    fbauth::Sha256 sha;          // whole body (payload Sha256) or the current chunk (Streaming)
+    fbauth::ChunkVerifier chunks;  // Streaming: chunk signature chain
+    uint8_t wantSha[32] = {};    // payload Sha256: the signed body hash
     char path[kMountMax + 1 + s3::kWriteKeyMax + s3::kTmpSuffixLen + 1] = {};
 
     void fail(uint16_t s, const char* code, const char* msg) {
@@ -218,6 +226,10 @@ void releaseState(AsyncWebServerRequest* request) {
             mbedtls_md5_free(&p->md5);
             p->haveMd5 = false;
         }
+        if (p->shaLive) {
+            p->sha.~Sha256();
+            p->shaLive = false;
+        }
         if (p->ownsSlot) {
             s_putActive = false;
             p->ownsSlot = false;
@@ -261,7 +273,8 @@ void addCommonHeaders(AsyncWebServerResponse* response) {
     response->addHeader("Access-Control-Expose-Headers", kExposeHeaders);
 }
 
-void sendXmlError(AsyncWebServerRequest* request, int status, const char* code, const char* message) {
+void sendXmlError(AsyncWebServerRequest* request, int status, const char* code, const char* message,
+                  bool authDenied = false) {
     AsyncWebServerResponse* response;
     if (request->method() == HTTP_HEAD) {
         response = request->beginResponse(status);  // HEAD: no body
@@ -278,7 +291,25 @@ void sendXmlError(AsyncWebServerRequest* request, int status, const char* code, 
         response = request->beginResponse(status, "application/xml", body);
     }
     addCommonHeaders(response);
+    if (authDenied) fbauth::addDeniedHeaders(response);
     request->send(response);
+}
+
+void sendAuthError(AsyncWebServerRequest* request, const fbauth::Result& r) {
+    sendXmlError(request, 403, fbauth::statusCode(r.status), r.message, true);
+}
+
+// Signature check for requests without a body (everything but PutObject):
+// the signed payload must be UNSIGNED-PAYLOAD or the hash of "".
+bool verifyNoBody(AsyncWebServerRequest* request, fbauth::Result& r) {
+    if (!fbauth::verifyRequest(request, r)) return false;
+    if (r.payload == fbauth::Payload::Unsigned) return true;
+    uint8_t empty[32];
+    fbauth::fromHex(fbauth::kEmptySha256, empty, sizeof empty);
+    if (r.payload == fbauth::Payload::Sha256 && fbauth::digestEqual(r.payloadSha256, empty, 32)) return true;
+    r.status = fbauth::Status::SignatureDoesNotMatch;
+    r.message = "x-amz-content-sha256 does not match the (empty) body";
+    return false;
 }
 
 void sendConstXml(AsyncWebServerRequest* request, const char* xml, size_t len) {
@@ -854,6 +885,7 @@ void putSink(PutState* st, const uint8_t* data, size_t len) {
     }
     st->crc = esp_rom_crc32_le(st->crc, data, static_cast<uint32_t>(len));
     if (st->haveMd5) mbedtls_md5_update(&st->md5, data, len);
+    if (st->payload == fbauth::Payload::Sha256 || st->payload == fbauth::Payload::Streaming) st->sha.update(data, len);
     st->written += static_cast<uint32_t>(len);
     while (len) {
         const ssize_t n = write(st->fd, data, len);
@@ -872,6 +904,29 @@ PutState* putBegin(AsyncWebServerRequest* request) {
     if (!st) return nullptr;
     watchState(request);
 
+    // Every write is signed. Verified before anything touches the
+    // filesystem; a refused body is read and dropped.
+    {
+        fbauth::Result auth;
+        if (!fbauth::verifyRequest(request, auth)) {
+            st->fail(403, fbauth::statusCode(auth.status), auth.message);
+            st->authFailed = true;
+            return st;
+        }
+        st->payload = auth.payload;
+        if (auth.payload == fbauth::Payload::Sha256) {
+            memcpy(st->wantSha, auth.payloadSha256, sizeof st->wantSha);
+            st->sha.init();
+        } else if (auth.payload == fbauth::Payload::Streaming) {
+            st->sha.init();
+            if (!st->chunks.begin(auth)) {
+                st->fail(403, "AccessDenied", "cannot verify the chunk signatures");
+                st->authFailed = true;
+                return st;
+            }
+        }
+    }
+
     const Target t = parseTarget(request->url());
     if (const WriteRefusal r = checkWrite(t); r.status) {
         st->fail(r.status, r.code, r.msg);
@@ -886,6 +941,13 @@ PutState* putBegin(AsyncWebServerRequest* request) {
     const char* encoding = headerValue(request, "Content-Encoding");
     const char* sha = headerValue(request, "x-amz-content-sha256");
     st->chunked = (encoding && strstr(encoding, "aws-chunked")) || (sha && strncmp(sha, "STREAMING-", 10) == 0);
+    const bool chunkedPayload =
+        st->payload == fbauth::Payload::Streaming || st->payload == fbauth::Payload::UnsignedStreaming;
+    if (st->payload != fbauth::Payload::Unsigned && st->chunked != chunkedPayload) {
+        // a body hash over the aws-chunked encoding, or chunk signatures on a plain body
+        st->fail(400, "InvalidRequest", "x-amz-content-sha256 does not match the body encoding");
+        return st;
+    }
     if (const char* decoded = headerValue(request, "x-amz-decoded-content-length")) {
         st->expected = static_cast<uint32_t>(strtoul(decoded, nullptr, 10));
         st->lengthKnown = true;
@@ -948,7 +1010,25 @@ void putBody(AsyncWebServerRequest* request, const uint8_t* data, size_t len) {
         putSink(st, data, len);
         return;
     }
-    if (!st->dec.feed(data, len, [st](const uint8_t* p, size_t n) { putSink(st, p, n); })) {
+    const auto onData = [st](const uint8_t* p, size_t n) { putSink(st, p, n); };
+    if (st->payload == fbauth::Payload::Streaming) {
+        // STREAMING-AWS4-HMAC-SHA256-PAYLOAD: each chunk carries a signature
+        // chained from the request's; verified as soon as its data is in.
+        const auto onChunkEnd = [st](const char* sig, size_t sigLen) {
+            uint8_t digest[32];
+            st->sha.finish(digest);
+            st->sha.init();
+            if (st->status) return true;  // already failed (e.g. too large): keep draining
+            if (!st->chunks.verify(digest, fbauth::sv(sig, sigLen))) {
+                st->fail(403, "SignatureDoesNotMatch", "aws-chunked chunk signature does not match");
+                st->authFailed = true;
+            }
+            return true;
+        };
+        if (!st->dec.feed(data, len, onData, onChunkEnd)) st->fail(400, "InvalidRequest", "malformed aws-chunked body");
+        return;
+    }
+    if (!st->dec.feed(data, len, onData)) {
         st->fail(400, "InvalidRequest", "malformed aws-chunked body");
     }
 }
@@ -995,6 +1075,13 @@ void putFinish(AsyncWebServerRequest* request) {
     if (st->fd >= 0) {
         if (close(st->fd) != 0) st->fail(500, "InternalError", "write failed");
         st->fd = -1;
+    }
+    if (!st->status && st->payload == fbauth::Payload::Sha256) {
+        uint8_t digest[32];
+        st->sha.finish(digest);
+        if (!fbauth::digestEqual(digest, st->wantSha, 32)) {
+            st->fail(400, "XAmzContentSHA256Mismatch", "x-amz-content-sha256 does not match the body");
+        }
     }
     if (!st->status && st->haveMd5) {
         uint8_t digest[16];
@@ -1054,8 +1141,9 @@ void putFinish(AsyncWebServerRequest* request) {
         ESP_LOGW(TAG, "PUT %s: %u %s %s", request->url().c_str(), st->status, st->errCode, text);
         const uint16_t status = st->status;
         const char* code = st->errCode;
+        const bool authDenied = st->authFailed;
         releaseState(request);  // drop the temp file before answering
-        sendXmlError(request, status, code, text);
+        sendXmlError(request, status, code, text, authDenied);
         return;
     }
 
@@ -1130,6 +1218,17 @@ public:
         if (method == HTTP_OPTIONS && t.type != Target::Root) {
             handlePreflight(request);
             return;
+        }
+        // Signatures: reads of the public buckets and ListBuckets are
+        // anonymous; everything else is signed (PutObject: see putBegin).
+        const bool putObject = method == HTTP_PUT && t.type == Target::Object;
+        const bool isRead = method == HTTP_GET || method == HTTP_HEAD;
+        if (!putObject && !s3::anonymousAllowed(t.type == Target::Root ? nullptr : t.bucket, isRead)) {
+            fbauth::Result auth;
+            if (!verifyNoBody(request, auth)) {
+                sendAuthError(request, auth);
+                return;
+            }
         }
         switch (t.type) {
             case Target::Root:

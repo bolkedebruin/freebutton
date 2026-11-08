@@ -53,6 +53,7 @@ inline constexpr sv kService = "s3";
 inline constexpr sv kTerminator = "aws4_request";
 inline constexpr sv kUnsignedPayload = "UNSIGNED-PAYLOAD";
 inline constexpr sv kStreamingPayload = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+inline constexpr sv kStreamingUnsignedTrailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER";
 inline constexpr sv kEmptySha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 inline constexpr long kMaxSkewSeconds = 15 * 60;
 inline constexpr long kMaxPresignExpires = 604800;  // 7 days, as S3
@@ -87,6 +88,11 @@ enum class Payload : uint8_t {
     Unsigned,   // UNSIGNED-PAYLOAD (always for presigned requests)
     Sha256,     // hex SHA-256 of the body, in Result::payloadSha256: CHECK IT
     Streaming,  // STREAMING-AWS4-HMAC-SHA256-PAYLOAD: aws-chunked, chunk signatures
+    // STREAMING-UNSIGNED-PAYLOAD-TRAILER: aws-chunked, body not signed (like
+    // UNSIGNED-PAYLOAD), checksum in a trailer. aws-cli's CRT transfer client
+    // (`aws s3 cp`) sends it even over plain HTTP. Only the S3 PutObject path
+    // accepts it; everything else treats it as an unsupported payload.
+    UnsignedStreaming,
 };
 
 // Outcome of verify(). Small and fixed (no heap); lives on the caller's stack
@@ -739,6 +745,8 @@ inline Status verify(const Req& req, const VerifyConfig& cfg, KeyFn&& keyFor, Re
                 r.payload = Payload::Unsigned;
             } else if (content == kStreamingPayload) {
                 r.payload = Payload::Streaming;
+            } else if (content == kStreamingUnsignedTrailer) {
+                r.payload = Payload::UnsignedStreaming;
             } else if (fromHex(content, r.payloadSha256, 32)) {
                 r.payload = Payload::Sha256;
             } else {

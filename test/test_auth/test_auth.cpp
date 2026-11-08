@@ -450,7 +450,9 @@ void test_error_paths() {
     TEST_ASSERT_EQUAL_INT((int)Status::AccessDenied, (int)headerCase(auth(good), nullptr));                // no x-amz-date
     TEST_ASSERT_EQUAL_INT((int)Status::AccessDenied, (int)headerCase(auth(good), "2026-11-08T12:00Z"));
     TEST_ASSERT_EQUAL_INT((int)Status::AccessDenied, (int)headerCase(auth(good), "20261108T120000Z", nullptr, 5));  // body, no hash
-    TEST_ASSERT_EQUAL_INT((int)Status::AccessDenied, (int)headerCase(auth(good), "20261108T120000Z", "STREAMING-UNSIGNED-PAYLOAD-TRAILER"));
+    // accepted as a payload mode (S3 PutObject only), so this one fails on the signature
+    TEST_ASSERT_EQUAL_INT((int)Status::SignatureDoesNotMatch, (int)headerCase(auth(good), "20261108T120000Z", "STREAMING-UNSIGNED-PAYLOAD-TRAILER"));
+    TEST_ASSERT_EQUAL_INT((int)Status::AccessDenied, (int)headerCase(auth(good), "20261108T120000Z", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"));
     TEST_ASSERT_EQUAL_INT((int)Status::SignatureDoesNotMatch, (int)headerCase(auth(good), "20261108T120000Z", "UNSIGNED-PAYLOAD"));
     TEST_ASSERT_EQUAL_INT((int)Status::AccessDenied, (int)headerCase("Basic dXNlcjpwYXNz"));
     TEST_ASSERT_EQUAL_INT((int)Status::AccessDenied, (int)headerCase("AWS4-HMAC-SHA256 SignedHeaders=host, Signature=00"));

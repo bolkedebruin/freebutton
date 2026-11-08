@@ -83,17 +83,21 @@ struct Bucket {
     // "/<name>/..." is also a URL of the web IDE (serveStatic from /www):
     // only requests from S3 clients go to the bucket.
     bool sharesStaticPath;
+    // Reads (GET/HEAD objects, listings, HeadBucket, location) need no
+    // signature. Everything else on the S3 API is SigV4-signed (Auth.h).
+    bool publicRead;
 
-    constexpr Bucket(const char* n, const char* d, bool w, bool s)
+    constexpr Bucket(const char* n, const char* d, bool w, bool s, bool p)
         : name(n), dir(d), nameLen(static_cast<uint8_t>(cLen(n))), dirLen(static_cast<uint8_t>(cLen(d))),
-          writable(w), sharesStaticPath(s) {}
+          writable(w), sharesStaticPath(s), publicRead(p) {}
 };
 
 inline constexpr Bucket kBuckets[] = {
-    {"app", "", true, false},                         // user data: config.json, scripts/, bytecode index
-    {"web", "www", false, false},                     // the IDE bundle (gzipped)
-    {"examples", "scripts/examples", false, false},   // example scripts
-    {"fonts", "fonts", false, true},                  // device fonts; the IDE loads /fonts/*.woff2 itself
+    // name       dir                 writable static  publicRead
+    {"app", "", true, false, false},                         // user data: config.json (secrets), scripts/, bytecode index
+    {"web", "www", false, false, true},                      // the IDE bundle (gzipped)
+    {"examples", "scripts/examples", false, false, true},    // example scripts
+    {"fonts", "fonts", false, true, true},                   // device fonts; the IDE loads /fonts/*.woff2 itself
 };
 inline constexpr size_t kBucketCount = sizeof(kBuckets) / sizeof(kBuckets[0]);
 
@@ -105,6 +109,13 @@ constexpr bool bucketTableValid() {
     return true;
 }
 static_assert(bucketTableValid(), "bucket directories: at most kDirMax, no leading/trailing '/'");
+
+// Requests that need no signature: reads of a publicly readable bucket,
+// ListBuckets (b == nullptr) and requests for an unknown bucket (b ==
+// nullptr, answered NoSuchBucket). Writes always need one, whatever bucket.
+inline bool anonymousAllowed(const Bucket* b, bool isRead) {
+    return isRead && (b == nullptr || b->publicRead);
+}
 
 // ListAllMyBucketsResult for kBuckets (the native tests check they match).
 inline constexpr char kListBucketsXml[] =
@@ -591,6 +602,15 @@ public:
     // onData(const uint8_t* data, size_t len). Returns false once in Error.
     template <class F>
     bool feed(const uint8_t* in, size_t len, F&& onData) {
+        return feed(in, len, onData, [](const char*, size_t) { return true; });
+    }
+
+    // Also calls onChunkEnd(const char* sig, size_t sigLen) -> bool once per
+    // chunk, after its data (the final empty chunk included), with the value
+    // of its ";chunk-signature=" extension ("" when absent or malformed);
+    // returning false puts the decoder in Error.
+    template <class F, class E>
+    bool feed(const uint8_t* in, size_t len, F&& onData, E&& onChunkEnd) {
         size_t i = 0;
         while (i < len && state_ != State::Error) {
             if (state_ == State::Data) {
@@ -599,10 +619,17 @@ public:
                 onData(in + i, span);
                 i += span;
                 remaining_ -= static_cast<uint32_t>(span);
-                if (remaining_ == 0) state_ = State::DataCr;
+                if (remaining_ == 0) {
+                    state_ = State::DataCr;
+                    if (!onChunkEnd(sig_, sigLen_)) state_ = State::Error;
+                }
                 continue;
             }
             step(static_cast<char>(in[i++]));
+            if (chunkEnded_) {  // the final, empty chunk (no Data state)
+                chunkEnded_ = false;
+                if (!onChunkEnd(sig_, sigLen_)) state_ = State::Error;
+            }
         }
         return state_ != State::Error;
     }
@@ -617,10 +644,18 @@ public:
 private:
     static constexpr const char* kCrcName = "x-amz-checksum-crc32";
     static constexpr uint8_t kCrcNameLen = 20;
+    static constexpr const char* kSigPrefix = "chunk-signature=";
+    static constexpr uint8_t kSigPrefixLen = 16;
+    static constexpr uint8_t kSigLen = 64;  // hex SHA-256 HMAC
+    static constexpr uint8_t kNoSig = 0xFF;  // extension is not (or no longer) a signature
 
     State state_ = State::Size;
     uint32_t remaining_ = 0;
     uint8_t digits_ = 0;
+    uint8_t extIdx_ = 0;
+    uint8_t sigLen_ = 0;
+    bool chunkEnded_ = false;
+    char sig_[kSigLen + 1] = {};
     // trailer line matching
     uint8_t nameIdx_ = 0;
     bool nameMatch_ = true;
@@ -671,11 +706,13 @@ private:
             case State::Size: {
                 const int v = hexVal(c);
                 if (v >= 0) {
+                    if (digits_ == 0) sigLen_ = 0;  // new chunk header
                     if (remaining_ > 0x0FFFFFFF) { state_ = State::Error; return; }
                     remaining_ = remaining_ << 4 | static_cast<uint32_t>(v);
                     ++digits_;
                 } else if (c == ';' && digits_) {
                     state_ = State::Ext;
+                    extIdx_ = 0;
                 } else if (c == '\r' && digits_) {
                     state_ = State::SizeLf;
                 } else {
@@ -684,14 +721,25 @@ private:
                 return;
             }
             case State::Ext:
-                if (c == '\r') state_ = State::SizeLf;
-                else if (c == '\n') state_ = State::Error;
+                if (c == '\r') { state_ = State::SizeLf; return; }
+                if (c == '\n') { state_ = State::Error; return; }
+                if (extIdx_ < kSigPrefixLen) {
+                    extIdx_ = c == kSigPrefix[extIdx_] ? static_cast<uint8_t>(extIdx_ + 1) : kNoSig;
+                } else if (extIdx_ == kSigPrefixLen) {
+                    if (sigLen_ < kSigLen) {
+                        sig_[sigLen_++] = c;
+                    } else {
+                        sigLen_ = 0;  // too long: not a signature
+                        extIdx_ = kNoSig;
+                    }
+                }
                 return;
             case State::SizeLf:
                 if (c != '\n') { state_ = State::Error; return; }
                 digits_ = 0;
                 if (remaining_ == 0) {
                     state_ = State::TrailerStart;
+                    chunkEnded_ = true;
                 } else {
                     state_ = State::Data;
                 }

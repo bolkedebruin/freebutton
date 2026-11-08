@@ -126,7 +126,12 @@ could not sign the WebSocket upgrade.
 The S3 API (`S3Server`) verifies with the same API (see below). Anonymous
 there: reads of the buckets `web`, `examples`, `fonts` and ListBuckets;
 everything else signed, including reads of bucket `app` (it holds
-`config.json`). Until that integration is merged the S3 API stays anonymous.
+`config.json`); the rule is `s3::anonymousAllowed()` with the bucket table's
+`publicRead` flag (S3Logic.h). PutObject verifies before it opens the temp
+file, then checks the body against the signed hash (`XAmzContentSHA256Mismatch`,
+400) or each aws-chunked chunk signature as it arrives; nothing is committed
+unless every check passed. Refusals are S3 XML errors with the same codes and
+the `x-freebutton-auth: required` header.
 
 ### Refusals
 
@@ -193,8 +198,12 @@ if (!fbauth::verifyRequest(request, auth)) {
     `AWS4-HMAC-SHA256-PAYLOAD\n<date>\n<scope>\n<previous signature>\n<sha256("")>\n<sha256(chunk)>`,
     seeded with the request signature (`auth.signature`). A failed chunk
     breaks the chain for good.
-  - Trailer variants (`STREAMING-UNSIGNED-PAYLOAD-TRAILER`,
-    `...-PAYLOAD-TRAILER`) are refused by `verifyRequest` (AccessDenied).
+  - `STREAMING-UNSIGNED-PAYLOAD-TRAILER` (`Payload::UnsignedStreaming`):
+    aws-chunked, body not signed, checksum trailer. aws-cli's CRT transfer
+    client (`aws s3 cp`) sends it even over plain HTTP, so S3 PutObject
+    accepts it like `UNSIGNED-PAYLOAD` (the headers, path and key are still
+    signed; the body is not). The other endpoints refuse it.
+    `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` is refused (AccessDenied).
 - Pure helpers for tests or other servers: `fbauth::verify<Sha>(req, cfg, keyFn, result)`,
   `writeCanonicalRequest`, `chunkSignature`, `deriveSigningKey`,
   `generateCredentials`, `formatQrPayload` (AuthLogic.h).

@@ -119,4 +119,6 @@ Today one LittleFS `data` partition (4 MB) holds the IDE bundle (`www/`, ~1.5 MB
 
 Keys are relative to the bucket directory; an object is reachable through exactly one bucket (`app` does not list `www/`, `fonts/`, `scripts/examples/`, answers 404 for reads and 400 InvalidArgument for writes of such keys). The IDE edits `app` and lists the read-only buckets on demand; `ota_fs.py` backs up all of `app`. Moving a bucket to its own partition later only changes its directory (mount point) in the table, not the API.
 
-**Still TODO:** the partition split above, and authentication (SigV4 / shared key) so `web` (and `fonts`) can become writable for IDE updates as `aws s3 sync web/dist s3://web/` (gzipped objects) without touching user data or rebuilding images. A writable bucket below the root also needs `PutState::path` / `kWriteKeyMax` to account for its directory (static_assert in `S3Server.cpp`).
+**Authentication: DONE** (SigV4, docs/AUTH.md): writes and reads of `app` are signed; `web`, `examples`, `fonts` are publicly readable.
+
+**Still TODO:** the partition split above, and letting signed clients write `web` (and `fonts`), so they become writable for IDE updates as `aws s3 sync web/dist s3://web/` (gzipped objects) without touching user data or rebuilding images. A writable bucket below the root also needs `PutState::path` / `kWriteKeyMax` to account for its directory (static_assert in `S3Server.cpp`).
