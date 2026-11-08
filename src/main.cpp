@@ -41,7 +41,11 @@ const std::string deviceId(platform_create_id_string());
 
 NeoPixelController neopixels(NEOPIN);
 auto& registry = MqttBrokerRegistry::instance();
-auto& scriptEngine = Scripting::ScriptEngine::getInstance(10 * 1024); // 10KB heap
+// JS heap, allocated once at engine init from the internal heap. 10 KB left
+// ~1 KB free with btn_a00001's script (display items, keys, covers, volume),
+// too little for the MQTT strings a callback allocates. JS is meant to own
+// the device logic, so it gets 16 KB.
+auto& scriptEngine = Scripting::ScriptEngine::getInstance(16 * 1024);
 
 // Global ConfigManager
 freebutton::ConfigManager configManager;
