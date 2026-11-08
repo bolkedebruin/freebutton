@@ -8,8 +8,8 @@ lib/lvgl_esp32_drivers
 /.vscode/launch.json
 compile_commands.json
 
-# ESP-IDF Component Manager
-dependencies.lock
+# ESP-IDF Component Manager. dependencies.lock is tracked: without it a fresh
+# checkout resolves newer components (esp-sr ...) that change sdkconfig.esp32.
 managed_components/
 .espressif/
 

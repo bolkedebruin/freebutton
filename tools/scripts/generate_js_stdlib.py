@@ -93,41 +93,32 @@ def main():
     ]):
         return 1
 
-    # Generate stdlib header (32-bit for ESP32)
-    print("\nStep 4: Generating freebutton_stdlib.h...")
-    try:
-        with open(stdlib_header, "w") as f:
+    # Generate the headers (32-bit for ESP32). Each is written only when its
+    # content changed: rewriting an identical header would make every build
+    # recompile the engine, and opening it for writing before the tool ran
+    # left an empty header behind when the tool failed.
+    for step, header, args in (
+        (4, stdlib_header, ["-m32"]),
+        (5, atom_header, ["-a", "-m32"]),
+    ):
+        print(f"\nStep {step}: Generating {header.name}...")
+        try:
             result = subprocess.run(
-                [str(stdlib_tool), "-m32"],
+                [str(stdlib_tool), *args],
                 check=True,
                 capture_output=True,
                 text=True
             )
-            f.write(result.stdout)
-        print(f"Generated {stdlib_header}")
-    except subprocess.CalledProcessError as e:
-        print(f"Error generating stdlib header: {e}")
-        if e.stderr:
-            print("stderr:", e.stderr)
-        return 1
-
-    # Generate atom header (32-bit for ESP32)
-    print("\nStep 5: Generating mquickjs_atom.h...")
-    try:
-        with open(atom_header, "w") as f:
-            result = subprocess.run(
-                [str(stdlib_tool), "-a", "-m32"],
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            f.write(result.stdout)
-        print(f"Generated {atom_header}")
-    except subprocess.CalledProcessError as e:
-        print(f"Error generating atom header: {e}")
-        if e.stderr:
-            print("stderr:", e.stderr)
-        return 1
+        except subprocess.CalledProcessError as e:
+            print(f"Error generating {header.name}: {e}")
+            if e.stderr:
+                print("stderr:", e.stderr)
+            return 1
+        if header.exists() and header.read_text() == result.stdout:
+            print(f"Unchanged {header}")
+        else:
+            header.write_text(result.stdout)
+            print(f"Generated {header}")
 
     print("\n" + "=" * 60)
     print("SUCCESS: stdlib headers generated!")

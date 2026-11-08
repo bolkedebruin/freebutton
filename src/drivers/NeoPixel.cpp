@@ -4,6 +4,11 @@
 #include "NeoPixel.h"
 #include "pins.h"
 
+// FastLED >= 3.10.5 no longer pulls in Arduino.h / <cstring> through
+// FastLED.h (constrain, map, delay, strcmp).
+#include <Arduino.h>
+#include <cstring>
+
 #define TEST_PATTERN_DELAY 200
 #define FLASH_DURATION 500
 #define GLOW_STEP_DELAY 30
