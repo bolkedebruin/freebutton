@@ -42,11 +42,56 @@ void test_hash_alone_and_leading_slash() {
     TEST_ASSERT_FALSE(match("/#", "x"));
 }
 
+void test_plus_single_level() {
+    TEST_ASSERT_TRUE(match("a/+/c", "a/x/c"));
+    TEST_ASSERT_TRUE(match("a/+/c", "a//c"));  // empty level
+    TEST_ASSERT_FALSE(match("a/+/c", "a/c"));
+    TEST_ASSERT_FALSE(match("a/+/c", "a/x/y/c"));
+    TEST_ASSERT_FALSE(match("a/+/c", "a/x/cd"));
+    TEST_ASSERT_TRUE(match("a/+", "a/x"));
+    TEST_ASSERT_FALSE(match("a/+", "a/x/y"));
+    TEST_ASSERT_FALSE(match("a/+", "a"));
+    TEST_ASSERT_TRUE(match("+/b", "a/b"));
+    TEST_ASSERT_TRUE(match("+", "a"));
+    TEST_ASSERT_FALSE(match("+", "a/b"));
+    TEST_ASSERT_TRUE(match("buttonplus/btn/button/+/label", "buttonplus/btn/button/2/label"));
+    TEST_ASSERT_FALSE(match("buttonplus/btn/button/+/label", "buttonplus/btn/button/2/top_label"));
+    TEST_ASSERT_FALSE(match("buttonplus/btn/button/+/label", "buttonplus/btn/button/2/click"));
+}
+
+void test_plus_with_hash() {
+    TEST_ASSERT_TRUE(match("a/+/#", "a/x"));
+    TEST_ASSERT_TRUE(match("a/+/#", "a/x/y/z"));
+    TEST_ASSERT_FALSE(match("a/+/#", "a"));
+    TEST_ASSERT_TRUE(match("+/#", "a"));
+}
+
+void test_wildcard_not_a_whole_level_is_literal() {
+    TEST_ASSERT_TRUE(match("a/b+", "a/b+"));
+    TEST_ASSERT_FALSE(match("a/b+", "a/bc"));
+    TEST_ASSERT_TRUE(match("a/#b", "a/#b"));
+    TEST_ASSERT_FALSE(match("a/#b", "a/xb"));
+}
+
+void test_dollar_topics_and_length_bound_with_plus() {
+    TEST_ASSERT_FALSE(match("#", "$SYS/x"));
+    TEST_ASSERT_FALSE(match("+/x", "$SYS/x"));
+    TEST_ASSERT_TRUE(match("$SYS/#", "$SYS/x"));
+    const char buf[] = "a/b/cXYZ";  // only the first 5 bytes are the topic
+    TEST_ASSERT_TRUE(mqtt_topic_matches("a/+/c", buf, 5));
+    TEST_ASSERT_TRUE(mqtt_topic_matches("a/b/+", buf, 5));
+    TEST_ASSERT_FALSE(mqtt_topic_matches("a/b/+/+", buf, 5));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_exact);
     RUN_TEST(test_length_bounded_topic);
     RUN_TEST(test_hash_level_boundary);
     RUN_TEST(test_hash_alone_and_leading_slash);
+    RUN_TEST(test_plus_single_level);
+    RUN_TEST(test_plus_with_hash);
+    RUN_TEST(test_wildcard_not_a_whole_level_is_literal);
+    RUN_TEST(test_dollar_topics_and_length_bound_with_plus);
     return UNITY_END();
 }

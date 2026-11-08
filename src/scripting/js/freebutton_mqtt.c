@@ -144,7 +144,7 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, size_t 
         if (!sub->allocated || !sub->ctx)
             continue;
 
-        // Exact match or trailing '#' (see mqtt_topic_match.h). topic is
+        // MQTT filter match, '+' and trailing '#' (mqtt_topic_match.h). topic is
         // pointer + length, not NUL-terminated. A callback may unsubscribe
         // (free sub->topic); the loop re-checks `allocated` every round.
         const int matches = mqtt_topic_matches(sub->topic, topic, topic_len);
