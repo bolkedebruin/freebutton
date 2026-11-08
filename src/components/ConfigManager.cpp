@@ -233,7 +233,15 @@ ConfigManager::MemoryStats ConfigManager::getMemoryStats() const {
 void ConfigManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
     ESP_LOGI(TAG, "Loading %zu display items", itemsArray.size());
 
-    // Reserve capacity for efficiency
+    // Reserve capacity for efficiency; keep auto ids above the configured ones.
+    unsigned long maxConfiguredId = 0;
+    for (const auto& itemElement : itemsArray) {
+        if (itemElement.is<ArduinoJson::JsonObject>()) {
+            maxConfiguredId = std::max(maxConfiguredId,
+                                       DisplayItem::configuredId(itemElement.as<ArduinoJson::JsonObject>()));
+        }
+    }
+    DisplayItem::reserveIdsUpTo(maxConfiguredId);
     {
         const ItemsLock lock;
         displayItems.reserve(displayItems.size() + itemsArray.size());
@@ -250,6 +258,15 @@ void ConfigManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
             ESP_LOGD(TAG, "Created DisplayItem: id=%lu, label='%s', page=%d",
                     item->id, item->label.c_str(), item->page);
             const ItemsLock lock;  // item (and its box) built outside the lock
+            for (const auto& existing : displayItems) {
+                if (existing->id == item->id) {
+                    const unsigned long duplicate = item->id;
+                    item->id = DisplayItem::next_id++;
+                    ESP_LOGW(TAG, "Display item id %lu is used twice; the second one gets id %lu", duplicate,
+                             item->id);
+                    break;
+                }
+            }
             displayItems.emplace_back(std::move(item));
         } else {
             ESP_LOGW(TAG, "Failed to create DisplayItem from JSON");

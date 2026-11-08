@@ -9,6 +9,7 @@
 #include "TopicHandler.h"
 #include "ui/PendingRender.h"
 #include "utils/TextSlot.h"
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -75,6 +76,34 @@ public:
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
     const std::string getComponentType() const override;
 
+    // Id given in the config ("displayitemid", a number or a numeric string
+    // as the Button+ format writes it), or 0 when absent or invalid. Scripts
+    // address config items by this id, so it must stay stable across boots.
+    static unsigned long configuredId(const JsonObject& config) {
+        const auto v = config["displayitemid"];
+        if (v.is<unsigned long>()) {
+            return v.as<unsigned long>();
+        }
+        if (v.is<const char*>()) {
+            const char* s = v.as<const char*>();
+            if (s == nullptr || *s < '0' || *s > '9') {
+                return 0;
+            }
+            char* end = nullptr;
+            const unsigned long id = std::strtoul(s, &end, 10);
+            return (end != nullptr && *end == '\0') ? id : 0;
+        }
+        return 0;
+    }
+
+    // Auto ids (items without a configured id, JS display.create()) start
+    // above every configured id, so they never collide with one.
+    static void reserveIdsUpTo(const unsigned long maxConfiguredId) {
+        if (maxConfiguredId >= next_id) {
+            next_id = maxConfiguredId + 1;
+        }
+    }
+
     static std::unique_ptr<DisplayItem> fromJson(const JsonObject& config) {
         auto displayItem = std::make_unique<DisplayItem>();
         displayItem->configure(config);
@@ -111,6 +140,9 @@ private:
     std::vector<Topic> topics;
 
     void configure(const JsonObject &data) {
+        if (const unsigned long configured = configuredId(data); configured != 0) {
+            id = configured;
+        }
         x = data["x"].isNull() ? x : data["x"].as<int>();
         y = data["y"].isNull() ? y : data["y"].as<int>();
 
@@ -129,7 +161,8 @@ private:
         if (data["topics"].is<JsonArray>()) {
             handleTopics(data["topics"].as<JsonArray>());
         } else {
-            ESP_LOGW(TAG, "No topics in DisplayItem JSON");
+            // Normal for items whose value a script sets.
+            ESP_LOGD(TAG, "DisplayItem %lu has no topics", id);
         }
     }
 public:
