@@ -53,8 +53,49 @@ S3NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 BUCKET = "app"  # the user's files; key = LittleFS path without the leading "/"
 
 
+# Device access credentials (shown on the device display). Without them,
+# requests go out unsigned (firmware without authentication still works).
+CREDENTIALS = None  # (access key id, secret) once main() has parsed them
+
+
+def _sign(method, url, headers, data):
+    """AWS SigV4 (region us-east-1, service s3), header form. The path is
+    signed exactly as sent; the query is decoded, re-encoded and sorted.
+    Multipart bodies use UNSIGNED-PAYLOAD (the device cannot hash them)."""
+    import hashlib
+    import hmac
+    akid, secret = CREDENTIALS
+    u = urllib.parse.urlsplit(url)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz_date, day = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+    is_multipart = headers.get("Content-Type", "").startswith("multipart/")
+    payload = "UNSIGNED-PAYLOAD" if is_multipart else hashlib.sha256(data or b"").hexdigest()
+    host = u.netloc
+    pairs = sorted((urllib.parse.quote(k, safe="-_.~"), urllib.parse.quote(v, safe="-_.~"))
+                   for k, v in urllib.parse.parse_qsl(u.query, keep_blank_values=True))
+    canonical_query = "&".join(f"{k}={v}" for k, v in pairs)
+    signed = "host;x-amz-content-sha256;x-amz-date"
+    canonical = "\n".join([method, u.path or "/", canonical_query,
+                           f"host:{host}\nx-amz-content-sha256:{payload}\nx-amz-date:{amz_date}\n",
+                           signed, payload])
+    scope = f"{day}/us-east-1/s3/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    key = ("AWS4" + secret).encode()
+    for part in (day, "us-east-1", "s3", "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    headers.update({
+        "x-amz-date": amz_date,
+        "x-amz-content-sha256": payload,
+        "Authorization": f"AWS4-HMAC-SHA256 Credential={akid}/{scope}, SignedHeaders={signed}, Signature={signature}",
+    })
+
+
 def http(method, url, data=None, headers=None, timeout=60):
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    headers = dict(headers or {})
+    if CREDENTIALS:
+        _sign(method, url, headers, data)
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, r.read()
 
@@ -110,7 +151,14 @@ def main():
     ap.add_argument("device", help="device base URL, e.g. http://192.168.1.50")
     ap.add_argument("--config", help="use this config.json instead of the device's")
     ap.add_argument("--dry-run", action="store_true", help="back up and build the image, do not upload")
+    ap.add_argument("--access-key", default=os.environ.get("FB_ACCESS_KEY_ID"),
+                    help="device access key id (default $FB_ACCESS_KEY_ID; shown on the device display)")
+    ap.add_argument("--secret-key", default=os.environ.get("FB_SECRET_ACCESS_KEY"),
+                    help="device secret (default $FB_SECRET_ACCESS_KEY)")
     args = ap.parse_args()
+    global CREDENTIALS
+    if args.access_key and args.secret_key:
+        CREDENTIALS = (args.access_key, args.secret_key)
     base = args.device.rstrip("/")
 
     # 1. Device and its user files.
