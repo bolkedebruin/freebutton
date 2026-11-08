@@ -6,7 +6,9 @@ The firmware serves the web IDE from LittleFS ``/www/`` (gzip-only; see
 fallback serves ``/www/index.html.gz`` explicitly). This script stages, with
 zero external dependencies at runtime:
 
-  * config + data files at the image root (config.json, virt*.json, ...)
+  * config + data files at the image root (config.json, virt*.json, ...);
+    FREEBUTTON_CONFIG=<path> takes config.json from another file
+    (e.g. devices/<id>/config.json)
   * the built web bundle from ``web/dist/`` as ``www/<relpath>.gz``
   * device fonts from ``data/fonts/*.bin`` (staged for the future WS-G
     streaming-font path; nothing reads them yet)
@@ -59,9 +61,20 @@ def assemble(project_dir):
 
     copied = 0
 
-    # 1. Root config/data files.
+    # 1. Root config/data files. FREEBUTTON_CONFIG=<path> replaces
+    #    data/config.json, e.g. a device's devices/<id>/config.json.
+    config_override = os.environ.get("FREEBUTTON_CONFIG")
+    if config_override and not os.path.isabs(config_override):
+        config_override = os.path.join(project_dir, config_override)
+    if config_override and not os.path.isfile(config_override):
+        print(f"[assemble_littlefs] ERROR: FREEBUTTON_CONFIG={config_override} not found",
+              file=sys.stderr)
+        sys.exit(1)
     for name in ROOT_FILES:
         src = os.path.join(data_dir, name)
+        if name == "config.json" and config_override:
+            src = config_override
+            print(f"[assemble_littlefs] config.json <- {src}")
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(staging, name))
             copied += 1
