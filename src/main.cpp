@@ -19,10 +19,12 @@
 #include "ui/ProgressBar.h"
 #include "scripting/ScriptEngine.h"
 #include "scripting/BytecodeRegistry.h"
+#include "scripting/mqtt_binding.h"
 
 // Forward declaration - avoid include order issues with ESPAsyncWebServer
 namespace Scripting {
     void cleanupWebSocketClients();
+    void processWebSocketRepl();
 }
 
 extern "C" {
@@ -155,6 +157,10 @@ void setup() {
     if (scriptEngineReady) {
         ESP_LOGI(TAG, "ScriptEngine initialized successfully");
 
+        // The button task may call into the handlers this script registers
+        // while it is still running; the engine lock keeps them out.
+        const Scripting::EngineLock engineLock;
+
         // Load and execute user script from flash if it exists
         // Must load bytecode BEFORE executing any JavaScript to avoid RAM atom conflicts
         JSContext* ctx = scriptEngine.getContext();
@@ -274,8 +280,12 @@ void loop() {
     // only while the broker's outbox is drained and the heap has room.
     HomeAssistantDiscovery::poll();
 
-    // Process JavaScript timers
+    // JavaScript. Script code runs on this task (and, for button handlers,
+    // on the button task), always under the engine lock. MQTT messages and
+    // REPL requests are queued by their own tasks and delivered here.
     if (scriptEngine.isInitialized()) {
+        MqttBinding::processPending();
+        Scripting::processWebSocketRepl();
         int64_t delay_ms = scriptEngine.processTimers();
         // Timer processing is non-blocking, returns next timer delay or -1 if no timers
         (void)delay_ms; // We process timers every loop iteration

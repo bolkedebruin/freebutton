@@ -185,8 +185,8 @@ void DisplayItem::destroyBox() {
     lvglDisplay.unlock();
 }
 
-// JS bindings. These run in the JS task, or in an MQTT task when called from a
-// JS mqtt.subscribe() callback, so like onMessage they only store the text.
+// JS bindings (loop or button task, JS engine lock held). Like onMessage they
+// only store the text.
 void DisplayItem::setDisplayLabel(const std::string_view text) {
     storeText(captionSlot_, text, id, "caption");
 }

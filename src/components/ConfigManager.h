@@ -49,7 +49,10 @@ public:
     /**
      * Get number of display items
      */
-    size_t getDisplayItemCount() const { return displayItems.size(); }
+    size_t getDisplayItemCount() const {
+        const ItemsLock lock;
+        return displayItems.size();
+    }
 
     /**
      * Get number of buttons
@@ -62,11 +65,13 @@ public:
     size_t getClockCount() const { return clocks.size(); }
 
     /**
-     * Iterate over all display items
+     * Iterate over all display items, with the display-items lock held.
+     * func must not add or remove display items.
      * @param func Function to call for each DisplayItem
      */
     template<typename Func>
     void forEachDisplayItem(Func&& func) {
+        const ItemsLock lock;
         for (auto& item : displayItems) {
             func(*item);
         }
@@ -77,6 +82,7 @@ public:
      */
     template<typename Func>
     void forEachDisplayItem(Func&& func) const {
+        const ItemsLock lock;
         for (const auto& item : displayItems) {
             func(*item);
         }
@@ -127,9 +133,12 @@ public:
     /**
      * Get display item by index
      * @param index Index of display item
-     * @return Reference to DisplayItem or nullptr if index invalid
+     * @return Reference to DisplayItem or nullptr if index invalid. Display
+     *         item pointers stay valid until the item is removed, which only
+     *         script code does (JS engine lock).
      */
     DisplayItem* getDisplayItem(const size_t index) const {
+        const ItemsLock lock;
         return index < displayItems.size() ? displayItems[index].get() : nullptr;
     }
 
@@ -235,6 +244,25 @@ public:
 
 private:
     static constexpr auto TAG = "ConfigManager";
+
+    // Guards the displayItems VECTOR: its storage and which items it holds.
+    // Script code adds and removes items at run time (displayitem_binding,
+    // loop or button task) while the config writer iterates it (/config,
+    // async_tcp task); a push_back that reallocates, or an erase, under that
+    // iteration was a use-after-free. It does not guard the items' fields.
+    // Recursive, statically allocated, held only for vector operations and
+    // iteration. Items are never destroyed under it (their destructor takes
+    // the broker's subscription lock and the LVGL lock). The only lock taken
+    // while holding it is a broker's subscriptionsLock_ (registerTopics() in
+    // forEachDisplayItem at boot); nothing takes it while holding the LVGL
+    // lock or a subscription lock.
+    class ItemsLock {
+    public:
+        ItemsLock();
+        ~ItemsLock();
+        ItemsLock(const ItemsLock&) = delete;
+        ItemsLock& operator=(const ItemsLock&) = delete;
+    };
 
     std::vector<std::unique_ptr<DisplayItem>> displayItems;
     std::vector<std::unique_ptr<Button>> buttons;
@@ -346,9 +374,10 @@ void ConfigManager::write(OutputStream &stream) {
         }
     }
 
-    // display items array
+    // display items array (script code may add / remove items meanwhile)
     {
         auto items = doc.Array("displayitems");
+        const ItemsLock lock;
         for (auto& item : displayItems) {
             auto jitem = items.Object();
             item->toJson<OutputStream>(jitem);

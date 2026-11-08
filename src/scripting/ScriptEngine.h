@@ -11,6 +11,8 @@
 #include <string_view>
 #include <functional>
 
+#include <freertos/FreeRTOS.h>
+
 // Include mquickjs C headers
 extern "C" {
     #include <mquickjs.h>
@@ -20,6 +22,38 @@ extern "C" {
 class ButtonManager;
 
 namespace Scripting {
+
+// The JS engine lock. mquickjs is single-threaded: its context, its stack and
+// the binding tables (timers, button/sensor/MQTT callbacks) must be used by
+// one task at a time. Every entry into script code holds this lock:
+//   * loop task: the user script in setup(), JS timers, MQTT messages and
+//     REPL requests (both handed over by their own tasks, see below), and
+//     sensor onChange callbacks (sampleSensors()).
+//   * button task: button onClick/onLongPress/onRelease, which must return
+//     synchronously (a handler returning false cancels the press).
+// Tasks that must NOT take it:
+//   * MQTT tasks: they copy messages into a bounded ring and return
+//     (mqtt_binding.cpp); waiting for script code would stop them draining
+//     the socket.
+//   * async_tcp: REPL requests are parked in a slot and run by the loop task
+//     (WebSocketREPL::processPending()).
+//   * LVGL task / lv_timer callbacks.
+// Lock order: JS lock -> {LVGL lock, broker subscriptionsLock_, JS MQTT queue
+// lock, ConfigManager display-items lock}. None of those is ever held while
+// taking the JS lock. Recursive, statically allocated.
+class EngineLock {
+public:
+    explicit EngineLock(TickType_t wait = portMAX_DELAY);
+    ~EngineLock();
+    // False when the wait timed out: do not enter the engine.
+    [[nodiscard]] bool owned() const noexcept { return owned_; }
+
+    EngineLock(const EngineLock&) = delete;
+    EngineLock& operator=(const EngineLock&) = delete;
+
+private:
+    bool owned_{false};
+};
 
 // Result of script execution
 struct ScriptResult {
@@ -41,7 +75,7 @@ public:
     void shutdown();
     bool isInitialized() const noexcept { return ctx_ != nullptr; }
 
-    // Script execution
+    // Script execution (takes the engine lock)
     ScriptResult execute(std::string_view script, const char* filename = "<eval>");
 
     // REPL support
@@ -54,8 +88,8 @@ public:
     // Get the JSContext for advanced operations (like timer processing)
     JSContext* getContext() const { return ctx_; }
 
-    // Process JavaScript timers - call this regularly from main loop
-    // Returns milliseconds until next timer, or -1 if no timers pending
+    // Process JavaScript timers - call this regularly from main loop (takes the
+    // engine lock). Returns milliseconds until next timer, or -1 if no timers pending
     int64_t processTimers() const;
 
 private:

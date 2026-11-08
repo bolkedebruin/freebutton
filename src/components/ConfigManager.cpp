@@ -11,8 +11,29 @@
 #include "drivers/BusAwareFileSystem.h"
 #include "mqtt/HomeAssistantDiscovery.h"
 #include "Clock.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace freebutton {
+
+namespace {
+
+// Created on first use (setup(), before any other task touches the list).
+SemaphoreHandle_t displayItemsMutex() {
+    static StaticSemaphore_t buffer;
+    static SemaphoreHandle_t handle = xSemaphoreCreateRecursiveMutexStatic(&buffer);
+    return handle;
+}
+
+} // namespace
+
+ConfigManager::ItemsLock::ItemsLock() {
+    xSemaphoreTakeRecursive(displayItemsMutex(), portMAX_DELAY);
+}
+
+ConfigManager::ItemsLock::~ItemsLock() {
+    xSemaphoreGiveRecursive(displayItemsMutex());
+}
 
 void ConfigManager::loadFromFile(const std::string& filename) {
     ESP_LOGI(TAG, "Loading components from file: %s", filename.c_str());
@@ -79,19 +100,24 @@ void ConfigManager::loadFromFile(const std::string& filename) {
     registerAllSubscriptions();
 
     ESP_LOGI(TAG, "Loaded %zu display items, %zu buttons, and %zu clocks from file",
-             displayItems.size(), buttons.size(), clocks.size());
+             getDisplayItemCount(), buttons.size(), clocks.size());
 }
 
 void ConfigManager::clear() {
     ESP_LOGI(TAG, "Clearing all components");
 
-    // Clear vectors - this will automatically call destructors and free memory
-    displayItems.clear();
+    // Clear vectors - this will automatically call destructors and free memory.
+    // Display items are taken out under the lock and destroyed outside it.
+    std::vector<std::unique_ptr<DisplayItem>> oldItems;
+    {
+        const ItemsLock lock;
+        oldItems.swap(displayItems);
+    }
+    oldItems.clear();
     buttons.clear();
     clocks.clear();
 
-    // Shrink capacity to free memory
-    displayItems.shrink_to_fit();
+    // Shrink capacity to free memory (displayItems: swapped with an empty one)
     buttons.shrink_to_fit();
     clocks.shrink_to_fit();
 }
@@ -99,6 +125,7 @@ void ConfigManager::clear() {
 std::vector<DisplayItem*> ConfigManager::getDisplayItemsByPage(const int page) const {
     std::vector<DisplayItem*> pageItems;
 
+    const ItemsLock lock;
     for (auto& item : displayItems) {
         if (item->page == page) {
             pageItems.push_back(item.get());
@@ -129,7 +156,10 @@ Button* ConfigManager::getButtonByPosition(const int position) const {
     return nullptr;
 }
 
+// The pointer stays valid until the item is removed, which only script code
+// does; script-code callers (JS engine lock) may therefore keep using it.
 DisplayItem* ConfigManager::findDisplayItemById(unsigned long id) const {
+    const ItemsLock lock;
     for (const auto& item : displayItems) {
         if (item->id == id) {
             return item.get();
@@ -144,7 +174,10 @@ DisplayItem* ConfigManager::addDisplayItem(std::unique_ptr<DisplayItem> item) {
     }
 
     DisplayItem* ptr = item.get();
-    displayItems.emplace_back(std::move(item));
+    {
+        const ItemsLock lock;
+        displayItems.emplace_back(std::move(item));
+    }
 
     ESP_LOGI(TAG, "Added DisplayItem: id=%lu, label='%s', page=%d",
              ptr->id, ptr->label.c_str(), ptr->page);
@@ -153,14 +186,24 @@ DisplayItem* ConfigManager::addDisplayItem(std::unique_ptr<DisplayItem> item) {
 }
 
 bool ConfigManager::removeDisplayItem(unsigned long id) {
-    auto it = std::find_if(displayItems.begin(), displayItems.end(),
-        [id](const std::unique_ptr<DisplayItem>& item) {
-            return item->id == id;
-        });
+    std::unique_ptr<DisplayItem> removed;
+    {
+        const ItemsLock lock;
+        auto it = std::find_if(displayItems.begin(), displayItems.end(),
+            [id](const std::unique_ptr<DisplayItem>& item) {
+                return item->id == id;
+            });
+        if (it != displayItems.end()) {
+            removed = std::move(*it);
+            displayItems.erase(it);
+        }
+    }
 
-    if (it != displayItems.end()) {
+    if (removed) {
         ESP_LOGI(TAG, "Removing DisplayItem: id=%lu", id);
-        displayItems.erase(it);
+        // Destroyed here, outside the lock: the destructor unsubscribes
+        // (broker lock) and deletes the box (LVGL lock).
+        removed.reset();
         return true;
     }
 
@@ -169,6 +212,7 @@ bool ConfigManager::removeDisplayItem(unsigned long id) {
 }
 
 ConfigManager::MemoryStats ConfigManager::getMemoryStats() const {
+    const ItemsLock lock;
     MemoryStats stats{};
     stats.displayItemCount = displayItems.size();
     stats.buttonCount = buttons.size();
@@ -190,7 +234,10 @@ void ConfigManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
     ESP_LOGI(TAG, "Loading %zu display items", itemsArray.size());
 
     // Reserve capacity for efficiency
-    displayItems.reserve(itemsArray.size());
+    {
+        const ItemsLock lock;
+        displayItems.reserve(displayItems.size() + itemsArray.size());
+    }
 
     for (const auto& itemElement : itemsArray) {
         if (!itemElement.is<ArduinoJson::JsonObject>()) {
@@ -202,13 +249,14 @@ void ConfigManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
         if (item) {
             ESP_LOGD(TAG, "Created DisplayItem: id=%lu, label='%s', page=%d",
                     item->id, item->label.c_str(), item->page);
+            const ItemsLock lock;  // item (and its box) built outside the lock
             displayItems.emplace_back(std::move(item));
         } else {
             ESP_LOGW(TAG, "Failed to create DisplayItem from JSON");
         }
     }
 
-    ESP_LOGI(TAG, "Successfully loaded %zu display items", displayItems.size());
+    ESP_LOGI(TAG, "Successfully loaded %zu display items", getDisplayItemCount());
 }
 
 void ConfigManager::loadButtons(const ArduinoJson::JsonArray& buttonsArray) {

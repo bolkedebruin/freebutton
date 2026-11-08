@@ -399,7 +399,7 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
             // the first batch only; the rest follow their SUBACKs.
             self->startResubscribe();
 
-            // Notify JavaScript callbacks
+            // Queue for the JavaScript callbacks (run later on the loop task)
             MqttBinding::notifyConnected(brokerId);
 
             if (on_connected_callback_) {
@@ -412,7 +412,7 @@ void MqttBroker::handleMqttEvent(esp_mqtt_event_handle_t event) const {
             // Abandon a running resubscribe; the next CONNECTED starts over.
             self->stopResubscribe();
 
-            // Notify JavaScript callbacks
+            // Queue for the JavaScript callbacks (run later on the loop task)
             MqttBinding::notifyDisconnected(brokerId);
 
             if (on_disconnected_callback_) {
@@ -514,10 +514,10 @@ void MqttBroker::dispatchMessage(esp_mqtt_event_handle_t event) const {
         }
     }
 
-    // Outside the lock: JS callbacks run script code of arbitrary length and
-    // the JS layer has its own state; they must not run under the
-    // subscription lock. Pointer + length (no copy); the JS layer builds its
-    // strings straight from these.
+    // Outside the lock. The JS layer does not run script code here: it copies
+    // the message into its bounded queue if a JS subscription matches (or
+    // drops it when full) and the loop task runs the callbacks. It never
+    // waits for the JS engine.
     MqttBinding::notifyMessageReceived(brokerId, event->topic, static_cast<size_t>(event->topic_len),
                                        event->data, static_cast<size_t>(event->data_len));
 

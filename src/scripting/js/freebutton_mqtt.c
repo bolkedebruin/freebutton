@@ -41,13 +41,22 @@ static inline bool mqtt_binding_unsubscribe(int id, const char* topic) { return 
 static inline void mqtt_binding_register_message_callback(void (*cb)(uint8_t, const char*, size_t, const char*, size_t)) {}
 static inline void mqtt_binding_register_connect_callback(void (*cb)(uint8_t)) {}
 static inline void mqtt_binding_register_disconnect_callback(void (*cb)(uint8_t)) {}
+static inline void mqtt_binding_register_message_filter(int (*f)(uint8_t, const char*, size_t)) {}
+static inline void mqtt_binding_lock(void) {}
+static inline void mqtt_binding_unlock(void) {}
 #endif
 
 // Maximum subscriptions per broker
 #define MAX_BROKERS 2
 #define MAX_SUBSCRIPTIONS_PER_BROKER 8
 
-// Storage for JavaScript callbacks using JSGCRef for GC protection
+// Storage for JavaScript callbacks using JSGCRef for GC protection.
+//
+// Threads: everything here is used by script code and by the wrappers below,
+// all with the JS engine lock held (loop task, or the button task). The one
+// exception is js_mqtt_message_filter(), which the MQTT task runs to decide
+// what to queue: it reads `allocated` and `topic`, so those two fields are
+// only written under mqtt_binding_lock().
 typedef struct {
     JSContext *ctx;
     JSGCRef callback;
@@ -101,8 +110,25 @@ static MqttSubscription* alloc_subscription(uint8_t brokerId) {
 }
 
 /*
- * C callback wrapper - called from the hardware layer when MQTT message arrives
- * and invokes the JavaScript callback
+ * MQTT task, mqtt_binding_lock() held: does any JS subscription want this
+ * message? Only matching messages are queued for the loop task.
+ */
+static int js_mqtt_message_filter(uint8_t brokerId, const char* topic, size_t topic_len) {
+    if (brokerId >= MAX_BROKERS)
+        return 0;
+
+    const BrokerCallbacks *broker = &js_mqtt_brokers[brokerId];
+    for (int i = 0; i < MAX_SUBSCRIPTIONS_PER_BROKER; i++) {
+        const MqttSubscription *sub = &broker->subscriptions[i];
+        if (sub->allocated && sub->topic && mqtt_topic_matches(sub->topic, topic, topic_len))
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * C callback wrapper - called on the loop task (JS engine lock held) for each
+ * queued MQTT message, and invokes the matching JavaScript callbacks
  */
 static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, size_t topic_len,
                                     const char* payload, size_t length) {
@@ -119,7 +145,8 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, size_t 
             continue;
 
         // Exact match or trailing '#' (see mqtt_topic_match.h). topic is
-        // pointer + length, not NUL-terminated.
+        // pointer + length, not NUL-terminated. A callback may unsubscribe
+        // (free sub->topic); the loop re-checks `allocated` every round.
         const int matches = mqtt_topic_matches(sub->topic, topic, topic_len);
 
         if (!matches)
@@ -135,7 +162,7 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, size_t 
         if (!JS_IsFunction(ctx, sub->callback.val))
             continue;
 
-        // Create arguments straight from the MQTT receive buffer (no copies)
+        // Create arguments straight from the queue record (no extra copies)
         JSValue topicArg = JS_NewStringLen(ctx, topic, topic_len);
         JSValue payloadArg = JS_NewStringLen(ctx, payload, length);
 
@@ -162,7 +189,7 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, size_t 
 }
 
 /*
- * C callback wrapper - called when broker connects
+ * C callback wrapper - called when broker connects (loop task, engine lock)
  */
 static void js_mqtt_connect_wrapper(uint8_t brokerId) {
     if (brokerId >= MAX_BROKERS)
@@ -203,7 +230,7 @@ static void js_mqtt_connect_wrapper(uint8_t brokerId) {
 }
 
 /*
- * C callback wrapper - called when broker disconnects
+ * C callback wrapper - called when broker disconnects (loop task, engine lock)
  */
 static void js_mqtt_disconnect_wrapper(uint8_t brokerId) {
     if (brokerId >= MAX_BROKERS)
@@ -240,6 +267,22 @@ static void js_mqtt_disconnect_wrapper(uint8_t brokerId) {
         if (str) {
             ESP_LOGW(MQTT_JS_TAG, "Exception in MQTT disconnect callback: %.*s", (int)len, str);
         }
+    }
+}
+
+/*
+ * Register the wrappers with the binding layer (once). Also needed for
+ * mqtt.onConnect()/onDisconnect() without any mqtt.subscribe().
+ */
+static void js_mqtt_register_wrappers(void) {
+    static int callbacks_registered = 0;
+    if (!callbacks_registered) {
+        mqtt_binding_register_message_callback(js_mqtt_message_wrapper);
+        mqtt_binding_register_connect_callback(js_mqtt_connect_wrapper);
+        mqtt_binding_register_disconnect_callback(js_mqtt_disconnect_wrapper);
+        // Last: from here on the MQTT task queues events for the wrappers.
+        mqtt_binding_register_message_filter(js_mqtt_message_filter);
+        callbacks_registered = 1;
     }
 }
 
@@ -425,8 +468,8 @@ JSValue js_freebutton_mqtt_subscribe(JSContext *ctx, JSValue *this_val, int argc
     }
 
     // Dynamically allocate topic string (memory efficient)
-    sub->topic = strdup(topic);
-    if (!sub->topic) {
+    char *topic_copy = strdup(topic);
+    if (!topic_copy) {
         // Out of memory - fail gracefully
         return JS_ThrowInternalError(ctx, "out of memory allocating topic string");
     }
@@ -435,21 +478,25 @@ JSValue js_freebutton_mqtt_subscribe(JSContext *ctx, JSValue *this_val, int argc
     sub->ctx = ctx;
     JSValue *pfunc = JS_AddGCRef(ctx, &sub->callback);
     *pfunc = argv[2];
-    sub->allocated = 1;
 
-    // Register binding layer callbacks (only once)
-    static int callbacks_registered = 0;
-    if (!callbacks_registered) {
-        mqtt_binding_register_message_callback(js_mqtt_message_wrapper);
-        mqtt_binding_register_connect_callback(js_mqtt_connect_wrapper);
-        mqtt_binding_register_disconnect_callback(js_mqtt_disconnect_wrapper);
-        callbacks_registered = 1;
-    }
+    // Publish the slot to the MQTT task's filter (callback first, then the
+    // fields the filter reads, under the lock).
+    mqtt_binding_lock();
+    sub->topic = topic_copy;
+    sub->allocated = 1;
+    mqtt_binding_unlock();
+
+    js_mqtt_register_wrappers();
 
     // Subscribe through binding layer
     if (mqtt_binding_subscribe((uint8_t)brokerId, topic, qos) < 0) {
-        JS_DeleteGCRef(ctx, &sub->callback);
+        mqtt_binding_lock();
         sub->allocated = 0;
+        sub->topic = NULL;
+        mqtt_binding_unlock();
+        free(topic_copy);
+        JS_DeleteGCRef(ctx, &sub->callback);
+        sub->ctx = NULL;
         return JS_ThrowInternalError(ctx, "failed to subscribe to MQTT topic");
     }
 
@@ -486,15 +533,16 @@ JSValue js_freebutton_mqtt_unsubscribe(JSContext *ctx, JSValue *this_val, int ar
     // Find and free subscription
     MqttSubscription* sub = find_subscription((uint8_t)brokerId, topic);
     if (sub) {
-        // Free dynamically allocated topic string
-        if (sub->topic) {
-            free(sub->topic);
-            sub->topic = NULL;
-        }
+        // Take the slot away from the MQTT task's filter first
+        mqtt_binding_lock();
+        char *old_topic = sub->topic;
+        sub->allocated = 0;
+        sub->topic = NULL;
+        mqtt_binding_unlock();
+        free(old_topic);
 
         // Free JavaScript callback reference
         JS_DeleteGCRef(ctx, &sub->callback);
-        sub->allocated = 0;
         sub->ctx = NULL;
     }
 
@@ -547,6 +595,8 @@ JSValue js_freebutton_mqtt_onConnect(JSContext *ctx, JSValue *this_val, int argc
     *pfunc = argv[1];
     broker->connectAllocated = 1;
 
+    js_mqtt_register_wrappers();
+
     return JS_UNDEFINED;
 }
 
@@ -590,6 +640,8 @@ JSValue js_freebutton_mqtt_onDisconnect(JSContext *ctx, JSValue *this_val, int a
     JSValue *pfunc = JS_AddGCRef(ctx, &broker->disconnectCallback);
     *pfunc = argv[1];
     broker->disconnectAllocated = 1;
+
+    js_mqtt_register_wrappers();
 
     return JS_UNDEFINED;
 }

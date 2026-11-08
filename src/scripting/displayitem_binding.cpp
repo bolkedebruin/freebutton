@@ -26,6 +26,10 @@ static DisplayItemInfo cachedInfo;
 // External reference to global ConfigManager
 extern freebutton::ConfigManager configManager;
 
+// All of these run in script code (JS engine lock held). Items are only added
+// and removed from here, so a DisplayItem* looked up by id stays valid for the
+// rest of the call. ConfigManager locks its list itself: the config writer
+// (async_tcp) iterates it concurrently.
 extern "C" {
 
 unsigned long displayitem_create(
@@ -105,8 +109,8 @@ const DisplayItemInfo* displayitem_get_info(unsigned long id)
 
 // The text setters only store the text in the item's slot; the LVGL task
 // renders it on its next tick. They take no LVGL lock and allocate nothing,
-// which matters because JS mqtt.subscribe() callbacks call them from the MQTT
-// task. They do not change item->label / item->unit: those std::strings are
+// so a JS mqtt.subscribe() callback updating many items stays cheap. They do
+// not change item->label / item->unit: those std::strings are
 // the configured defaults (read by createBox() and the config writer in other
 // tasks); the slot is the runtime state.
 bool displayitem_set_label(const unsigned long id, const char* label)

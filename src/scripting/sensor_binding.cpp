@@ -11,6 +11,7 @@
 #include <ranges>
 
 #include "drivers/Sensors.h"
+#include "ScriptEngine.h"
 
 static const char* TAG = "SensorBinding";
 
@@ -148,9 +149,10 @@ void sensor_hw_notify_value(int sensorId, float value) {
     if (std::fabs(value - previousValue) >= CHANGE_THRESHOLD) {
         previousValues[sensorId] = value;
 
-        // Invoke callback
+        // Invoke callback (loop task; the button task may be in the engine)
         if (changeCallbacks[sensorId]) {
             ESP_LOGD(TAG, "Invoking onChange callback for sensor %d", sensorId);
+            const Scripting::EngineLock lock;
             changeCallbacks[sensorId](sensorId, value);
         }
     }

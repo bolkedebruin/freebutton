@@ -9,6 +9,7 @@
 #include "button_hardware.h"
 #include "components/ConfigManager.h"
 #include "drivers/LvglDisplay.h"
+#include "ScriptEngine.h"
 
 extern "C" {
 #include "ui/ui_button.h"
@@ -30,8 +31,8 @@ extern "C" {
 
 // Set button label / top label. Like the MQTT path, these only store the text
 // in the button; the LVGL task renders it on its next tick. No LVGL lock is
-// taken: JS mqtt.subscribe() callbacks call these from the MQTT task, which
-// must not wait for the display.
+// taken: script code (loop or button task, engine lock held) need not wait
+// for the display.
 int button_hw_set_label(int position, const char* label) {
     if (!label) {
         ESP_LOGE(TAG, "NULL label pointer");
@@ -111,26 +112,45 @@ void button_hw_register_release_callback(int position, ButtonReleaseCallback cal
     }
 }
 
+// Dispatch to JavaScript. Runs in the button task, synchronously: the
+// handler's return value decides whether the press is published. Waits for
+// the JS engine (a timer or MQTT callback may be running on the loop task),
+// but not forever: after kEngineWait the event is not given to the script
+// and the default action proceeds.
+static constexpr TickType_t kEngineWait = pdMS_TO_TICKS(1000);
+
+static bool dispatchToScript(const ButtonClickCallback callback, const int position, const char* what) {
+    if (!callback) {
+        return false;
+    }
+    const Scripting::EngineLock lock(kEngineWait);
+    if (!lock.owned()) {
+        ESP_LOGW(TAG, "Button %d %s: script engine busy, not dispatched to JS", position, what);
+        return false;
+    }
+    return callback(position);
+}
+
 // Dispatch click event to JavaScript (positions are 1-based: 1-8)
 bool button_hw_dispatch_click(int position) {
-    if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].click) {
-        return callbacks[position - 1].click(position);
+    if (position >= 1 && position <= BUTTON_COUNT) {
+        return dispatchToScript(callbacks[position - 1].click, position, "click");
     }
     return false;
 }
 
 // Dispatch long press event to JavaScript (positions are 1-based: 1-8)
 bool button_hw_dispatch_long_press(int position) {
-    if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].longPress) {
-        return callbacks[position - 1].longPress(position);
+    if (position >= 1 && position <= BUTTON_COUNT) {
+        return dispatchToScript(callbacks[position - 1].longPress, position, "long press");
     }
     return false;
 }
 
 // Dispatch release event to JavaScript (positions are 1-based: 1-8)
 bool button_hw_dispatch_release(int position) {
-    if (position >= 1 && position <= BUTTON_COUNT && callbacks[position - 1].release) {
-        return callbacks[position - 1].release(position);
+    if (position >= 1 && position <= BUTTON_COUNT) {
+        return dispatchToScript(callbacks[position - 1].release, position, "release");
     }
     return false;
 }

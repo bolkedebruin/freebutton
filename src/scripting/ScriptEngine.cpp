@@ -8,6 +8,7 @@
 #include <cstring>
 #include <esp_log.h>
 #include <esp_rom_sys.h>
+#include <freertos/semphr.h>
 
 static const char* TAG = "ScriptEngine";
 
@@ -25,6 +26,27 @@ extern "C" {
 }
 
 namespace Scripting {
+
+namespace {
+
+// Created on first use (at run time, from setup()), never deleted.
+SemaphoreHandle_t engineMutex() {
+    static StaticSemaphore_t buffer;
+    static SemaphoreHandle_t handle = xSemaphoreCreateRecursiveMutexStatic(&buffer);
+    return handle;
+}
+
+} // namespace
+
+EngineLock::EngineLock(const TickType_t wait)
+    : owned_(xSemaphoreTakeRecursive(engineMutex(), wait) == pdTRUE) {
+}
+
+EngineLock::~EngineLock() {
+    if (owned_) {
+        xSemaphoreGiveRecursive(engineMutex());
+    }
+}
 
 // Singleton implementation
 ScriptEngine& ScriptEngine::getInstance(size_t heapSize) {
@@ -93,6 +115,8 @@ ScriptResult ScriptEngine::execute(std::string_view script, const char* filename
     if (!ctx_) {
         return {false, "", "Script engine not initialized"};
     }
+
+    EngineLock lock;
 
     // Copy to std::string to ensure null-termination
     // mquickjs JS_Eval requires input[input_len] = '\0'
@@ -215,6 +239,7 @@ int64_t ScriptEngine::processTimers() const {
     if (!ctx_) {
         return -1;  // No timers when engine not initialized
     }
+    EngineLock lock;
     return JS_ProcessTimers(ctx_);
 }
 

@@ -6,6 +6,7 @@
 #include "ScriptEngine.h"
 #include "../json/JsonEscape.h"
 #include <esp_log.h>
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -163,14 +164,14 @@ void WebSocketREPL::handleMessage(AsyncWebSocketClient* client, std::string_view
     // Extract code field
     auto codePos = data.find("\"code\"");
     if (codePos == std::string_view::npos) {
-        sendResult(client, id, false, "Missing 'code' field");
+        sendResult(client, client->id(), id, false, "Missing 'code' field");
         return;
     }
 
     auto colonPos = data.find(':', codePos);
     auto quoteStart = data.find('"', colonPos);
     if (quoteStart == std::string_view::npos) {
-        sendResult(client, id, false, "Invalid 'code' format");
+        sendResult(client, client->id(), id, false, "Invalid 'code' format");
         return;
     }
 
@@ -184,7 +185,7 @@ void WebSocketREPL::handleMessage(AsyncWebSocketClient* client, std::string_view
     }
 
     if (quoteEnd >= data.size()) {
-        sendResult(client, id, false, "Unterminated 'code' string");
+        sendResult(client, client->id(), id, false, "Unterminated 'code' string");
         return;
     }
 
@@ -200,23 +201,40 @@ void WebSocketREPL::handleMessage(AsyncWebSocketClient* client, std::string_view
              (unsigned long)esp_get_free_heap_size(),
              (unsigned long)esp_get_minimum_free_heap_size());
 
-    // Execute the code
-    auto& engine = ScriptEngine::getInstance();
-    if (!engine.isInitialized()) {
-        sendResult(client, id, false, "Script engine not initialized");
+    if (!ScriptEngine::getInstance().isInitialized()) {
+        sendResult(client, client->id(), id, false, "Script engine not initialized");
         return;
     }
 
-    auto result = engine.execute(code, "<repl>");
-
-    if (result.success) {
-        sendResult(client, id, true, result.output);
-    } else {
-        sendResult(client, id, false, result.error);
+    // Park the request for the loop task, which owns the JS engine. This
+    // handler runs in async_tcp and must not run script code.
+    if (pendingReady_.load(std::memory_order_acquire)) {
+        sendResult(client, client->id(), id, false, "REPL busy: previous eval still pending");
+        return;
     }
+    pending_.clientId = client->id();
+    pending_.idLength = std::min(id.size(), sizeof(pending_.id));
+    std::memcpy(pending_.id, id.data(), pending_.idLength);
+    pending_.code = std::move(code);
+    pendingReady_.store(true, std::memory_order_release);
 }
 
-void WebSocketREPL::sendResult(AsyncWebSocketClient* client, std::string_view id,
+void WebSocketREPL::processPending() {
+    if (!pendingReady_.load(std::memory_order_acquire)) {
+        return;
+    }
+    const std::string_view id(pending_.id, pending_.idLength);
+    {
+        // execute() takes the engine lock.
+        const auto result = ScriptEngine::getInstance().execute(pending_.code, "<repl>");
+        sendResult(nullptr, pending_.clientId, id, result.success,
+                   result.success ? result.output : result.error);
+    }
+    std::string().swap(pending_.code);  // free the code now, not at the next eval
+    pendingReady_.store(false, std::memory_order_release);
+}
+
+void WebSocketREPL::sendResult(AsyncWebSocketClient* client, const uint32_t clientId, std::string_view id,
                                 bool success, std::string_view value) {
     // Escape value for JSON and truncate if needed
     std::string escapedValue = escapeJsonString(value);
@@ -242,7 +260,11 @@ void WebSocketREPL::sendResult(AsyncWebSocketClient* client, std::string_view id
     }
 
     if (len > 0 && len < static_cast<int>(sizeof(buffer))) {
-        client->text(buffer, len);
+        if (client) {
+            client->text(buffer, len);
+        } else if (ws_) {
+            ws_->text(clientId, buffer, len);  // no-op if the client has gone
+        }
     }
 }
 
@@ -285,6 +307,10 @@ void WebSocketREPL::cleanupClients() {
 // Free function for easy access from main loop without include issues
 void cleanupWebSocketClients() {
     WebSocketREPL::getInstance().cleanupClients();
+}
+
+void processWebSocketRepl() {
+    WebSocketREPL::getInstance().processPending();
 }
 
 // Static callback for console output - bridges mquickjs to WebSocket
