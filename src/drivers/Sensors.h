@@ -10,6 +10,8 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 
+#include "../mqtt/HaEntities.h"
+
 namespace FreeButton {
 
 // Forward declarations
@@ -187,6 +189,8 @@ extern Adafruit_BME280 bme;
 void addSensor(int address);
 void sampleSensors();
 void initializeSensors();
-void registerSensorsWithDiscovery(uint8_t brokerId);
+// Home Assistant discovery source for every sensor (generated on demand).
+// Register once with HomeAssistantDiscovery::addSource().
+const freebutton::ha::DiscoverySource& sensorDiscoverySource();
 
 } // namespace FreeButton

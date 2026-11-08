@@ -7,6 +7,7 @@
 #include "PushButton.h"
 #include "ButtonLed.h"
 #include "mqtt/Component.h"
+#include "mqtt/HaEntities.h"
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -26,11 +27,12 @@ private:
     std::atomic<uint32_t> pending_{0};
 };
 
-// Button Manager class to handle all physical buttons and LEDs
-class ButtonManager {
+// Button Manager class to handle all physical buttons and LEDs.
+// Also the Home Assistant discovery source for them (generated on demand).
+class ButtonManager final : public freebutton::ha::DiscoverySource {
 public:
     ButtonManager();
-    ~ButtonManager() = default;
+    ~ButtonManager() override = default;
 
     // Non-copyable, movable
     ButtonManager(const ButtonManager&) = delete;
@@ -41,11 +43,14 @@ public:
     // Button management
     void addButton(std::unique_ptr<PushButton> button);
     void removeButton(int position);
-    // Register Home Assistant discovery (event, button, device triggers) for
-    // every key position. Existence follows the PHYSICAL buttons; the config
-    // only refines event_types / mirroring (read at publish time). Positions
-    // without a button publish an empty retained payload, removing stale entities.
-    void registerButtonsWithHomeAssistant(uint8_t brokerId) const;
+    // Home Assistant discovery (DiscoverySource): per key position 1..BUTTON_COUNT
+    // an event, a button and two device triggers, then one light per LED.
+    // Existence follows the PHYSICAL buttons; the config only refines
+    // event_types / mirroring (read at publish time). Positions without a
+    // button publish an empty retained payload, removing stale entities.
+    // Register once with HomeAssistantDiscovery::addSource().
+    [[nodiscard]] size_t discoveryCount() const override;
+    bool writeDiscovery(size_t index, uint8_t brokerId, freebutton::ha::DiscoveryOut& out) const override;
 
     // Subscribe to the HA `button` command topic of every physical key on one
     // Home Assistant broker. Call after broker creation.
@@ -66,9 +71,6 @@ public:
     // Only BAR connectors get LEDs; each bar owns a 4-LED block packed by bar order.
     void createLEDsForAllButtons(const std::string& deviceId, uint8_t brokerId,
                                  const uint8_t connectorTypes[4]);
-    // Register light discovery for every LED on one Home Assistant broker.
-    void registerLEDsWithHomeAssistant(uint8_t brokerId) const;
-
     // Get LEDs for a specific button position
     std::vector<ButtonLed*> getLEDsForButton(int position) const;
 

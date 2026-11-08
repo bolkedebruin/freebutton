@@ -9,6 +9,8 @@
 #include <string_view>
 #include <cstdint>
 
+namespace freebutton::ha { class DiscoveryOut; }
+
 // LED Position enumeration for type safety
 enum class LedPosition : uint8_t {
     FRONT = 0,
@@ -57,8 +59,8 @@ public:
         , brokerId_(brokerId)
         , ledIndex_(ledIndex) {}
 
-    // Home Assistant Discovery Integration
-    void registerWithHomeAssistant(uint8_t brokerId) const;
+    // Home Assistant discovery: write this LED's light config (no heap).
+    void writeDiscovery(freebutton::ha::DiscoveryOut& out) const;
 
     // Get state for publishing (to be called by Button component)
     [[nodiscard]] std::string getStateJson() const;

@@ -22,21 +22,31 @@ constexpr const char* kLatin1[64] = {
 
 } // namespace
 
-std::string haSlugify(const std::string_view utf8) {
-    std::string out;
-    out.reserve(utf8.size());
+size_t haSlugify(const std::string_view utf8, char* out, const size_t capacity) {
+    if (capacity == 0) {
+        return 0;
+    }
+    size_t n = 0;
     bool pendingSep = false;
+    bool full = false;
 
+    auto put = [&](const char c) {
+        if (n + 1 >= capacity) {
+            full = true;
+            return;
+        }
+        out[n++] = c;
+    };
     auto emit = [&](const char* text) {
-        if (pendingSep && !out.empty()) {
-            out.push_back('_');
+        if (pendingSep && n > 0) {
+            put('_');
         }
         pendingSep = false;
-        out.append(text);
+        for (; *text; ++text) put(*text);
     };
 
     size_t i = 0;
-    while (i < utf8.size()) {
+    while (i < utf8.size() && !full) {
         const auto c = static_cast<uint8_t>(utf8[i]);
 
         if (c < 0x80) {
@@ -82,5 +92,18 @@ std::string haSlugify(const std::string_view utf8) {
             ++i;
         }
     }
+    // A cut inside a separator run must not leave a trailing '_'.
+    while (full && n > 0 && out[n - 1] == '_') {
+        --n;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+std::string haSlugify(const std::string_view utf8) {
+    // The slug is never longer than its input: every output byte (or "_")
+    // consumes at least one input byte.
+    std::string out(utf8.size() + 1, '\0');
+    out.resize(haSlugify(utf8, out.data(), out.size()));
     return out;
 }

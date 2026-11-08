@@ -91,6 +91,30 @@ void MqttBroker::publish(std::string_view topic, std::string_view data, const in
     }
 }
 
+int MqttBroker::publish(const char* topic, const char* payload, const size_t length, const int qos,
+                        const int retain) const {
+    if (!topic || topic[0] == '\0') {
+        ESP_LOGE(TAG, "Empty topic (zero-copy publish)");
+        return -1;
+    }
+    if (!payload) {
+        payload = "";
+    }
+
+    ESP_LOGD(TAG, "topic: %s (%u B, zero-copy)", topic, static_cast<unsigned>(length));
+
+    if (!enabled || !client) {
+        return -1;
+    }
+    // len 0 makes esp-mqtt take strlen(payload): payload is NUL-terminated,
+    // so an empty payload stays empty.
+    const int ret = esp_mqtt_client_publish(client, topic, payload, static_cast<int>(length), qos, retain);
+    if (ret < 0) {
+        ESP_LOGW(TAG, "Failed to enqueue message on %s: %d", topic, ret);
+    }
+    return ret;
+}
+
 void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber *subscriber) {
     // Always store subscription regardless of client state - will subscribe when client is ready
 

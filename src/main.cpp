@@ -139,13 +139,13 @@ void setup() {
     // Start brokers and configure Home Assistant auto-discovery
     configManager.startBrokers(deviceId);
 
-    // Register Home Assistant discovery on every broker with "hassdiscovery"
-    MqttBrokerRegistry::forEachBroker([](const uint8_t brokerId, const MqttBroker* broker) {
+    // Home Assistant discovery: the sources are registered once and generate
+    // their entities per broker with "hassdiscovery" when published.
+    auto& buttons = getHardwareInitializer().getButtonManager();
+    HomeAssistantDiscovery::addSource(sensorDiscoverySource());
+    HomeAssistantDiscovery::addSource(buttons);
+    MqttBrokerRegistry::forEachBroker([&buttons](const uint8_t brokerId, const MqttBroker* broker) {
         if (broker && broker->isConfigured() && broker->hasAutoDiscovery()) {
-            auto& buttons = getHardwareInitializer().getButtonManager();
-            registerSensorsWithDiscovery(brokerId);
-            buttons.registerButtonsWithHomeAssistant(brokerId);
-            buttons.registerLEDsWithHomeAssistant(brokerId);
             buttons.subscribeHomeAssistantCommands(brokerId);
         }
     });
@@ -269,6 +269,10 @@ void loop() {
         lastWsCleanupTime = currentTime;
         Scripting::cleanupWebSocketClients();
     }
+
+    // Home Assistant discovery: non-blocking, at most one config per pass,
+    // only while the broker's outbox is drained and the heap has room.
+    HomeAssistantDiscovery::poll();
 
     // Process JavaScript timers
     if (scriptEngine.isInitialized()) {

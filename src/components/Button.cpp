@@ -12,6 +12,8 @@
 #include "types.h"
 #include <esp_log.h>
 
+#include <array>
+#include <span>
 #include <utility>
 
 namespace freebutton {
@@ -128,13 +130,31 @@ void Button::longPress() const {
 }
 
 ha::ButtonEventPlan Button::homeAssistantPlan(const uint8_t haBrokerId) const {
-    std::vector<ha::PressTopic> pressTopics;
-    pressTopics.reserve(topics.size());
+    // No heap (runs on the Home Assistant discovery task): the plan only
+    // looks at the FIRST topic per press type, so pass just those.
+    std::array<ha::PressTopic, 3> pressTopics{};
+    size_t count = 0;
     for (const auto& t : topics) {
-        pressTopics.push_back({t.brokerId, t.topic, t.payload, t.eventType});
+        if (t.eventType != CLICK && t.eventType != LONG_PRESS && t.eventType != RELEASE) {
+            continue;
+        }
+        bool seen = false;
+        for (size_t i = 0; i < count; ++i) {
+            seen = seen || pressTopics[i].eventType == t.eventType;
+        }
+        if (!seen) {
+            pressTopics[count++] = {t.brokerId, t.topic, t.payload, t.eventType};
+            if (count == pressTopics.size()) break;
+        }
     }
-    const std::string canonical = ha::canonicalButtonStateTopic(deviceId, static_cast<int>(position_));
-    return ha::planButtonEvents(pressTopics, haBrokerId, canonical);
+    char canonical[96];
+    const size_t canonicalLength =
+        ha::canonicalButtonStateTopic(canonical, sizeof(canonical), deviceId, static_cast<int>(position_));
+    if (canonicalLength == 0) {
+        return ha::unannouncedPlan("canonical press topic does not fit its buffer");
+    }
+    return ha::planButtonEvents(std::span<const ha::PressTopic>(pressTopics.data(), count), haBrokerId,
+                                std::string_view(canonical, canonicalLength));
 }
 
 void Button::release() const {

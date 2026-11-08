@@ -12,10 +12,13 @@
 #include <map>
 
 #include "mqtt/HomeAssistantDiscovery.h"
+#include "mqtt/HaEntities.h"
 #include "mqtt/Registry.h"
 #include "components/ButtonEventPlan.h"
 #include "components/ConfigManager.h"
 #include "scripting/button_hardware.h"
+
+namespace ha = freebutton::ha;
 
 namespace FreeButton {
 
@@ -106,12 +109,22 @@ namespace {
 // How a key position's presses reach the canonical topic. The config only
 // refines this (user topics already covering it, extra event types); a key
 // without a config Button still publishes click/longpress there.
+//
+// Reads ConfigManager's buttons and their topics WITHOUT synchronisation
+// (from the button task, loop() for discovery, ...). That is only valid
+// because the configuration is immutable after boot; a runtime config reload
+// would need a lock here.
 freebutton::ha::ButtonEventPlan planForPosition(const int pos, const uint8_t haBrokerId) {
     namespace ha = freebutton::ha;
     if (const auto* button = configManager.getButtonByPosition(pos)) {
         return button->homeAssistantPlan(haBrokerId);
     }
-    return ha::planButtonEvents({}, haBrokerId, ha::canonicalButtonStateTopic(deviceId, pos));
+    char canonical[96];
+    const size_t length = ha::canonicalButtonStateTopic(canonical, sizeof(canonical), deviceId, pos);
+    if (length == 0) {
+        return ha::unannouncedPlan("canonical press topic does not fit its buffer");
+    }
+    return ha::planButtonEvents({}, haBrokerId, std::string_view(canonical, length));
 }
 
 } // namespace
@@ -121,7 +134,11 @@ void ButtonManager::mirrorToCanonicalTopic(const int pos, const EventType event)
     if (event != CLICK && event != LONG_PRESS) {
         return;
     }
-    const std::string topic = ha::canonicalButtonStateTopic(deviceId, pos);
+    char topic[96];
+    const size_t topicLength = ha::canonicalButtonStateTopic(topic, sizeof(topic), deviceId, pos);
+    if (topicLength == 0) {
+        return;
+    }
     MqttBrokerRegistry::forEachBroker([&](const uint8_t brokerId, const MqttBroker* broker) {
         if (!broker || !HomeAssistantDiscovery::isDiscoveryEnabled(brokerId)) {
             return;
@@ -132,80 +149,59 @@ void ButtonManager::mirrorToCanonicalTopic(const int pos, const EventType event)
         }
         // Not retained: Home Assistant ignores retained events, and a retained
         // press would replay after a reconnect.
-        broker->publish(topic, ha::defaultPayloadFor(event), 0, false);
+        broker->publish(std::string_view(topic, topicLength), ha::defaultPayloadFor(event), 0, false);
     });
 }
 
-void ButtonManager::registerButtonsWithHomeAssistant(const uint8_t brokerId) const {
-    namespace ha = freebutton::ha;
+// Entries per key position: event, button, click trigger, long-press trigger.
+static constexpr size_t kEntriesPerPosition = 4;
 
-    // Every position, not just the physical ones: generators for positions
-    // without a physical button publish empty payloads, clearing configs left
-    // behind by earlier firmware or a different module layout.
-    for (int pos = 1; pos <= BUTTON_COUNT; ++pos) {
-        const std::string objectId = "button_" + std::to_string(pos);
-        const std::string name = "Button " + std::to_string(pos);
+size_t ButtonManager::discoveryCount() const {
+    // Every position, not just the physical ones: positions without a
+    // physical button publish empty payloads, clearing configs left behind
+    // by earlier firmware or a different module layout.
+    return BUTTON_COUNT * kEntriesPerPosition + leds_.size();
+}
 
-        // MQTT event: physical presses (click / long press / ...)
-        HomeAssistantDiscovery::registerComponent(brokerId, [this, pos, objectId, name](const uint8_t haBroker) {
-            HomeAssistantDiscoveryConfig config;
-            config.component_type = "event";
-            config.object_id = objectId;
-            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
-            config.unique_id = config.device.identifier + "_" + objectId + "_event";
-            config.name = name;
-            config.device_class = "button";
-            config.state_topic = ha::canonicalButtonStateTopic(deviceId, pos);
-            config.availability = true;
+bool ButtonManager::writeDiscovery(const size_t index, const uint8_t brokerId, ha::DiscoveryOut& out) const {
+    if (index >= BUTTON_COUNT * kEntriesPerPosition) {
+        const size_t led = index - BUTTON_COUNT * kEntriesPerPosition;
+        if (led >= leds_.size()) {
+            return false;
+        }
+        leds_[led]->writeDiscovery(out);
+        return true;
+    }
 
-            const bool present = getButton(pos) != nullptr;
-            const auto plan = planForPosition(pos, haBroker);
+    const int pos = static_cast<int>(index / kEntriesPerPosition) + 1;
+    const bool present = getButton(pos) != nullptr;
+    switch (index % kEntriesPerPosition) {
+        case 0: {
+            // MQTT event: physical presses (click / long press / ...)
+            const auto plan = planForPosition(pos, brokerId);
             if (present && !plan.announceEvent) {
                 ESP_LOGW(TAG, "Key %d: not announcing HA event entity: %s", pos, plan.problem.c_str());
             }
-            config.enabled = present && plan.announceEvent;
-            config.event_types = plan.eventTypes;
-            return config;
-        });
-
-        // MQTT button: a press sent from Home Assistant acts as a short press
-        HomeAssistantDiscovery::registerComponent(brokerId, [this, pos, objectId, name](const uint8_t haBroker) {
-            HomeAssistantDiscoveryConfig config;
-            config.component_type = "button";
-            config.object_id = objectId;
-            config.name = name;
-            config.command_topic = ha::buttonCommandTopic(deviceId, pos);
-            config.availability = true;
-            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
-            config.enabled = getButton(pos) != nullptr;
-            return config;
-        });
-
-        // Device triggers, kept for existing automations. They match payloads
-        // on the canonical topic, which carries them for every announced key.
-        HomeAssistantDiscovery::registerTrigger(brokerId, [this, pos](const uint8_t haBroker) {
-            HomeAssistantTriggerConfig config;
-            config.object_id = "button_" + std::to_string(pos) + "_click";
-            config.type = "button_short_press";
-            config.subtype = "button_" + std::to_string(pos);
-            config.topic = ha::canonicalButtonStateTopic(deviceId, pos);
-            config.payload = CLICK_PAYLOAD;
-            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
-            config.enabled = getButton(pos) != nullptr && planForPosition(pos, haBroker).announceEvent;
-            return config;
-        });
-
-        HomeAssistantDiscovery::registerTrigger(brokerId, [this, pos](const uint8_t haBroker) {
-            HomeAssistantTriggerConfig config;
-            config.object_id = "button_" + std::to_string(pos) + "_long";
-            config.type = "button_long_press";
-            config.subtype = "button_" + std::to_string(pos);
-            config.topic = ha::canonicalButtonStateTopic(deviceId, pos);
-            config.payload = LONG_PRESS_PAYLOAD;
-            config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
-            config.enabled = getButton(pos) != nullptr && planForPosition(pos, haBroker).announceEvent;
-            return config;
-        });
+            std::string_view types[ha::EventTypeList::kMaxTypes];
+            size_t count = 0;
+            for (const auto type : plan.eventTypes) {
+                types[count++] = type;
+            }
+            ha::writeButtonEvent(out, pos, present && plan.announceEvent, types, count);
+            return true;
+        }
+        case 1:
+            // MQTT button: a press sent from Home Assistant acts as a short press
+            ha::writeButtonCommand(out, pos, present);
+            return true;
+        default: {
+            // Device triggers, kept for existing automations. They match payloads
+            // on the canonical topic, which carries them for every announced key.
+            const bool longPress = index % kEntriesPerPosition == 3;
+            const bool exists = present && planForPosition(pos, brokerId).announceEvent;
+            ha::writeButtonTrigger(out, pos, longPress, exists);
+            return true;
+        }
     }
 }
 
@@ -220,12 +216,28 @@ void ButtonManager::subscribeHomeAssistantCommands(const uint8_t brokerId) const
     }
 }
 
-void HaButtonCommandSubscriber::onMessage(uint8_t brokerId, const std::string_view topic, std::string_view data) {
-    for (int pos = 1; pos <= BUTTON_COUNT; ++pos) {
-        if (topic == freebutton::ha::buttonCommandTopic(deviceId, pos)) {
-            pending_.fetch_or(1u << (pos - 1));
-            return;
-        }
+// Topic buttonplus/<deviceId>/button_<pos>/set (ha::buttonCommandTopic):
+// the position is parsed from it, no strings are built per command.
+void HaButtonCommandSubscriber::onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) {
+    constexpr std::string_view kRoot = PUBLICMQTTID "/";
+    constexpr std::string_view kButton = "/button_";
+    constexpr std::string_view kSet = "/set";
+    if (!topic.starts_with(kRoot)) return;
+    topic.remove_prefix(kRoot.size());
+    if (!topic.starts_with(deviceId)) return;
+    topic.remove_prefix(deviceId.size());
+    if (!topic.starts_with(kButton) || !topic.ends_with(kSet)) return;
+    topic.remove_prefix(kButton.size());
+    topic.remove_suffix(kSet.size());
+    // Exactly the decimal digits std::to_string writes: no sign, no leading 0.
+    if (topic.empty() || topic.size() > 2 || topic.front() == '0') return;
+    int pos = 0;
+    for (const char c : topic) {
+        if (c < '0' || c > '9') return;
+        pos = pos * 10 + (c - '0');
+    }
+    if (pos >= 1 && pos <= BUTTON_COUNT) {
+        pending_.fetch_or(1u << (pos - 1));
     }
 }
 
@@ -376,16 +388,6 @@ void ButtonManager::createLEDsForButton(int position, int frontIndex, int wallIn
         position, LedPosition::FRONT, 0, frontIndex, deviceId, brokerId));
     leds_.push_back(std::make_unique<ButtonLed>(
         position, LedPosition::WALL, 1, wallIndex, deviceId, brokerId));
-}
-
-void ButtonManager::registerLEDsWithHomeAssistant(const uint8_t brokerId) const {
-    ESP_LOGI(TAG, "Registering %zu LEDs with Home Assistant", leds_.size());
-
-    for (const auto& led : leds_) {
-        led->registerWithHomeAssistant(brokerId);
-    }
-
-    ESP_LOGI(TAG, "Home Assistant registration completed for all LEDs");
 }
 
 std::vector<ButtonLed*> ButtonManager::getLEDsForButton(const int position) const {

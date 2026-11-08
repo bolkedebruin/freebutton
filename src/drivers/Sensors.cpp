@@ -2,7 +2,7 @@
 #include <string_view>
 #include <lvgl.h>
 #include "../mqtt/Registry.h"
-#include "../mqtt/HomeAssistantDiscovery.h"
+#include <cstdio>
 #include "../scripting/sensor_binding.h"
 
 #include "../../lib/vendored/stscommon/sensirion_arch_config.h"
@@ -218,8 +218,11 @@ void sampleSensors() {
         if (sensor && sensor->online) {
             const float value = sensor->sample();
 
-            if (sensorComponents[id]) {
-                sensorComponents[id]->publishSensorValue(brokerId, value);
+            // find(), not operator[]: the maps are immutable after init
+            // (discovery iterates them from the same loop task).
+            if (const auto component = sensorComponents.find(id);
+                component != sensorComponents.end() && component->second) {
+                component->second->publishSensorValue(brokerId, value);
             }
 
             // Dispatch JavaScript onChange events (if registered)
@@ -294,73 +297,82 @@ void initializeSensors() {
     sensorComponents[VirtualSensorIds::LV_FREE_MEM_ID] = std::move(lvglFreeComponent);
 }
 
-void registerSensorsWithDiscovery(const uint8_t brokerId) {
-    for (auto& [id, sensor] : sensorDevices) {
-        if (sensor && sensorComponents[id]) {
-            // Generate appropriate default_entity_id based on sensor type
-            std::string defaultEntityId;
-            std::string stateTopic;
-            
-            switch (sensor->type) {
-                case SensorType::STS35:
-                    defaultEntityId = "sts35_1_" + std::to_string(id);
-                    stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/sts35_1/state";
-                    break;
-                case SensorType::STS35_2:
-                    defaultEntityId = "sts35_2_" + std::to_string(id);
-                    stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/sts35_2/state";
-                    break;
-                case SensorType::BME280_TEMPERATURE:
-                    defaultEntityId = "bme280_temperature_" + std::to_string(id);
-                    stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/bme280_temperature/state";
-                    break;
-                case SensorType::BME280_PRESSURE:
-                    defaultEntityId = "bme280_pressure_" + std::to_string(id);
-                    stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/bme280_pressure/state";
-                    break;
-                case SensorType::BME280_HUMIDITY:
-                    defaultEntityId = "bme280_humidity_" + std::to_string(id);
-                    stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/bme280_humidity/state";
-                    break;
-                case SensorType::VIRTUAL:
-                    if (id == VirtualSensorIds::FREE_HEAP_ID) {
-                        defaultEntityId = "free_memory_" + std::to_string(id);
-                        stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/free_memory/state";
-                    } else if (id == VirtualSensorIds::LV_USED_MEM_ID) {
-                        defaultEntityId = "lvgl_used_memory_" + std::to_string(id);
-                        stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/lvgl_used_memory/state";
-                    } else if (id == VirtualSensorIds::LV_FREE_MEM_ID) {
-                        defaultEntityId = "lvgl_free_memory_" + std::to_string(id);
-                        stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/lvgl_free_memory/state";
-                    } else {
-                        defaultEntityId = "virtual_" + std::to_string(id);
-                        stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/virtual_" + std::to_string(id) + "/state";
-                    }
-                    break;
-                default:
-                    defaultEntityId = "sensor_" + std::to_string(id);
-                    stateTopic = std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/unknown/state";
-                    break;
-            }
-            
-            // Convert to callback-based registration for memory efficiency
-            auto generator = [sensor, defaultEntityId, stateTopic](uint8_t broker_id) -> HomeAssistantDiscoveryConfig {
-                HomeAssistantDiscoveryConfig config;
-                config.component_type = "sensor";
-                config.object_id = defaultEntityId;
-                config.name = std::string(sensor->name);
-                config.device_class = std::string(sensor->deviceClass);
-                config.unit_of_measurement = std::string(sensor->unitOfMeasurement);
-                config.state_topic = stateTopic;
-                config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
-                config.enabled = true;
-                return config;
-            };
+namespace {
 
-            ESP_LOGI("Sensors", "Registering sensor '%s' with Home Assistant (callback)", std::string(sensor->name).c_str());
-            HomeAssistantDiscovery::registerComponent(brokerId, std::move(generator));
+// Sensors with an MQTT component, in map order: entry `index` of the source.
+const SensorDevice* discoverableSensor(const size_t index, int& id) {
+    size_t n = 0;
+    for (const auto& [sensorId, sensor] : sensorDevices) {
+        const auto component = sensorComponents.find(sensorId);
+        if (!sensor || component == sensorComponents.end() || !component->second) {
+            continue;
+        }
+        if (n++ == index) {
+            id = sensorId;
+            return sensor.get();
         }
     }
+    return nullptr;
+}
+
+class SensorDiscoverySource final : public freebutton::ha::DiscoverySource {
+public:
+    [[nodiscard]] size_t discoveryCount() const override {
+        size_t n = 0;
+        int id;
+        while (discoverableSensor(n, id)) ++n;
+        return n;
+    }
+
+    bool writeDiscovery(const size_t index, uint8_t, freebutton::ha::DiscoveryOut& out) const override {
+        int id = 0;
+        const SensorDevice* sensor = discoverableSensor(index, id);
+        if (!sensor) {
+            return false;
+        }
+        // object id <name>_<sensor id>; state on buttonplus/<id>/sensor/<name>/state
+        const char* name;
+        switch (sensor->type) {
+            case SensorType::STS35:              name = "sts35_1"; break;
+            case SensorType::STS35_2:            name = "sts35_2"; break;
+            case SensorType::BME280_TEMPERATURE: name = "bme280_temperature"; break;
+            case SensorType::BME280_PRESSURE:    name = "bme280_pressure"; break;
+            case SensorType::BME280_HUMIDITY:    name = "bme280_humidity"; break;
+            case SensorType::VIRTUAL:
+                name = id == VirtualSensorIds::FREE_HEAP_ID     ? "free_memory"
+                     : id == VirtualSensorIds::LV_USED_MEM_ID   ? "lvgl_used_memory"
+                     : id == VirtualSensorIds::LV_FREE_MEM_ID   ? "lvgl_free_memory"
+                     : nullptr;
+                break;
+            default:
+                name = nullptr;
+                break;
+        }
+
+        char objectId[48];
+        char topicName[32];
+        if (name) {
+            std::snprintf(objectId, sizeof(objectId), "%s_%d", name, id);
+            std::snprintf(topicName, sizeof(topicName), "%s", name);
+        } else if (sensor->type == SensorType::VIRTUAL) {
+            std::snprintf(objectId, sizeof(objectId), "virtual_%d", id);
+            std::snprintf(topicName, sizeof(topicName), "virtual_%d", id);
+        } else {
+            std::snprintf(objectId, sizeof(objectId), "sensor_%d", id);
+            std::snprintf(topicName, sizeof(topicName), "unknown");
+        }
+
+        freebutton::ha::writeSensor(out, objectId, sensor->name, sensor->deviceClass,
+                                    sensor->unitOfMeasurement, topicName);
+        return true;
+    }
+};
+
+} // namespace
+
+const freebutton::ha::DiscoverySource& sensorDiscoverySource() {
+    static SensorDiscoverySource source;
+    return source;
 }
 
 }

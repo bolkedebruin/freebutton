@@ -39,6 +39,11 @@ public:
     void sendBirth() const;
 
     void publish(std::string_view topic, std::string_view data, int qos, int retain) const;
+    // Zero-copy: `topic` and `payload` are already NUL-terminated and handed
+    // to esp-mqtt as they are (length 0 = empty payload, e.g. to clear a
+    // retained config). Returns esp_mqtt_client_publish's result: the message
+    // id, or negative when the message could not be enqueued.
+    int publish(const char* topic, const char* payload, size_t length, int qos, int retain) const;
     void subscribe(std::string_view topic, int qos, MqttSubscriber* subscriber);
     void unsubscribe(std::string_view topic);
     void unsubscribe(MqttSubscriber* subscriber);

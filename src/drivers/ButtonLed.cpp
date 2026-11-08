@@ -5,7 +5,8 @@
 
 #include "ButtonLed.h"
 #include "NeoPixel.h"
-#include "mqtt/HomeAssistantDiscovery.h"
+#include "mqtt/HaEntities.h"
+#include <cstdio>
 #include "mqtt/Component.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
@@ -110,46 +111,25 @@ std::string ButtonLed::colorToJson() const {
     return result;
 }
 
-void ButtonLed::registerWithHomeAssistant(const uint8_t brokerId) const {
-    // Convert to callback-based registration for memory efficiency
-    auto generator = [this](uint8_t broker_id) -> HomeAssistantDiscoveryConfig {
-        HomeAssistantDiscoveryConfig config;
-        config.component_type = "light";
-        config.object_id = getObjectId();  // e.g. "led_7_0" -> light.<device>_led_7_0
-        config.name = getEntityName();           // "Button 7 Wall LED"
-
-        // Core light functionality - runtime topic generation
-        config.state_topic = getStateTopic();
-        config.command_topic = getCommandTopic();
-        config.additional_config["schema"] = "json";
-        config.additional_config["retain"] = "true";
-
-        // RGB color support - runtime topic generation
-        config.additional_config["rgb_state_topic"] = getColorStateTopic();
-        config.additional_config["rgb_command_topic"] = getColorCommandTopic();
-        config.additional_config["rgb_command_template"] =
-            R"({{ {"r": red, "g": green, "b": blue} | tojson }})";
-        config.additional_config["rgb_value_template"] =
-            "{{ value_json.r }},{{ value_json.g }},{{ value_json.b }}";
-
-        // Brightness support (0-255 scale) - runtime topic generation
-        config.additional_config["brightness_state_topic"] = getBrightnessStateTopic();
-        config.additional_config["brightness_command_topic"] = getBrightnessCommandTopic();
-        config.additional_config["brightness_scale"] = "255";
-
-        // Effect support - runtime topic generation
-        config.additional_config["effect_state_topic"] = getEffectStateTopic();
-        config.additional_config["effect_command_topic"] = getEffectCommandTopic();
-        config.additional_config["effect_list"] = R"(["none","glow","flash"])";
-
-        config.device = HomeAssistantDiscovery::getGlobalDeviceInfo();
-        config.enabled = true;
-        return config;
-    };
-
-    HomeAssistantDiscovery::registerComponent(brokerId, std::move(generator));
-
-    ESP_LOGI(TAG, "Registered %s with Home Assistant (callback)", getEntityName().c_str());
+void ButtonLed::writeDiscovery(freebutton::ha::DiscoveryOut& out) const {
+    // Same root as generateBaseTopic(), built on the stack.
+    char base[80];
+    int n;
+    if (ledPosition_ == LedPosition::BOTH) {
+        n = std::snprintf(base, sizeof(base), PUBLICMQTTID "/%s/button%u_%u", deviceId_.c_str(),
+                          static_cast<unsigned>(buttonPosition_), static_cast<unsigned>(ledNumber_));
+    } else {
+        const auto position = positionToString();
+        n = std::snprintf(base, sizeof(base), PUBLICMQTTID "/%s/button%u_%.*s", deviceId_.c_str(),
+                          static_cast<unsigned>(buttonPosition_), static_cast<int>(position.size()),
+                          position.data());
+    }
+    if (n < 0 || static_cast<size_t>(n) >= sizeof(base)) {
+        ESP_LOGE(TAG, "LED %u/%u topic root too long", buttonPosition_, ledNumber_);
+        return;  // nothing written: no message
+    }
+    freebutton::ha::writeLight(out, buttonPosition_, ledNumber_, positionToString(),
+                               std::string_view(base, static_cast<size_t>(n)));
 }
 
 bool ButtonLed::matchesTopic(std::string_view topic) const noexcept {

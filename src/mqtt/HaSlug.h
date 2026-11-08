@@ -15,9 +15,14 @@
 #ifndef FREEBUTTON_HASLUG_H
 #define FREEBUTTON_HASLUG_H
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
 std::string haSlugify(std::string_view utf8);
+
+// Heap-free variant: writes the slug NUL-terminated into `out` and returns
+// its length. A slug longer than capacity - 1 is cut (never ending in "_").
+size_t haSlugify(std::string_view utf8, char* out, size_t capacity);
 
 #endif //FREEBUTTON_HASLUG_H

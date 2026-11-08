@@ -28,8 +28,25 @@ void test_more_latin1() {
     check("a_b", "a\xC3\x97" "b");                       // a×b (× is a separator)
 }
 
+// Heap-free overload: same slug into a fixed buffer, cut when too small.
+void test_buffer_overload() {
+    char buf[64];
+    TEST_ASSERT_EQUAL(17, haSlugify("ButtonPlus Garage", buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("buttonplus_garage", buf);
+    TEST_ASSERT_EQUAL(8, haSlugify("Caf\xC3\xA9 \xC3\x89\xC3\xA9n", buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("cafe_een", buf);
+    char small[8];
+    TEST_ASSERT_EQUAL(6, haSlugify("abcdef ghij", small, sizeof(small)));  // never ends in "_"
+    TEST_ASSERT_EQUAL_STRING("abcdef", small);
+    TEST_ASSERT_EQUAL(7, haSlugify("abcdefghij", small, sizeof(small)));
+    TEST_ASSERT_EQUAL_STRING("abcdefg", small);
+    TEST_ASSERT_EQUAL(0, haSlugify("!!!", small, sizeof(small)));
+    TEST_ASSERT_EQUAL_STRING("", small);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
+    RUN_TEST(test_buffer_overload);
     RUN_TEST(test_plain_name);
     RUN_TEST(test_dash_and_punctuation);
     RUN_TEST(test_latin1_accents);
