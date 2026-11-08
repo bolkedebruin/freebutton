@@ -15,10 +15,12 @@
  * SDK configuration:
  *   - endpoint = device base URL (same origin by default), forcePathStyle,
  *     region us-east-1 (required by the SDK, meaningless to the device)
- *   - dummy static credentials + a no-op signer: the device ignores
- *     signatures, and skipping SigV4 saves hashing every body and sending
- *     Authorization / x-amz-date / x-amz-content-sha256 headers the device
- *     would have to buffer in its scarce RAM
+ *   - SigV4 with the credentials from Settings > Device access (auth.ts):
+ *     the device requires signatures for writes and for reads of bucket
+ *     "app"; without stored credentials requests go out unsigned, so the
+ *     anonymous buckets (web, examples, fonts) still work. The signer signs
+ *     only host / x-amz-date / x-amz-content-sha256 to keep the headers the
+ *     device has to buffer small.
  *   - maxAttempts 1: no automatic retries against a RAM-starved device
  *   - request checksums stay at the SDK default (string bodies are not
  *     streamed, so PutObject sends a plain body + x-amz-checksum-crc32,
@@ -34,6 +36,7 @@ import {
   type ListObjectsV2CommandOutput,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
+import { addAuthRequiredMiddleware, credentialsProvider, deviceS3Signer, signedFetch } from './auth';
 
 /** The user's files (read/write). */
 export const APP_BUCKET = 'app';
@@ -99,6 +102,8 @@ const S3_ERROR_CODES = new Set([
   'AccessDenied', 'EntityTooLarge', 'InvalidArgument', 'InvalidRequest', 'NoSuchKey',
   'NoSuchBucket', 'NotImplemented', 'InternalError', 'ServiceUnavailable', 'SlowDown',
   'MethodNotAllowed', 'InvalidObjectState', 'PreconditionFailed',
+  // Authentication refusals (403): the storage API is there, access is not.
+  'SignatureDoesNotMatch', 'RequestTimeTooSkewed', 'MissingAuthentication',
 ]);
 
 /** Resolve the endpoint: "" means the origin that served the IDE. */
@@ -135,8 +140,8 @@ export function createS3Client(baseUrl: string, overrides: Partial<S3ClientConfi
     endpoint: endpointFor(baseUrl),
     region: 'us-east-1',
     forcePathStyle: true,
-    credentials: { accessKeyId: 'freebutton', secretAccessKey: 'freebutton' },
-    signer: { sign: async (request) => request },
+    credentials: credentialsProvider(baseUrl),
+    signer: deviceS3Signer(baseUrl),
     maxAttempts: 1,
     ...overrides,
   });
@@ -144,6 +149,7 @@ export function createS3Client(baseUrl: string, overrides: Partial<S3ClientConfi
     rebootHeaderMiddleware as unknown as Parameters<typeof client.middlewareStack.add>[0],
     { step: 'deserialize', name: 'freebuttonRebootHeader', priority: 'high' },
   );
+  addAuthRequiredMiddleware(client, baseUrl);
   return client;
 }
 
@@ -316,7 +322,7 @@ export async function deleteObject(baseUrl: string, key: string): Promise<void> 
 }
 
 /** POST /api/reboot (not part of S3; lives next to it on the device). */
-export async function rebootDevice(baseUrl: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+export async function rebootDevice(baseUrl: string, fetchImpl: typeof fetch = signedFetch): Promise<void> {
   const res = await fetchImpl(`${baseUrl.replace(/\/+$/, '')}/api/reboot`, { method: 'POST' });
   if (!res.ok) throw new S3Error(res.status, '', `Reboot failed: HTTP ${res.status} ${res.statusText}`.trim());
 }
