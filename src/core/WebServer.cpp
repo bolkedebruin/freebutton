@@ -14,6 +14,7 @@
 #include "scripting/WebSocketREPL.h"
 #include "drivers/DeviceInfo.h"
 #include "S3Server.h"
+#include "Auth.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -409,77 +410,6 @@ static void handleReboot(AsyncWebServerRequest *request) {
     request->send(200, "application/json", R"({"status":"rebooting"})");
 }
 
-// Embedded WebSocket test page - served from device to avoid PNA restrictions
-static constexpr std::string_view wsTestPage = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-    <title>WebSocket REPL Test</title>
-    <meta charset="utf-8">
-    <style>
-        body { font-family: sans-serif; margin: 20px; }
-        #log { background: #f0f0f0; padding: 10px; height: 300px; overflow: auto; font-family: monospace; }
-        input { width: 300px; padding: 5px; }
-        button { padding: 5px 15px; margin: 5px 0; }
-    </style>
-</head>
-<body>
-    <h1>WebSocket REPL Test</h1>
-    <p><strong>Page origin:</strong> <span id="origin"></span></p>
-    <input type="text" id="code" placeholder="Enter JavaScript code..." value="1+1">
-    <button onclick="sendCode()">Evaluate</button>
-    <button onclick="connect()">Reconnect</button>
-    <button onclick="disconnect()">Disconnect</button>
-    <pre id="log"></pre>
-    <script>
-        let ws = null;
-        const log = (msg) => {
-            const el = document.getElementById('log');
-            el.textContent += new Date().toLocaleTimeString() + ': ' + msg + '\n';
-            el.scrollTop = el.scrollHeight;
-        };
-        const connect = () => {
-            if (ws) { ws.close(); ws = null; }
-            const wsUrl = 'ws://' + location.host + '/ws/repl';
-            log('Connecting to ' + wsUrl);
-            ws = new WebSocket(wsUrl);
-            ws.onopen = () => log('CONNECTED');
-            ws.onclose = (e) => log('CLOSED: code=' + e.code);
-            ws.onerror = () => log('ERROR');
-            ws.onmessage = (e) => {
-                const msg = JSON.parse(e.data);
-                if (msg.type === 'result') {
-                    log('=> ' + (msg.success ? msg.value : 'Error: ' + msg.error));
-                } else if (msg.type === 'console') {
-                    log('[console] ' + msg.message);
-                } else {
-                    log('MSG: ' + e.data);
-                }
-            };
-        };
-        const disconnect = () => { if (ws) { ws.close(); ws = null; } };
-        const sendCode = () => {
-            if (!ws || ws.readyState !== WebSocket.OPEN) { log('Not connected'); return; }
-            const code = document.getElementById('code').value;
-            const id = Math.random().toString(36).substr(2, 8);
-            log('> ' + code);
-            ws.send(JSON.stringify({ type: 'eval', id: id, code: code }));
-        };
-        document.getElementById('code').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendCode();
-        });
-        document.getElementById('origin').textContent = location.origin;
-        connect();
-    </script>
-</body>
-</html>
-)rawliteral";
-
-void handleWsTestPage(AsyncWebServerRequest *request) {
-    const std::string content{wsTestPage};
-    request->send(200, "text/html", content.c_str());
-}
-
 void handleBytecodeDownload(AsyncWebServerRequest *request) {
     // Download the temp file created by BytecodeWriter
     // Default name is "script" but can be overridden
@@ -504,9 +434,21 @@ void webserver_start() {
     // The web IDE is now served locally from LittleFS /www/ (same-origin), so the
     // wildcard CORS + Private-Network-Access DefaultHeaders that the former
     // externally-hosted (cross-origin) IDE required are no longer needed and
-    // have been removed.
+    // have been removed. Cross-origin (dev) clients get CORS headers from the
+    // auth middleware (fbauth::installGate).
     // The HTTP_OPTIONS -> 200 preflight guard is kept in onNotFound for any
     // remaining tooling that issues a CORS preflight against the API.
+
+    // SigV4 authentication (Auth.h, docs/AUTH.md). The gate must be the FIRST
+    // handler: it takes over a protected request whose signature fails at the
+    // end of its headers, before any body byte reaches a handler. Signature
+    // required: POST /api/reboot, /upload, /ota_update, /updatefirmware,
+    // /resetWifi, /api/bytecode/upload; GET /config; the /ws/repl upgrade.
+    // Anonymous: /api/version, /api/device, /api/bytecode/list,
+    // /api/bytecode/next_address, the /upgrade and /bytecode pages (their
+    // unsigned form posts now get 403), static www, captive portal, OPTIONS.
+    fbauth::init();
+    fbauth::installGate(server);
 
     // SPA fallback: any GET that is not an API/WebSocket route and does not map
     // to a static file serves the gzipped app shell so client-side routing works.
@@ -538,15 +480,9 @@ void webserver_start() {
         request->send(404);
     });
 
-    // S3-compatible file API (buckets app, web, examples, fonts). Registered
-    // before serveStatic so "/<bucket>/..." and S3 ListBuckets on "/" reach it
-    // first (browser GETs of /fonts/... still fall through to the IDE).
-    s3_register(server);
-
-    // Serve the locally-built web IDE bundle (with .gz auto-negotiation) from
-    // LittleFS /www/. index.html is the default document for "/".
-    server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
-
+    // The API routes are registered BEFORE the S3 handler: a signed request
+    // (Authorization: AWS4-HMAC-SHA256, x-amz-* headers) looks like an S3
+    // client to it, and it would answer e.g. GET /config as bucket "config".
     server.on("/config", HTTP_GET, handleConfig);
 
     // Firmware/build metadata (defines injected by build_info_flags.py).
@@ -584,7 +520,8 @@ void webserver_start() {
         request->send(response);
     });
 
-    server.on("/resetWifi", HTTP_GET, [](AsyncWebServerRequest *request){
+    // POST only (and signed): as a GET it was a one-click WiFi wipe for any page.
+    server.on("/resetWifi", HTTP_POST, [](AsyncWebServerRequest *request){
         request->send(200, "text/plain", "Resetting WiFi settings and rebooting...");
         delay(1000);
         reset_wifi_credentials();
@@ -596,7 +533,8 @@ void webserver_start() {
     server.on("/ota_update", HTTP_POST, handleOtaUpdate);
     server.on("/updatefirmware", HTTP_POST, handleRemoteFirmwareUpdate);
 
-    // Bytecode upload endpoints
+    // Bytecode upload endpoints. /bytecode is a dev upload page (anonymous);
+    // its unsigned upload is refused now, upload from the IDE instead.
     server.on("/bytecode", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(LittleFS, "/bytecode_upload.html", "text/html");
     });
@@ -625,11 +563,19 @@ void webserver_start() {
         request->send(200, "application/json", body);
     });
 
-    // WebSocket test page (served from device to avoid browser PNA restrictions)
-    server.on("/ws-test", HTTP_GET, handleWsTestPage);
-
-    // WebSocket REPL for JavaScript debugging
+    // WebSocket REPL for JavaScript debugging; the upgrade needs a presigned
+    // URL. (The former /ws-test page is gone: it could not sign the upgrade.)
     Scripting::WebSocketREPL::getInstance().init(server);
+
+    // S3-compatible file API (buckets app, web, examples, fonts). Registered
+    // after the API routes (see above) and before serveStatic so
+    // "/<bucket>/..." and S3 ListBuckets on "/" reach it first (browser GETs
+    // of /fonts/... still fall through to the IDE).
+    s3_register(server);
+
+    // Serve the locally-built web IDE bundle (with .gz auto-negotiation) from
+    // LittleFS /www/. index.html is the default document for "/".
+    server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
 
     ESP_LOGI(TAG, "Starting webserver");
     server.begin();

@@ -145,6 +145,14 @@ void FactoryButton::buttonTask() noexcept {
                 callback_(ButtonEvent::LONG_PRESS_START);
                 xSemaphoreGive(mutex_);
             }
+            nextHoldTick_ = currentTime + HOLD_TICK_MS;
+        } else if (flags_.currentState && flags_.longPressTriggered &&
+                   static_cast<int32_t>(currentTime - nextHoldTick_) >= 0) {
+            nextHoldTick_ += HOLD_TICK_MS;
+            if (callback_ && xSemaphoreTake(mutex_, portMAX_DELAY) == pdTRUE) {
+                callback_(ButtonEvent::HOLD);
+                xSemaphoreGive(mutex_);
+            }
         }
 
         flags_.lastState = rawState;

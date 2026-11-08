@@ -11,7 +11,8 @@ enum class ButtonEvent {
     NONE,
     SHORT_PRESS,
     LONG_PRESS_START,
-    LONG_PRESS_END
+    LONG_PRESS_END,
+    HOLD,  // every HOLD_TICK_MS after LONG_PRESS_START while still held; see getPressedDuration()
 };
 
 class FactoryButton {
@@ -19,6 +20,7 @@ public:
     static constexpr uint32_t LONG_PRESS_DURATION_MS = 2000;
     static constexpr uint32_t DEBOUNCE_TIME_MS = 50;
     static constexpr uint32_t TASK_DELAY_MS = 10;
+    static constexpr uint32_t HOLD_TICK_MS = 500;
 
     using ButtonCallback = void(*)(ButtonEvent);
 
@@ -50,6 +52,7 @@ private:
 
     uint32_t pressStartTime_ = 0;
     uint32_t lastChangeTime_ = 0;
+    uint32_t nextHoldTick_ = 0;
 
     SemaphoreHandle_t mutex_ = nullptr;
 };

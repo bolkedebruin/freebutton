@@ -53,7 +53,7 @@ void show_device_info_modal(lv_obj_t* screen, const char* device_info) {
 
     // Simple close instruction
     lv_obj_t* close_label = lv_label_create(modal);
-    lv_label_set_text(close_label, "Release to close");
+    lv_label_set_text(close_label, "Release to close, hold on for API keys");
     lv_obj_set_style_text_color(close_label, lv_color_hex(0x888888), 0);
     lv_obj_align(close_label, LV_ALIGN_BOTTOM_MID, 0, -5);
 
