@@ -2,6 +2,8 @@
 
 #include "core/AuthLogic.h"
 
+#include <WiFi.h>
+
 #include <cstdio>
 #include <cstring>
 #include <esp_log.h>
@@ -11,9 +13,12 @@ static const char* TAG = "credentials_modal";
 static lv_obj_t* modal = nullptr;
 static lv_obj_t* hint_label = nullptr;
 
-// 280 x 200 like the other modals: QR (140 px, quiet zone on, 3 px modules
-// for the 68-byte payload = version 4) on the left, the text on the right,
-// the hint along the bottom.
+// 280 x 200 like the other modals: QR (140 px, quiet zone on) on the left,
+// the text on the right, the hint along the bottom. The QR is a link,
+// http://<ip>/#fbcred=<akid>:<secret> (<= 92 bytes for IPv4: version 6, still
+// 3 px modules): a phone camera opens the IDE, which stores the credentials
+// from the fragment (browsers never send it) and offers copy / save. Without
+// an IP address the plain FBCRED:<akid>:<secret> text is encoded.
 void show_credentials_modal(lv_obj_t* screen, const char* access_key_id, const char* secret, const char* hint) {
     if (!screen || !access_key_id || !secret) return;
     hide_credentials_modal();
@@ -31,8 +36,13 @@ void show_credentials_modal(lv_obj_t* screen, const char* access_key_id, const c
     lv_obj_set_style_pad_all(modal, 6, 0);
     lv_obj_set_scrollbar_mode(modal, LV_SCROLLBAR_MODE_OFF);
 
-    char payload[fbauth::kQrPayloadLen + 1];
-    const bool haveQr = fbauth::formatQrPayload(access_key_id, secret, payload, sizeof payload);
+    char payload[fbauth::kQrUrlMax + 1];
+    IPAddress ip = WiFi.localIP();
+    if (ip == IPAddress(0, 0, 0, 0)) ip = WiFi.softAPIP();  // setup AP (captive portal)
+    char host[16];
+    snprintf(host, sizeof host, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+    const bool haveQr = (ip != IPAddress(0, 0, 0, 0) && fbauth::formatQrUrl(host, access_key_id, secret, payload, sizeof payload)) ||
+                        fbauth::formatQrPayload(access_key_id, secret, payload, sizeof payload);
     lv_obj_t* qr = haveQr ? lv_qrcode_create(modal) : nullptr;
     if (qr) {
         lv_qrcode_set_size(qr, 140);

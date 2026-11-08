@@ -52,7 +52,7 @@ static uint32_t credentialsSince = 0;
 static std::string* pendingDeviceInfoText = nullptr;
 static lv_timer_t* modalCheckTimer = nullptr;
 
-static constexpr const char* HINT_IDLE = "Press: close.  Hold 10 s: new keys";
+static constexpr const char* HINT_IDLE = "Scan to open the IDE. Press: close. Hold 10 s: new keys";
 
 static void setHint(const char* text) {
     snprintf(hint, sizeof hint, "%s", text);

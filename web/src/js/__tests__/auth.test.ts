@@ -15,6 +15,7 @@ import {
   addAuthRequiredMiddleware, clearCredentials, credentialsProvider, deviceOrigin, deviceS3Signer,
   getClockOffset, getCredentials, parseAuthErrorBody, parseFbcred, parseServerTime, presignUrl,
   setClockOffset, setCredentials, signRequest, signatureHeaders, signedFetch, validateCredentials,
+  formatFbcred, importCredentialsFromLocation, takeImportedCredentials,
   type DeviceCredentials,
 } from '../auth';
 import { ReplWebSocket } from '../websocket';
@@ -562,5 +563,44 @@ describe('S3 client with deviceS3Signer', () => {
     window.removeEventListener('auth-required', listener);
     expect(events).toHaveLength(1);
     expect(events[0].code).toBe('AccessDenied');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QR link http://<device>/#fbcred=<akid>:<secret>
+// ---------------------------------------------------------------------------
+
+describe('QR link import', () => {
+  const AKID = 'FBABCDEFGHIJKLMNOP23';  // test values (same as the firmware tests)
+  const SECRET = 'abcdefghijABCDEFGHIJ0123456789klmnopqrst';
+  const loc = (hash: string) => ({ hash, pathname: '/', search: '?x=1' });
+  const hist = () => ({ state: { a: 1 }, replaceState: vi.fn() });
+
+  it('stores the credentials for this origin and clears the fragment', () => {
+    const h = hist();
+    const creds = importCredentialsFromLocation(loc(`#fbcred=${AKID}:${SECRET}`), h);
+    expect(creds).toEqual({ accessKeyId: AKID, secretAccessKey: SECRET });
+    expect(getCredentials('')).toEqual(creds);
+    expect(h.replaceState).toHaveBeenCalledWith({ a: 1 }, '', '/?x=1');
+    expect(takeImportedCredentials()).toEqual(creds);
+    expect(takeImportedCredentials()).toBeNull();  // once
+    expect(formatFbcred(creds!)).toBe(`FBCRED:${AKID}:${SECRET}`);
+  });
+
+  it('ignores other fragments and leaves the URL alone', () => {
+    const h = hist();
+    expect(importCredentialsFromLocation(loc('#editor'), h)).toBeNull();
+    expect(importCredentialsFromLocation(loc(''), h)).toBeNull();
+    expect(h.replaceState).not.toHaveBeenCalled();
+    expect(getCredentials('')).toBeNull();
+  });
+
+  it('clears a malformed fragment but stores nothing', () => {
+    const h = hist();
+    expect(importCredentialsFromLocation(loc(`#fbcred=${AKID}:short`), h)).toBeNull();
+    expect(importCredentialsFromLocation(loc('#fbcred=%E0%A4%A'), h)).toBeNull();
+    expect(h.replaceState).toHaveBeenCalledTimes(2);
+    expect(getCredentials('')).toBeNull();
+    expect(takeImportedCredentials()).toBeNull();
   });
 });

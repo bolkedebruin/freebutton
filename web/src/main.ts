@@ -1,5 +1,8 @@
 import './app.css';
 
+// First: credentials from the device's QR link (before any request).
+import './js/boot-credentials.js';
+
 // Component registrations
 import './components/fb-app.js';
 import './components/fb-navbar.js';

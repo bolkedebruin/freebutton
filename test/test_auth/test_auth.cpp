@@ -521,6 +521,17 @@ void test_credentials_format() {
     TEST_ASSERT_TRUE(formatQrPayload(kBotoAkid, kBotoSecret, qr, sizeof qr));
     TEST_ASSERT_EQUAL_STRING("FBCRED:FBABCDEFGHIJKLMNOP23:abcdefghijABCDEFGHIJ0123456789klmnopqrst", qr);
     TEST_ASSERT_FALSE(formatQrPayload(kBotoAkid, kBotoSecret, qr, sizeof qr - 1));
+
+    char url[kQrUrlMax + 1];
+    TEST_ASSERT_TRUE(formatQrUrl("192.168.1.51", kBotoAkid, kBotoSecret, url, sizeof url));
+    TEST_ASSERT_EQUAL_STRING(
+        "http://192.168.1.51/#fbcred=FBABCDEFGHIJKLMNOP23:abcdefghijABCDEFGHIJ0123456789klmnopqrst", url);
+    TEST_ASSERT_TRUE(formatQrUrl("255.255.255.255", kBotoAkid, kBotoSecret, url, sizeof url));
+    TEST_ASSERT_TRUE(strlen(url) <= 106);  // QR version 6 at ECC M: 3 px modules in the 140 px code
+    TEST_ASSERT_FALSE(formatQrUrl("", kBotoAkid, kBotoSecret, url, sizeof url));
+    TEST_ASSERT_FALSE(formatQrUrl("evil.host/x?", kBotoAkid, kBotoSecret, url, sizeof url));
+    TEST_ASSERT_FALSE(formatQrUrl(std::string(33, 'a'), kBotoAkid, kBotoSecret, url, sizeof url));
+    TEST_ASSERT_FALSE(formatQrUrl("10.0.0.1", kBotoAkid, kBotoSecret, url, sizeof url - 1));
 }
 
 int main(int, char**) {

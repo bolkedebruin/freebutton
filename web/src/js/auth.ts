@@ -92,6 +92,79 @@ export function parseFbcred(text: string): DeviceCredentials | null {
   return validateCredentials(creds) === null ? creds : null;
 }
 
+/** `FBCRED:<akid>:<secret>`, the text form of the credentials (copy / paste). */
+export function formatFbcred(creds: DeviceCredentials): string {
+  return `FBCRED:${creds.accessKeyId}:${creds.secretAccessKey}`;
+}
+
+// ---------------------------------------------------------------------------
+// QR link: http://<device>/#fbcred=<akid>:<secret>
+// ---------------------------------------------------------------------------
+//
+// The device's QR code is a link to its own IDE with the credentials in the
+// URL fragment, which browsers never send over the network. A phone camera
+// opens it; importCredentialsFromLocation() (run before anything else, see
+// boot-credentials.ts) stores them for this origin and removes the fragment
+// from the address bar and the history entry. Settings then offers copy and
+// save-to-password-manager (takeImportedCredentials()).
+
+const FRAGMENT_KEY = 'fbcred=';
+let imported: DeviceCredentials | null = null;
+
+export function importCredentialsFromLocation(
+  loc: Pick<Location, 'hash' | 'pathname' | 'search'> = location,
+  hist: Pick<History, 'replaceState' | 'state'> = history,
+): DeviceCredentials | null {
+  const hash = loc.hash ?? '';
+  const at = hash.indexOf(FRAGMENT_KEY);
+  if (at < 0) return null;
+  // Whatever follows, the secret leaves the address bar and the history.
+  try { hist.replaceState(hist.state, '', loc.pathname + loc.search); } catch { /* not fatal */ }
+  let value = hash.slice(at + FRAGMENT_KEY.length).split('&')[0];
+  try { value = decodeURIComponent(value); } catch { return null; }
+  const creds = parseFbcred('FBCRED:' + value);
+  if (!creds) return null;
+  try { setCredentials(creds, ''); } catch { return null; }
+  imported = creds;
+  return creds;
+}
+
+/** Credentials imported from the QR link at startup, once (Settings shows them). */
+export function takeImportedCredentials(): DeviceCredentials | null {
+  const creds = imported;
+  imported = null;
+  return creds;
+}
+
+/**
+ * Copy text to the clipboard. The device IDE runs on plain HTTP, where
+ * navigator.clipboard does not exist (secure contexts only), so this falls
+ * back to a selected textarea + execCommand('copy'), which mobile Safari and
+ * Chrome still honour inside a user gesture.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && globalThis.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall back */ }
+  if (typeof document === 'undefined') return false;
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.top = '0';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
 // ---------------------------------------------------------------------------
 // Storage (localStorage, keyed per device origin)
 // ---------------------------------------------------------------------------

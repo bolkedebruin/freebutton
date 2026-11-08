@@ -3,8 +3,8 @@ import { customElement, state } from 'lit/decorators.js';
 import { on } from '../js/app-state.js';
 import { XIcon } from '../icons/index.js';
 import {
-  clearCredentials, deviceOrigin, getCredentials, normalizeCredentials, parseFbcred, setCredentials,
-  validateCredentials,
+  clearCredentials, copyText, deviceOrigin, formatFbcred, getCredentials, normalizeCredentials, parseFbcred,
+  setCredentials, takeImportedCredentials, validateCredentials,
 } from '../js/auth.js';
 import { workspace } from '../js/workspace.js';
 
@@ -40,6 +40,27 @@ export class FbSettingsModal extends LitElement {
         this._authAlert = e.detail.message || 'The device requires access credentials.';
       }),
     );
+    // Opened from the device's QR link: the credentials are stored already;
+    // show them so they can be copied or saved in the password manager.
+    const imported = takeImportedCredentials();
+    if (imported) {
+      this._openSettings();
+      this._akid = imported.accessKeyId;
+      this._secret = imported.secretAccessKey;
+      this._authStatus = {
+        text: 'Received from the device and stored in this browser. Save puts them in your password manager; Copy copies them as FBCRED text.',
+        error: false,
+      };
+    }
+  }
+
+  private async _copyCredentials() {
+    const creds = normalizeCredentials(this._akid, this._secret);
+    if (validateCredentials(creds)) { this._authStatus = { text: 'Nothing to copy: enter valid credentials first.', error: true }; return; }
+    const ok = await copyText(formatFbcred(creds));
+    this._authStatus = ok
+      ? { text: 'Copied as FBCRED:<access key id>:<secret>.', error: false }
+      : { text: 'This browser did not allow copying; select the fields and copy them by hand.', error: true };
   }
 
   disconnectedCallback() {
@@ -140,9 +161,12 @@ export class FbSettingsModal extends LitElement {
             .value=${this._fbcred}
             @input=${(e: Event) => this._onFbcredInput((e.target as HTMLInputElement).value)} />
         </label>
+        <form class="flex flex-col gap-2" data-testid="credentials-form" autocomplete="on"
+          @submit=${(e: Event) => { e.preventDefault(); this._saveCredentials(); }}>
         <label class="flex flex-col gap-1">
           <span class="text-xs text-gray-100">Access key id</span>
-          <input type="text" data-testid="akid-input" class=${INPUT_CLASS} autocomplete="off" spellcheck="false"
+          <input type="text" name="username" data-testid="akid-input" class=${INPUT_CLASS} autocomplete="username" spellcheck="false"
+            autocapitalize="characters"
             placeholder="FB + 18 characters"
             .value=${this._akid}
             @input=${(e: Event) => this._onAkidInput((e.target as HTMLInputElement).value)} />
@@ -150,8 +174,8 @@ export class FbSettingsModal extends LitElement {
         <label class="flex flex-col gap-1">
           <span class="text-xs text-gray-100">Secret</span>
           <div class="flex gap-2">
-            <input type=${this._showSecret ? 'text' : 'password'} data-testid="secret-input" class=${INPUT_CLASS}
-              autocomplete="off" spellcheck="false" placeholder="40 characters"
+            <input type=${this._showSecret ? 'text' : 'password'} name="password" data-testid="secret-input" class=${INPUT_CLASS}
+              autocomplete="current-password" spellcheck="false" autocapitalize="off" placeholder="40 characters"
               .value=${this._secret}
               @input=${(e: Event) => { this._secret = (e.target as HTMLInputElement).value; }} />
             <button type="button" data-testid="secret-toggle"
@@ -161,15 +185,19 @@ export class FbSettingsModal extends LitElement {
         </label>
 
         <div class="flex items-center gap-2">
-          <button type="button" data-testid="credentials-save"
+          <button type="submit" data-testid="credentials-save"
             class="${BUTTON_CLASS} bg-purple-90 text-white hover:bg-purple-80"
+            ?disabled=${!this._akid.trim() || !this._secret.trim()}>Save</button>
+          <button type="button" data-testid="credentials-copy"
+            class="${BUTTON_CLASS} text-gray-100 bg-white/5 hover:bg-white/10"
             ?disabled=${!this._akid.trim() || !this._secret.trim()}
-            @click=${() => this._saveCredentials()}>Save</button>
+            @click=${() => this._copyCredentials()}>Copy</button>
           <button type="button" data-testid="credentials-clear"
             class="${BUTTON_CLASS} text-gray-100 hover:bg-white/10"
             ?disabled=${!stored && !this._akid && !this._secret}
             @click=${() => this._clearCredentials()}>Clear</button>
         </div>
+        </form>
 
         ${this._authStatus ? html`
           <div class="text-xs ${this._authStatus.error ? 'text-status-red' : 'text-gray-100'}"
@@ -177,8 +205,10 @@ export class FbSettingsModal extends LitElement {
         ` : ''}
 
         <div class="text-[11px] leading-snug text-gray-200">
-          The device shows its access key id and secret on its display, as text and as a QR code.
-          They are stored in this browser only. The connection to the device is not encrypted:
+          Hold the device's factory button for 6 s: it shows its access key id and secret, and a QR code
+          that opens this IDE with them on a phone. They are stored in this browser only; Save also
+          offers them to your password manager (username = key id, password = secret), which can fill
+          them in here later. The connection to the device is not encrypted:
           signing proves that the requests come from you, but others on the network can read the traffic.
         </div>
       </section>

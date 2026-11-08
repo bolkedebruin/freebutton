@@ -63,6 +63,12 @@ inline constexpr size_t kAccessKeyIdLen = 20;
 inline constexpr size_t kSecretLen = 40;
 inline constexpr sv kQrPrefix = "FBCRED:";
 inline constexpr size_t kQrPayloadLen = 7 + kAccessKeyIdLen + 1 + kSecretLen;  // 68
+// QR link "http://<host>/#fbcred=<akid>:<secret>": a phone camera opens it,
+// the IDE picks the credentials up from the fragment (never sent to the
+// device) and offers copy / save-to-password-manager. Host: IPv4 or a name.
+inline constexpr sv kQrUrlFragment = "/#fbcred=";
+inline constexpr size_t kQrHostMax = 32;
+inline constexpr size_t kQrUrlMax = 7 + kQrHostMax + 9 + kAccessKeyIdLen + 1 + kSecretLen;  // 109
 
 enum class Status : uint8_t {
     Ok,
@@ -875,6 +881,30 @@ inline void generateCredentials(Rng&& rng, char akid[kAccessKeyIdLen + 1], char 
         secret[i++] = kAlnum[b % 62];
     }
     secret[kSecretLen] = '\0';
+}
+
+// "http://<host>/#fbcred=<akid>:<secret>" into out (kQrUrlMax + 1 bytes).
+inline bool formatQrUrl(sv host, sv akid, sv secret, char* out, size_t cap) {
+    if (cap < kQrUrlMax + 1 || host.empty() || host.size() > kQrHostMax || akid.size() != kAccessKeyIdLen ||
+        secret.size() != kSecretLen) {
+        return false;
+    }
+    for (char c : host) {  // a plain host name or address, nothing that changes the URL's meaning
+        if (!(isUnreserved(static_cast<unsigned char>(c)) || c == ':' || c == '[' || c == ']')) return false;
+    }
+    char* p = out;
+    const auto put = [&p](sv s) {
+        memcpy(p, s.data(), s.size());
+        p += s.size();
+    };
+    put("http://");
+    put(host);
+    put(kQrUrlFragment);
+    put(akid);
+    *p++ = ':';
+    put(secret);
+    *p = '\0';
+    return true;
 }
 
 // "FBCRED:<akid>:<secret>" into out (kQrPayloadLen + 1 bytes).
