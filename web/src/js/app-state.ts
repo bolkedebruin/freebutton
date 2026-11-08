@@ -28,6 +28,16 @@ export interface DisplayItem {
   unit?: string;
   fontSize?: number;
   color?: string;
+  /** Stable id from config.json "displayitemid". */
+  id?: string;
+  /** lv_align_t from config.json. */
+  align?: number;
+}
+
+/** A physical connector slot (config.json info.connectors). Keys: id*2+1, id*2+2. */
+export interface ConnectorConfig {
+  id: number;
+  type: 'bar' | 'display' | 'empty';
 }
 
 export interface ButtonConfig {
@@ -66,6 +76,32 @@ export interface DeviceInfoData {
   lvglTotal: number;  // bytes
 }
 
+export interface WorkspaceFile {
+  key: string;
+  size: number;
+  lastModified?: Date;
+}
+
+/**
+ * Where files live: 'device' = the device's S3 storage API, 'local' = no
+ * device storage reachable (dev without hardware / older firmware), files are
+ * kept in browser memory only. 'probing' until the first list completes.
+ */
+export type WorkspaceMode = 'probing' | 'device' | 'local';
+
+export interface WorkspaceSnapshot {
+  mode: WorkspaceMode;
+  /** Human-readable status (offline reason, last error). */
+  message: string;
+  files: WorkspaceFile[];
+  busy: boolean;
+  /** Object key of the file in the editor ("scripts/main.js"). */
+  currentKey: string;
+  dirty: boolean;
+  /** The open file does not exist in storage yet (e.g. template main.js). */
+  isNew: boolean;
+}
+
 // Typed custom event map
 declare global {
   interface WindowEventMap {
@@ -95,9 +131,19 @@ declare global {
     'console-eval': CustomEvent<{ code: string }>;
 
     // Device events
-    'device-config': CustomEvent<{ pages: PageConfig[] }>;
+    // connectors: physical layout (empty = unknown, use the legacy layout).
+    'device-config': CustomEvent<{ pages: PageConfig[]; connectors?: ConnectorConfig[] }>;
     // Live device info; data is null when no device is reachable (simulator/dev).
     'device-info': CustomEvent<{ data: DeviceInfoData | null }>;
+
+    // Editor document changed (user edit or programmatic load).
+    'editor-doc-change': CustomEvent<void>;
+
+    // Workspace (device files + the file open in the editor)
+    'workspace-change': CustomEvent<WorkspaceSnapshot>;
+    'save-request': CustomEvent<void>;
+    // Shown after config.json was saved: config is applied at boot.
+    'reboot-suggested': CustomEvent<{ key: string }>;
 
     // File events
     'files-change': CustomEvent<{ files: FileEntry[]; used: number; total: number }>;

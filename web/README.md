@@ -140,6 +140,43 @@ The project uses Rollup with TypeScript to bundle CodeMirror 6 and application c
 - `@codemirror/lang-javascript@^6.2.1` - JavaScript language support
 - `@codemirror/theme-one-dark@^6.1.2` - Dark theme
 - `acorn@^8.0.0` - ES5 JavaScript parser for validation
+- `@codemirror/lang-json` - JSON mode for editing `config.json`
+- `@aws-sdk/client-s3` - S3 client for the device file storage (only the
+  ListObjectsV2/Get/Put/Delete/Head commands are bundled, about 68 KB gzipped)
+
+## Device Files (Assets panel)
+
+The device serves LittleFS as a minimal S3-compatible API. It uses path-style
+URLs and one bucket `fs`, which is the LittleFS root. An object key is the path
+without the leading slash, for example `config.json` or `scripts/main.js`.
+`src/js/device-storage.ts` is the only module that imports the AWS SDK. It uses
+dummy credentials and a no-op signer, because the device ignores signatures,
+and it does no retries. `src/js/workspace.ts` owns the file list and the file
+that is open in the editor.
+
+- **Boot script**: the editor opens `/scripts/main.js` at start. If that file
+  is not on the device yet, the editor starts from a template, and the first
+  Save creates the file.
+- **Save** (toolbar or Ctrl/Cmd+S): stores the source on the device. Before the
+  request, the IDE checks the same rules as the device: the extension must be
+  `.js`, `.json` or `.txt`; the file must not be under `www/` or `fonts/`; the
+  key can be at most 63 bytes and the body at most 64 KiB. `.json` files must be
+  valid JSON. For `config.json` the IDE also checks the structure, then offers
+  a reboot, because the device applies the config at boot.
+- **Deploy** (upload icon): saves the open file first. Then, for
+  `scripts/main.js` only, it validates the source, compiles it for the device
+  and uploads the bytecode as `main.jsc`, which is the file the firmware runs at
+  boot. Deploy only saves other files and does not compile them.
+- **Assets**: lists all files. `www/` (the IDE bundle) and `fonts/` are grouped
+  and collapsed. They are read-only, and the IDE never downloads them. You
+  cannot delete `config.json`. The IDE requests the list when it starts, when
+  you click refresh, after a save, create or delete, and when the REPL connects
+  to a different device. It never polls.
+- **Virtual device**: the key labels and top labels (`toplabel`, or `topLabel`
+  in older files) come from the device's `config.json`. The connector layout
+  comes from `info.connectors`.
+- **No device** (dev without hardware, or older firmware without `/fs`): files
+  are kept in browser memory only, and the Assets panel says so.
 
 ### Build Dependencies
 - `rollup@^4.0.0` - Module bundler

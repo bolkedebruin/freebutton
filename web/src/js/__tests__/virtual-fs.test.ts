@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { virtualFS, initDefaultFiles, formatFileSize } from '../virtual-fs';
+import { virtualFS, formatFileSize } from '../virtual-fs';
 
 // Reset virtualFS between tests by deleting all files
 beforeEach(() => {
@@ -106,23 +106,14 @@ describe('virtual-fs', () => {
   });
 });
 
-describe('initDefaultFiles', () => {
-  it('seeds 4 files with expected names', () => {
-    initDefaultFiles();
-    const files = virtualFS.getFileList();
-    expect(files).toHaveLength(4);
-    const names = files.map(f => f.name).sort();
-    expect(names).toEqual(['banner.png', 'bg-pattern.svg', 'icon-home.svg', 'logo.svg']);
+describe('text helpers', () => {
+  it('writeText / readText round-trip UTF-8', () => {
+    expect(virtualFS.writeText('scripts/main.js', 'print("héllo")')).toBe(true);
+    expect(virtualFS.readText('scripts/main.js')).toBe('print("héllo")');
   });
 
-  it('files have approximate expected sizes', () => {
-    initDefaultFiles();
-    const byName = (n: string) => virtualFS.getFileList().find(f => f.name === n)!;
-    // Sizes should be within ~10 bytes of target due to rounding
-    expect(byName('logo.svg').size).toBeCloseTo(2.1 * 1024, -1);
-    expect(byName('icon-home.svg').size).toBeCloseTo(1.4 * 1024, -1);
-    expect(byName('banner.png').size).toBeCloseTo(24.3 * 1024, -1);
-    expect(byName('bg-pattern.svg').size).toBeCloseTo(3.8 * 1024, -1);
+  it('readText returns null for a missing file', () => {
+    expect(virtualFS.readText('nope.js')).toBeNull();
   });
 });
 

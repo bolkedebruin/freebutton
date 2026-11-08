@@ -1,7 +1,7 @@
 import { LitElement, html } from 'lit';
 import { customElement } from 'lit/decorators.js';
 import { initEditor, loadExample } from '../js/editor.js';
-import { on } from '../js/app-state.js';
+import { on, emit } from '../js/app-state.js';
 import type { EditorView } from 'codemirror';
 
 @customElement('fb-code-editor')
@@ -19,6 +19,8 @@ export class FbCodeEditor extends LitElement {
     const container = this.querySelector('#cm-editor');
     if (container) {
       this._editor = initEditor(container as HTMLElement);
+      // The workspace waits for this to load scripts/main.js into the editor.
+      emit('editor-ready');
     }
 
     this._unsubs.push(

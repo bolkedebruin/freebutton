@@ -1,8 +1,11 @@
 /**
  * Device Configuration Manager
- * Manages PageConfig[] and emits device-config events on changes.
+ * Manages PageConfig[] (+ the physical connector layout) and emits
+ * device-config events on changes. Starts with sample data; the workspace
+ * replaces it with the device's config.json (see config-model.ts) when one is
+ * available.
  */
-import { emit, type PageConfig, type DisplayItem, type ButtonConfig } from './app-state';
+import { emit, type PageConfig, type DisplayItem, type ButtonConfig, type ConnectorConfig } from './app-state';
 
 const defaultConfig: PageConfig[] = [
   {
@@ -22,14 +25,21 @@ const defaultConfig: PageConfig[] = [
 ];
 
 let currentConfig: PageConfig[] = structuredClone(defaultConfig);
+// Empty = layout unknown (sample data / config without info.connectors).
+let currentConnectors: ConnectorConfig[] = [];
 
 export function getConfig(): PageConfig[] {
   return currentConfig;
 }
 
-export function setConfig(config: PageConfig[]): void {
+export function getConnectors(): ConnectorConfig[] {
+  return currentConnectors;
+}
+
+export function setConfig(config: PageConfig[], connectors: ConnectorConfig[] = []): void {
   currentConfig = config;
-  emit('device-config', { pages: config });
+  currentConnectors = connectors;
+  emit('device-config', { pages: config, connectors });
 }
 
 export function loadDefaultConfig(): void {
@@ -40,7 +50,7 @@ export function updateDisplayItem(pageNumber: number, index: number, item: Parti
   const page = currentConfig.find(p => p.number === pageNumber);
   if (!page || index < 0 || index >= page.displayItems.length) return;
   Object.assign(page.displayItems[index], item);
-  emit('device-config', { pages: currentConfig });
+  emit('device-config', { pages: currentConfig, connectors: currentConnectors });
 }
 
 export function updateButton(pageNumber: number, position: number, updates: Partial<ButtonConfig>): void {
@@ -49,5 +59,5 @@ export function updateButton(pageNumber: number, position: number, updates: Part
   const btn = page.buttons.find(b => b.position === position);
   if (!btn) return;
   Object.assign(btn, updates);
-  emit('device-config', { pages: currentConfig });
+  emit('device-config', { pages: currentConfig, connectors: currentConnectors });
 }

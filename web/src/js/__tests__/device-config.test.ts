@@ -48,7 +48,7 @@ describe('device-config', () => {
     setConfig(newConfig);
 
     expect(getConfig()).toEqual(newConfig);
-    expect(received).toEqual({ pages: newConfig });
+    expect(received).toEqual({ pages: newConfig, connectors: [] });
 
     window.removeEventListener('device-config', handler as EventListener);
   });

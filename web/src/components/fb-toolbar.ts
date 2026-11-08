@@ -1,6 +1,6 @@
 import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { PlayIcon, CheckIcon, UploadIcon, DownloadIcon, TrashIcon, PlugIcon } from '../icons/index.js';
+import { PlayIcon, CheckIcon, UploadIcon, DownloadIcon, TrashIcon, PlugIcon, SaveIcon } from '../icons/index.js';
 import { getCode, clearEditor as clearEditorContent } from '../js/editor.js';
 import { compile } from '../js/compiler.js';
 import { validateCode, formatValidationErrors } from '../js/validator.js';
@@ -82,9 +82,8 @@ export class FbToolbar extends LitElement {
   }
 
   private _handleUpload() {
-    // Deploy to the device that served this IDE (same-origin). No URL needed —
-    // fb-app handles the compile-for-device + upload flow. The ws:// input below
-    // is for the separate REPL WebSocket connection, not deployment.
+    // fb-app saves the source, then compiles scripts/main.js for the device
+    // and uploads main.jsc (same origin, or the device the REPL connected to).
     emit('deploy-request');
   }
 
@@ -119,7 +118,8 @@ export class FbToolbar extends LitElement {
         </div>
         <div class="w-px h-6 bg-border-default mx-4"></div>
         <div class="flex items-center gap-4">
-          ${this._iconBtn(UploadIcon(), 'Deploy to device', () => this._handleUpload())}
+          ${this._iconBtn(SaveIcon(), 'Save file (Ctrl/Cmd+S)', () => emit('save-request'))}
+          ${this._iconBtn(UploadIcon(), 'Deploy: save, compile main.js and upload as main.jsc', () => this._handleUpload())}
           ${this._iconBtn(DownloadIcon(), 'Download', () => this._handleDownload())}
         </div>
         <div class="w-px h-6 bg-border-default mx-4"></div>

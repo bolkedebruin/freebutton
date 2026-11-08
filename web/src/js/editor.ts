@@ -26,6 +26,8 @@ import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { keymap, ViewUpdate } from '@codemirror/view';
 import { javascript } from '@codemirror/lang-javascript';
+import { json } from '@codemirror/lang-json';
+import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import { githubDark } from '@fsegurai/codemirror-theme-github-dark';
 import { indentMore, insertTab } from '@codemirror/commands';
 import { acceptCompletion } from '@codemirror/autocomplete';
@@ -35,8 +37,15 @@ import { freebuttonAutocomplete } from './autocomplete';
 import { validateCode } from './validator';
 import { emit } from './app-state';
 import { examples as examplesList, exampleMap } from './examples';
+import { validateJson, validateConfigShape, type FileKind } from './fs-rules';
 
 let editorView: EditorView | null = null;
+// Language-specific extensions (syntax, linter, autocomplete), swapped per file.
+const languageCompartment = new Compartment();
+let baseExtensions: Extension[] = [];
+let currentKind: FileKind = 'js';
+// Set when the open file is config.json, so the JSON linter adds shape checks.
+let currentIsConfig = false;
 
 /**
  * MQuickJS linter - validates code as you type
@@ -119,6 +128,41 @@ const mquickjsLinter = linter((view) => {
 });
 
 /**
+ * JSON linter - syntax errors at the reported offset; config.json also gets
+ * the structural check that save enforces.
+ */
+const jsonLinter = linter((view) => {
+    const code = view.state.doc.toString();
+    const diagnostics: Diagnostic[] = [];
+    const err = validateJson(code);
+    if (err) {
+        const from = Math.min(err.offset ?? 0, code.length);
+        diagnostics.push({ from, to: Math.min(from + 1, code.length), severity: 'error', message: err.message });
+    } else if (currentIsConfig) {
+        for (const message of validateConfigShape(JSON.parse(code))) {
+            diagnostics.push({ from: 0, to: Math.min(1, code.length), severity: 'error', message });
+        }
+    }
+    emit('validation-result', {
+        valid: diagnostics.length === 0,
+        errors: diagnostics.map(d => d.message),
+        errorCount: diagnostics.length
+    });
+    return diagnostics;
+});
+
+/** Plain text: nothing to validate, keep the status bar honest. */
+const textStatus = EditorView.updateListener.of((update: ViewUpdate) => {
+    if (update.docChanged) emit('validation-result', { valid: true, errors: [], errorCount: 0 });
+});
+
+function languageExtensions(kind: FileKind): Extension {
+    if (kind === 'json') return [json(), jsonLinter];
+    if (kind === 'js') return [javascript(), mquickjsLinter, freebuttonAutocomplete];
+    return [textStatus];
+}
+
+/**
  * Custom Tab key handler
  * - Accepts completion if menu is open
  * - Inserts tab if cursor is in the middle of a line
@@ -171,8 +215,7 @@ export const examples: Record<string, string> = Object.fromEntries(
  * @returns The initialized editor instance
  */
 export function initEditor(parent: HTMLElement): EditorView {
-    editorView = new EditorView({
-        extensions: [
+    baseExtensions = [
             // Minimal setup extensions (no autocomplete)
             lineNumbers(),
             highlightActiveLineGutter(),
@@ -196,8 +239,7 @@ export function initEditor(parent: HTMLElement): EditorView {
                 ...historyKeymap,
                 ...foldKeymap
             ]),
-            // Language and theme
-            javascript(),
+            // Theme (language lives in languageCompartment)
             githubDark,
             // Editor configuration
             EditorView.lineWrapping,
@@ -209,17 +251,52 @@ export function initEditor(parent: HTMLElement): EditorView {
                     run: customTabHandler
                 }
             ]),
-            // Linting
+            // Linting (the linter itself is per language)
             lintGutter(),
-            mquickjsLinter,
             // Custom extensions
             cursorPositionExtension(),
-            freebuttonAutocomplete  // Our custom autocomplete only (no default autocomplete)
-        ],
+            docChangeExtension(),
+    ];
+    editorView = new EditorView({
+        state: createState('', currentKind),
         parent: parent
     });
 
     return editorView;
+}
+
+function createState(doc: string, kind: FileKind): EditorState {
+    return EditorState.create({
+        doc,
+        extensions: [...baseExtensions, languageCompartment.of(languageExtensions(kind))],
+    });
+}
+
+/** Notify listeners (workspace dirty tracking) whenever the document changes. */
+function docChangeExtension() {
+    return EditorView.updateListener.of((update: ViewUpdate) => {
+        if (update.docChanged) emit('editor-doc-change');
+    });
+}
+
+/**
+ * Replace the editor with a different file: new document, language for `kind`
+ * (JS = MQuickJS linter + FreeButton autocomplete, JSON = JSON linter, text =
+ * none) and a fresh undo history, so undo cannot jump back into another file.
+ */
+export function openDocument(content: string, kind: FileKind, opts: { isConfig?: boolean } = {}): void {
+    if (!editorView) {
+        throw new Error('Editor not initialized');
+    }
+    currentKind = kind;
+    currentIsConfig = !!opts.isConfig;
+    editorView.setState(createState(content, kind));
+    // setState is not a transaction, so update listeners don't see it.
+    emit('editor-doc-change');
+}
+
+export function getDocumentKind(): FileKind {
+    return currentKind;
 }
 
 /**

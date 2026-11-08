@@ -17,6 +17,9 @@ import '../fb-console-pane.js';
 import '../fb-console-output.js';
 import '../fb-console-input.js';
 import '../fb-file-drawer.js';
+import type { WorkspaceSnapshot } from '../../js/app-state.js';
+import { LOCAL_MESSAGE } from '../../js/workspace.js';
+import { loadDefaultConfig } from '../../js/device-config.js';
 
 function createElement<T extends HTMLElement>(tag: string): T {
   const el = document.createElement(tag) as T;
@@ -81,6 +84,17 @@ describe('fb-navbar', () => {
 });
 
 describe('fb-app keyboard shortcuts', () => {
+  it('Ctrl+S dispatches save-request', async () => {
+    createElement('fb-app');
+    await nextFrame();
+    let fired = 0;
+    const handler = () => { fired++; };
+    window.addEventListener('save-request', handler);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }));
+    window.removeEventListener('save-request', handler);
+    expect(fired).toBe(1);
+  });
+
   it('prevents default on Ctrl+S', async () => {
     const el = createElement('fb-app');
     await nextFrame();
@@ -225,29 +239,111 @@ describe('fb-status-bar', () => {
 });
 
 describe('fb-file-drawer', () => {
-  it('renders file list with correct count', async () => {
-    const el = createElement('fb-file-drawer');
-    await nextFrame();
-
-    // 4 mock files
-    const fileItems = el.querySelectorAll('.group\\/item');
-    expect(fileItems.length).toBe(4);
+  const snapshot = (over: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot => ({
+    mode: 'device',
+    message: '',
+    files: [
+      { key: 'config.json', size: 10082 },
+      { key: 'scripts/main.js', size: 1200 },
+      { key: 'scripts/util.js', size: 300 },
+      { key: 'www/index.html.gz', size: 250000 },
+      { key: 'fonts/mdi_24.bin', size: 40000 },
+    ],
+    busy: false,
+    currentKey: 'scripts/main.js',
+    dirty: false,
+    isNew: false,
+    ...over,
   });
 
-  it('has X delete buttons on file items', async () => {
+  async function drawerWith(snap: WorkspaceSnapshot) {
     const el = createElement('fb-file-drawer');
     await nextFrame();
+    window.dispatchEvent(new CustomEvent('workspace-change', { detail: snap }));
+    await nextFrame();
+    return el;
+  }
 
-    const deleteButtons = el.querySelectorAll('.group\\/item button');
-    expect(deleteButtons.length).toBe(4);
+  it('lists user files and groups www/ + fonts/ collapsed', async () => {
+    const el = await drawerWith(snapshot());
+    const keys = Array.from(el.querySelectorAll('[data-testid="user-files"] [data-key]')).map(n => n.getAttribute('data-key'));
+    expect(keys).toEqual(['config.json', 'scripts/main.js', 'scripts/util.js']);
+    const system = el.querySelector('[data-testid="system-files"]')!;
+    expect(system.textContent).toContain('2 files');
+    // Collapsed: individual system files are not rendered.
+    expect(system.textContent).not.toContain('index.html.gz');
   });
 
-  it('shows storage indicator', async () => {
-    const el = createElement('fb-file-drawer');
-    await nextFrame();
+  it('offers delete only for deletable files (not config.json, not system files)', async () => {
+    const el = await drawerWith(snapshot());
+    const deletable = Array.from(el.querySelectorAll('[data-testid="delete-file"]'))
+      .map(b => b.closest('[data-key]')!.getAttribute('data-key'));
+    expect(deletable).toEqual(['scripts/main.js', 'scripts/util.js']);
+  });
 
+  it('marks the open file as unsaved', async () => {
+    const el = await drawerWith(snapshot({ dirty: true }));
+    const main = el.querySelector('[data-key="scripts/main.js"]')!;
+    expect(main.textContent).toContain('●');
+  });
+
+  it('shows a not-yet-saved main.js when it does not exist yet', async () => {
+    const el = await drawerWith(snapshot({ files: [], isNew: true }));
+    expect(el.querySelector('[data-testid="unsaved-file"]')?.textContent).toContain('scripts/main.js');
+  });
+
+  it('explains the browser-only fallback when no device storage is reachable', async () => {
+    const el = await drawerWith(snapshot({ mode: 'local', message: LOCAL_MESSAGE, files: [] }));
+    expect(el.querySelector('[data-testid="storage-source"]')?.textContent).toContain('Browser');
+    expect(el.querySelector('[data-testid="workspace-message"]')?.textContent).toContain('browser session only');
+  });
+
+  it('shows storage totals', async () => {
+    const el = await drawerWith(snapshot());
+    expect(el.textContent).toContain('5 files');
     expect(el.textContent).toContain('KB used');
-    expect(el.textContent).toContain('128 KB');
+  });
+});
+
+describe('fb-button-grid with explicit positions', () => {
+  it('renders one key per position, empty when unconfigured', async () => {
+    const el = createElement('fb-button-grid') as any;
+    el.currentPage = 1;
+    el.buttons = [{ position: 7, label: 'Open', topLabel: 'Raam', ledOn: false, ledColor: 'rgb(0,0,0)', page: 1 }];
+    el.positions = [7, 8];
+    await nextFrame();
+    const keys = Array.from(el.querySelectorAll('[data-position]')).map((n: any) => n.getAttribute('data-position'));
+    expect(keys).toEqual(['7', '8']);
+    expect(el.querySelector('[data-position="7"]').textContent).toContain('Raam');
+    expect(el.querySelector('[data-position="8"]').textContent.trim()).toBe('');
+  });
+});
+
+describe('fb-virtual-device layout from config.json', () => {
+  it('renders connectors top to bottom: display + its keys, then bars', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+    window.dispatchEvent(new CustomEvent('device-config', {
+      detail: {
+        pages: [{ number: 1, displayItems: [], buttons: [
+          { position: 7, label: 'Open', topLabel: 'Raam', ledOn: false, ledColor: 'rgb(0,0,0)', page: 1 },
+          { position: 8, label: 'Dicht', topLabel: 'Raam', ledOn: false, ledColor: 'rgb(0,0,0)', page: 1 },
+        ] }],
+        connectors: [{ id: 2, type: 'display' }, { id: 3, type: 'bar' }],
+      },
+    }));
+    await nextFrame();
+    expect(el.querySelectorAll('fb-tft-display').length).toBe(1);
+    const grids = Array.from(el.querySelectorAll('fb-button-grid')).map(g => g.getAttribute('data-connector'));
+    expect(grids).toEqual(['2', '3']);
+    await nextFrame();
+    expect(el.textContent).toContain('Open');
+    expect(el.textContent).toContain('Dicht');
+    // Only page 1 exists now.
+    const tabs = Array.from(el.querySelectorAll('button')).map(b => b.textContent?.trim()).filter(t => t?.startsWith('Page'));
+    expect(tabs).toEqual(['Page 1']);
+    // Restore the sample layout for later tests.
+    loadDefaultConfig();
   });
 });
 

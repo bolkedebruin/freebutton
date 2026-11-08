@@ -8,9 +8,16 @@ export class FbButtonGrid extends LitElement {
 
   @property({ type: Number }) currentPage = 1;
   @property({ attribute: false }) buttons: ButtonConfig[] = [];
+  /**
+   * Key positions to render (e.g. one connector: [5, 6]). Positions without a
+   * configured button render as an empty key. Null = render the configured
+   * buttons of the current page only (legacy layout).
+   */
+  @property({ attribute: false }) positions: number[] | null = null;
 
+  /** Odd positions are the left key of a connector (position = id*2+1). */
   private _isLeftSide(position: number): boolean {
-    return position === 5 || position === 7;
+    return position % 2 === 1;
   }
 
   private _dotsIcon(size: number) {
@@ -28,7 +35,7 @@ export class FbButtonGrid extends LitElement {
     const leftSide = this._isLeftSide(btn.position);
 
     return html`
-      <div class="bg-[rgb(20,20,20)] h-[57.1px] flex items-center justify-center relative font-fira text-white
+      <div data-position=${btn.position} class="bg-[rgb(20,20,20)] h-[57.1px] flex items-center justify-center relative font-fira text-white
         ${leftSide ? 'flex-row' : 'flex-row-reverse'}">
 
         <!-- Config dots -->
@@ -65,9 +72,11 @@ export class FbButtonGrid extends LitElement {
   }
 
   render() {
-    const pageButtons = this.buttons
-      .filter(b => b.page === this.currentPage)
-      .sort((a, b) => a.position - b.position);
+    const onPage = this.buttons.filter(b => b.page === this.currentPage);
+    const pageButtons = this.positions
+      ? this.positions.map(position => onPage.find(b => b.position === position)
+          ?? { position, page: this.currentPage, label: '', topLabel: '', ledOn: false, ledColor: 'rgb(0,0,0)' })
+      : onPage.sort((a, b) => a.position - b.position);
 
     return html`
       <div class="grid grid-cols-2 gap-[6.72px] w-[342px] mt-[6.72px] font-fira">

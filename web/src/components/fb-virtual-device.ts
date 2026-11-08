@@ -1,7 +1,8 @@
 import { LitElement, html, svg } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { on, type PageConfig, type DeviceInfoData } from '../js/app-state.js';
-import { getConfig, loadDefaultConfig } from '../js/device-config.js';
+import { on, type PageConfig, type DeviceInfoData, type ConnectorConfig } from '../js/app-state.js';
+import { getConfig, getConnectors, loadDefaultConfig } from '../js/device-config.js';
+import { positionsForConnector } from '../js/config-model.js';
 import { setDeviceInfoVisible } from '../js/device-info.js';
 import { SettingsIcon } from '../icons/index.js';
 
@@ -15,6 +16,10 @@ const MAX_SAMPLES = 60;
 const GRAPH_W = 282;
 const GRAPH_H = 56;
 const DASH = '—'; // em dash placeholder when no device is connected
+// Front-face geometry (px) used to size the flip container per layout.
+const TFT_H = 219;
+const KEY_ROW_H = 57.1 + 6.72;
+const MIN_FACE_H = 420;
 
 function formatKB(bytes: number): string {
   return `${Math.round(bytes / 1024)} KB`;
@@ -26,6 +31,8 @@ export class FbVirtualDevice extends LitElement {
 
   @state() private currentPage = 1;
   @state() private _pages: PageConfig[] = [];
+  // Physical layout from config.json info.connectors; empty = legacy layout.
+  @state() private _connectors: ConnectorConfig[] = [];
   @state() private _flipped = false;
   @state() private _deviceName = 'btn_fab028';
   @state() private _ntpServer = 'pool.ntp.org';
@@ -43,7 +50,12 @@ export class FbVirtualDevice extends LitElement {
     super.connectedCallback();
     this._unsub = on('device-config', (e) => {
       this._pages = e.detail.pages;
+      this._connectors = e.detail.connectors ?? [];
+      if (!this._pages.some(p => p.number === this.currentPage)) {
+        this.currentPage = this._pages[0]?.number ?? 1;
+      }
     });
+    this._connectors = getConnectors();
     this._unsubInfo = on('device-info', (e) => this._applyInfo(e.detail.data));
     const cfg = getConfig();
     if (cfg.length > 0) {
@@ -234,6 +246,37 @@ export class FbVirtualDevice extends LitElement {
     `;
   }
 
+  /**
+   * Front face. With a known layout every connector renders top to bottom in
+   * id order: a large display shows the TFT above its two keys, a bar shows
+   * its two keys. Without one, the TFT plus the configured keys (legacy).
+   */
+  private _renderFront(page: PageConfig | undefined) {
+    const buttons = page?.buttons ?? [];
+    const items = page?.displayItems ?? [];
+    const slots = this._connectors.filter(c => c.type !== 'empty');
+    if (slots.length === 0) {
+      return html`
+        <fb-tft-display .currentPage=${this.currentPage} .displayItems=${items}></fb-tft-display>
+        <fb-button-grid .currentPage=${this.currentPage} .buttons=${buttons}></fb-button-grid>
+      `;
+    }
+    return slots.map(c => html`
+      ${c.type === 'display'
+        ? html`<fb-tft-display .currentPage=${this.currentPage} .displayItems=${items}></fb-tft-display>`
+        : ''}
+      <fb-button-grid data-connector=${c.id} .currentPage=${this.currentPage} .buttons=${buttons}
+        .positions=${positionsForConnector(c.id)}></fb-button-grid>
+    `);
+  }
+
+  private _faceHeight(): number {
+    const slots = this._connectors.filter(c => c.type !== 'empty');
+    if (slots.length === 0) return MIN_FACE_H;
+    const h = slots.reduce((sum, c) => sum + KEY_ROW_H + (c.type === 'display' ? TFT_H : 0), 0);
+    return Math.max(MIN_FACE_H, Math.ceil(h));
+  }
+
   render() {
     const pages = this._pages.length > 0 ? this._pages : getConfig();
     const currentPageConfig = pages.find(p => p.number === this.currentPage);
@@ -263,12 +306,11 @@ export class FbVirtualDevice extends LitElement {
         </div>
 
         <!-- Flip container -->
-        <div class="device-flip-container w-[342px]" style="height: 420px;">
+        <div class="device-flip-container w-[342px]" style="height: ${this._faceHeight()}px;">
           <div class="device-flip-inner ${this._flipped ? 'flipped' : ''} relative h-full">
             <!-- Front face -->
             <div class="device-flip-front w-full font-fira text-[11.2px]">
-              <fb-tft-display .currentPage=${this.currentPage} .displayItems=${currentPageConfig?.displayItems ?? []}></fb-tft-display>
-              <fb-button-grid .currentPage=${this.currentPage} .buttons=${currentPageConfig?.buttons ?? []}></fb-button-grid>
+              ${this._renderFront(currentPageConfig)}
             </div>
             <!-- Back face -->
             <div class="device-flip-back">

@@ -1,9 +1,11 @@
 import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { emit, on } from '../js/app-state.js';
-import { getCode } from '../js/editor.js';
+import { getCode, getEditorView, openDocument } from '../js/editor.js';
 import { compile, compileForDevice } from '../js/compiler.js';
 import { validateCode, formatValidationErrors } from '../js/validator.js';
+import { workspace } from '../js/workspace.js';
+import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
 
 @customElement('fb-app')
 export class FbApp extends LitElement {
@@ -17,6 +19,14 @@ export class FbApp extends LitElement {
     super.connectedCallback();
     window.addEventListener('keydown', this._handleGlobalKeydown);
     this._unsubs.push(on('deploy-request', () => this._deploy()));
+    // Load the device's files and open scripts/main.js once the editor exists.
+    void workspace.start({
+      editor: {
+        isReady: () => getEditorView() !== null,
+        getCode,
+        open: (content, kind, opts) => openDocument(content, kind, opts),
+      },
+    });
   }
 
   disconnectedCallback() {
@@ -29,9 +39,10 @@ export class FbApp extends LitElement {
   private _handleGlobalKeydown = (e: KeyboardEvent) => {
     const mod = e.metaKey || e.ctrlKey;
 
-    // Ctrl/Cmd+S — prevent browser save
+    // Ctrl/Cmd+S — save the open file (instead of the browser's save page)
     if (mod && e.key === 's') {
       e.preventDefault();
+      emit('save-request');
     }
 
     // Ctrl/Cmd+Enter — compile
@@ -91,46 +102,63 @@ export class FbApp extends LitElement {
   }
 
   /**
-   * Compile the current code for the serving device and upload the bytecode.
-   * Talks to the same origin that served the IDE (no device URL needed), which
-   * is the device itself when the firmware serves this app. Progress and result
-   * are reported through the console pane.
+   * Deploy = save the source, then (for the boot script only) compile it for
+   * the device and upload the bytecode as main.jsc.
+   *
+   * - scripts/main.js: saved, validated, compiled relocated for the device
+   *   (GET /api/bytecode/next_address) and uploaded to /api/bytecode/upload.
+   * - any other file: only saved. The firmware runs main.jsc at boot, so
+   *   compiling a helper file on its own would never run it.
+   * Progress and result are reported through the console pane.
    */
   private async _deploy() {
     if (this._deploying) return;
-
-    const code = getCode();
-    if (!code.trim()) return;
-
-    // Pre-validate before touching the device
-    const validation = validateCode(code);
-    if (!validation.valid) {
-      emit('console-line', {
-        text: 'Deploy aborted — validation failed:\n' + formatValidationErrors(validation.errors),
-        type: 'error'
-      });
-      emit('deploy-result', { success: false, message: 'Validation failed' });
-      return;
-    }
-
     this._deploying = true;
-    emit('console-line', { text: 'Compiling for device...', type: 'info' });
-
     try {
-      // Same-origin: query the device for its virtual address, compile relocated,
-      // then POST the bytecode blob to the upload endpoint.
-      const bytecode = await compileForDevice(code);
+      // 1. Never lose the source: save it first (JSON is validated on save).
+      const saved = await workspace.save();
+      const { currentKey, mode } = workspace.snapshot();
+      if (!saved) {
+        emit('deploy-result', { success: false, message: 'Save failed' });
+        return;
+      }
+      if (currentKey !== MAIN_SCRIPT_KEY) {
+        const msg = `Saved /${currentKey}. Only /${MAIN_SCRIPT_KEY} is compiled and run at boot; open it to deploy.`;
+        emit('console-line', { text: msg, type: 'info' });
+        emit('deploy-result', { success: true, message: msg });
+        return;
+      }
+
+      // 2. Validate before touching the device's bytecode store.
+      const code = getCode();
+      const validation = validateCode(code);
+      if (!validation.valid) {
+        emit('console-line', {
+          text: 'Deploy aborted (source saved) — validation failed:\n' + formatValidationErrors(validation.errors),
+          type: 'error'
+        });
+        emit('deploy-result', { success: false, message: 'Validation failed' });
+        return;
+      }
+      if (mode === 'local') {
+        emit('console-line', { text: 'No device storage reachable — trying the bytecode upload anyway...', type: 'warn' });
+      }
+
+      // 3. Compile relocated for the device and upload as main.jsc.
+      const base = workspace.deviceBase;
+      emit('console-line', { text: 'Compiling for device...', type: 'info' });
+      const bytecode = await compileForDevice(code, base);
 
       emit('console-line', {
-        text: 'Compiled ' + bytecode.length + ' bytes — uploading...',
+        text: 'Compiled ' + bytecode.length + ' bytes — uploading ' + MAIN_BYTECODE_NAME + '...',
         type: 'info'
       });
 
       const formData = new FormData();
       const blob = new Blob([bytecode as BlobPart], { type: 'application/octet-stream' });
-      formData.append('file', blob, 'script.jsc');
+      formData.append('file', blob, MAIN_BYTECODE_NAME);
 
-      const response = await fetch('/api/bytecode/upload', {
+      const response = await fetch(base + '/api/bytecode/upload', {
         method: 'POST',
         body: formData
       });
@@ -144,7 +172,7 @@ export class FbApp extends LitElement {
         throw new Error(result.message || 'Upload rejected by device');
       }
 
-      const okMsg = '✓ Uploaded ' + bytecode.length + ' bytes to device';
+      const okMsg = '✓ Uploaded ' + bytecode.length + ' bytes to device as ' + MAIN_BYTECODE_NAME;
       emit('console-line', { text: okMsg, type: 'result' });
       emit('deploy-result', { success: true, message: okMsg, size: bytecode.length });
     } catch (err) {
