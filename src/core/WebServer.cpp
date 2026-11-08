@@ -13,9 +13,13 @@
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/WebSocketREPL.h"
 #include "drivers/DeviceInfo.h"
+#include "S3Server.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
+#include <esp_timer.h>
+#include <esp_system.h>
 #include <LittleFS.h>
+#include <new>
 
 static auto TAG = "webserver";
 
@@ -223,86 +227,149 @@ void handleRemoteFirmwareUpdate(AsyncWebServerRequest *request) {
 }
 
 // Bytecode Upload Functionality
-// Use a small heap-allocated structure to store upload status
-struct UploadStatus {
+// Per-request state in request->_tempObject (malloc'd: the server free()s it).
+// The writer (~8.5 KB: two 4 KB work buffers) is allocated with malloc +
+// placement new so a full heap answers 500 instead of aborting, and is
+// destroyed from onDisconnect if the client goes away mid-upload (otherwise
+// its relocation context and the registry's upload reservation would leak).
+struct BytecodeUpload {
+    BytecodeWriter* writer;
     esp_err_t error;
 };
 
+static void destroyWriter(BytecodeUpload* upload) {
+    if (upload && upload->writer) {
+        upload->writer->~BytecodeWriter();
+        free(upload->writer);
+        upload->writer = nullptr;
+    }
+}
+
 void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
                       size_t index, uint8_t *data, size_t len, bool final) {
-    BytecodeWriter* writer = nullptr;
-    esp_err_t err = ESP_OK;
+    auto* upload = static_cast<BytecodeUpload*>(request->_tempObject);
 
-    if (index == 0) {
+    if (index == 0 && !upload) {
         size_t content_length = request->contentLength();
         ESP_LOGI(TAG, "Bytecode upload start: %s (%zu bytes)", filename.c_str(), content_length);
 
-        // Create new writer and store in request
-        writer = new BytecodeWriter();
+        upload = static_cast<BytecodeUpload*>(malloc(sizeof(BytecodeUpload)));
+        if (!upload) return;  // handleBytecodeUpload answers 500
+        upload->writer = nullptr;
+        upload->error = ESP_OK;
+        request->_tempObject = upload;
+        request->onDisconnect([request]() {
+            destroyWriter(static_cast<BytecodeUpload*>(request->_tempObject));
+        });
 
-        // Initialize with total size for upfront flash erase
-        err = writer->beginWrite(filename.c_str(), content_length);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "beginWrite failed: 0x%x", err);
-            delete writer;
-            request->_tempObject = new UploadStatus{err};
+        void* mem = malloc(sizeof(BytecodeWriter));
+        if (!mem) {
+            ESP_LOGE(TAG, "No heap for the bytecode writer");
+            upload->error = ESP_ERR_NO_MEM;
             return;
         }
+        upload->writer = new (mem) BytecodeWriter();
 
-        request->_tempObject = writer;
-    } else {
-        // Retrieve existing writer from request
-        writer = static_cast<BytecodeWriter*>(request->_tempObject);
+        // Initialize with total size for upfront flash erase
+        const esp_err_t err = upload->writer->beginWrite(filename.c_str(), content_length);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "beginWrite failed: 0x%x", err);
+            upload->error = err;
+            destroyWriter(upload);
+            return;
+        }
     }
 
-    if (!writer) {
-        ESP_LOGE(TAG, "BytecodeWriter is null");
+    if (!upload || !upload->writer) {
         return;
     }
 
     // Write chunk directly to flash with inline relocation
-    err = writer->write(data, len, final);
+    const esp_err_t err = upload->writer->write(data, len, final);
 
     if (final) {
         ESP_LOGI(TAG, "Bytecode upload complete: %s", filename.c_str());
-
-        // Allocate status structure for response handler
-        UploadStatus* status = new UploadStatus{err};
-
-        // Clean up writer and replace with status
-        delete writer;
-        request->_tempObject = status;
+        upload->error = err;
+        destroyWriter(upload);
     } else if (err != ESP_OK) {
-        // Upload failed mid-stream, clean up
         ESP_LOGE(TAG, "Upload failed during chunk write: 0x%x", err);
-
-        // Allocate status structure for response handler
-        UploadStatus* status = new UploadStatus{err};
-
-        delete writer;
-        request->_tempObject = status;
+        upload->error = err;
+        destroyWriter(upload);
     }
 }
 
 void handleBytecodeUpload(AsyncWebServerRequest *request) {
-    const auto status = static_cast<UploadStatus*>(request->_tempObject);
+    auto* upload = static_cast<BytecodeUpload*>(request->_tempObject);
 
-    if (!status) {
+    if (!upload) {
         request->send(500, "application/json", R"({"status":"error","message":"Upload failed"})");
         return;
     }
-
-    esp_err_t err = status->error;
-    delete status;
-    request->_tempObject = nullptr;
+    // A request without a file part never reached the final chunk.
+    const esp_err_t err = upload->writer ? ESP_FAIL : upload->error;
+    destroyWriter(upload);
 
     if (err == ESP_OK) {
         request->send(200, "application/json", R"({"status":"success"})");
     } else {
-        AsyncResponseStream *response = request->beginResponseStream("application/json");
-        response->printf(R"({"status":"error","message":"Write failed","code":%d})", err);
-        request->send(response);
+        char body[96];
+        snprintf(body, sizeof body, R"({"status":"error","message":"Write failed","code":%d})", err);
+        request->send(200, "application/json", body);  // status in the body, as before
     }
+}
+
+// GET /api/bytecode/list: the registry's active entries, rendered twice into
+// the response window (count, then per TCP chunk) like /config.
+template <class S>
+static void writeBytecodeList(S& out) {
+    auto put = [&out](const char* s) { while (*s) out.Put(*s++); };
+    put("{\"entries\":[");
+    bool first = true;
+    BytecodeRegistry::instance().forEachActive([&](const BytecodeEntry& entry) {
+        if (!first) out.Put(',');
+        first = false;
+        put("{\"name\":\"");
+        for (const char* c = entry.name; *c; ++c) {
+            if (*c == '"' || *c == '\\') out.Put('\\');
+            if (static_cast<unsigned char>(*c) >= 0x20) out.Put(*c);
+        }
+        char num[48];
+        snprintf(num, sizeof num, "\",\"size\":%lu}", static_cast<unsigned long>(entry.size));
+        put(num);
+    });
+    put("]}");
+}
+
+static void handleBytecodeList(AsyncWebServerRequest *request) {
+    WindowOutputStream counter;
+    writeBytecodeList(counter);
+    AsyncWebServerResponse *response = request->beginResponse(
+        "application/json", counter.total(),
+        [](uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
+            WindowOutputStream window(buffer, index, maxLen);
+            writeBytecodeList(window);
+            return window.copied();
+        });
+    request->send(response);
+}
+
+// POST /api/reboot: answer first, restart 500 ms later from an esp_timer
+// (never delay() on the async_tcp task).
+static void handleReboot(AsyncWebServerRequest *request) {
+    static esp_timer_handle_t timer = nullptr;
+    if (!timer) {
+        esp_timer_create_args_t args = {};
+        args.callback = [](void*) { esp_restart(); };
+        args.name = "reboot";
+        if (esp_timer_create(&args, &timer) != ESP_OK) {
+            timer = nullptr;
+            request->send(500, "application/json", R"({"status":"error","message":"timer"})");
+            return;
+        }
+    }
+    ESP_LOGI(TAG, "Reboot requested over HTTP");
+    esp_timer_start_once(timer, 500 * 1000);  // already running: keep that one
+    request->send(200, "application/json", R"({"status":"rebooting"})");
 }
 
 // Embedded WebSocket test page - served from device to avoid PNA restrictions
@@ -434,6 +501,10 @@ void webserver_start() {
         request->send(404);
     });
 
+    // S3-compatible file API (bucket "fs" = LittleFS root). Registered before
+    // serveStatic so "/fs/..." and S3 ListBuckets on "/" reach it first.
+    s3_register(server);
+
     // Serve the locally-built web IDE bundle (with .gz auto-negotiation) from
     // LittleFS /www/. index.html is the default document for "/".
     server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
@@ -493,13 +564,15 @@ void webserver_start() {
     });
 
     server.on("/api/bytecode/upload", HTTP_POST, handleBytecodeUpload, onBytecodeUpload);
+    server.on("/api/bytecode/list", HTTP_GET, handleBytecodeList);
+    server.on("/api/reboot", HTTP_POST, handleReboot);
 
-    // Reports where the next uploaded bytecode blob will land in the js_user
-    // partition. The registry mmaps the partition in its constructor, so use a
-    // function-local static (mapped once) and reload metadata on each request.
+    // Reports where the next (small) uploaded bytecode blob would land in the
+    // js_user partition and the free gap there (the device relocates uploads
+    // itself; the IDE compiles position-independent bytecode).
     server.on("/api/bytecode/next_address", HTTP_GET, [](AsyncWebServerRequest *request){
-        static BytecodeRegistry registry;
-        registry.load();
+        auto& registry = BytecodeRegistry::instance();
+        BytecodeRegistry::Lock lock;
         const uint32_t offset = registry.getNextOffset();
         const uint32_t virtual_addr = registry.getVirtualBaseAddress() + offset;
         const size_t free_space = registry.getFreeSpace();

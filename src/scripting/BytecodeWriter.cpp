@@ -65,7 +65,8 @@ uint8_t* BytecodeWriter::relocReadCallback(void* opaque, uintptr_t offset, size_
 }
 
 BytecodeWriter::BytecodeWriter()
-    : partition_(nullptr)
+    : registry_(BytecodeRegistry::instance())
+    , partition_(nullptr)
     , partition_offset_(0)
     , write_offset_(0)
     , total_size_(0)
@@ -85,9 +86,6 @@ BytecodeWriter::BytecodeWriter()
     , chunk_size_(0) {
 
     current_name_[0] = '\0';
-
-    // Load registry
-    registry_.load();
 
     // Find partition
     partition_ = esp_partition_find_first(
@@ -149,6 +147,10 @@ esp_err_t BytecodeWriter::eraseRegion(uint32_t offset, size_t size) const {
 }
 
 void BytecodeWriter::cleanup() {
+    if (reserved_) {
+        registry_.releaseReservation();
+        reserved_ = false;
+    }
     if (reloc_ctx_) {
         JS_FreeContext(reloc_ctx_);
         reloc_ctx_ = nullptr;
@@ -191,8 +193,23 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size) {
     current_name_[sizeof(current_name_) - 1] = '\0';
     expected_size_ = total_size;
 
-    // Get target address for relocation
-    partition_offset_ = registry_.getNextOffset();
+    // Pick the target region: lowest free gap that overlaps neither an active
+    // entry (including the old version of this name) nor bytecode executing
+    // since boot, and reserve it against a concurrent upload.
+    {
+        BytecodeRegistry::Lock lock;
+        uint32_t offset = 0;
+        if (!registry_.allocate(total_size, &offset)) {
+            ESP_LOGE(TAG, "No free region of %zu bytes in js_user", total_size);
+            return ESP_ERR_NO_MEM;
+        }
+        if (!registry_.reserve(offset, total_size)) {
+            ESP_LOGE(TAG, "Another bytecode upload is in progress");
+            return ESP_ERR_INVALID_STATE;
+        }
+        reserved_ = true;
+        partition_offset_ = offset;
+    }
     relocation_target_addr_ = registry_.getVirtualBaseAddress() + partition_offset_;
 
     ESP_LOGI(TAG, "Will relocate to: 0x%lx (partition offset: 0x%lx)",
@@ -201,6 +218,7 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size) {
     // Erase flash region upfront
     size_t aligned_size = ((total_size + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
     if (esp_err_t err = eraseRegion(partition_offset_, aligned_size); err != ESP_OK) {
+        cleanup();
         return err;
     }
 
@@ -208,14 +226,14 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size) {
     reloc_ctx_mem_ = static_cast<uint8_t*>(malloc(RELOC_CTX_HEAP_SIZE));
     if (!reloc_ctx_mem_) {
         ESP_LOGE(TAG, "Failed to allocate context heap");
+        cleanup();
         return ESP_ERR_NO_MEM;
     }
 
     reloc_ctx_ = JS_NewContext(reloc_ctx_mem_, RELOC_CTX_HEAP_SIZE, &js_stdlib);
     if (!reloc_ctx_) {
         ESP_LOGE(TAG, "Failed to create QuickJS context");
-        free(reloc_ctx_mem_);
-        reloc_ctx_mem_ = nullptr;
+        cleanup();
         return ESP_ERR_NO_MEM;
     }
 
@@ -223,10 +241,7 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size) {
     reloc_read_buffer_ = static_cast<uint8_t*>(malloc(RELOC_READ_BUFFER_SIZE));
     if (!reloc_read_buffer_) {
         ESP_LOGE(TAG, "Failed to allocate reloc read buffer");
-        JS_FreeContext(reloc_ctx_);
-        reloc_ctx_ = nullptr;
-        free(reloc_ctx_mem_);
-        reloc_ctx_mem_ = nullptr;
+        cleanup();
         return ESP_ERR_NO_MEM;
     }
 
@@ -582,7 +597,9 @@ esp_err_t BytecodeWriter::finalizeWrite() {
 
     ESP_LOGI(TAG, "Relocated bytecode CRC32: 0x%lx", relocated_crc);
 
-    // Update registry
+    // Update registry (replaces the old entry of this name; its region is
+    // reusable once nothing executes from it any more)
+    BytecodeRegistry::Lock lock;
     uint32_t flash_addr = registry_.getPartitionAddress() + partition_offset_;
     if (!registry_.add(current_name_, partition_offset_, total_size_, relocated_crc, flash_addr)) {
         ESP_LOGE(TAG, "Failed to update registry");

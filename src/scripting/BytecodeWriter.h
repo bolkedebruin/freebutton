@@ -57,8 +57,9 @@ public:
     static bool validate(const uint8_t* bytecode, size_t size);
 
 private:
-    BytecodeRegistry registry_;
+    BytecodeRegistry& registry_;  // the shared instance
     const esp_partition_t* partition_;
+    bool reserved_ = false;       // holds the registry's upload reservation
 
     static constexpr size_t MAX_BYTECODE_SIZE = 256 * 1024;  // 256KB max
     static constexpr size_t SECTOR_SIZE = 4096;  // 4KB flash sectors

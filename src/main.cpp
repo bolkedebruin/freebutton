@@ -169,10 +169,11 @@ void setup() {
         // Must load bytecode BEFORE executing any JavaScript to avoid RAM atom conflicts
         JSContext* ctx = scriptEngine.getContext();
 
-        // Find bytecode in registry
+        // Find bytecode in registry: the IDE's boot script "main.jsc", else
+        // the legacy "script.jsc".
         BytecodeEntry entry;
-        if (bytecode_registry_find("script.jsc", &entry)) {
-            ESP_LOGI(TAG, "Found user script in bytecode registry");
+        if (bytecode_registry_find("main.jsc", &entry) || bytecode_registry_find("script.jsc", &entry)) {
+            ESP_LOGI(TAG, "Found user script '%s' in bytecode registry", entry.name);
 
             // Memory map from flash
             MappedFile* mapped = file_hw_mmap("js_user", entry.offset, entry.size);
@@ -247,7 +248,7 @@ void setup() {
             }
         } else {
             ESP_LOGI(TAG, "No user script found");
-            ESP_LOGI(TAG, "Upload script.jsc via web interface to run custom code");
+            ESP_LOGI(TAG, "Upload main.jsc via web interface to run custom code");
         }
         // No (loadable) user script: the REPL and later scripts still need fb.
         scriptEngine.initDeviceApi();

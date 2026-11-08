@@ -1,0 +1,394 @@
+//
+// Native unit tests for the pure S3 API logic (src/core/S3Logic.h) and the
+// streaming JSON validator (src/json/JsonValidator.h).
+//
+#include <unity.h>
+#include <string>
+#include <vector>
+
+#include "../../src/core/S3Logic.h"
+#include "../../src/json/JsonValidator.h"
+#include "rapidjson/stream.h"
+
+void setUp() {}
+void tearDown() {}
+
+struct StrSink {
+    std::string s;
+    void Put(char c) { s += c; }
+};
+
+static s3::KeyCheck wk(const char* k) { return s3::checkWriteKey(k, strlen(k)); }
+
+// --- keys -------------------------------------------------------------------
+
+void test_write_key_accepts_plain_paths() {
+    TEST_ASSERT_TRUE(wk("config.json") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(wk("scripts/main.js") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(wk("notes/a-b_c.txt") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(wk("scripts/examples/x.js") == s3::KeyCheck::Ok);
+}
+
+void test_write_key_rejects_traversal_and_shape() {
+    TEST_ASSERT_TRUE(wk("") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("/config.json") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("../config.json") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("scripts/../config.json") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("a..b.js") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("scripts//main.js") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("scripts/") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("scripts/main js.js") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("a\x01.js") == s3::KeyCheck::Invalid);
+}
+
+void test_write_key_extensions() {
+    TEST_ASSERT_TRUE(wk("main.jsc") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("index.html") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("x.JSON") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("x.json.tmp") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("json") == s3::KeyCheck::Invalid);
+}
+
+void test_write_key_protected_prefixes() {
+    TEST_ASSERT_TRUE(wk("www/index.js") == s3::KeyCheck::Forbidden);
+    TEST_ASSERT_TRUE(wk("fonts/x.json") == s3::KeyCheck::Forbidden);
+    TEST_ASSERT_TRUE(wk("js_bytecode_meta.json") == s3::KeyCheck::Forbidden);
+    TEST_ASSERT_TRUE(wk("wwwx/a.js") == s3::KeyCheck::Ok);
+}
+
+void test_write_key_lengths() {
+    // 63 chars total is the maximum.
+    std::string k = "abcd/" + std::string(55, 'a') + ".js";  // 5 + 55 + 3 = 63
+    TEST_ASSERT_EQUAL(63, k.size());
+    TEST_ASSERT_TRUE(wk(k.c_str()) == s3::KeyCheck::Ok);
+    std::string k64 = "abcd/" + std::string(56, 'a') + ".js";
+    TEST_ASSERT_TRUE(wk(k64.c_str()) == s3::KeyCheck::Invalid);
+    // A single component must leave room for ".tmp" under name_max 64.
+    std::string single = std::string(58, 'a') + ".js";  // 61 + 4 = 65 > 64
+    TEST_ASSERT_TRUE(wk(single.c_str()) == s3::KeyCheck::Invalid);
+    std::string single_ok = std::string(57, 'a') + ".js";  // 60 + 4 = 64
+    TEST_ASSERT_TRUE(wk(single_ok.c_str()) == s3::KeyCheck::Ok);
+}
+
+void test_read_key() {
+    TEST_ASSERT_TRUE(s3::keyReadable("www/assets/index-abc.js.gz", 26));
+    TEST_ASSERT_FALSE(s3::keyReadable("www/../config.json", 18));
+    TEST_ASSERT_FALSE(s3::keyReadable("", 0));
+    TEST_ASSERT_FALSE(s3::keyReadable("a//b", 4));
+    std::string longk(97, 'a');
+    TEST_ASSERT_FALSE(s3::keyReadable(longk.c_str(), longk.size()));
+}
+
+void test_content_types() {
+    TEST_ASSERT_EQUAL_STRING("application/json", s3::contentTypeFor("config.json", 11));
+    TEST_ASSERT_EQUAL_STRING("application/javascript", s3::contentTypeFor("a/main.js", 9));
+    TEST_ASSERT_EQUAL_STRING("text/plain", s3::contentTypeFor("x.txt", 5));
+    TEST_ASSERT_EQUAL_STRING("application/octet-stream", s3::contentTypeFor("fonts/a.bin", 11));
+}
+
+// --- escaping / encoding -------------------------------------------------------
+
+void test_xml_escape() {
+    StrSink s;
+    s3::putXml(s, "a&b<c>\"d'e");
+    TEST_ASSERT_EQUAL_STRING("a&amp;b&lt;c&gt;&quot;d&apos;e", s.s.c_str());
+}
+
+void test_url_encode() {
+    StrSink s;
+    const char* k = "dir/a b+c%.js";
+    s3::putUrlEncoded(s, k, strlen(k));
+    TEST_ASSERT_EQUAL_STRING("dir/a%20b%2Bc%25.js", s.s.c_str());
+}
+
+void test_hex_token_roundtrip() {
+    StrSink s;
+    s3::putHex(s, "www/a.js", 8);
+    char out[32];
+    TEST_ASSERT_EQUAL(8, s3::hexDecode(s.s.data(), s.s.size(), out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("www/a.js", out);
+    TEST_ASSERT_EQUAL(-1, s3::hexDecode("abc", 3, out, sizeof out));
+    TEST_ASSERT_EQUAL(-1, s3::hexDecode("zz", 2, out, sizeof out));
+    TEST_ASSERT_EQUAL(-1, s3::hexDecode("00", 2, out, sizeof out));
+    TEST_ASSERT_EQUAL(-1, s3::hexDecode("6161", 4, out, 2));
+}
+
+void test_put_uint() {
+    StrSink s;
+    s3::putUint(s, 0);
+    s.Put(',');
+    s3::putUint(s, 18446744073709551615ull);
+    TEST_ASSERT_EQUAL_STRING("0,18446744073709551615", s.s.c_str());
+}
+
+void test_base64() {
+    uint8_t out[16];
+    TEST_ASSERT_EQUAL(3, s3::base64Decode("TWFu", 4, out, sizeof out));
+    TEST_ASSERT_EQUAL_MEMORY("Man", out, 3);
+    TEST_ASSERT_EQUAL(1, s3::base64Decode("TQ==", 4, out, sizeof out));
+    TEST_ASSERT_EQUAL('M', out[0]);
+    TEST_ASSERT_EQUAL(2, s3::base64Decode("TWE=", 4, out, sizeof out));
+    TEST_ASSERT_EQUAL(-1, s3::base64Decode("TWE", 3, out, sizeof out));
+    TEST_ASSERT_EQUAL(-1, s3::base64Decode("T!E=", 4, out, sizeof out));
+    // MD5("") = d41d8cd98f00b204e9800998ecf8427e
+    TEST_ASSERT_EQUAL(16, s3::base64Decode("1B2M2Y8AsgTpgAmY7PhCfg==", 24, out, sizeof out));
+    TEST_ASSERT_EQUAL_HEX8(0xd4, out[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x7e, out[15]);
+    TEST_ASSERT_EQUAL(-1, s3::base64Decode("1B2M2Y8AsgTpgAmY7PhCfg==", 24, out, 8));
+}
+
+void test_crc32_b64() {
+    // CRC32("hello world") = 0x0d4a1185 -> base64 of 0d 4a 11 85 = "DUoRhQ=="
+    uint32_t crc = 0;
+    TEST_ASSERT_TRUE(s3::parseCrc32B64("DUoRhQ==", 8, &crc));
+    TEST_ASSERT_EQUAL_HEX32(0x0d4a1185, crc);
+    char out[9];
+    s3::formatCrc32B64(0x0d4a1185, out);
+    TEST_ASSERT_EQUAL_STRING("DUoRhQ==", out);
+    s3::formatCrc32B64(0xffffffff, out);
+    TEST_ASSERT_TRUE(s3::parseCrc32B64(out, 8, &crc));
+    TEST_ASSERT_EQUAL_HEX32(0xffffffff, crc);
+    TEST_ASSERT_FALSE(s3::parseCrc32B64("1B2M2Y8AsgTpgAmY7PhCfg==", 24, &crc));
+}
+
+// --- dates / etag ---------------------------------------------------------------
+
+void test_dates() {
+    char iso[25];
+    s3::formatIso8601(0, iso);
+    TEST_ASSERT_EQUAL_STRING("1970-01-01T00:00:00.000Z", iso);
+    s3::formatIso8601(1794141296, iso);  // 2026-11-08T12:34:56Z
+    TEST_ASSERT_EQUAL_STRING("2026-11-08T12:34:56.000Z", iso);
+    s3::formatIso8601(951782400, iso);  // leap day 2000-02-29
+    TEST_ASSERT_EQUAL_STRING("2000-02-29T00:00:00.000Z", iso);
+    s3::formatIso8601(4107542400ll, iso);  // 2100-03-01 (2100 is not a leap year)
+    TEST_ASSERT_EQUAL_STRING("2100-03-01T00:00:00.000Z", iso);
+    s3::formatIso8601(-5, iso);
+    TEST_ASSERT_EQUAL_STRING("1970-01-01T00:00:00.000Z", iso);
+    char http[30];
+    s3::formatHttpDate(784111777, http);  // RFC 7231 example
+    TEST_ASSERT_EQUAL_STRING("Sun, 06 Nov 1994 08:49:37 GMT", http);
+    s3::formatHttpDate(0, http);
+    TEST_ASSERT_EQUAL_STRING("Thu, 01 Jan 1970 00:00:00 GMT", http);
+}
+
+void test_etag() {
+    char e[40];
+    s3::formatETag(10082, 0x6560a0b1, e);
+    TEST_ASSERT_EQUAL_STRING("\"2762-6560a0b1\"", e);
+    s3::formatETag(0, 0, e);
+    TEST_ASSERT_EQUAL_STRING("\"0-0\"", e);
+}
+
+// --- roll-up ----------------------------------------------------------------------
+
+void test_rollup() {
+    bool isPrefix;
+    TEST_ASSERT_EQUAL(4, s3::rollup("www/a.js", 8, 0, true, &isPrefix));
+    TEST_ASSERT_TRUE(isPrefix);
+    TEST_ASSERT_EQUAL(8, s3::rollup("www/a.js", 8, 4, true, &isPrefix));
+    TEST_ASSERT_FALSE(isPrefix);
+    TEST_ASSERT_EQUAL(8, s3::rollup("www/a.js", 8, 0, false, &isPrefix));
+    TEST_ASSERT_FALSE(isPrefix);
+    // prefix ending mid-segment
+    TEST_ASSERT_EQUAL(11, s3::rollup("www/assets/x.js", 15, 5, true, &isPrefix));
+    TEST_ASSERT_TRUE(isPrefix);
+}
+
+void test_dir_action() {
+    size_t rolled = 0;
+    TEST_ASSERT_TRUE(s3::dirAction("www/", 4, "", 0, true, &rolled) == s3::DirAction::Rollup);
+    TEST_ASSERT_EQUAL(4, rolled);
+    TEST_ASSERT_TRUE(s3::dirAction("www/", 4, "", 0, false, &rolled) == s3::DirAction::Descend);
+    TEST_ASSERT_TRUE(s3::dirAction("www/", 4, "www/", 4, true, &rolled) == s3::DirAction::Descend);
+    TEST_ASSERT_TRUE(s3::dirAction("www/assets/", 11, "www/", 4, true, &rolled) == s3::DirAction::Rollup);
+    TEST_ASSERT_EQUAL(11, rolled);
+    TEST_ASSERT_TRUE(s3::dirAction("www/", 4, "www/assets/", 11, true, &rolled) == s3::DirAction::Descend);
+    TEST_ASSERT_TRUE(s3::dirAction("fonts/", 6, "www/", 4, true, &rolled) == s3::DirAction::Skip);
+    TEST_ASSERT_TRUE(s3::dirAction("ww/", 3, "www", 3, true, &rolled) == s3::DirAction::Skip);
+    TEST_ASSERT_TRUE(s3::dirAction("www/", 4, "ww", 2, true, &rolled) == s3::DirAction::Rollup);
+    TEST_ASSERT_EQUAL(4, rolled);
+}
+
+void test_subtree_pruning() {
+    // Everything under "a/" is <= "b" -> nothing new.
+    TEST_ASSERT_TRUE(s3::subtreeNotAbove("a/", 2, "b"));
+    // Marker inside the subtree -> must walk.
+    TEST_ASSERT_FALSE(s3::subtreeNotAbove("a/", 2, "a/x"));
+    // Marker is a prefix of the dir -> values are longer, so > marker.
+    TEST_ASSERT_FALSE(s3::subtreeNotAbove("a/", 2, "a"));
+    TEST_ASSERT_FALSE(s3::subtreeNotAbove("c/", 2, "b"));
+    TEST_ASSERT_FALSE(s3::subtreeNotAbove("c/", 2, ""));
+
+    TEST_ASSERT_TRUE(s3::subtreeAbove("c/", 2, "b.json"));
+    TEST_ASSERT_FALSE(s3::subtreeAbove("a/", 2, "b.json"));
+    TEST_ASSERT_FALSE(s3::subtreeAbove("a/", 2, "a/x"));
+    TEST_ASSERT_TRUE(s3::subtreeAbove("a/", 2, "a"));
+    TEST_ASSERT_FALSE(s3::subtreeAbove("a/", 2, nullptr));
+}
+
+// --- aws-chunked ---------------------------------------------------------------
+
+struct DecodeResult {
+    std::string data;
+    bool ok;
+    bool done;
+    bool hasCrc;
+    std::string crc;
+};
+
+static DecodeResult decodeSplit(const std::string& body, size_t split) {
+    s3::AwsChunkedDecoder d;
+    DecodeResult r{};
+    auto sink = [&](const uint8_t* p, size_t n) { r.data.append(reinterpret_cast<const char*>(p), n); };
+    const auto* p = reinterpret_cast<const uint8_t*>(body.data());
+    r.ok = d.feed(p, split, sink) && d.feed(p + split, body.size() - split, sink);
+    r.done = d.done();
+    r.hasCrc = d.hasCrc32();
+    r.crc = d.hasCrc32() ? d.crc32B64() : "";
+    return r;
+}
+
+static void checkAllSplits(const std::string& body, const std::string& expect, bool expectCrc,
+                           const char* crc) {
+    for (size_t split = 0; split <= body.size(); ++split) {
+        const DecodeResult r = decodeSplit(body, split);
+        const std::string msg = "split at " + std::to_string(split);
+        TEST_ASSERT_TRUE_MESSAGE(r.ok, msg.c_str());
+        TEST_ASSERT_TRUE_MESSAGE(r.done, msg.c_str());
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(expect.c_str(), r.data.c_str(), msg.c_str());
+        TEST_ASSERT_EQUAL_MESSAGE(expectCrc, r.hasCrc, msg.c_str());
+        if (expectCrc) TEST_ASSERT_EQUAL_STRING_MESSAGE(crc, r.crc.c_str(), msg.c_str());
+    }
+    // Byte at a time.
+    s3::AwsChunkedDecoder d;
+    std::string out;
+    for (char c : body) {
+        const auto b = static_cast<uint8_t>(c);
+        TEST_ASSERT_TRUE(d.feed(&b, 1, [&](const uint8_t* p, size_t n) {
+            out.append(reinterpret_cast<const char*>(p), n);
+        }));
+    }
+    TEST_ASSERT_TRUE(d.done());
+    TEST_ASSERT_EQUAL_STRING(expect.c_str(), out.c_str());
+}
+
+void test_chunked_unsigned_trailer() {
+    const std::string body =
+        "b\r\nhello world\r\n"
+        "0\r\n"
+        "x-amz-checksum-crc32:DUoRhQ==\r\n"
+        "\r\n";
+    checkAllSplits(body, "hello world", true, "DUoRhQ==");
+}
+
+void test_chunked_signed() {
+    const std::string sig = ";chunk-signature=ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648";
+    const std::string body =
+        "5" + sig + "\r\nhello\r\n" +
+        "6" + sig + "\r\n world\r\n" +
+        "0" + sig + "\r\n\r\n";
+    checkAllSplits(body, "hello world", false, "");
+}
+
+void test_chunked_signed_trailer_and_case() {
+    const std::string body =
+        "4\r\nabcd\r\n"
+        "0\r\n"
+        "X-Amz-Checksum-Crc32 : ignored-because-name-has-space\r\n"
+        "x-amz-checksum-crc32c:AAAAAA==\r\n"
+        "X-AMZ-CHECKSUM-CRC32: 7ZTn1A==\r\n"
+        "x-amz-trailer-signature:abcdef\r\n"
+        "\r\n";
+    checkAllSplits(body, "abcd", true, "7ZTn1A==");
+}
+
+void test_chunked_empty_body() {
+    checkAllSplits("0\r\n\r\n", "", false, "");
+}
+
+void test_chunked_errors() {
+    auto bad = [](const std::string& body) {
+        s3::AwsChunkedDecoder d;
+        const bool ok = d.feed(reinterpret_cast<const uint8_t*>(body.data()), body.size(),
+                               [](const uint8_t*, size_t) {});
+        return !ok || !d.done();
+    };
+    TEST_ASSERT_TRUE(bad("zz\r\n"));
+    TEST_ASSERT_TRUE(bad("\r\n"));
+    TEST_ASSERT_TRUE(bad("3\nabc\r\n0\r\n\r\n"));
+    TEST_ASSERT_TRUE(bad("3\r\nabcX\r\n0\r\n\r\n"));   // missing CRLF after data
+    TEST_ASSERT_TRUE(bad("3\r\nabc\r\n"));             // truncated (no final chunk)
+    TEST_ASSERT_TRUE(bad("fffffffff\r\n"));            // size overflow
+    TEST_ASSERT_FALSE(bad("3\r\nabc\r\n0\r\n\r\n"));
+}
+
+// --- JSON validator -----------------------------------------------------------
+
+static bool valid(const char* s, size_t* off) {
+    rapidjson::StringStream ss(s);
+    return json::validateJson(ss, off);
+}
+
+void test_json_validator() {
+    size_t off = 0;
+    TEST_ASSERT_TRUE(valid(R"({"a":[1,2,{"b":"c"}],"d":null})", &off));
+    TEST_ASSERT_TRUE(valid("  {}\n", &off));
+    TEST_ASSERT_FALSE(valid(R"({"a":1,})", &off));
+    TEST_ASSERT_EQUAL(7, off);
+    TEST_ASSERT_FALSE(valid(R"({"a":1} x)", &off));
+    TEST_ASSERT_FALSE(valid("", &off));
+    TEST_ASSERT_FALSE(valid(R"({"a":"unterminated)", &off));
+    TEST_ASSERT_TRUE(valid(R"({"esc":"a\"b\\c\u00e9","n":-1.5e3,"t":true})", &off));
+    TEST_ASSERT_TRUE(valid("[0,-0,1e300,0.5E-3]", &off));
+    TEST_ASSERT_TRUE(valid("[123456789012345678901234567890]", &off));
+    // RapidJSON (also the boot-time config parser) rejects exponents past double range.
+    TEST_ASSERT_FALSE(valid("[1e400]", &off));
+    TEST_ASSERT_FALSE(valid("[01]", &off));
+    TEST_ASSERT_FALSE(valid("[1.]", &off));
+    TEST_ASSERT_FALSE(valid("[-]", &off));
+    TEST_ASSERT_FALSE(valid(R"(["bad \x escape"])", &off));
+}
+
+void test_json_validator_bounds() {
+    size_t off = 0;
+    std::string deep(64, '[');
+    deep += std::string(64, ']');
+    TEST_ASSERT_TRUE(valid(deep.c_str(), &off));
+    std::string tooDeep(65, '[');
+    tooDeep += std::string(65, ']');
+    TEST_ASSERT_FALSE(valid(tooDeep.c_str(), &off));
+    // A 60 KB string is fine (decoded in place, not onto the reader stack).
+    std::string big = "{\"s\":\"" + std::string(60000, 'x') + "\"}";
+    TEST_ASSERT_TRUE(valid(big.c_str(), &off));
+}
+
+int main() {
+    UNITY_BEGIN();
+    RUN_TEST(test_write_key_accepts_plain_paths);
+    RUN_TEST(test_write_key_rejects_traversal_and_shape);
+    RUN_TEST(test_write_key_extensions);
+    RUN_TEST(test_write_key_protected_prefixes);
+    RUN_TEST(test_write_key_lengths);
+    RUN_TEST(test_read_key);
+    RUN_TEST(test_content_types);
+    RUN_TEST(test_xml_escape);
+    RUN_TEST(test_url_encode);
+    RUN_TEST(test_hex_token_roundtrip);
+    RUN_TEST(test_put_uint);
+    RUN_TEST(test_base64);
+    RUN_TEST(test_crc32_b64);
+    RUN_TEST(test_dates);
+    RUN_TEST(test_etag);
+    RUN_TEST(test_rollup);
+    RUN_TEST(test_dir_action);
+    RUN_TEST(test_subtree_pruning);
+    RUN_TEST(test_chunked_unsigned_trailer);
+    RUN_TEST(test_chunked_signed);
+    RUN_TEST(test_chunked_signed_trailer_and_case);
+    RUN_TEST(test_chunked_empty_body);
+    RUN_TEST(test_chunked_errors);
+    RUN_TEST(test_json_validator);
+    RUN_TEST(test_json_validator_bounds);
+    return UNITY_END();
+}

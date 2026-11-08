@@ -13,16 +13,39 @@ using namespace FreeButton;
 
 static auto TAG = "BytecodeRegistry";
 
+namespace {
+StaticSemaphore_t s_lock_buf;
+SemaphoreHandle_t s_lock = nullptr;
+}
+
+BytecodeRegistry::Lock::Lock() {
+    if (!s_lock) BytecodeRegistry::instance();  // creates the mutex
+    xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
+}
+
+BytecodeRegistry::Lock::~Lock() {
+    xSemaphoreGiveRecursive(s_lock);
+}
+
+BytecodeRegistry& BytecodeRegistry::instance() {
+    // Constructed (partition mapped, metadata loaded) on first use; never
+    // destroyed, so the mapping and its virtual address stay put.
+    static BytecodeRegistry* registry = [] {
+        s_lock = xSemaphoreCreateRecursiveMutexStatic(&s_lock_buf);
+        auto* r = new BytecodeRegistry();
+        r->load();
+        return r;
+    }();
+    return *registry;
+}
+
 BytecodeRegistry::BytecodeRegistry()
     : user_partition_(nullptr)
-    , next_offset_(0)
     , virtual_base_addr_(0)
     , mmap_handle_(0) {
     initPartition();
     initVirtualMapping();
 }
-
-BytecodeRegistry::~BytecodeRegistry() = default;
 
 bool BytecodeRegistry::initPartition() {
     user_partition_ = esp_partition_find_first(
@@ -43,39 +66,28 @@ bool BytecodeRegistry::initPartition() {
 }
 
 bool BytecodeRegistry::load() {
+    Lock lock;
     entries_.clear();
-    next_offset_ = 0;
 
     if (!loadFromFile(METADATA_PATH)) {
         ESP_LOGW(TAG, "No metadata file found or failed to load, starting fresh");
         return true;  // Not an error, just empty
     }
 
-    // Calculate next offset from entries
-    for (const auto& entry : entries_) {
-        if (entry.active) {
-            uint32_t entry_end = entry.offset + entry.size;
-            if (entry_end > next_offset_) {
-                next_offset_ = entry_end;
-            }
-        }
-    }
-
-    // Align to 4KB boundary (flash erase sector size)
-    next_offset_ = (next_offset_ + 0xFFF) & ~0xFFF;
-
     ESP_LOGI(TAG, "Loaded %zu entries, next offset: 0x%lx",
-             entries_.size(), next_offset_);
+             entries_.size(), getNextOffset());
 
     return true;
 }
 
 bool BytecodeRegistry::save() {
+    Lock lock;
     return saveToFile(METADATA_PATH);
 }
 
 bool BytecodeRegistry::add(const char* name, uint32_t offset, uint32_t size,
                            uint32_t checksum, uint32_t flash_addr) {
+    Lock lock;
     if (!name || strlen(name) >= 32) {
         ESP_LOGE(TAG, "Invalid name");
         return false;
@@ -116,6 +128,7 @@ bool BytecodeRegistry::add(const char* name, uint32_t offset, uint32_t size,
 }
 
 const BytecodeEntry* BytecodeRegistry::find(const char* name) const {
+    Lock lock;
     if (!name) return nullptr;
 
     for (const auto& entry : entries_) {
@@ -128,6 +141,7 @@ const BytecodeEntry* BytecodeRegistry::find(const char* name) const {
 }
 
 std::vector<BytecodeEntry> BytecodeRegistry::list() const {
+    Lock lock;
     std::vector<BytecodeEntry> active_entries;
     for (const auto& entry : entries_) {
         if (entry.active) {
@@ -138,6 +152,7 @@ std::vector<BytecodeEntry> BytecodeRegistry::list() const {
 }
 
 bool BytecodeRegistry::remove(const char* name) {
+    Lock lock;
     if (!name) return false;
 
     for (auto& entry : entries_) {
@@ -151,18 +166,116 @@ bool BytecodeRegistry::remove(const char* name) {
     return false;
 }
 
+uint32_t BytecodeRegistry::usableSize() const {
+    if (!user_partition_) return 0;
+    return user_partition_->size < MAX_PARTITION_SIZE ? user_partition_->size : MAX_PARTITION_SIZE;
+}
+
+static uint32_t alignDown(uint32_t v, uint32_t a) { return v & ~(a - 1); }
+static uint32_t alignUp(uint32_t v, uint32_t a) { return (v + a - 1) & ~(a - 1); }
+
+// Is any byte of [start, end) used by an active entry, a pin or the upload
+// in progress? All ranges are widened to whole flash sectors.
+bool BytecodeRegistry::overlapsUsed(uint32_t start, uint32_t end) const {
+    auto hit = [&](uint32_t s, uint32_t e) {
+        s = alignDown(s, SECTOR_SIZE);
+        e = alignUp(e, SECTOR_SIZE);
+        return s < end && start < e;
+    };
+    for (const auto& entry : entries_) {
+        if (entry.active && entry.size && hit(entry.offset, entry.offset + entry.size)) return true;
+    }
+    for (int i = 0; i < pin_count_; ++i) {
+        if (hit(pins_[i].start, pins_[i].end)) return true;
+    }
+    return has_reservation_ && hit(reservation_.start, reservation_.end);
+}
+
+// Start of the first used range at or after `from` (usableSize() if none).
+uint32_t BytecodeRegistry::nextUsedStart(uint32_t from) const {
+    uint32_t next = usableSize();
+    auto consider = [&](uint32_t s, uint32_t e) {
+        s = alignDown(s, SECTOR_SIZE);
+        if (alignUp(e, SECTOR_SIZE) > from && s < next) next = s < from ? from : s;
+    };
+    for (const auto& entry : entries_) {
+        if (entry.active && entry.size) consider(entry.offset, entry.offset + entry.size);
+    }
+    for (int i = 0; i < pin_count_; ++i) consider(pins_[i].start, pins_[i].end);
+    if (has_reservation_) consider(reservation_.start, reservation_.end);
+    return next;
+}
+
+bool BytecodeRegistry::allocate(size_t size, uint32_t* offset) const {
+    Lock lock;
+    const uint32_t limit = usableSize();
+    const uint32_t need = alignUp(static_cast<uint32_t>(size ? size : 1), SECTOR_SIZE);
+    if (need > limit) return false;
+
+    // Candidates: the floor and the end of every used range; take the lowest that fits.
+    bool found = false;
+    uint32_t best = 0;
+    auto tryAt = [&](uint32_t c) {
+        c = alignUp(c, SECTOR_SIZE);
+        if (c < pin_floor_ || c + need > limit || (found && c >= best)) return;
+        if (overlapsUsed(c, c + need)) return;
+        best = c;
+        found = true;
+    };
+    tryAt(pin_floor_);
+    for (const auto& entry : entries_) {
+        if (entry.active) tryAt(entry.offset + entry.size);
+    }
+    for (int i = 0; i < pin_count_; ++i) tryAt(pins_[i].end);
+    if (has_reservation_) tryAt(reservation_.end);
+
+    if (found && offset) *offset = best;
+    return found;
+}
+
+bool BytecodeRegistry::reserve(uint32_t offset, size_t size) {
+    Lock lock;
+    if (has_reservation_) return false;
+    reservation_ = {offset, offset + static_cast<uint32_t>(size)};
+    has_reservation_ = true;
+    return true;
+}
+
+void BytecodeRegistry::releaseReservation() {
+    Lock lock;
+    has_reservation_ = false;
+}
+
+void BytecodeRegistry::pin(uint32_t offset, uint32_t size) {
+    Lock lock;
+    const uint32_t end = offset + size;
+    for (int i = 0; i < pin_count_; ++i) {
+        if (pins_[i].start == offset && pins_[i].end == end) return;
+    }
+    if (pin_count_ < kMaxPins) {
+        pins_[pin_count_++] = {offset, end};
+        return;
+    }
+    // Table full: never hand out anything below the highest pinned byte.
+    uint32_t top = alignUp(end, SECTOR_SIZE);
+    for (int i = 0; i < pin_count_; ++i) {
+        const uint32_t e = alignUp(pins_[i].end, SECTOR_SIZE);
+        if (e > top) top = e;
+    }
+    if (top > pin_floor_) pin_floor_ = top;
+    ESP_LOGW(TAG, "Pin table full; uploads go above 0x%lx until reboot", (unsigned long)pin_floor_);
+}
+
 uint32_t BytecodeRegistry::getNextOffset() const {
-    return next_offset_;
+    Lock lock;
+    uint32_t offset = 0;
+    return allocate(SECTOR_SIZE, &offset) ? offset : usableSize();
 }
 
 size_t BytecodeRegistry::getFreeSpace() const {
-    if (!user_partition_) return 0;
-
-    if (next_offset_ >= user_partition_->size) {
-        return 0;
-    }
-
-    return user_partition_->size - next_offset_;
+    Lock lock;
+    const uint32_t offset = getNextOffset();
+    return nextUsedStart(offset) - offset;
 }
 
 uint32_t BytecodeRegistry::getPartitionAddress() const {
@@ -301,21 +414,15 @@ void BytecodeRegistry::setVirtualBaseAddress(uint32_t addr) {
 // C interface for mquickjs binding
 extern "C" {
 
-static BytecodeRegistry* g_registry = nullptr;
-
 bool bytecode_registry_find(const char* name, BytecodeEntry* entry) {
-    if (!g_registry) {
-        g_registry = new BytecodeRegistry();
-        g_registry->load();
-    }
-
-    const BytecodeEntry* found = g_registry->find(name);
-    if (found && entry) {
-        *entry = *found;
-        return true;
-    }
-
-    return false;
+    auto& registry = BytecodeRegistry::instance();
+    BytecodeRegistry::Lock lock;
+    const BytecodeEntry* found = registry.find(name);
+    if (!found) return false;
+    // The caller maps and runs it in place: keep the region until reboot.
+    registry.pin(found->offset, found->size);
+    if (entry) *entry = *found;
+    return true;
 }
 
 } // extern "C"
