@@ -217,6 +217,7 @@ void ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * defaul
 
     /* Create a flex container for mixed text/image content */
     lv_obj_t * container = lv_obj_create(obj);
+    lv_obj_set_scrollable(container, false);  /* no scrollbar when wider than the parent */
     lv_obj_set_size(container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_layout(container, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(container, LV_FLEX_FLOW_ROW);

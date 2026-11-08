@@ -70,6 +70,7 @@ void ui_box_set_default_title_color(const long color)
 lv_obj_t* ui_create_text_container(lv_obj_t *parent)
 {
     lv_obj_t* txt = lv_obj_create(parent);
+    lv_obj_set_scrollable(txt, false);  /* see ui_box_create() */
     lv_obj_set_size(txt, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_layout(txt, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(txt, LV_FLEX_FLOW_ROW);
@@ -89,6 +90,10 @@ lv_obj_t* ui_box_create(lv_obj_t* parent)
 {
 	lv_obj_t* box = lv_obj_create(parent);
 	lv_obj_add_style(box, &style_box, 0);
+	/* Safety net only: content is sized to fit (empty caption / unit are
+	 * hidden). Should text still be wider than the box, it is clipped
+	 * instead of making the box scrollable, which drew a scrollbar line. */
+	lv_obj_set_scrollable(box, false);
 
 	box_dsc_t* b = lv_malloc(sizeof(box_dsc_t));
 
@@ -137,6 +142,9 @@ void ui_box_set_caption(lv_obj_t* box, const char* caption)
 	const box_dsc_t* b = lv_obj_get_user_data(box);
 	/* Caption always uses fixed size 1 (fnt_semibold_14), not base_font_size */
     ui_render_text(b->title, caption, &style_title, 1, true);
+    /* An empty caption takes no room: hidden flex children get no column
+     * gap either (the theme's ~8 px per gap pushed text past the box). */
+    lv_obj_set_hidden(b->title, caption == NULL || caption[0] == '\0');
 }
 
 void ui_box_set_text(lv_obj_t* box, const char* text)
@@ -150,6 +158,8 @@ void ui_box_set_hint(lv_obj_t* box, const char* hint)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
     ui_render_text(b->hint, hint, &style_hint, b->base_font_size, false);
+    /* An empty unit takes no room (see ui_box_set_caption). */
+    lv_obj_set_hidden(b->hint, hint == NULL || hint[0] == '\0');
 }
 
 void ui_box_set_font_size(lv_obj_t* box, uint8_t size, int boxtype)
