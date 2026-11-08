@@ -116,7 +116,7 @@ public:
         obj.Add("buttonuid", std::to_string(position_) + "-" + std::to_string(page_)); // not used
         obj.Add("page", page_);
         obj.Add("label", label);
-        obj.Add("topLabel", topLabel);
+        obj.Add("toplabel", topLabel);  // the key configure() reads (Button+ format)
 
         // topics array
         {
@@ -147,7 +147,13 @@ private:
         data["page"].isNull() ? page_ = 1 : page_ = data["page"].as<uint32_t>();
 
         label = data["label"].isNull() ? label : data["label"].as<std::string>();
-        topLabel = data["toplabel"].isNull() ? topLabel : data["toplabel"].as<std::string>();
+        // "toplabel" (Button+ format); "topLabel" is what /config wrote before
+        // and what configs saved from it (data/config.json) still contain.
+        if (!data["toplabel"].isNull()) {
+            topLabel = data["toplabel"].as<std::string>();
+        } else if (!data["topLabel"].isNull()) {
+            topLabel = data["topLabel"].as<std::string>();
+        }
         ledColorFront = data["ledcolorfront"].isNull() ? ledColorFront : data["ledcolorfront"].as<uint32_t>();
         ledColorWall = data["ledcolorwall"].isNull() ? ledColorWall : data["ledcolorwall"].as<uint32_t>();
 
@@ -168,7 +174,8 @@ private:
         if (data["topics"].is<JsonArray>()) {
             handleTopics(data["topics"].as<JsonArray>());
         } else {
-            ESP_LOGW(TAG, "No topics in Button JSON");
+            // Normal for keys whose logic a script owns.
+            ESP_LOGD(TAG, "Button at position %d has no topics", position_);
         }
 
         ESP_LOGI(TAG, "Configured Button %d at position %d", id, position_);
