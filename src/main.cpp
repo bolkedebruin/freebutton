@@ -61,7 +61,7 @@ void setup() {
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
     esp_log_level_set("broker", ESP_LOG_DEBUG);
     esp_log_level_set("displayitem", ESP_LOG_DEBUG);
-    esp_log_level_set("mqtt", ESP_LOG_DEBUG);
+    esp_log_level_set("mqtt", ESP_LOG_INFO);
     esp_log_level_set("item", ESP_LOG_DEBUG);
     esp_log_level_set("sensor", ESP_LOG_DEBUG);
     esp_log_level_set("config", ESP_LOG_DEBUG);
