@@ -45,6 +45,8 @@ public:
 
 private:
     lv_obj_t* box = nullptr;  // UI box element; written only with the LVGL lock held
+    // Whether box is hidden because its page is not shown (LVGL lock held).
+    bool hiddenByPage_ = false;
 
     // Text set from other tasks (MQTT, JS), rendered by the LVGL task in
     // applyPending(). Sizes are whole footprints (see TextSlot.h):
@@ -64,6 +66,8 @@ private:
     TextSlot<kUnitSlotBytes> unitSlot_;
 
     void invalidatePending();
+    // LVGL lock held, box exists: hide / show the box for the shown page.
+    void applyPage();
 
 public:
 
@@ -181,6 +185,10 @@ public:
     void setDisplayLabel(std::string_view text);
     void setDisplayValue(std::string_view text);
     void setDisplayUnit(std::string_view text);
+
+    // Page (config "page"; 0 = every page). Any task: the LVGL task hides or
+    // shows the box on its next tick (see ui/MainPage.h).
+    void setPage(int newPage);
 
     // PendingRender (LVGL task, LVGL lock held)
     bool applyPending() override;

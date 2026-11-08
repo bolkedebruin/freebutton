@@ -6,6 +6,7 @@
 #define FREEBUTTON_CLOCK_H_COMPONENT
 
 #include "mqtt/Component.h"
+#include "ui/PendingRender.h"
 #include <string>
 #include <memory>
 
@@ -18,7 +19,9 @@ extern "C" {
 
 namespace freebutton {
 
-class Clock final {
+// A PendingRender only to follow the main display's page (ui/MainPage.h):
+// it has no text set from other tasks.
+class Clock final : public ui::PendingRender {
 public:
     static unsigned long next_id;
 
@@ -53,6 +56,8 @@ public:
 
 private:
     static constexpr auto TAG = "Clock";
+    bool hiddenByPage_ = false;  // LVGL lock held
+    void applyPage();
 
     void configure(const JsonObject &data) {
         x = data["x"].isNull() ? x : data["x"].as<int>();
@@ -65,8 +70,11 @@ private:
 
 public:
     // UI methods
-    void createClock() const;
+    void createClock();
     void destroyClock();
+
+    // PendingRender (LVGL task, LVGL lock held): hide / show for the shown page.
+    bool applyPending() override;
 
     // Getters for ConfigManager
     int getPage() const { return page; }

@@ -579,8 +579,22 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "label": "fb.main.display.setPage",
         "type": "method",
         "detail": "(id: number, page: number) → void",
-        "info": "Set item page",
+        "info": "Set item page (0 = every page)",
         "apply": "fb.main.display.setPage(${1:id}, ${2:page})"
+      },
+      {
+        "label": "fb.main.display.showPage",
+        "type": "method",
+        "detail": "(page: number) → void",
+        "info": "Show a page of the main display: items and the clock on this page or on page 0 (every page) are shown, the others hidden. Page 1 is shown at boot.",
+        "apply": "fb.main.display.showPage(${1:page})"
+      },
+      {
+        "label": "fb.main.display.getShownPage",
+        "type": "method",
+        "detail": "() → number",
+        "info": "Page of the main display shown now",
+        "apply": "fb.main.display.getShownPage()"
       },
       {
         "label": "fb.main.left.button.onClick",

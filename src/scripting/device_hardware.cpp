@@ -57,6 +57,7 @@ void device_hw_init_fb(void* ctx) {
         DITEM_SET_VALUE = 14, DITEM_SET_UNIT = 15, DITEM_SET_POSITION = 16,
         DITEM_SET_PAGE = 17,
         DISP_GET_LABEL = 18, DISP_GET_TOP_LABEL = 19,
+        DITEM_SHOW_PAGE = 20, DITEM_GET_SHOWN_PAGE = 21,
     };
 
     const int P = FB_PROXY_FUNC_IDX;
@@ -110,6 +111,8 @@ void device_hw_init_fb(void* ctx) {
     setMethod(disp_items_proto, "setUnit",     DITEM_SET_UNIT);
     setMethod(disp_items_proto, "setPosition", DITEM_SET_POSITION);
     setMethod(disp_items_proto, "setPage",     DITEM_SET_PAGE);
+    setMethod(disp_items_proto, "showPage",    DITEM_SHOW_PAGE);
+    setMethod(disp_items_proto, "getShownPage", DITEM_GET_SHOWN_PAGE);
 
     // --- Get Object.create for prototype inheritance ---
 

@@ -6,6 +6,7 @@
 
 #include "drivers/LvglDisplay.h"
 #include "mqtt/Registry.h"
+#include "ui/MainPage.h"
 
 extern "C" {
 #include "ui/ui_clock.h"
@@ -26,7 +27,7 @@ Clock::~Clock() {
     destroyClock();
 }
 
-void Clock::createClock() const {
+void Clock::createClock() {
     /*
     if (clock_widget) {
         ESP_LOGW(TAG, "Clock %lu already created", id);
@@ -45,6 +46,9 @@ void Clock::createClock() const {
     lvglDisplay.lock();
 
     clock_init(parent, x, y, width, height, align);
+    hiddenByPage_ = false;
+    applyPage();
+    linkPending();  // follows later page changes
 
     lvglDisplay.unlock();
 
@@ -57,8 +61,23 @@ void Clock::destroyClock() {
     // lock, so ~Clock must not run while the caller holds it.
     auto& lvglDisplay = FreeButton::getLvglDisplay();
     lvglDisplay.lock();
+    unlinkPending();
     clock_destroy();
     lvglDisplay.unlock();
+}
+
+// LVGL lock held.
+void Clock::applyPage() {
+    const bool hide = !ui::visibleOnPage(page, ui::shownPage());
+    if (hide != hiddenByPage_) {
+        clock_set_hidden(hide);
+        hiddenByPage_ = hide;
+    }
+}
+
+bool Clock::applyPending() {
+    applyPage();
+    return false;
 }
 
 

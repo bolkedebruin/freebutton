@@ -5,6 +5,7 @@
 #include "DisplayItem.h"
 #include "mqtt/Registry.h"
 #include "drivers/LvglDisplay.h"
+#include "ui/MainPage.h"
 #include "types.h"
 
 #include <utility>
@@ -91,6 +92,7 @@ bool DisplayItem::applyPending() {
     if (!box) {
         return false;  // createBox() requests a render once the box exists
     }
+    applyPage();
     bool again = false;
     again |= valueSlot_.apply([this](const char* text) { ui_box_set_text(box, text); })
              == TextSlotApply::Busy;
@@ -109,6 +111,21 @@ void DisplayItem::invalidatePending() {
     captionSlot_.invalidate();
     unitSlot_.invalidate();
     linkPending();
+    ui::requestPendingRender();
+}
+
+// LVGL lock held, box exists. Touches LVGL only when the visibility changes;
+// every pending render walks all items, so this runs often.
+void DisplayItem::applyPage() {
+    const bool hide = !ui::visibleOnPage(page, ui::shownPage());
+    if (hide != hiddenByPage_) {
+        lv_obj_set_hidden(box, hide);
+        hiddenByPage_ = hide;
+    }
+}
+
+void DisplayItem::setPage(const int newPage) {
+    page = newPage;
     ui::requestPendingRender();
 }
 
@@ -139,6 +156,7 @@ void DisplayItem::createBox() {
         ESP_LOGI(TAG, "Redrawing existing box for DisplayItem %lu", id);
         const int adjustedWidth = width == 0 ? 45 : width;
         draw_box(box, label.c_str(), "", unit.c_str(), x, y, fontSize, adjustedWidth, alignment, boxType);
+        applyPage();
         invalidatePending();
         lvglDisplay.unlock();
         return;
@@ -162,6 +180,9 @@ void DisplayItem::createBox() {
     // Apply the initial configuration using draw_box
     const int adjustedWidth = width == 0 ? 45 : width;
     draw_box(box, label.c_str(), "", unit.c_str(), x, y, fontSize, adjustedWidth, alignment, boxType);
+    // A new box is visible; hide it right away when its page is not shown.
+    hiddenByPage_ = false;
+    applyPage();
     invalidatePending();
 
     lvglDisplay.unlock();

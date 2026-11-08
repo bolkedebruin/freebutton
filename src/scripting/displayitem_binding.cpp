@@ -10,6 +10,7 @@
 #include "components/DisplayItem.h"
 #include "components/Topics.h"
 #include "drivers/LvglDisplay.h"
+#include "ui/MainPage.h"
 
 extern "C" {
 #include "ui/ui.h"
@@ -177,11 +178,20 @@ bool displayitem_set_page(unsigned long id, int page)
         return false;
     }
 
-    item->page = page;
-
-    // Note: Page changes may require additional handling for visibility
+    // Hidden / shown by the LVGL task on its next tick.
+    item->setPage(page);
 
     return true;
+}
+
+bool displayitem_show_page(const int page)
+{
+    return freebutton::ui::showPage(page);
+}
+
+int displayitem_get_shown_page(void)
+{
+    return freebutton::ui::shownPage();
 }
 
 int displayitem_get_all_ids(unsigned long* ids, int maxCount)

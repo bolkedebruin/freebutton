@@ -430,8 +430,12 @@ export interface FbMainDisplay {
     setUnit(id: number, unit: string): void;
     /** Set item position */
     setPosition(id: number, x: number, y: number): void;
-    /** Set item page */
+    /** Set item page (0 = every page) */
     setPage(id: number, page: number): void;
+    /** Show a page of the main display: items and the clock on this page or on page 0 (every page) are shown, the others hidden. Page 1 is shown at boot. */
+    showPage(page: number): void;
+    /** Page of the main display shown now */
+    getShownPage(): number;
 }
 
 export interface FbMainSide {

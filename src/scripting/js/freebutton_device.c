@@ -51,6 +51,8 @@ enum {
     FB_METHOD_DITEM_SET_PAGE = 17,
     FB_METHOD_DISP_GET_LABEL = 18,
     FB_METHOD_DISP_GET_TOP_LABEL = 19,
+    FB_METHOD_DITEM_SHOW_PAGE = 20,
+    FB_METHOD_DITEM_GET_SHOWN_PAGE = 21,
 };
 
 /*
@@ -185,6 +187,10 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         return js_freebutton_display_setPosition(ctx, this_val, argc, argv);
     case FB_METHOD_DITEM_SET_PAGE:
         return js_freebutton_display_setPage(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_SHOW_PAGE:
+        return js_freebutton_display_showPage(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_GET_SHOWN_PAGE:
+        return js_freebutton_display_getShownPage(ctx, this_val, argc, argv);
     default:
         return JS_ThrowInternalError(ctx, "unknown fb method %d", method);
     }

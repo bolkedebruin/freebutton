@@ -213,6 +213,22 @@ void clock_destroy(void)
     }
 }
 
+void clock_set_hidden(const bool hidden)
+{
+    if (g_clock == NULL || g_clock->container == NULL) {
+        return;
+    }
+    lv_obj_set_hidden(g_clock->container, hidden);
+    if (g_timer != NULL) {
+        if (hidden) {
+            lv_timer_pause(g_timer);
+        } else {
+            lv_timer_resume(g_timer);
+            lv_timer_ready(g_timer);  // hands right on the next tick
+        }
+    }
+}
+
 static void update_time_labels(analog_clock_t* clock)
 {
     time_t now;

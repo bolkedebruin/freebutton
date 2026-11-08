@@ -606,9 +606,13 @@ public:
              {"params", json::array({{{"name", "id"}, {"type", "number"}, {"description", "Item ID"}},
                                      {{"name", "x"}, {"type", "number"}, {"description", "X position"}},
                                      {{"name", "y"}, {"type", "number"}, {"description", "Y position"}}})}},
-            {{"name", "setPage"}, {"description", "Set item page"}, {"returns", "void"},
+            {{"name", "setPage"}, {"description", "Set item page (0 = every page)"}, {"returns", "void"},
              {"params", json::array({{{"name", "id"}, {"type", "number"}, {"description", "Item ID"}},
-                                     {{"name", "page"}, {"type", "number"}, {"description", "Page number"}}})}}
+                                     {{"name", "page"}, {"type", "number"}, {"description", "Page number"}}})}},
+            {{"name", "showPage"}, {"description", "Show a page of the main display: items and the clock on this page or on page 0 (every page) are shown, the others hidden. Page 1 is shown at boot."}, {"returns", "void"},
+             {"params", json::array({{{"name", "page"}, {"type", "number"}, {"description", "Page to show (1 or more)"}}})}},
+            {{"name", "getShownPage"}, {"description", "Page of the main display shown now"}, {"returns", "number"},
+             {"params", json::array()}}
         });
 
         output["fb"] = {

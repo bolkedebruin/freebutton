@@ -83,6 +83,18 @@ bool displayitem_set_position(unsigned long id, int x, int y);
 bool displayitem_set_page(unsigned long id, int page);
 
 /*
+ * Show a page of the main display: items (and the clock) whose page is this
+ * page or 0 ("every page") are shown, the others hidden. Any task; the LVGL
+ * task applies it on its next tick. Returns false for page < 1.
+ */
+bool displayitem_show_page(int page);
+
+/*
+ * Page of the main display currently shown (1 at boot).
+ */
+int displayitem_get_shown_page(void);
+
+/*
  * Get all display item IDs
  * Fills the provided array with item IDs, up to maxCount
  * Returns the actual number of items copied

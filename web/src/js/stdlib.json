@@ -1894,7 +1894,7 @@
             "returns": "void"
           },
           {
-            "description": "Set item page",
+            "description": "Set item page (0 = every page)",
             "name": "setPage",
             "params": [
               {
@@ -1909,6 +1909,24 @@
               }
             ],
             "returns": "void"
+          },
+          {
+            "description": "Show a page of the main display: items and the clock on this page or on page 0 (every page) are shown, the others hidden. Page 1 is shown at boot.",
+            "name": "showPage",
+            "params": [
+              {
+                "description": "Page to show (1 or more)",
+                "name": "page",
+                "type": "number"
+              }
+            ],
+            "returns": "void"
+          },
+          {
+            "description": "Page of the main display shown now",
+            "name": "getShownPage",
+            "params": [],
+            "returns": "number"
           }
         ]
       },

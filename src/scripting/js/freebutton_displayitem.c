@@ -16,6 +16,8 @@
  *   display.setUnit(id, unit)    - Set display item unit
  *   display.setPosition(id, x, y) - Set display item position
  *   display.setPage(id, page)    - Set display item page
+ *   display.showPage(page)       - Show a page of the main display
+ *   display.getShownPage()       - Page of the main display shown now
  */
 
 #include <stdio.h>
@@ -50,6 +52,8 @@ static inline bool displayitem_set_value(unsigned long id, const char* v) { retu
 static inline bool displayitem_set_unit(unsigned long id, const char* u) { return false; }
 static inline bool displayitem_set_position(unsigned long id, int x, int y) { return false; }
 static inline bool displayitem_set_page(unsigned long id, int p) { return false; }
+static inline bool displayitem_show_page(int p) { return p >= 1; }
+static inline int displayitem_get_shown_page(void) { return 1; }
 static inline int displayitem_get_all_ids(unsigned long* ids, int max) { return 0; }
 #endif
 
@@ -337,4 +341,36 @@ JSValue js_freebutton_display_setPage(JSContext *ctx, JSValue *this_val, int arg
 
     bool success = displayitem_set_page((unsigned long)id, page);
     return JS_NewBool(success);
+}
+
+/**
+ * @jsapi display.showPage
+ * @description Show a page of the main display. Items (and the clock) whose
+ *              page is this page or 0 ("every page") are shown, the others
+ *              are hidden. Pages count from 1; page 1 is shown at boot.
+ * @param {number} page - Page to show (1 or more)
+ */
+JSValue js_freebutton_display_showPage(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    int page = 0;
+
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "display.showPage() requires a page argument");
+    }
+    if (JS_ToInt32(ctx, &page, argv[0]))
+        return JS_EXCEPTION;
+    if (!displayitem_show_page(page)) {
+        return JS_ThrowRangeError(ctx, "display.showPage(): page must be 1 or more");
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @jsapi display.getShownPage
+ * @description Page of the main display shown now (1 at boot)
+ * @returns {number} Page number
+ */
+JSValue js_freebutton_display_getShownPage(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return JS_NewInt32(ctx, displayitem_get_shown_page());
 }
