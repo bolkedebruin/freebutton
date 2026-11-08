@@ -22,9 +22,15 @@ struct BytecodeEntry {
     uint32_t flash_addr;        // Actual flash address (for relocation)
     uint8_t version;            // Bytecode format version
     bool active;                // Is this entry valid?
+    // App build the bytecode was relocated for: the first 4 bytes of the
+    // running app's ELF SHA-256 at upload time. Relocation writes absolute
+    // addresses of the stdlib's ROM atoms, which live in the APP's rodata,
+    // so the bytecode is invalid after any firmware update. 0 = unknown
+    // (uploaded before this field existed): treated as stale.
+    uint32_t app_id;
 
     BytecodeEntry()
-        : offset(0), size(0), checksum(0), flash_addr(0), version(1), active(false) {
+        : offset(0), size(0), checksum(0), flash_addr(0), version(1), active(false), app_id(0) {
         name[0] = '\0';
     }
 };
@@ -151,6 +157,9 @@ extern "C" {
 // Find bytecode entry by name (C wrapper). A found entry is pinned: callers
 // map and execute it from flash.
 bool bytecode_registry_find(const char* name, BytecodeEntry* entry);
+
+// ID of the running app build (see BytecodeEntry::app_id).
+uint32_t bytecode_current_app_id(void);
 
 #ifdef __cplusplus
 }

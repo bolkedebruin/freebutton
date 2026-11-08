@@ -334,7 +334,9 @@ static void writeBytecodeList(S& out) {
             if (static_cast<unsigned char>(*c) >= 0x20) out.Put(*c);
         }
         char num[48];
-        snprintf(num, sizeof num, "\",\"size\":%lu}", static_cast<unsigned long>(entry.size));
+        // stale: uploaded for another firmware build; it is not run (redeploy).
+        snprintf(num, sizeof num, "\",\"size\":%lu,\"stale\":%s}", static_cast<unsigned long>(entry.size),
+                 entry.app_id == bytecode_current_app_id() ? "false" : "true");
         put(num);
     });
     put("]}");

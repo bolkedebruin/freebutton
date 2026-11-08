@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <esp_log.h>
 #include <esp_crc.h>
+#include <esp_app_desc.h>
 #include "drivers/BusAwareFileSystem.h"
 
 using namespace FreeButton;
@@ -103,6 +104,7 @@ bool BytecodeRegistry::add(const char* name, uint32_t offset, uint32_t size,
             entry.flash_addr = flash_addr;
             entry.active = true;
             entry.version = 1;
+            entry.app_id = bytecode_current_app_id();
             ESP_LOGI(TAG, "Updated entry '%s'", name);
             return true;
         }
@@ -118,6 +120,7 @@ bool BytecodeRegistry::add(const char* name, uint32_t offset, uint32_t size,
     entry.flash_addr = flash_addr;
     entry.active = true;
     entry.version = 1;
+    entry.app_id = bytecode_current_app_id();
 
     entries_.push_back(entry);
 
@@ -326,6 +329,7 @@ bool BytecodeRegistry::loadFromFile(const char* path) {
         entry.flash_addr = obj["flash_addr"].as<uint32_t>();
         entry.version = obj["version"].as<uint32_t>();
         entry.active = obj["active"].as<bool>();
+        entry.app_id = obj["app"].as<uint32_t>();  // absent (older uploads) -> 0 = stale
 
         entries_.push_back(entry);
     }
@@ -356,6 +360,7 @@ bool BytecodeRegistry::saveToFile(const char* path) {
         obj["flash_addr"] = entry.flash_addr;
         obj["version"] = entry.version;
         obj["active"] = entry.active;
+        obj["app"] = entry.app_id;
     }
 
     // Serialize to file
@@ -414,11 +419,26 @@ void BytecodeRegistry::setVirtualBaseAddress(uint32_t addr) {
 // C interface for mquickjs binding
 extern "C" {
 
+uint32_t bytecode_current_app_id(void) {
+    const uint8_t* sha = esp_app_get_description()->app_elf_sha256;
+    const uint32_t id = (uint32_t(sha[0]) << 24) | (uint32_t(sha[1]) << 16) | (uint32_t(sha[2]) << 8) | sha[3];
+    return id ? id : 1;  // 0 means "unknown" in BytecodeEntry::app_id
+}
+
 bool bytecode_registry_find(const char* name, BytecodeEntry* entry) {
     auto& registry = BytecodeRegistry::instance();
     BytecodeRegistry::Lock lock;
     const BytecodeEntry* found = registry.find(name);
     if (!found) return false;
+    // Bytecode relocated for another app build points at that build's ROM
+    // atoms: running it reads garbage (seen on btn_a00001 after an OTA).
+    if (found->app_id != bytecode_current_app_id()) {
+        ESP_LOGE(TAG, "'%s' was uploaded for another firmware build (app %08lx, running %08lx): "
+                      "not running it; deploy the script again",
+                 name, static_cast<unsigned long>(found->app_id),
+                 static_cast<unsigned long>(bytecode_current_app_id()));
+        return false;
+    }
     // The caller maps and runs it in place: keep the region until reboot.
     registry.pin(found->offset, found->size);
     if (entry) *entry = *found;
