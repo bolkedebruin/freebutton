@@ -153,11 +153,25 @@ void handleUpgradePage(AsyncWebServerRequest *request) {
     request->send(200, "text/html", content.c_str());
 }
 
+// OTA upload state (async_tcp task only).
+static const char* s_uploadError = nullptr;  // refused before anything was written
+static bool s_fsUnmounted = false;           // LittleFS unmounted for a filesystem OTA
+
 // Function to handle file uploads
+// updateType=firmware: the app image goes to the next OTA slot.
+// updateType=filesystem: a complete LittleFS image (pio buildfs /
+// tools/scripts/ota_fs.py) replaces the data partition. It is checked first
+// (LittleFS magic), refused while an S3 transfer has a file open, and only
+// then LittleFS is unmounted, so nothing reads the partition while it is
+// rewritten (S3 answers 503, static files 404 meanwhile). Apply with
+// /ota_update (reboot). A failure after writing started leaves the
+// filesystem unusable until a successful upload; the flash-resident
+// /upgrade page and this endpoint keep working.
 void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
     static std::string updateType;
     if (!index) {
         ESP_LOGI(TAG, "Upload start for: %s", filename.c_str());
+        s_uploadError = nullptr;
 
         // Get update type from request
         updateType = std::string(request->arg("updateType").c_str());
@@ -168,12 +182,30 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
                 ESP_LOGE(TAG, "Update.begin() failed");
             }
         } else if (updateType == "filesystem") {
-            ESP_LOGI(TAG, "Starting filesystem update");
-            if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) {
-                Update.printError(Serial);
-                ESP_LOGE(TAG, "Update.begin() failed");
+            // LittleFS superblock: the "littlefs" magic at byte 8 of block 0.
+            if (len < 16 || memcmp(data + 8, "littlefs", 8) != 0) {
+                s_uploadError = "not a LittleFS image";
+            } else if (!s3_idle()) {
+                s_uploadError = "storage busy (S3 transfer), retry";
+            } else {
+                ESP_LOGW(TAG, "Starting filesystem update: unmounting LittleFS");
+                LittleFS.end();
+                s_fsUnmounted = true;
+                if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) {
+                    Update.printError(Serial);
+                    ESP_LOGE(TAG, "Update.begin() failed");
+                }
             }
+        } else {
+            s_uploadError = "updateType must be firmware or filesystem (and come before the file)";
         }
+        if (s_uploadError) {
+            ESP_LOGE(TAG, "Upload refused: %s", s_uploadError);
+        }
+    }
+
+    if (s_uploadError) {
+        return;  // refused: drain the body, write nothing
     }
 
     if (Update.write(data, len) != len) {
@@ -192,8 +224,11 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
 }
 
 void handleFirmwareUpload(AsyncWebServerRequest *request) {
-    if (Update.hasError()) {
-        request->send(500, "text/plain", "Upload failed.");
+    if (s_uploadError) {
+        request->send(400, "text/plain", s_uploadError);
+    } else if (Update.hasError()) {
+        request->send(500, "text/plain",
+                      s_fsUnmounted ? "Upload failed; the filesystem must be uploaded again." : "Upload failed.");
     } else {
         request->send(200, "text/plain", "Upload complete. Click 'Trigger OTA Update' to apply.");
     }

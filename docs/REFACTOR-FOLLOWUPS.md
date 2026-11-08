@@ -98,3 +98,12 @@ Since `dee8c6f` the registry refuses bytecode uploaded for another app build (re
 - At boot, when `bytecode_registry_find()` sees a stale entry (app id differs) and the `.pi` file exists, run the same streaming relocation as the upload (`BytecodeWriter`, file -> js_user partition, ~16 KB heap only during the relocation, before the JS engine allocates its heap), update the entry's app id, then run it as usual. Log it; fall back to "not running, deploy again" if the file is missing or relocation fails.
 - Re-relocating the flash copy itself is not possible (the old app's atom table is gone), and compiling `scripts/main.js` on the device would need the host-side compiler's RAM.
 - The IDE could also notice `"stale": true` in `/api/bytecode/list` and offer "Redeploy main.js" as a manual fallback.
+
+## 10. TODO — Separate partitions for user data and the IDE
+
+Today one LittleFS `data` partition (4 MB) holds the IDE bundle (`www/`, ~1.5 MB gzipped), the fonts and the user's files, so every IDE update has to rewrite (and preserve) user data; `tools/scripts/ota_fs.py` does that by backing the user files up over S3 and rebuilding the image around them. Split it:
+
+- **`ide` partition** (read-only for the firmware): `www/` and `fonts/`, built and updated as a whole image (`pio run -t buildfs` / filesystem OTA to that partition only). Size it for the bundle plus headroom (~2 MB), mounted e.g. at `/ide`, served by `serveStatic`; S3 lists it read-only (or not at all).
+- **`data` partition** (user): `config.json`, `scripts/`, the bytecode registry index, user assets. Never rewritten by updates; formatted only on first boot / factory reset.
+- The unused `img_data` (1 MB, subtype 0x42) can be folded into one of them.
+- Needs a partition-table change, so one serial flash per device (as with the earlier layout migration; Garage still has the old table and needs that anyway). Plan the migration: back up user files over S3, flash the new table + both images, restore. OTA for the app and the IDE image separately afterwards; `ota_fs.py` then becomes a plain IDE-image upload.

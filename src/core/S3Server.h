@@ -13,4 +13,9 @@ class AsyncWebServer;
 // requests for "/" (ListBuckets) and "/fs..." are not taken by the IDE.
 void s3_register(AsyncWebServer& server);
 
+// True when no S3 request holds a LittleFS file open (no PutObject upload,
+// no GetObject transfer). A filesystem OTA only unmounts LittleFS then.
+// async_tcp task only (like the handlers).
+bool s3_idle();
+
 #endif  // FREEBUTTON_S3SERVER_H

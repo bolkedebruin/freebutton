@@ -1147,6 +1147,10 @@ public:
 
 }  // namespace
 
+bool s3_idle() {
+    return !s_putActive && s_getsActive == 0;
+}
+
 void s3_register(AsyncWebServer& server) {
     server.addHandler(new S3Handler());
 }
