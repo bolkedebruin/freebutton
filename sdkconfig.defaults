@@ -72,3 +72,6 @@ CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=2
+# esp-mqtt event queue: other tasks wake the MQTT task with a custom event
+# (Broker subscription pump); with 1 slot that post could deadlock.
+CONFIG_MQTT_EVENT_QUEUE_SIZE=4

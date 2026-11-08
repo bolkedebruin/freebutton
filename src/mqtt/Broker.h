@@ -4,9 +4,13 @@
 
 #ifndef BROKER_H
 #define BROKER_H
+#include <atomic>
 #include <functional>
 #include <mqtt_client.h>
 #include <string>
+
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "Component.h"
 #include "config.h"
@@ -23,6 +27,8 @@ public:
         password = "";
 
         deviceTopic = BASE_TOPIC + deviceId;
+        statusTopic_ = deviceTopic + "/status";
+        subscriptionsLock_ = xSemaphoreCreateRecursiveMutexStatic(&subscriptionsLockBuf_);
     }
 
     // Constructor for full broker configuration from JSON
@@ -31,7 +37,13 @@ public:
         : brokerId(0), name(name), url(url), port(port), wsPort(wsPort),
           username(username), password(password), autoDiscovery_(autoDiscovery), client(nullptr) {
         deviceTopic = BASE_TOPIC + deviceId;
+        statusTopic_ = deviceTopic + "/status";
+        subscriptionsLock_ = xSemaphoreCreateRecursiveMutexStatic(&subscriptionsLockBuf_);
     }
+
+    // Holds a static mutex and is registered with esp-mqtt by brokerId: not copyable or movable.
+    MqttBroker(const MqttBroker&) = delete;
+    MqttBroker& operator=(const MqttBroker&) = delete;
 
     void start();
     void stop();
@@ -49,7 +61,7 @@ public:
     void unsubscribe(MqttSubscriber* subscriber);
 
     // Connection state
-    [[nodiscard]] constexpr bool isConnected() const noexcept { return connected_; }
+    [[nodiscard]] bool isConnected() const noexcept { return connected_.load(); }
 
     // Bytes waiting in the esp-mqtt outbox (QoS>0 messages not yet acknowledged).
     [[nodiscard]] int outboxSize() const { return client ? esp_mqtt_client_get_outbox_size(client) : 0; }
@@ -63,7 +75,9 @@ public:
     // Instance event handler
     void handleMqttEvent(esp_mqtt_event_handle_t event) const;
     
-    // Resubscribe to all existing subscriptions (called on reconnect)
+    // Resubscribe to all existing subscriptions (called on reconnect). Sends the
+    // first SUBSCRIBE batch only; each SUBACK (MQTT_EVENT_SUBSCRIBED) sends the
+    // next one, so the MQTT task keeps draining the socket in between.
     void resubscribeAll() const;
 
     void setBrokerId(const uint8_t id) { brokerId = id; }
@@ -106,9 +120,10 @@ private:
     esp_mqtt_client_handle_t client = nullptr;
 
     std::string deviceTopic;
+    std::string statusTopic_;  // <deviceTopic>/status: LWT and birth, built once
 
     bool enabled = false;
-    bool connected_ = false;
+    std::atomic<bool> connected_{false};
     bool autoDiscovery_ = false;
 
     // Event callbacks
@@ -122,11 +137,39 @@ private:
                                   int32_t event_id, void* event_data);
 
     struct SubscriptionEntry {
+        SubscriptionEntry(const std::string_view topic, const uint8_t qos, MqttSubscriber* subscriber)
+            : topic(topic), subscribers{subscriber}, qos(qos) {}
+
         std::string topic;
         std::vector<MqttSubscriber*> subscribers;  // Multiple components can subscribe to same topic
+        uint8_t qos = 0;     // Requested QoS, used for every (re)subscribe
+        bool sent = false;   // SUBSCRIBE sent on the current connection
     };
 
+    // Guarded by subscriptionsLock_ (recursive, statically allocated). Any
+    // task may append/remove entries; only the MQTT task talks to esp-mqtt
+    // about them (SUBSCRIBE/UNSUBSCRIBE), from pumpSubscriptions().
+    // An entry with no subscribers is a pending UNSUBSCRIBE.
     std::vector<SubscriptionEntry> subscriptions_;
+    StaticSemaphore_t subscriptionsLockBuf_{};
+    SemaphoreHandle_t subscriptionsLock_ = nullptr;
+
+    // Subscription pump state, guarded by subscriptionsLock_.
+    bool subscriptionWork_ = false;      // unsent entries or pending unsubscribes may exist
+    int batchMsgId_ = -1;                // msg_id of the SUBSCRIBE awaiting its SUBACK
+    uint32_t batchSentTick_ = 0;         // FreeRTOS tick that SUBSCRIBE was sent
+    uint32_t lastBatchWarnTick_ = 0;     // rate limit for SUBSCRIBE send-failure warnings
+    uint32_t lastUnsubscribeWarnTick_ = 0;  // rate limit for UNSUBSCRIBE send-failure warnings
+
+    // Waking the MQTT task from other tasks (custom MQTT_USER_EVENT).
+    std::atomic<bool> wakePosted_{false};
+    std::atomic<TaskHandle_t> mqttTask_{nullptr};
+
+    void startResubscribe();
+    void stopResubscribe();
+    void pumpSubscriptions();           // MQTT task only
+    void requestSubscriptionWork();     // any task; call without holding the lock
+    void dispatchMessage(esp_mqtt_event_handle_t event) const;
 };
 
 #endif //BROKER_H

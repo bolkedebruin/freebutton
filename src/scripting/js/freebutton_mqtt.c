@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "mquickjs.h"
+#include "mqtt_topic_match.h"
 
 // ESP32-specific includes
 #ifdef ESP_PLATFORM
@@ -37,7 +38,7 @@ static inline bool mqtt_binding_is_connected(int id) { return false; }
 static inline bool mqtt_binding_publish(int id, const char* topic, const char* payload, int qos, bool retain) { return false; }
 static inline bool mqtt_binding_subscribe(int id, const char* topic, int qos) { return false; }
 static inline bool mqtt_binding_unsubscribe(int id, const char* topic) { return false; }
-static inline void mqtt_binding_register_message_callback(void (*cb)(uint8_t, const char*, const char*, size_t)) {}
+static inline void mqtt_binding_register_message_callback(void (*cb)(uint8_t, const char*, size_t, const char*, size_t)) {}
 static inline void mqtt_binding_register_connect_callback(void (*cb)(uint8_t)) {}
 static inline void mqtt_binding_register_disconnect_callback(void (*cb)(uint8_t)) {}
 #endif
@@ -103,7 +104,8 @@ static MqttSubscription* alloc_subscription(uint8_t brokerId) {
  * C callback wrapper - called from the hardware layer when MQTT message arrives
  * and invokes the JavaScript callback
  */
-static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, const char* payload, size_t length) {
+static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, size_t topic_len,
+                                    const char* payload, size_t length) {
     if (brokerId >= MAX_BROKERS)
         return;
 
@@ -116,22 +118,9 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, const c
         if (!sub->allocated || !sub->ctx)
             continue;
 
-        // Simple topic matching (exact match for now, wildcard support can be added)
-        // For production, implement MQTT wildcard matching (+ and #)
-        int matches = (strcmp(sub->topic, topic) == 0);
-
-        // Check for wildcard matches
-        if (!matches) {
-            // Support for # wildcard (multi-level)
-            size_t topic_len = strlen(sub->topic);
-            if (topic_len > 0 && sub->topic[topic_len - 1] == '#') {
-                // Check if topic starts with the prefix before #
-                size_t prefix_len = topic_len - 1;
-                if (prefix_len > 0 && sub->topic[prefix_len - 1] == '/')
-                    prefix_len--;
-                matches = (strncmp(sub->topic, topic, prefix_len) == 0);
-            }
-        }
+        // Exact match or trailing '#' (see mqtt_topic_match.h). topic is
+        // pointer + length, not NUL-terminated.
+        const int matches = mqtt_topic_matches(sub->topic, topic, topic_len);
 
         if (!matches)
             continue;
@@ -146,20 +135,9 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, const c
         if (!JS_IsFunction(ctx, sub->callback.val))
             continue;
 
-        // Create arguments
-        JSValue topicArg = JS_NewString(ctx, topic);
-        JSValue payloadArg;
-
-        // Create payload string (ensure null-terminated)
-        char *payload_str = (char*)malloc(length + 1);
-        if (payload_str) {
-            memcpy(payload_str, payload, length);
-            payload_str[length] = '\0';
-            payloadArg = JS_NewString(ctx, payload_str);
-            free(payload_str);
-        } else {
-            payloadArg = JS_NewString(ctx, "");
-        }
+        // Create arguments straight from the MQTT receive buffer (no copies)
+        JSValue topicArg = JS_NewStringLen(ctx, topic, topic_len);
+        JSValue payloadArg = JS_NewStringLen(ctx, payload, length);
 
         // REVERSE ORDER: args (right to left), function, this
         JS_PushArg(ctx, payloadArg);     // Arg 2 (payload)
@@ -176,8 +154,8 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, const c
             size_t len;
             const char* str = JS_ToCStringLen(ctx, &len, exception, &buf);
             if (str) {
-                ESP_LOGW(MQTT_JS_TAG, "Exception in MQTT message callback for topic '%s': %.*s",
-                         topic, (int)len, str);
+                ESP_LOGW(MQTT_JS_TAG, "Exception in MQTT message callback for topic '%.*s': %.*s",
+                         (int)topic_len, topic, (int)len, str);
             }
         }
     }

@@ -27,11 +27,9 @@ DisplayItem::DisplayItem(const int x, const int y, const int width, const int bo
 }
 
 DisplayItem::~DisplayItem() {
-    // Unsubscribe first, so no new message is dispatched to this item, then
-    // take the box off the LVGL task's list and delete it. onMessage may still
-    // be in flight on an MQTT task until the unsubscribe has synchronised with
-    // it; destroying items at runtime (config reload) while MQTT is connected
-    // is not supported.
+    // Unregister subscriptions first: unsubscribe(this) takes the broker's
+    // subscription lock, so it waits for an onMessage() running on the MQTT
+    // task to finish and no new one can start. Only then destroy the UI box.
     unregisterTopics();
     destroyBox();
 }

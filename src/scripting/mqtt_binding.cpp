@@ -144,10 +144,11 @@ void mqtt_binding_register_disconnect_callback(mqtt_js_disconnect_callback_t cal
 
 namespace MqttBinding {
 
-void notifyMessageReceived(uint8_t brokerId, const char* topic, const char* payload, size_t length) {
+void notifyMessageReceived(uint8_t brokerId, const char* topic, size_t topic_len,
+                           const char* payload, size_t length) {
     if (g_js_message_callback) {
-        ESP_LOGD(TAG, "Notifying JS: message on broker %d topic %s", brokerId, topic);
-        g_js_message_callback(brokerId, topic, payload, length);
+        ESP_LOGD(TAG, "Notifying JS: message on broker %d topic %.*s", brokerId, (int)topic_len, topic);
+        g_js_message_callback(brokerId, topic, topic_len, payload, length);
     }
 }
 

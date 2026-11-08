@@ -32,6 +32,13 @@ protected:
 
 class MqttSubscriber : public virtual MqttComponent {
 public:
+    // Called from the MQTT task with the broker's subscription lock held
+    // (MqttBroker::dispatchMessage). topic/data point into the MQTT receive
+    // buffer and are valid only during the call.
+    // RULE: must not block on any other lock (no LVGL lock, no JS engine) and
+    // must not do slow work. Only copy the data into own slots or set flags,
+    // and let the owner's task do the rest. subscribe()/unsubscribe() from
+    // here is allowed (the lock is recursive).
     virtual void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) = 0;
 
     void addSubscription(uint8_t brokerId, const std::string &topic, int qos = 0);

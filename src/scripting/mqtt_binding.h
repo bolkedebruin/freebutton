@@ -94,7 +94,10 @@ int mqtt_binding_get_broker_count(void);
 /*
  * JavaScript callback types
  */
-typedef void (*mqtt_js_message_callback_t)(uint8_t brokerId, const char* topic, const char* payload, size_t length);
+// topic and payload point into the MQTT client's receive buffer: they are NOT
+// NUL-terminated and are valid only for the duration of the call.
+typedef void (*mqtt_js_message_callback_t)(uint8_t brokerId, const char* topic, size_t topic_len,
+                                           const char* payload, size_t length);
 typedef void (*mqtt_js_connect_callback_t)(uint8_t brokerId);
 typedef void (*mqtt_js_disconnect_callback_t)(uint8_t brokerId);
 
@@ -113,7 +116,9 @@ void mqtt_binding_register_disconnect_callback(mqtt_js_disconnect_callback_t cal
  * These functions are called from MqttBroker event handlers
  */
 namespace MqttBinding {
-    void notifyMessageReceived(uint8_t brokerId, const char* topic, const char* payload, size_t length);
+    // Zero-copy: topic/payload are pointer + length, not NUL-terminated.
+    void notifyMessageReceived(uint8_t brokerId, const char* topic, size_t topic_len,
+                               const char* payload, size_t length);
     void notifyConnected(uint8_t brokerId);
     void notifyDisconnected(uint8_t brokerId);
 }
