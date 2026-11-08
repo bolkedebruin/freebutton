@@ -72,6 +72,11 @@ public:
 
     // Lifecycle
     bool init();
+    // Builds the fb object tree. Its property names become RAM atoms, and
+    // JS_LoadBytecode() refuses to load while any RAM atom exists ("no atom
+    // must be defined in RAM"). So: init(), load the user bytecode, then
+    // initDeviceApi(), then run the script. Idempotent.
+    void initDeviceApi();
     void shutdown();
     bool isInitialized() const noexcept { return ctx_ != nullptr; }
 
@@ -98,6 +103,7 @@ private:
 
     // Memory management
     uint8_t* heapBuffer_{nullptr};
+    bool deviceApiReady_{false};
     size_t heapSize_{0};
     JSContext* ctx_{nullptr};
 

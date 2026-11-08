@@ -252,7 +252,21 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (!data || size == 0) {
+    // ESPAsyncWebServer can end an upload with an empty final chunk (a small
+    // file arrives whole in the first call, then len 0 with final set).
+    if (size == 0) {
+        if (!final) {
+            return ESP_OK;
+        }
+        if (reloc_state_ == RelocationState::HEADER_PENDING) {
+            ESP_LOGE(TAG, "Empty upload");
+            cleanup();
+            writing_ = false;
+            return ESP_ERR_INVALID_SIZE;
+        }
+        return finalizeWrite();
+    }
+    if (!data) {
         ESP_LOGE(TAG, "Invalid parameters");
         return ESP_ERR_INVALID_ARG;
     }

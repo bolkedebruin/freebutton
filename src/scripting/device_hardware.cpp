@@ -60,70 +60,108 @@ void device_hw_init_fb(void* ctx) {
 
     const int P = FB_PROXY_FUNC_IDX;
 
+    // GC safety: mquickjs has a moving GC, and every JS_New* / JS_Call /
+    // JS_SetPropertyStr may run it. A JSValue held in a plain C local across
+    // such a call can be left pointing at the old location (this tree used
+    // to be built on an empty heap where no GC ran; it is now built after the
+    // user bytecode is loaded). So every value used after another allocation
+    // lives in a JSGCRef (pushed/popped LIFO), each new value is created in
+    // its own statement, and objects are read through the ref only after it.
+    // (JS_SetPropertyStr protects its own arguments.)
+
+    // Store a fresh fb_proxy method closure on *obj.
+    auto setMethod = [&](JSValue* obj, const char* name, int id) {
+        JSValue fn = JS_NewCFunctionParams(c, P, JS_NewInt32(c, id));
+        JS_SetPropertyStr(c, *obj, name, fn);
+    };
+
     // --- Create shared prototype objects ---
 
-    JSValue led_proto = JS_NewObject(c);
-    JS_SetPropertyStr(c, led_proto, "setColor", JS_NewCFunctionParams(c, P, JS_NewInt32(c, LED_SET_COLOR)));
-    JS_SetPropertyStr(c, led_proto, "on",       JS_NewCFunctionParams(c, P, JS_NewInt32(c, LED_ON)));
-    JS_SetPropertyStr(c, led_proto, "off",      JS_NewCFunctionParams(c, P, JS_NewInt32(c, LED_OFF)));
+    JSGCRef led_proto_ref, btn_proto_ref, disp_proto_ref, disp_items_proto_ref;
+    JSValue* led_proto = JS_PushGCRef(c, &led_proto_ref);
+    *led_proto = JS_NewObject(c);
+    setMethod(led_proto, "setColor", LED_SET_COLOR);
+    setMethod(led_proto, "on",       LED_ON);
+    setMethod(led_proto, "off",      LED_OFF);
 
-    JSValue btn_proto = JS_NewObject(c);
-    JS_SetPropertyStr(c, btn_proto, "onClick",     JS_NewCFunctionParams(c, P, JS_NewInt32(c, BTN_ON_CLICK)));
-    JS_SetPropertyStr(c, btn_proto, "onLongPress", JS_NewCFunctionParams(c, P, JS_NewInt32(c, BTN_ON_LONG_PRESS)));
-    JS_SetPropertyStr(c, btn_proto, "onRelease",   JS_NewCFunctionParams(c, P, JS_NewInt32(c, BTN_ON_RELEASE)));
+    JSValue* btn_proto = JS_PushGCRef(c, &btn_proto_ref);
+    *btn_proto = JS_NewObject(c);
+    setMethod(btn_proto, "onClick",     BTN_ON_CLICK);
+    setMethod(btn_proto, "onLongPress", BTN_ON_LONG_PRESS);
+    setMethod(btn_proto, "onRelease",   BTN_ON_RELEASE);
 
-    JSValue disp_proto = JS_NewObject(c);
-    JS_SetPropertyStr(c, disp_proto, "setLabel",    JS_NewCFunctionParams(c, P, JS_NewInt32(c, DISP_SET_LABEL)));
-    JS_SetPropertyStr(c, disp_proto, "setTopLabel", JS_NewCFunctionParams(c, P, JS_NewInt32(c, DISP_SET_TOP_LABEL)));
+    JSValue* disp_proto = JS_PushGCRef(c, &disp_proto_ref);
+    *disp_proto = JS_NewObject(c);
+    setMethod(disp_proto, "setLabel",    DISP_SET_LABEL);
+    setMethod(disp_proto, "setTopLabel", DISP_SET_TOP_LABEL);
 
-    JSValue disp_items_proto = JS_NewObject(c);
-    JS_SetPropertyStr(c, disp_items_proto, "create",      JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_CREATE)));
-    JS_SetPropertyStr(c, disp_items_proto, "remove",      JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_REMOVE)));
-    JS_SetPropertyStr(c, disp_items_proto, "count",       JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_COUNT)));
-    JS_SetPropertyStr(c, disp_items_proto, "get",         JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_GET)));
-    JS_SetPropertyStr(c, disp_items_proto, "getAll",      JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_GET_ALL)));
-    JS_SetPropertyStr(c, disp_items_proto, "setLabel",    JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_LABEL)));
-    JS_SetPropertyStr(c, disp_items_proto, "setValue",    JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_VALUE)));
-    JS_SetPropertyStr(c, disp_items_proto, "setUnit",     JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_UNIT)));
-    JS_SetPropertyStr(c, disp_items_proto, "setPosition", JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_POSITION)));
-    JS_SetPropertyStr(c, disp_items_proto, "setPage",     JS_NewCFunctionParams(c, P, JS_NewInt32(c, DITEM_SET_PAGE)));
+    JSValue* disp_items_proto = JS_PushGCRef(c, &disp_items_proto_ref);
+    *disp_items_proto = JS_NewObject(c);
+    setMethod(disp_items_proto, "create",      DITEM_CREATE);
+    setMethod(disp_items_proto, "remove",      DITEM_REMOVE);
+    setMethod(disp_items_proto, "count",       DITEM_COUNT);
+    setMethod(disp_items_proto, "get",         DITEM_GET);
+    setMethod(disp_items_proto, "getAll",      DITEM_GET_ALL);
+    setMethod(disp_items_proto, "setLabel",    DITEM_SET_LABEL);
+    setMethod(disp_items_proto, "setValue",    DITEM_SET_VALUE);
+    setMethod(disp_items_proto, "setUnit",     DITEM_SET_UNIT);
+    setMethod(disp_items_proto, "setPosition", DITEM_SET_POSITION);
+    setMethod(disp_items_proto, "setPage",     DITEM_SET_PAGE);
 
     // --- Get Object.create for prototype inheritance ---
 
-    JSValue global = JS_GetGlobalObject(c);
-    JSValue object_ctor = JS_GetPropertyStr(c, global, "Object");
-    JSValue create_func = JS_GetPropertyStr(c, object_ctor, "create");
+    JSGCRef global_ref, object_ctor_ref, create_func_ref;
+    JSValue* global = JS_PushGCRef(c, &global_ref);
+    *global = JS_GetGlobalObject(c);
+    JSValue* object_ctor = JS_PushGCRef(c, &object_ctor_ref);
+    *object_ctor = JS_GetPropertyStr(c, *global, "Object");
+    JSValue* create_func = JS_PushGCRef(c, &create_func_ref);
+    *create_func = JS_GetPropertyStr(c, *object_ctor, "create");
 
     // Helper: Object.create(proto) with _p = pos
     // mquickjs JS_Call stack order is args-reversed, then func, then this_obj
     // (see JS_Call docs in mquickjs.c). Object.create takes one arg (proto),
     // so push: arg[0]=proto, func=create_func, this_obj=object_ctor.
-    auto makeInst = [&](JSValue proto, int p) -> JSValue {
-        JS_PushArg(c, proto);        // arg[0]: prototype
-        JS_PushArg(c, create_func);  // func: Object.create
-        JS_PushArg(c, object_ctor);  // this: Object
-        JSValue inst = JS_Call(c, 1);
-        JS_SetPropertyStr(c, inst, "_p", JS_NewInt32(c, p));
-        return inst;
+    // Values on the JS stack are GC roots.
+    auto makeInst = [&](const JSValue* proto, int p) -> JSValue {
+        JSGCRef inst_ref;
+        JSValue* inst = JS_PushGCRef(c, &inst_ref);
+        JS_PushArg(c, *proto);        // arg[0]: prototype
+        JS_PushArg(c, *create_func);  // func: Object.create
+        JS_PushArg(c, *object_ctor);  // this: Object
+        *inst = JS_Call(c, 1);
+        JS_SetPropertyStr(c, *inst, "_p", JS_NewInt32(c, p));
+        return JS_PopGCRef(c, &inst_ref);
+    };
+
+    // *obj.name = value (value created first, *obj read afterwards).
+    auto setInst = [&](JSValue* obj, const char* name, const JSValue* proto, int p) {
+        JSValue inst = makeInst(proto, p);
+        JS_SetPropertyStr(c, *obj, name, inst);
     };
 
     // Helper: build a "side" {led?, backLed?, button, display}.
     // ledFront / ledWall are strip indices, or -1 to omit (main has no LEDs).
     auto makeSide = [&](int buttonPos, int ledFront, int ledWall) -> JSValue {
-        JSValue side = JS_NewObject(c);
+        JSGCRef side_ref;
+        JSValue* side = JS_PushGCRef(c, &side_ref);
+        *side = JS_NewObject(c);
         if (ledFront >= 0)
-            JS_SetPropertyStr(c, side, "led",     makeInst(led_proto, ledFront));
+            setInst(side, "led", led_proto, ledFront);
         if (ledWall >= 0)
-            JS_SetPropertyStr(c, side, "backLed", makeInst(led_proto, ledWall));
-        JS_SetPropertyStr(c, side, "button",  makeInst(btn_proto, buttonPos));
-        JS_SetPropertyStr(c, side, "display", makeInst(disp_proto, buttonPos));
-        return side;
+            setInst(side, "backLed", led_proto, ledWall);
+        setInst(side, "button",  btn_proto,  buttonPos);
+        setInst(side, "display", disp_proto, buttonPos);
+        return JS_PopGCRef(c, &side_ref);
     };
 
     // --- Build the fb tree from hardware topology ---
 
-    JSValue fb = JS_NewObject(c);
-    JSValue bars = JS_NewArray(c, 0);
+    JSGCRef fb_ref, bars_ref;
+    JSValue* fb = JS_PushGCRef(c, &fb_ref);
+    *fb = JS_NewObject(c);
+    JSValue* bars = JS_PushGCRef(c, &bars_ref);
+    *bars = JS_NewArray(c, 0);
     int barCount = 0;
 
     int mainConn = device_hw_get_main_connector();
@@ -138,11 +176,16 @@ void device_hw_init_fb(void* ctx) {
         if (type == 2 && mainConn == conn) {
             // LARGE connector → fb.main. The main display has NO LEDs, so its
             // sides expose only button + display (no led/backLed).
-            JSValue main_obj = JS_NewObject(c);
-            JS_SetPropertyStr(c, main_obj, "display", makeInst(disp_items_proto, 0));
-            JS_SetPropertyStr(c, main_obj, "left",  makeSide(leftPos,  -1, -1));
-            JS_SetPropertyStr(c, main_obj, "right", makeSide(rightPos, -1, -1));
-            JS_SetPropertyStr(c, fb, "main", main_obj);
+            JSGCRef main_ref;
+            JSValue* main_obj = JS_PushGCRef(c, &main_ref);
+            *main_obj = JS_NewObject(c);
+            setInst(main_obj, "display", disp_items_proto, 0);
+            JSValue left = makeSide(leftPos, -1, -1);
+            JS_SetPropertyStr(c, *main_obj, "left", left);
+            JSValue right = makeSide(rightPos, -1, -1);
+            JS_SetPropertyStr(c, *main_obj, "right", right);
+            JS_SetPropertyStr(c, *fb, "main", *main_obj);
+            JS_PopGCRef(c, &main_ref);
         } else if (type == 1) {
             // BAR connector → fb.bars[n]. Each bar owns a contiguous block of 4
             // strip LEDs, packed by bar order along the chain (main/empty
@@ -150,16 +193,32 @@ void device_hw_init_fb(void* ctx) {
             //   left.led = base+0, left.backLed = base+1,
             //   right.led = base+2, right.backLed = base+3.
             const int base = barCount * 4;
-            JSValue bar = JS_NewObject(c);
-            JS_SetPropertyStr(c, bar, "left",  makeSide(leftPos,  base + 0, base + 1));
-            JS_SetPropertyStr(c, bar, "right", makeSide(rightPos, base + 2, base + 3));
-            JS_SetPropertyUint32(c, bars, barCount, bar);
+            JSGCRef bar_ref;
+            JSValue* bar = JS_PushGCRef(c, &bar_ref);
+            *bar = JS_NewObject(c);
+            JSValue left = makeSide(leftPos, base + 0, base + 1);
+            JS_SetPropertyStr(c, *bar, "left", left);
+            JSValue right = makeSide(rightPos, base + 2, base + 3);
+            JS_SetPropertyStr(c, *bar, "right", right);
+            JS_SetPropertyUint32(c, *bars, barCount, *bar);
+            JS_PopGCRef(c, &bar_ref);
             barCount++;
         }
     }
 
-    JS_SetPropertyStr(c, fb, "bars", bars);
-    JS_SetPropertyStr(c, global, "fb", fb);
+    JS_SetPropertyStr(c, *fb, "bars", *bars);
+    JS_SetPropertyStr(c, *global, "fb", *fb);
+
+    // LIFO
+    JS_PopGCRef(c, &bars_ref);
+    JS_PopGCRef(c, &fb_ref);
+    JS_PopGCRef(c, &create_func_ref);
+    JS_PopGCRef(c, &object_ctor_ref);
+    JS_PopGCRef(c, &global_ref);
+    JS_PopGCRef(c, &disp_items_proto_ref);
+    JS_PopGCRef(c, &disp_proto_ref);
+    JS_PopGCRef(c, &btn_proto_ref);
+    JS_PopGCRef(c, &led_proto_ref);
 
     ESP_LOGI(TAG, "fb object tree built in C (%d bars, main=%d)", barCount, mainConn);
 }

@@ -162,14 +162,15 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, size_t 
         if (!JS_IsFunction(ctx, sub->callback.val))
             continue;
 
-        // Create arguments straight from the queue record (no extra copies)
-        JSValue topicArg = JS_NewStringLen(ctx, topic, topic_len);
-        JSValue payloadArg = JS_NewStringLen(ctx, payload, length);
-
-        // REVERSE ORDER: args (right to left), function, this
-        JS_PushArg(ctx, payloadArg);     // Arg 2 (payload)
-        JS_PushArg(ctx, topicArg);       // Arg 1 (topic)
-        JS_PushArg(ctx, sub->callback.val);  // Function
+        // Arguments straight from the queue record (no extra copies).
+        // REVERSE ORDER: args (right to left), function, this.
+        // Push each string as soon as it exists: the JS stack is a GC root,
+        // a C local is not, and the second allocation may run the (moving)
+        // GC. Holding both in locals first left `topic` pointing at a moved
+        // string (LoadProhibited in the callback).
+        JS_PushArg(ctx, JS_NewStringLen(ctx, payload, length));  // Arg 2 (payload)
+        JS_PushArg(ctx, JS_NewStringLen(ctx, topic, topic_len)); // Arg 1 (topic)
+        JS_PushArg(ctx, sub->callback.val);  // Function (GC ref, current value)
         JS_PushArg(ctx, JS_NULL);        // This
 
         JSValue result = JS_Call(ctx, 2);  // 2 arguments

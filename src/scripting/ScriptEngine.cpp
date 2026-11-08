@@ -91,18 +91,27 @@ bool ScriptEngine::init() {
     // This enables print()/console.log() to be sent to WebSocket clients
     JS_SetConsoleWriteFunc(websocketConsoleCallback);
 
-    // Initialize the fb object tree (hierarchical device API)
-    device_hw_init_fb(ctx_);
+    // The fb object tree is built later, by initDeviceApi(): it creates RAM
+    // atoms, which would stop the user bytecode from loading.
 
     ESP_LOGI(TAG, "JavaScript API initialized with %zu bytes heap", heapSize_);
 
     return true;
 }
 
+void ScriptEngine::initDeviceApi() {
+    if (!ctx_ || deviceApiReady_) {
+        return;
+    }
+    device_hw_init_fb(ctx_);
+    deviceApiReady_ = true;
+}
+
 void ScriptEngine::shutdown() {
     if (ctx_) {
         JS_FreeContext(ctx_);
         ctx_ = nullptr;
+        deviceApiReady_ = false;
     }
     if (heapBuffer_) {
         delete[] heapBuffer_;

@@ -192,6 +192,8 @@ void setup() {
 
                         if (!JS_IsException(userFunc)) {
                             ESP_LOGI(TAG, "User bytecode loaded successfully");
+                            // fb only now: its RAM atoms would have blocked the load.
+                            scriptEngine.initDeviceApi();
                             JSValue result = JS_Run(ctx, userFunc);
 
                             if (JS_IsException(result)) {
@@ -243,6 +245,8 @@ void setup() {
             ESP_LOGI(TAG, "No user script found");
             ESP_LOGI(TAG, "Upload script.jsc via web interface to run custom code");
         }
+        // No (loadable) user script: the REPL and later scripts still need fb.
+        scriptEngine.initDeviceApi();
     } else {
         ESP_LOGE(TAG, "Failed to initialize ScriptEngine");
     }
