@@ -87,9 +87,25 @@ void test_exact_key_set() {
     for (const char* key : {
              "\"deviceName\"", "\"ipv4\"", "\"ipv6\"", "\"ssid\"", "\"rssi\"",
              "\"mac\"", "\"firmware\"", "\"uptime\"", "\"heapFree\"", "\"heapTotal\"",
-             "\"heapMinFree\"", "\"lvglFree\"", "\"lvglTotal\"" }) {
+             "\"heapMinFree\"", "\"lvglFree\"", "\"lvglTotal\"",
+             "\"mainConnector\"", "\"connectors\"" }) {
         TEST_ASSERT_TRUE_MESSAGE(contains(json, key), key);
     }
+}
+
+void test_connectors_list_only_present_ones() {
+    DeviceInfo info = makeSample();
+    info.connectorTypes[2] = 2;   // large display
+    info.connectorTypes[3] = 1;   // bar
+    info.mainConnector = 2;
+    const std::string json = toJson(info);
+    TEST_ASSERT_TRUE(contains(json, "\"mainConnector\":2,"));
+    TEST_ASSERT_TRUE(contains(json, "\"connectors\":[{\"id\":2,\"type\":2},{\"id\":3,\"type\":1}]}"));
+}
+
+void test_no_connectors_is_empty_list() {
+    const std::string json = toJson(makeSample());
+    TEST_ASSERT_TRUE(contains(json, "\"mainConnector\":-1,\"connectors\":[]}"));
 }
 
 void test_not_connected_placeholders_pass_through() {
@@ -107,6 +123,8 @@ void tearDown() {}
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_contains_network_fields);
+    RUN_TEST(test_connectors_list_only_present_ones);
+    RUN_TEST(test_no_connectors_is_empty_list);
     RUN_TEST(test_contains_numeric_fields);
     RUN_TEST(test_memory_is_bytes_not_kb);
     RUN_TEST(test_valid_json_shape);

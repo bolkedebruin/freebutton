@@ -4,6 +4,7 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 #include "LvglDisplay.h"
+#include "../scripting/device_hardware.h"
 
 #include "config.h"
 
@@ -25,6 +26,10 @@ DeviceInfo DeviceInfoCollector::collectInfo() const {
     info.heapTotal = getTotalHeap();
     info.heapMinFree = getMinFreeHeap();
     getLvglMemory(info.lvglFree, info.lvglTotal);
+    for (int c = 0; c < DeviceInfo::kConnectors; ++c) {
+        info.connectorTypes[c] = static_cast<int8_t>(device_hw_get_connector_type(c));
+    }
+    info.mainConnector = static_cast<int8_t>(device_hw_get_main_connector());
     return info;
 }
 

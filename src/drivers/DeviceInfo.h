@@ -23,6 +23,13 @@ struct DeviceInfo {
     size_t heapMinFree;  // internal heap low-water mark since boot
     size_t lvglFree;     // LVGL allocator free bytes
     size_t lvglTotal;    // LVGL allocator total bytes
+
+    // Hardware topology from the I2C scan at boot: type per connector 0..3
+    // (0 = empty, 1 = bar, 2 = large display; same encoding as config.json
+    // info.connectors) and the connector of the main display (-1 = none).
+    static constexpr int kConnectors = 4;
+    int8_t connectorTypes[kConnectors] = {};
+    int8_t mainConnector = -1;
 };
 
 class DeviceInfoCollector {

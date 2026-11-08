@@ -13,6 +13,7 @@
  * (same origin when the IDE is served from the device itself).
  */
 import { on, emit, type DeviceInfoData } from './app-state';
+import { setHardwareConnectors } from './device-config';
 
 /** Map a REPL ws(s):// base URL to the http(s):// origin serving the REST API. */
 export function httpBaseFromWs(wsUrl: string): string {
@@ -89,6 +90,9 @@ async function poll(): Promise<void> {
   try {
     const data = await fetchDeviceInfo(currentBase);
     emit('device-info', { data });
+    // Real topology from the hardware scan; older firmware has none (then
+    // config.json info.connectors stays in effect). Emits only on change.
+    if (data.connectors) setHardwareConnectors(data.connectors);
   } catch {
     // Device unreachable (dropped, or dev build with no device) -> placeholders.
     emit('device-info', { data: null });

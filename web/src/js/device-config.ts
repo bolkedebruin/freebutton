@@ -6,6 +6,7 @@
  * available.
  */
 import { emit, type PageConfig, type DisplayItem, type ButtonConfig, type ConnectorConfig } from './app-state';
+import { mapConnectors } from './config-model';
 
 const defaultConfig: PageConfig[] = [
   {
@@ -25,8 +26,17 @@ const defaultConfig: PageConfig[] = [
 ];
 
 let currentConfig: PageConfig[] = structuredClone(defaultConfig);
-// Empty = layout unknown (sample data / config without info.connectors).
+// Layout from config.json info.connectors (stored info, can be stale).
+let configConnectors: ConnectorConfig[] = [];
+// Layout the firmware reports from its hardware scan (/api/device); wins
+// over config.json when present.
+let hardwareConnectors: ConnectorConfig[] = [];
+// Effective layout. Empty = unknown (sample data / no topology anywhere).
 let currentConnectors: ConnectorConfig[] = [];
+
+function effectiveConnectors(): ConnectorConfig[] {
+  return hardwareConnectors.length > 0 ? hardwareConnectors : configConnectors;
+}
 
 export function getConfig(): PageConfig[] {
   return currentConfig;
@@ -38,8 +48,22 @@ export function getConnectors(): ConnectorConfig[] {
 
 export function setConfig(config: PageConfig[], connectors: ConnectorConfig[] = []): void {
   currentConfig = config;
-  currentConnectors = connectors;
-  emit('device-config', { pages: config, connectors });
+  configConnectors = connectors;
+  currentConnectors = effectiveConnectors();
+  emit('device-config', { pages: config, connectors: currentConnectors });
+}
+
+/**
+ * Hardware topology from /api/device ({id, type} per connector). Emits only
+ * when it changes (device info is polled), so the device view does not
+ * re-render every poll.
+ */
+export function setHardwareConnectors(raw: { id: number; type: number }[] | undefined): void {
+  const next = raw ? mapConnectors({ info: { connectors: raw } }) : [];
+  if (JSON.stringify(next) === JSON.stringify(hardwareConnectors)) return;
+  hardwareConnectors = next;
+  currentConnectors = effectiveConnectors();
+  emit('device-config', { pages: currentConfig, connectors: currentConnectors });
 }
 
 export function loadDefaultConfig(): void {

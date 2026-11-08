@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getConfig, setConfig, loadDefaultConfig, updateDisplayItem, updateButton } from '../device-config';
+import type { ConnectorConfig } from '../app-state';
+import { getConfig, getConnectors, setConfig, setHardwareConnectors, loadDefaultConfig, updateDisplayItem, updateButton } from '../device-config';
 
 beforeEach(() => {
   loadDefaultConfig();
@@ -120,5 +121,26 @@ describe('device-config', () => {
     const offCount = buttons.filter(b => !b.ledOn).length;
     expect(onCount).toBe(3);
     expect(offCount).toBe(1);
+  });
+
+  it('hardware connectors from /api/device win over config.json and emit only on change', () => {
+    const fromConfig: ConnectorConfig[] = [{ id: 0, type: 'display' }];
+    setConfig(getConfig(), fromConfig);
+    expect(getConnectors()).toEqual(fromConfig);
+
+    let events = 0;
+    const handler = () => { events++; };
+    window.addEventListener('device-config', handler);
+    setHardwareConnectors([{ id: 3, type: 1 }, { id: 2, type: 2 }]);
+    const hw = getConnectors();
+    expect(hw.map(c => c.id)).toEqual([2, 3]);
+    expect(events).toBe(1);
+    setHardwareConnectors([{ id: 2, type: 2 }, { id: 3, type: 1 }]);  // same layout, next poll
+    expect(events).toBe(1);
+    setConfig(getConfig(), fromConfig);                       // config.json reloaded
+    expect(getConnectors()).toEqual(hw);                               // hardware still wins
+    setHardwareConnectors(undefined);                                  // older firmware / no device
+    expect(getConnectors()).toEqual(fromConfig);
+    window.removeEventListener('device-config', handler);
   });
 });

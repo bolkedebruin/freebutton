@@ -41,9 +41,9 @@ void appendNumber(std::string& out, const char* key, long long value) {
 std::string toJson(const DeviceInfo& info) {
     std::string out;
     // Worst case is 325 B (153 B of fixed keys/punctuation + a fully expanded
-    // IPv6, a 32-char SSID and 6-digit memory figures), so 320 would realloc to
-    // 640 for exactly the payloads the reserve exists to cover.
-    out.reserve(384);
+    // IPv6, a 32-char SSID and 6-digit memory figures) plus <= 106 B of
+    // topology (mainConnector + 4 connectors), so 448 never reallocates.
+    out.reserve(448);
     out += '{';
     appendString(out, "deviceName", info.deviceName);   out += ',';
     appendString(out, "ipv4", info.ipv4Address);         out += ',';
@@ -58,8 +58,22 @@ std::string toJson(const DeviceInfo& info) {
     appendNumber(out, "heapTotal", static_cast<long long>(info.heapTotal));     out += ',';
     appendNumber(out, "heapMinFree", static_cast<long long>(info.heapMinFree)); out += ',';
     appendNumber(out, "lvglFree", static_cast<long long>(info.lvglFree));       out += ',';
-    appendNumber(out, "lvglTotal", static_cast<long long>(info.lvglTotal));
-    out += '}';
+    appendNumber(out, "lvglTotal", static_cast<long long>(info.lvglTotal));  out += ',';
+    // Hardware topology (the web IDE lays out its virtual device from it).
+    appendNumber(out, "mainConnector", info.mainConnector);                  out += ',';
+    out += "\"connectors\":[";
+    bool first = true;
+    for (int c = 0; c < DeviceInfo::kConnectors; ++c) {
+        if (info.connectorTypes[c] == 0) continue;
+        if (!first) out += ',';
+        first = false;
+        out += "{\"id\":";
+        out += static_cast<char>('0' + c);
+        out += ",\"type\":";
+        out += static_cast<char>('0' + (info.connectorTypes[c] & 7));
+        out += '}';
+    }
+    out += "]}";
     return out;
 }
 
