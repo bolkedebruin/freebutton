@@ -114,10 +114,15 @@ typedef struct {
     bool allocated;
     JSGCRef func;
     int64_t timeout; /* in ms */
+    int32_t id;      /* what setTimeout returned; unique, never 0 */
 } JSTimer;
 
 #define MAX_TIMERS 16
 static JSTimer js_timer_list[MAX_TIMERS];
+/* Timer ids are unique and start at 1, as in browsers: scripts commonly
+ * test `if (timer)`, and clearTimeout() of a timer that already fired must
+ * not cancel a later timer that reuses the same slot. */
+static int32_t js_timer_next_id = 1;
 
 JSValue js_setTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
     (void)this_val;
@@ -136,7 +141,9 @@ JSValue js_setTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
             *pfunc = argv[0];
             th->timeout = get_time_ms() + delay;
             th->allocated = true;
-            return JS_NewInt32(ctx, i);
+            th->id = js_timer_next_id;
+            js_timer_next_id = (js_timer_next_id == INT32_MAX) ? 1 : js_timer_next_id + 1;
+            return JS_NewInt32(ctx, th->id);
         }
     }
     return JS_ThrowInternalError(ctx, "too many timers");
@@ -149,11 +156,14 @@ JSValue js_clearTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
 
     if (JS_ToInt32(ctx, &timer_id, argv[0]))
         return JS_EXCEPTION;
-    if (timer_id >= 0 && timer_id < MAX_TIMERS) {
-        th = &js_timer_list[timer_id];
-        if (th->allocated) {
+    if (timer_id <= 0)
+        return JS_UNDEFINED;  /* never a valid id (e.g. a "no timer" 0) */
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        th = &js_timer_list[i];
+        if (th->allocated && th->id == timer_id) {
             JS_DeleteGCRef(ctx, &th->func);
             th->allocated = false;
+            break;
         }
     }
     return JS_UNDEFINED;

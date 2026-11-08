@@ -56,6 +56,7 @@ void device_hw_init_fb(void* ctx) {
         DITEM_GET = 11, DITEM_GET_ALL = 12, DITEM_SET_LABEL = 13,
         DITEM_SET_VALUE = 14, DITEM_SET_UNIT = 15, DITEM_SET_POSITION = 16,
         DITEM_SET_PAGE = 17,
+        DISP_GET_LABEL = 18, DISP_GET_TOP_LABEL = 19,
     };
 
     const int P = FB_PROXY_FUNC_IDX;
@@ -94,6 +95,8 @@ void device_hw_init_fb(void* ctx) {
     *disp_proto = JS_NewObject(c);
     setMethod(disp_proto, "setLabel",    DISP_SET_LABEL);
     setMethod(disp_proto, "setTopLabel", DISP_SET_TOP_LABEL);
+    setMethod(disp_proto, "getLabel",    DISP_GET_LABEL);
+    setMethod(disp_proto, "getTopLabel", DISP_GET_TOP_LABEL);
 
     JSValue* disp_items_proto = JS_PushGCRef(c, &disp_items_proto_ref);
     *disp_items_proto = JS_NewObject(c);

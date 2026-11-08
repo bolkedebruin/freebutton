@@ -618,6 +618,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.left.display.setTopLabel(${1:text})"
       },
       {
+        "label": "fb.main.left.display.getLabel",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Label currently shown (last setLabel / MQTT text, else the config label)",
+        "apply": "fb.main.left.display.getLabel()"
+      },
+      {
+        "label": "fb.main.left.display.getTopLabel",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Top label currently shown (last setTopLabel / MQTT text, else the config label)",
+        "apply": "fb.main.left.display.getTopLabel()"
+      },
+      {
         "label": "fb.main.right.button.onClick",
         "type": "method",
         "detail": "(callback: () => boolean | void) → void",
@@ -651,6 +665,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(text: string) → void",
         "info": "Set button display top label",
         "apply": "fb.main.right.display.setTopLabel(${1:text})"
+      },
+      {
+        "label": "fb.main.right.display.getLabel",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Label currently shown (last setLabel / MQTT text, else the config label)",
+        "apply": "fb.main.right.display.getLabel()"
+      },
+      {
+        "label": "fb.main.right.display.getTopLabel",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Top label currently shown (last setTopLabel / MQTT text, else the config label)",
+        "apply": "fb.main.right.display.getTopLabel()"
       },
       {
         "label": "fb.bars[n].left.led.setColor",
@@ -730,6 +758,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.bars[n].left.display.setTopLabel(${1:text})"
       },
       {
+        "label": "fb.bars[n].left.display.getLabel",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Label currently shown (last setLabel / MQTT text, else the config label)",
+        "apply": "fb.bars[n].left.display.getLabel()"
+      },
+      {
+        "label": "fb.bars[n].left.display.getTopLabel",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Top label currently shown (last setTopLabel / MQTT text, else the config label)",
+        "apply": "fb.bars[n].left.display.getTopLabel()"
+      },
+      {
         "label": "fb.bars[n].right.led.setColor",
         "type": "method",
         "detail": "(r: number, g: number, b: number) → void",
@@ -805,6 +847,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(text: string) → void",
         "info": "Set button display top label",
         "apply": "fb.bars[n].right.display.setTopLabel(${1:text})"
+      },
+      {
+        "label": "fb.bars[n].right.display.getLabel",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Label currently shown (last setLabel / MQTT text, else the config label)",
+        "apply": "fb.bars[n].right.display.getLabel()"
+      },
+      {
+        "label": "fb.bars[n].right.display.getTopLabel",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Top label currently shown (last setTopLabel / MQTT text, else the config label)",
+        "apply": "fb.bars[n].right.display.getTopLabel()"
       }
     ]
   }

@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,6 +27,12 @@ int button_hw_set_label(int position, const char* label);
 // Set top label for button at position
 // Returns 0 on success, -1 on error
 int button_hw_set_top_label(int position, const char* topLabel);
+
+// What the button at position shows as label / top label (last runtime text,
+// else the configured one), NUL-terminated into out. Returns 0, or -1 when
+// there is no such button (out is then "").
+int button_hw_get_label(int position, char* out, size_t capacity);
+int button_hw_get_top_label(int position, char* out, size_t capacity);
 
 // Get button position count
 int button_hw_get_count();

@@ -71,6 +71,13 @@ public:
     void onMessage(uint8_t brokerId, std::string_view topic, std::string_view data) override;
     const std::string getComponentType() const override;
 
+    // What the button shows: the text last set at runtime (MQTT, JS), else
+    // the configured label. Any task. out must hold kLabelTextBytes.
+    static constexpr size_t kLabelTextBytes = TextSlot<kLabelSlotBytes>::kBufferSize;
+    static_assert(kLabelSlotBytes == kTopLabelSlotBytes, "label getters share one buffer size");
+    void currentLabel(char (&out)[kLabelTextBytes]) const;
+    void currentTopLabel(char (&out)[kLabelTextBytes]) const;
+
     // Button-specific methods
     void click() const;
     void longPress() const;

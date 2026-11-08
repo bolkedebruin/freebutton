@@ -87,6 +87,24 @@ void test_empty_slot_renders_nothing() {
     TEST_ASSERT_EQUAL(0, r.renders);
 }
 
+void test_read_does_not_consume() {
+    TextSlot<32> slot;
+    char out[TextSlot<32>::kBufferSize];
+    TEST_ASSERT_FALSE(slot.read(out));  // never written
+    slot.write("45%");
+    TEST_ASSERT_TRUE(slot.read(out));
+    TEST_ASSERT_EQUAL_STRING("45%", out);
+    TEST_ASSERT_TRUE(slot.read(out));    // reading again is fine
+    Recorder r;                          // the renderer still gets the update
+    TEST_ASSERT_EQUAL(static_cast<int>(TextSlotApply::Applied), static_cast<int>(slot.apply(r)));
+    TEST_ASSERT_EQUAL_STRING("45%", r.last.c_str());
+    TEST_ASSERT_TRUE(slot.read(out));    // and read still works after a render
+    TEST_ASSERT_EQUAL_STRING("45%", out);
+    slot.write("");
+    TEST_ASSERT_TRUE(slot.read(out));    // an empty runtime label is still runtime text
+    TEST_ASSERT_EQUAL_STRING("", out);
+}
+
 void test_write_then_apply_once() {
     TextSlot<32> slot;
     Recorder r;
@@ -294,6 +312,7 @@ int main(int, char**) {
     RUN_TEST(test_fit_never_splits_a_sequence);
     RUN_TEST(test_fit_invalid_utf8_cuts_at_max);
     RUN_TEST(test_empty_slot_renders_nothing);
+    RUN_TEST(test_read_does_not_consume);
     RUN_TEST(test_write_then_apply_once);
     RUN_TEST(test_burst_coalesces_into_one_render);
     RUN_TEST(test_empty_payload_is_rendered);

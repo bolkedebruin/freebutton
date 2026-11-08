@@ -12,7 +12,9 @@
 #include "types.h"
 #include <esp_log.h>
 
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <span>
 #include <utility>
 
@@ -119,6 +121,21 @@ void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_vie
         }
     }
 }
+
+namespace {
+template <class Slot, size_t N>
+void currentText(const Slot& slot, const std::string& configured, char (&out)[N]) {
+    if (!slot.read(out)) {
+        // Never set at runtime (or briefly busy): the configured text is shown.
+        const size_t n = std::min(configured.size(), N - 1);
+        std::memcpy(out, configured.data(), n);
+        out[n] = '\0';
+    }
+}
+} // namespace
+
+void Button::currentLabel(char (&out)[kLabelTextBytes]) const { currentText(labelSlot_, label, out); }
+void Button::currentTopLabel(char (&out)[kLabelTextBytes]) const { currentText(topLabelSlot_, topLabel, out); }
 
 // LVGL task, LVGL lock held. Each slot hands over a stable stack copy of its
 // text (at most 27 bytes), rendered once; lv_label_set_text() copies it.

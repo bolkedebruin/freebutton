@@ -18,11 +18,14 @@
 #ifdef ESP_PLATFORM
 #include "../device_hardware.h"
 #include "../led_hardware.h"
+#include "../button_hardware.h"
 #else
 // Host build stubs for generator
 static inline int device_hw_get_connector_type(int connector) { return 0; }
 static inline int device_hw_get_main_connector(void) { return -1; }
 static inline int led_hw_set_color(int pos, uint8_t r, uint8_t g, uint8_t b) { return 0; }
+static inline int button_hw_get_label(int position, char* out, size_t capacity) { if (capacity) out[0] = 0; return 0; }
+static inline int button_hw_get_top_label(int position, char* out, size_t capacity) { if (capacity) out[0] = 0; return 0; }
 #endif
 
 // Method IDs for the proxy dispatcher (encoded in params of JS_NewCFunctionParams)
@@ -46,6 +49,8 @@ enum {
     FB_METHOD_DITEM_SET_UNIT = 15,
     FB_METHOD_DITEM_SET_POSITION = 16,
     FB_METHOD_DITEM_SET_PAGE = 17,
+    FB_METHOD_DISP_GET_LABEL = 18,
+    FB_METHOD_DISP_GET_TOP_LABEL = 19,
 };
 
 /*
@@ -149,6 +154,15 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         tmp[0] = JS_NewInt32(ctx, pos);
         tmp[1] = argv[0];
         return js_freebutton_button_setTopLabel(ctx, this_val, 2, tmp);
+    }
+    case FB_METHOD_DISP_GET_LABEL:
+    case FB_METHOD_DISP_GET_TOP_LABEL: {
+        char text[32];  /* >= a button label slot's text (26 B + NUL) */
+        if (method == FB_METHOD_DISP_GET_LABEL)
+            button_hw_get_label(pos, text, sizeof(text));
+        else
+            button_hw_get_top_label(pos, text, sizeof(text));
+        return JS_NewString(ctx, text);
     }
     /* Display item methods - forward argc/argv directly (explicit ID args, no _p) */
     case FB_METHOD_DITEM_CREATE:

@@ -457,6 +457,10 @@ export interface FbSmallDisplay {
     setLabel(text: string): void;
     /** Set button display top label */
     setTopLabel(text: string): void;
+    /** Label currently shown (last setLabel / MQTT text, else the config label) */
+    getLabel(): string;
+    /** Top label currently shown (last setTopLabel / MQTT text, else the config label) */
+    getTopLabel(): string;
 }
 
 export interface FbRoot {

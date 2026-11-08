@@ -569,7 +569,11 @@ public:
             {{"name", "setLabel"}, {"description", "Set button display label"}, {"returns", "void"},
              {"params", json::array({{{"name", "text"}, {"type", "string"}, {"description", "Label text"}}})}},
             {{"name", "setTopLabel"}, {"description", "Set button display top label"}, {"returns", "void"},
-             {"params", json::array({{{"name", "text"}, {"type", "string"}, {"description", "Top label text"}}})}}
+             {"params", json::array({{{"name", "text"}, {"type", "string"}, {"description", "Top label text"}}})}},
+            {{"name", "getLabel"}, {"description", "Label currently shown (last setLabel / MQTT text, else the config label)"}, {"returns", "string"},
+             {"params", json::array()}},
+            {{"name", "getTopLabel"}, {"description", "Top label currently shown (last setTopLabel / MQTT text, else the config label)"}, {"returns", "string"},
+             {"params", json::array()}}
         });
         json fbMainDisplay = json::array({
             {{"name", "create"}, {"description", "Create a display item; returns its id"}, {"returns", "number"},

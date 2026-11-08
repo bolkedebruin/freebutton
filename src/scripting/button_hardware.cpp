@@ -7,6 +7,8 @@
 #include <esp_log.h>
 #include "config.h"  // For BUTTON_COUNT
 #include "button_hardware.h"
+#include <algorithm>
+#include <cstring>
 #include "components/ConfigManager.h"
 #include "drivers/LvglDisplay.h"
 #include "ScriptEngine.h"
@@ -56,6 +58,33 @@ int button_hw_set_label(int position, const char* label) {
 
     ESP_LOGD(TAG, "Set label for button %d to: %s", position, label);
     return 0;
+}
+
+namespace {
+int copyLabel(int position, char* out, size_t capacity, bool top) {
+    if (!out || capacity == 0) {
+        return -1;
+    }
+    out[0] = '\0';
+    const auto* button = configManager.getButtonByPosition(position);
+    if (!button) {
+        return -1;
+    }
+    char text[freebutton::Button::kLabelTextBytes];
+    top ? button->currentTopLabel(text) : button->currentLabel(text);
+    const size_t n = std::min(std::strlen(text), capacity - 1);
+    std::memcpy(out, text, n);
+    out[n] = '\0';
+    return 0;
+}
+} // namespace
+
+int button_hw_get_label(int position, char* out, size_t capacity) {
+    return copyLabel(position, out, capacity, false);
+}
+
+int button_hw_get_top_label(int position, char* out, size_t capacity) {
+    return copyLabel(position, out, capacity, true);
 }
 
 int button_hw_set_top_label(int position, const char* topLabel) {

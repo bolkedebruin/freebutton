@@ -1975,6 +1975,18 @@
               }
             ],
             "returns": "void"
+          },
+          {
+            "description": "Label currently shown (last setLabel / MQTT text, else the config label)",
+            "name": "getLabel",
+            "params": [],
+            "returns": "string"
+          },
+          {
+            "description": "Top label currently shown (last setTopLabel / MQTT text, else the config label)",
+            "name": "getTopLabel",
+            "params": [],
+            "returns": "string"
           }
         ]
       }

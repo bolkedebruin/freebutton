@@ -179,6 +179,28 @@ public:
 
     bool hasText() const { return seq_.load(std::memory_order_acquire) != 0; }
 
+    // Any task; does not consume (the LVGL task still renders the update).
+    // Copies the newest stable text into out. False when the slot was never
+    // written, or writers kept it busy for every attempt.
+    bool read(char (&out)[kBufferSize]) const {
+        for (int attempt = 0; attempt < kMaxCopyAttempts; ++attempt) {
+            const uint16_t s1 = seq_.load(std::memory_order_acquire);
+            if (s1 == 0) {
+                return false;
+            }
+            if (s1 & 1u) {
+                continue;
+            }
+            std::memcpy(out, buf_, kBufferSize);
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (seq_.load(std::memory_order_relaxed) == s1) {
+                out[kBufferSize - 1] = '\0';
+                return true;
+            }
+        }
+        return false;
+    }
+
 private:
     static constexpr uint16_t kNeverApplied = 0xFFFFu;  // odd: never equals a published seq
 
