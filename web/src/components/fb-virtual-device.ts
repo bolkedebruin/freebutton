@@ -272,16 +272,19 @@ export class FbVirtualDevice extends LitElement {
   private _renderFront(page: PageConfig | undefined) {
     const buttons = page?.buttons ?? [];
     const items = page?.displayItems ?? [];
+    const lists = page?.lists ?? [];
     const slots = this._connectors.filter(c => c.type !== 'empty');
     if (slots.length === 0) {
       return html`
-        <fb-tft-display .currentPage=${this.currentPage} .displayItems=${items}></fb-tft-display>
+        <fb-tft-display .currentPage=${this.currentPage} .displayItems=${items}
+          .lists=${lists}></fb-tft-display>
         <fb-button-grid .currentPage=${this.currentPage} .buttons=${buttons}></fb-button-grid>
       `;
     }
     return slots.map(c => html`
       ${c.type === 'display'
-        ? html`<fb-tft-display .currentPage=${this.currentPage} .displayItems=${items}></fb-tft-display>`
+        ? html`<fb-tft-display .currentPage=${this.currentPage} .displayItems=${items}
+          .lists=${lists}></fb-tft-display>`
         : ''}
       <fb-button-grid data-connector=${c.id} .currentPage=${this.currentPage} .buttons=${buttons}
         .positions=${positionsForConnector(c.id)}></fb-button-grid>

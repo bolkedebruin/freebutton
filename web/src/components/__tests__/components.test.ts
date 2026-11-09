@@ -19,7 +19,8 @@ import '../fb-console-input.js';
 import '../fb-file-drawer.js';
 import type { WorkspaceSnapshot } from '../../js/app-state.js';
 import { LOCAL_MESSAGE } from '../../js/workspace.js';
-import { loadDefaultConfig } from '../../js/device-config.js';
+import { loadDefaultConfig, setPreviewConfig } from '../../js/device-config.js';
+import { configToModel, mapList } from '../../js/config-model.js';
 
 function createElement<T extends HTMLElement>(tag: string): T {
   const el = document.createElement(tag) as T;
@@ -640,6 +641,66 @@ describe('fb-tft-display', () => {
     // Time should contain a colon (HH:MM format)
     const text = el.textContent || '';
     expect(text).toMatch(/\d+:\d{2}/);
+  });
+});
+
+describe('fb-tft-display lists', () => {
+  const list = (over: Record<string, unknown> = {}) => mapList({
+    name: 'scenes', x: 4, y: 18, width: 92, rows: 3, fontsize: 3,
+    items: ['Bed Time', 'Evening', 'Movie'], selected: 1,
+    color: '808080', focuscolor: 'ffd45f', focustextcolor: '000000', ...over,
+  })!;
+  // fontsize 3 = 32 px on the 320 px screen; the preview screen is 283 px wide.
+  const rowH = 32 * 1.25 * 283 / 320;
+
+  it('renders a roller: rows tall, the selected item in the middle row on the focus bar', async () => {
+    const el = createElement('fb-tft-display') as any;
+    el.lists = [list()];
+    await nextFrame();
+    const box = el.querySelector('[data-list="scenes"]') as HTMLElement;
+    expect(box).not.toBeNull();
+    expect(box.style.left).toBe('4%');
+    expect(box.style.top).toBe('18%');
+    expect(box.style.width).toBe('92%');
+    expect(parseFloat(box.style.height)).toBeCloseTo(3 * rowH, 1);
+    const focus = box.querySelector('[data-list-focus]') as HTMLElement;
+    expect(parseFloat(focus.style.top)).toBeCloseTo(rowH, 1);
+    expect(focus.style.background).toMatch(/ffd45f|255, 212, 95/i);
+    const items = Array.from(box.querySelectorAll('[data-list-item]')) as HTMLElement[];
+    expect(items.map(i => i.textContent?.trim())).toEqual(['Bed Time', 'Evening', 'Movie']);
+    const selected = box.querySelector('[data-selected]') as HTMLElement;
+    expect(selected.textContent?.trim()).toBe('Evening');
+    expect(selected.style.color).toMatch(/#000000|0, 0, 0/);
+    expect(items[0].style.color).toMatch(/808080|128, 128, 128/);
+    // Selected (index 1) sits in the middle row: no shift.
+    const strip = items[0].parentElement as HTMLElement;
+    expect(strip.style.transform).toMatch(/translateY\(0(px)?\)/);
+  });
+
+  it('does not wrap: the first item selected leaves the rows above empty', async () => {
+    const el = createElement('fb-tft-display') as any;
+    el.lists = [list({ selected: 0, rows: 5 })];
+    await nextFrame();
+    const strip = el.querySelector('[data-list-item]').parentElement as HTMLElement;
+    const shift = parseFloat(/translateY\((-?[\d.]+)px\)/.exec(strip.style.transform)![1]);
+    expect(shift).toBeCloseTo(2 * rowH, 1);
+  });
+});
+
+describe('fb-virtual-device lists', () => {
+  it('shows a list only on its page, live from a config.json draft', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+    setPreviewConfig(configToModel({
+      lists: [{ name: 'scenes', page: 2, items: ['Bed Time', 'Evening'], selected: 1 }],
+    }));
+    await nextFrame();
+    expect(el.querySelector('[data-list="scenes"]')).toBeNull();
+    const tab2 = Array.from(el.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Page 2') as HTMLElement;
+    tab2.click();
+    await nextFrame();
+    expect(el.querySelector('[data-list="scenes"] [data-selected]')?.textContent?.trim()).toBe('Evening');
+    loadDefaultConfig();
   });
 });
 

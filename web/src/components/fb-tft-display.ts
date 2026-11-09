@@ -1,6 +1,16 @@
 import { LitElement, html, svg } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import type { DisplayItem } from '../js/app-state.js';
+import type { DisplayItem, ListConfig } from '../js/app-state.js';
+import { FONT_PX } from '../js/config-model.js';
+
+// The preview screen is 283 px wide for the device's 320 x 240.
+const SCREEN_SCALE = 283 / 320;
+// Roller row height relative to the font size (about LVGL's line height).
+const ROW_LINE_HEIGHT = 1.25;
+
+function px(n: number): string {
+  return `${Math.round(n * 100) / 100}px`;
+}
 
 @customElement('fb-tft-display')
 export class FbTftDisplay extends LitElement {
@@ -8,6 +18,8 @@ export class FbTftDisplay extends LitElement {
 
   @property({ type: Number }) currentPage = 1;
   @property({ attribute: false }) displayItems: DisplayItem[] = [];
+  /** Lists (rollers) on the current page. */
+  @property({ attribute: false }) lists: ListConfig[] = [];
   @state() private timeStr = '';
   private _timer?: number;
 
@@ -42,6 +54,34 @@ export class FbTftDisplay extends LitElement {
     return item.value === 'time' || item.type === 'text' && item.value === 'time';
   }
 
+  /**
+   * A list like the device's LVGL roller: `rows` rows, the selected item in
+   * the middle one on a focus-colored bar, nothing wraps. A new selection
+   * scrolls (CSS transition).
+   */
+  private _renderList(list: ListConfig) {
+    const fontPx = FONT_PX[list.fontSize - 1] * SCREEN_SCALE;
+    const rowH = fontPx * ROW_LINE_HEIGHT;
+    const middle = (list.rows - 1) * rowH / 2;
+    const shift = middle - Math.max(0, list.selected) * rowH;
+    return html`
+      <div class="absolute overflow-hidden" data-list=${list.name}
+        style="left: ${list.x}%; top: ${list.y}%; width: ${list.width}%; height: ${px(list.rows * rowH)};
+          font-size: ${px(fontPx)}; line-height: ${px(rowH)};">
+        <div class="absolute left-0 right-0 rounded-[6px]" data-list-focus
+          style="top: ${px(middle)}; height: ${px(rowH)}; background: ${list.focusColor};"></div>
+        <div class="relative" style="transform: translateY(${px(shift)}); transition: transform 200ms ease-out;">
+          ${list.items.map((text, i) => html`
+            <div class="text-center whitespace-nowrap overflow-hidden text-ellipsis px-[4px]"
+              data-list-item=${i} ?data-selected=${i === list.selected}
+              style="height: ${px(rowH)}; color: ${i === list.selected ? list.focusTextColor : list.color};"
+            >${text}</div>
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
   render() {
     return html`
       <!-- LargeDisplay outer -->
@@ -69,6 +109,7 @@ export class FbTftDisplay extends LitElement {
               </div>
             </div>
           `)}
+          ${this.lists.map(list => this._renderList(list))}
 
           <!-- Status bar -->
           <div class="absolute text-[11.2px] font-normal font-[Montserrat,sans-serif] text-white text-left leading-[11.2px]"
