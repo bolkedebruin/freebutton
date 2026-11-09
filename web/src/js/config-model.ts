@@ -5,20 +5,24 @@
  *   buttons[]            (legacy: mqttbuttons[]) {position, page, label, toplabel|topLabel}
  *   displayitems[]       (legacy: mqttdisplays[]) {displayitemid, x, y, width (% of 320x240),
  *                         page (0 = every page), fontsize, align (lv_align_t), label, unit}
+ *   lists[]              {name, page, x, y, width (% of 320x240), rows, fontsize,
+ *                         items[], selected, color, focuscolor, focustextcolor}:
+ *                         rollers on the main display (mapList, LIST_DEFAULTS)
  *   info.connectors[]    {id (0-based), type: 1 = bar, 2 = large display, 0 = empty}
- *   "name" on keys and display items: the names scripts use with fb.key("name")
- *                        and fb.main.display.setValue("name", ...) (configNames,
+ *   "name" on keys, display items and lists: the names scripts use with
+ *                        fb.key("name"), fb.main.display.setValue("name", ...)
+ *                        and fb.main.list.next("name") (configNames,
  *                        validateConfigNames)
  * Key position on connector `id` is id*2+1 (left) and id*2+2 (right), the
  * same mapping the firmware uses (ButtonManager: position0 = connector*2+side).
  */
-import type { ButtonConfig, ConnectorConfig, DisplayItem, PageConfig } from './app-state';
+import type { ButtonConfig, ConnectorConfig, DisplayItem, ListConfig, PageConfig } from './app-state';
 
 export interface DeviceModel {
   pages: PageConfig[];
   /** Sorted by id. Empty when config.json has no info.connectors. */
   connectors: ConnectorConfig[];
-  /** Key and display item names scripts can use. */
+  /** Key, display item and list names scripts can use. */
   names: ConfigNames;
 }
 
@@ -28,15 +32,30 @@ export const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,23}$/;
 /** fb.main.display methods whose first argument is an item id or name. */
 export const DISPLAY_NAME_METHODS = ['remove', 'get', 'setLabel', 'setValue', 'setUnit', 'setPosition', 'setPage'];
 
+/** fb.main.list methods; the first argument is a list name (or its index in "lists"). */
+export const LIST_NAME_METHODS = ['next', 'prev', 'select', 'getSelected', 'count', 'setItems'];
+
 /**
- * Names a script can pass to fb.key() (keys) and to the
- * DISPLAY_NAME_METHODS (display items). Valid names only, first one wins:
- * what the firmware resolves. Keys and display items are separate namespaces.
+ * Names a script can pass to fb.key() (keys), to the DISPLAY_NAME_METHODS
+ * (display items) and to the LIST_NAME_METHODS (lists). Valid names only,
+ * first one wins: what the firmware resolves. Keys, display items and lists
+ * are separate namespaces.
  */
 export interface ConfigNames {
   keys: string[];
   displayItems: string[];
+  lists: string[];
 }
+
+/** config.json "lists" entry defaults (the firmware uses the same). */
+export const LIST_DEFAULTS = {
+  page: 1, x: 0, y: 0, width: 50, rows: 3, fontsize: 3, selected: 0,
+  color: '808080', focuscolor: 'ffd45f', focustextcolor: '000000',
+} as const;
+export const LIST_MAX_ROWS = 7;
+/** fontsize 1..5 -> px on the 320x240 screen. */
+export const FONT_PX = [14, 24, 32, 48, 72] as const;
+export const HEX_COLOR = /^[0-9a-fA-F]{6}$/;
 
 type Obj = Record<string, unknown>;
 
@@ -114,6 +133,36 @@ export function mapDisplayItem(raw: unknown): { page: number; item: DisplayItem 
   return { page: num(raw.page, 0), item };
 }
 
+function clampInt(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, Math.round(v)));
+}
+
+function hexColor(v: unknown, fallback: string): string {
+  return '#' + (typeof v === 'string' && HEX_COLOR.test(v) ? v : fallback).toLowerCase();
+}
+
+/** A "lists" entry with defaults; null without a valid name (the firmware skips those). */
+export function mapList(raw: unknown): ListConfig | null {
+  if (!isObj(raw) || typeof raw.name !== 'string' || !NAME_PATTERN.test(raw.name)) return null;
+  const d = LIST_DEFAULTS;
+  const items = Array.isArray(raw.items) ? raw.items.filter((i): i is string => typeof i === 'string') : [];
+  const selected = items.length === 0 ? -1 : clampInt(num(raw.selected, d.selected), 0, items.length - 1);
+  return {
+    name: raw.name,
+    page: Math.max(0, Math.round(num(raw.page, d.page))),
+    x: num(raw.x, d.x),
+    y: num(raw.y, d.y),
+    width: num(raw.width, d.width),
+    rows: clampInt(num(raw.rows, d.rows), 1, LIST_MAX_ROWS),
+    fontSize: clampInt(num(raw.fontsize ?? raw.fontSize, d.fontsize), 1, FONT_PX.length),
+    items,
+    selected,
+    color: hexColor(raw.color, d.color),
+    focusColor: hexColor(raw.focuscolor, d.focuscolor),
+    focusTextColor: hexColor(raw.focustextcolor, d.focustextcolor),
+  };
+}
+
 export function mapConnectors(cfg: Obj): ConnectorConfig[] {
   const info = isObj(cfg.info) ? cfg.info : {};
   const list = Array.isArray(info.connectors) ? info.connectors : [];
@@ -136,15 +185,20 @@ export function configToModel(cfg: unknown): DeviceModel {
   const items = firstArray(o, 'displayitems', 'mqttdisplays')
     .map(mapDisplayItem)
     .filter((d): d is { page: number; item: DisplayItem } => d !== null);
+  const lists = (Array.isArray(o.lists) ? o.lists : [])
+    .map(mapList)
+    .filter((l): l is ListConfig => l !== null);
 
   const pageNumbers = new Set<number>([1]);
   buttons.forEach(b => pageNumbers.add(b.page));
   items.forEach(d => { if (d.page >= 1) pageNumbers.add(d.page); });
+  lists.forEach(l => { if (l.page >= 1) pageNumbers.add(l.page); });
 
   const pages: PageConfig[] = [...pageNumbers].sort((a, b) => a - b).map(n => ({
     number: n,
     buttons: buttons.filter(b => b.page === n).sort((a, b) => a.position - b.position),
     displayItems: items.filter(d => d.page < 1 || d.page === n).map(d => d.item),
+    lists: lists.filter(l => l.page < 1 || l.page === n),
   }));
 
   return { pages, connectors: mapConnectors(o), names: configNames(o) };
@@ -153,6 +207,7 @@ export function configToModel(cfg: unknown): DeviceModel {
 // The firmware reads both spellings of each list, in file order.
 const KEY_LISTS = ['buttons', 'mqttbuttons'];
 const ITEM_LISTS = ['mqttdisplays', 'displayitems'];
+const LIST_LISTS = ['lists'];
 
 interface NameEntry {
   /** "buttons[2]" */
@@ -181,21 +236,26 @@ function validNames(entries: NameEntry[]): string[] {
   return [...names];
 }
 
-/** Key and display item names in a parsed config.json (see ConfigNames). */
+/** Key, display item and list names in a parsed config.json (see ConfigNames). */
 export function configNames(cfg: unknown): ConfigNames {
   const o: Obj = isObj(cfg) ? cfg : {};
-  return { keys: validNames(nameEntries(o, KEY_LISTS)), displayItems: validNames(nameEntries(o, ITEM_LISTS)) };
+  return {
+    keys: validNames(nameEntries(o, KEY_LISTS)),
+    displayItems: validNames(nameEntries(o, ITEM_LISTS)),
+    lists: validNames(nameEntries(o, LIST_LISTS)),
+  };
 }
 
 /**
  * Problems with "name" fields: a name that does not match NAME_PATTERN, and
- * a name used twice among keys or twice among display items (the firmware
- * ignores those; the first one wins). Empty list = OK.
+ * a name used twice among keys, display items or lists (the firmware
+ * ignores those; the first one wins). A list without a name is a shape
+ * problem (fs-rules validateConfigShape). Empty list = OK.
  */
 export function validateConfigNames(cfg: unknown): string[] {
   if (!isObj(cfg)) return [];
   const problems: string[] = [];
-  const groups: [string, string[]][] = [['key', KEY_LISTS], ['display item', ITEM_LISTS]];
+  const groups: [string, string[]][] = [['key', KEY_LISTS], ['display item', ITEM_LISTS], ['list', LIST_LISTS]];
   for (const [what, lists] of groups) {
     const firstAt = new Map<string, string>();
     for (const { where, name } of nameEntries(cfg, lists)) {

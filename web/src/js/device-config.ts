@@ -1,7 +1,7 @@
 /**
  * Device Configuration Manager
  * Manages PageConfig[] (+ the physical connector layout and the config.json
- * key / display item names) and emits device-config events on changes.
+ * key / display item / list names) and emits device-config events on changes.
  * Starts with sample data; the workspace replaces it with the device's
  * config.json (see config-model.ts) when one is available.
  *
@@ -75,7 +75,7 @@ export function getConnectors(): ConnectorConfig[] {
 }
 
 /**
- * Key and display item names of the stored config.json, for script
+ * Key, display item and list names of the stored config.json, for script
  * completion and validation. null when no config.json is loaded.
  */
 export function getConfigNames(): ConfigNames | null {

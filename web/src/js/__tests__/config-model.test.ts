@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   configToModel, parseConfigText, positionsForConnector, mapButton, mapDisplayItem,
-  configNames, validateConfigNames, NAME_PATTERN,
+  configNames, validateConfigNames, NAME_PATTERN, mapList,
 } from '../config-model';
 
 describe('config.json -> button model', () => {
@@ -44,7 +44,7 @@ describe('config.json -> button model', () => {
   });
 
   it('always has page 1, even for an empty config', () => {
-    expect(configToModel({}).pages).toEqual([{ number: 1, buttons: [], displayItems: [] }]);
+    expect(configToModel({}).pages).toEqual([{ number: 1, buttons: [], displayItems: [], lists: [] }]);
     expect(configToModel(null).pages).toHaveLength(1);
   });
 });
@@ -142,18 +142,18 @@ describe('key and display item names', () => {
       mqttdisplays: [{ displayitemid: '1', name: 'volume' }, { displayitemid: '2', name: 'x'.repeat(25) }],
       displayitems: [{ displayitemid: '3', name: 'clock' }],
     });
-    expect(names).toEqual({ keys: ['sceneUp', 'volume'], displayItems: ['volume', 'clock'] });
+    expect(names).toEqual({ keys: ['sceneUp', 'volume'], displayItems: ['volume', 'clock'], lists: [] });
   });
 
   it('reads legacy mqttbuttons and is empty for a config without names', () => {
     expect(configNames({ mqttbuttons: [{ position: 1, name: 'old' }] }).keys).toEqual(['old']);
-    expect(configNames({})).toEqual({ keys: [], displayItems: [] });
-    expect(configNames(null)).toEqual({ keys: [], displayItems: [] });
+    expect(configNames({})).toEqual({ keys: [], displayItems: [], lists: [] });
+    expect(configNames(null)).toEqual({ keys: [], displayItems: [], lists: [] });
   });
 
   it('configToModel carries the names', () => {
     const model = configToModel({ buttons: [{ position: 1, name: 'a' }], mqttdisplays: [{ name: 'b' }] });
-    expect(model.names).toEqual({ keys: ['a'], displayItems: ['b'] });
+    expect(model.names).toEqual({ keys: ['a'], displayItems: ['b'], lists: [] });
   });
 
   it('NAME_PATTERN: letters, digits and _, not starting with a digit, 1..24 chars', () => {
@@ -192,5 +192,66 @@ describe('validateConfigNames', () => {
   it('ignores non-objects', () => {
     expect(validateConfigNames(null)).toEqual([]);
     expect(validateConfigNames({ buttons: [null, 'x'] })).toEqual([]);
+  });
+});
+
+describe('lists', () => {
+  const scenes = {
+    name: 'scenes', page: 2, x: 4, y: 18, width: 92, rows: 5, fontsize: 2,
+    items: ['Bed Time', 'Evening', 'Movie'], selected: 1,
+    color: 'AABBCC', focuscolor: '112233', focustextcolor: 'ffffff',
+  };
+
+  it('maps every field, colors as #rrggbb', () => {
+    expect(mapList(scenes)).toEqual({
+      name: 'scenes', page: 2, x: 4, y: 18, width: 92, rows: 5, fontSize: 2,
+      items: ['Bed Time', 'Evening', 'Movie'], selected: 1,
+      color: '#aabbcc', focusColor: '#112233', focusTextColor: '#ffffff',
+    });
+  });
+
+  it('applies the defaults', () => {
+    expect(mapList({ name: 'a', items: ['x'] })).toEqual({
+      name: 'a', page: 1, x: 0, y: 0, width: 50, rows: 3, fontSize: 3,
+      items: ['x'], selected: 0,
+      color: '#808080', focusColor: '#ffd45f', focusTextColor: '#000000',
+    });
+  });
+
+  it('clamps rows, fontsize and selected; -1 without items; bad colors fall back', () => {
+    const l = mapList({ name: 'a', rows: 12, fontsize: 0, items: ['x', 'y'], selected: 9, color: '#123456' })!;
+    expect([l.rows, l.fontSize, l.selected, l.color]).toEqual([7, 1, 1, '#808080']);
+    expect(mapList({ name: 'a', selected: 2 })!.selected).toBe(-1);
+    expect(mapList({ name: 'a', items: 'x' })!.items).toEqual([]);
+  });
+
+  it('skips entries without a valid name', () => {
+    expect(mapList({ items: ['x'] })).toBeNull();
+    expect(mapList({ name: '1st' })).toBeNull();
+    expect(mapList('scenes')).toBeNull();
+  });
+
+  it('puts lists on their page (page 0 = every page) and adds the page', () => {
+    const model = configToModel({ lists: [scenes, { name: 'all', page: 0 }, { name: 'p1' }] });
+    expect(model.pages.map(p => p.number)).toEqual([1, 2]);
+    expect(model.pages[0].lists!.map(l => l.name)).toEqual(['all', 'p1']);
+    expect(model.pages[1].lists!.map(l => l.name)).toEqual(['scenes', 'all']);
+  });
+
+  it('collects list names as their own namespace', () => {
+    expect(configNames({
+      buttons: [{ position: 1, name: 'scenes' }],
+      lists: [{ name: 'scenes' }, { name: 'rooms' }, { name: 'scenes' }, { name: '-' }, {}],
+    })).toEqual({ keys: ['scenes'], displayItems: [], lists: ['scenes', 'rooms'] });
+  });
+
+  it('validateConfigNames: invalid and duplicate list names', () => {
+    expect(validateConfigNames({
+      displayitems: [{ name: 'x' }],
+      lists: [{ name: 'x' }, { name: 'x' }, { name: 'a b' }],
+    })).toEqual([
+      'lists[1].name "x" is already used by lists[0] (list names must be unique)',
+      'lists[2].name "a b" is not a valid name (1-24 letters, digits or _, not starting with a digit)',
+    ]);
   });
 });

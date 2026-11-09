@@ -148,7 +148,7 @@ describe('device-config', () => {
 
   it('config names: none for sample data, set with config.json, kept on hardware updates', () => {
     expect(getConfigNames()).toBeNull();
-    const names = { keys: ['up'], displayItems: ['volume'] };
+    const names = { keys: ['up'], displayItems: ['volume'], lists: [] };
     setConfig(getConfig(), [], names);
     expect(getConfigNames()).toEqual(names);
     setHardwareConnectors([{ id: 1, type: 1 }]);

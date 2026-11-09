@@ -13,10 +13,10 @@
  *     read-only buckets; the device answers 400 for such `app` keys)
  *   - key <= 63 chars, body <= 64 KiB
  *   - config.json must be valid JSON (and cannot be deleted), with valid,
- *     unique key / display item names
+ *     unique key / display item / list names and well-formed "lists"
  */
 
-import { validateConfigNames } from './config-model';
+import { FONT_PX, HEX_COLOR, LIST_MAX_ROWS, validateConfigNames } from './config-model';
 
 export const MAX_KEY_LENGTH = 63;
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -221,10 +221,64 @@ export function validateJson(text: string): JsonError | null {
   }
 }
 
+type NumberRule = [field: string, min: number, max: number, integer: boolean];
+const LIST_NUMBERS: NumberRule[] = [
+  ['page', 0, Infinity, true],
+  ['x', 0, 100, false],
+  ['y', 0, 100, false],
+  ['width', 0, 100, false],
+  ['rows', 1, LIST_MAX_ROWS, true],
+  ['fontsize', 1, FONT_PX.length, true],
+  ['selected', 0, Infinity, true],
+];
+const LIST_COLORS = ['color', 'focuscolor', 'focustextcolor'];
+
+function rangeText(min: number, max: number): string {
+  return max === Infinity ? `>= ${min}` : `${min}..${max}`;
+}
+
+/** config.json "lists" entries (name presence; name validity is validateConfigNames). */
+function validateLists(lists: unknown[]): string[] {
+  const problems: string[] = [];
+  lists.forEach((l, i) => {
+    const at = `lists[${i}]`;
+    if (typeof l !== 'object' || l === null || Array.isArray(l)) {
+      problems.push(`${at} must be an object`);
+      return;
+    }
+    const o = l as Record<string, unknown>;
+    if (!('name' in o)) problems.push(`${at}.name is required`);
+    if ('items' in o) {
+      if (!Array.isArray(o.items)) {
+        problems.push(`${at}.items must be an array of strings`);
+      } else {
+        o.items.forEach((item, j) => {
+          if (typeof item !== 'string') problems.push(`${at}.items[${j}] must be a string`);
+          else if (item.includes('\n')) problems.push(`${at}.items[${j}] must not contain a newline`);
+        });
+      }
+    }
+    for (const [field, min, max, integer] of LIST_NUMBERS) {
+      if (!(field in o)) continue;
+      const v = o[field];
+      if (typeof v !== 'number' || !Number.isFinite(v) || (integer && !Number.isInteger(v)) || v < min || v > max) {
+        problems.push(`${at}.${field} must be ${integer ? 'an integer' : 'a number'} ${rangeText(min, max)}`);
+      }
+    }
+    for (const field of LIST_COLORS) {
+      if (field in o && (typeof o[field] !== 'string' || !HEX_COLOR.test(o[field] as string))) {
+        problems.push(`${at}.${field} must be 6 hex digits without "#" (e.g. "ffd45f")`);
+      }
+    }
+  });
+  return problems;
+}
+
 /**
  * Light structural check of a parsed config.json: things that would make
- * the firmware ignore whole sections, and invalid or duplicate key / display
- * item names (validateConfigNames). Returns a list of problems (empty = OK).
+ * the firmware ignore whole sections, malformed "lists" entries, and invalid
+ * or duplicate key / display item / list names (validateConfigNames).
+ * Returns a list of problems (empty = OK).
  */
 export function validateConfigShape(cfg: unknown): string[] {
   const problems: string[] = [];
@@ -232,7 +286,7 @@ export function validateConfigShape(cfg: unknown): string[] {
     return ['config.json must be a JSON object ({ ... })'];
   }
   const o = cfg as Record<string, unknown>;
-  for (const key of ['buttons', 'mqttbuttons', 'displayitems', 'mqttdisplays', 'brokers']) {
+  for (const key of ['buttons', 'mqttbuttons', 'displayitems', 'mqttdisplays', 'brokers', 'lists']) {
     if (key in o && !Array.isArray(o[key])) problems.push(`"${key}" must be an array`);
   }
   for (const key of ['buttons', 'mqttbuttons']) {
@@ -249,6 +303,7 @@ export function validateConfigShape(cfg: unknown): string[] {
       }
     });
   }
+  if (Array.isArray(o.lists)) problems.push(...validateLists(o.lists));
   problems.push(...validateConfigNames(o));
   return problems;
 }

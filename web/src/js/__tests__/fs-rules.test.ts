@@ -137,6 +137,54 @@ describe('JSON validation', () => {
       'mqttdisplays[0].name "bad-name" is not a valid name (1-24 letters, digits or _, not starting with a digit)',
     ]);
   });
+
+  it('accepts well-formed lists', () => {
+    expect(validateConfigShape({
+      lists: [
+        { name: 'scenes', page: 2, x: 4, y: 18, width: 92, rows: 3, fontsize: 3,
+          items: ['Bed Time', 'Evening'], selected: 0,
+          color: '808080', focuscolor: 'FFD45F', focustextcolor: '000000' },
+        { name: 'empty', items: [] },
+        { name: 'bare' },
+      ],
+    })).toEqual([]);
+  });
+
+  it('checks the lists shape', () => {
+    expect(validateConfigShape({ lists: {} })).toEqual(['"lists" must be an array']);
+    expect(validateConfigShape({
+      lists: [
+        'x',
+        { items: ['a'] },
+        { name: 's', items: 'a\nb' },
+        { name: 't', items: ['ok', 3, 'two\nlines'] },
+        { name: 'u', rows: 0, fontsize: 6, x: 101, width: '50', page: 1.5, selected: -1 },
+        { name: 'v', color: '#808080', focuscolor: 'fff', focustextcolor: 0 },
+      ],
+    })).toEqual([
+      'lists[0] must be an object',
+      'lists[1].name is required',
+      'lists[2].items must be an array of strings',
+      'lists[3].items[1] must be a string',
+      'lists[3].items[2] must not contain a newline',
+      'lists[4].page must be an integer >= 0',
+      'lists[4].x must be a number 0..100',
+      'lists[4].width must be a number 0..100',
+      'lists[4].rows must be an integer 1..7',
+      'lists[4].fontsize must be an integer 1..5',
+      'lists[4].selected must be an integer >= 0',
+      'lists[5].color must be 6 hex digits without "#" (e.g. "ffd45f")',
+      'lists[5].focuscolor must be 6 hex digits without "#" (e.g. "ffd45f")',
+      'lists[5].focustextcolor must be 6 hex digits without "#" (e.g. "ffd45f")',
+    ]);
+  });
+
+  it('includes invalid and duplicate list names', () => {
+    expect(validateConfigShape({ lists: [{ name: 'a' }, { name: 'a' }, { name: '9' }] })).toEqual([
+      'lists[1].name "a" is already used by lists[0] (list names must be unique)',
+      'lists[2].name "9" is not a valid name (1-24 letters, digits or _, not starting with a digit)',
+    ]);
+  });
 });
 
 describe('validateBody', () => {
@@ -156,6 +204,12 @@ describe('validateBody', () => {
       'config.json: mqttdisplays[1].name "v" is already used by mqttdisplays[0] (display item names must be unique)'
     );
     expect(validateBody('config.json', JSON.stringify({ mqttdisplays: [{ name: 'v' }], buttons: [{ position: 1, name: 'v' }] }))).toBeNull();
+  });
+
+  it('blocks saving config.json with a malformed list', () => {
+    expect(validateBody('config.json', JSON.stringify({ lists: [{ name: 's', rows: 9 }] })))
+      .toBe('config.json: lists[0].rows must be an integer 1..7');
+    expect(validateBody('config.json', JSON.stringify({ lists: [{ name: 'v' }], mqttdisplays: [{ name: 'v' }] }))).toBeNull();
   });
 
   it('does not syntax-check .js (the source is always saved)', () => {

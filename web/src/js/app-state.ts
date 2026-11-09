@@ -53,6 +53,32 @@ export interface ButtonConfig {
   name?: string;
 }
 
+/**
+ * A roller on the main display (config.json "lists"; LVGL roller on the
+ * device). Defaults applied (see config-model mapList).
+ */
+export interface ListConfig {
+  /** Script name (fb.main.list.next("name")); required. */
+  name: string;
+  /** 1-based; 0 = every page. */
+  page: number;
+  /** Percent of the 320x240 screen. */
+  x: number;
+  y: number;
+  width: number;
+  /** Visible rows (1..7); the selected item sits in the middle one. */
+  rows: number;
+  /** 1..5 (14, 24, 32, 48, 72 px). */
+  fontSize: number;
+  items: string[];
+  /** Selected index from config.json (clamped to the items; -1 = no items). */
+  selected: number;
+  /** "#rrggbb": other rows' text, selected row background, selected row text. */
+  color: string;
+  focusColor: string;
+  focusTextColor: string;
+}
+
 /** Live preview of an unsaved config.json: 'live' = shown, 'stale' = text not valid JSON (last valid kept). */
 export type PreviewState = 'live' | 'stale';
 
@@ -60,6 +86,8 @@ export interface PageConfig {
   number: number;
   displayItems: DisplayItem[];
   buttons: ButtonConfig[];
+  /** Lists shown on this page (config.json "lists"); missing = none. */
+  lists?: ListConfig[];
 }
 
 /**
