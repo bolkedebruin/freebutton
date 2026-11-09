@@ -63,13 +63,13 @@ function type(ed: { content: string }, text: string) {
 
 const STORED = JSON.stringify({
   info: { connectors: [{ id: 0, type: 2 }, { id: 1, type: 1 }] },
-  buttons: [{ position: 1, page: 1, label: 'Open', toplabel: 'Raam' }],
+  buttons: [{ position: 3, page: 1, label: 'Open', toplabel: 'Raam' }],
   displayitems: [{ displayitemid: 'temp', x: 0, y: 0, width: 50, label: 'Temp', unit: 'C' }],
 });
 
 const EDITED = JSON.stringify({
   info: { connectors: [{ id: 0, type: 2 }, { id: 1, type: 1 }, { id: 2, type: 1 }] },
-  buttons: [{ position: 1, page: 1, label: 'Dicht', toplabel: 'Raam' }, { position: 3, page: 2, label: 'Lamp' }],
+  buttons: [{ position: 3, page: 1, label: 'Dicht', toplabel: 'Raam' }, { position: 4, page: 2, label: 'Lamp' }],
   displayitems: [{ displayitemid: 'temp', x: 10, y: 20, width: 40, label: 'Temperatuur', unit: 'C' }],
 });
 
@@ -103,15 +103,15 @@ describe('live config.json preview', () => {
   it('re-renders the preview from the unsaved text after the debounce, without storing it', async () => {
     const { dev, ed } = await openConfig();
     const callsBefore = dev.calls.length;
-    expect(label(1)).toBe('Open');
+    expect(label(3)).toBe('Open');
 
     type(ed, EDITED);
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS - 1);
-    expect(label(1)).toBe('Open');            // still debouncing
+    expect(label(3)).toBe('Open');            // still debouncing
     vi.advanceTimersByTime(1);
 
-    expect(label(1)).toBe('Dicht');
-    expect(label(3, 2)).toBe('Lamp');
+    expect(label(3)).toBe('Dicht');
+    expect(label(4, 2)).toBe('Lamp');
     expect(getConfig().map(p => p.number)).toEqual([1, 2]);
     expect(getConfig()[0].displayItems[0]).toMatchObject({ x: 10, y: 20, width: 40, label: 'Temperatuur', unit: 'C' });
     expect(getConnectors().map(c => c.id)).toEqual([0, 1, 2]);
@@ -134,7 +134,7 @@ describe('live config.json preview', () => {
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
     window.removeEventListener('device-config', handler);
     expect(events).toBe(1);
-    expect(label(1)).toBe('Dicht4');
+    expect(label(3)).toBe('Dicht4');
   });
 
   it('keeps the last valid preview while the text is not valid JSON, flagged stale', async () => {
@@ -146,12 +146,12 @@ describe('live config.json preview', () => {
     type(ed, EDITED.slice(0, -5));            // mid-edit
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
     expect(getConfig()).toBe(valid);
-    expect(label(1)).toBe('Dicht');
+    expect(label(3)).toBe('Dicht');
     expect(getPreviewState()).toBe('stale');
 
     type(ed, EDITED.replace('Dicht', 'Half'));
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
-    expect(label(1)).toBe('Half');
+    expect(label(3)).toBe('Half');
     expect(getPreviewState()).toBe('live');
   });
 
@@ -159,7 +159,7 @@ describe('live config.json preview', () => {
     const { ed } = await openConfig();
     type(ed, '{ "buttons": [');
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
-    expect(label(1)).toBe('Open');
+    expect(label(3)).toBe('Open');
     expect(getPreviewState()).toBe('stale');
   });
 
@@ -167,14 +167,14 @@ describe('live config.json preview', () => {
     const { ed, dev } = await openConfig();
     type(ed, EDITED);
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
-    expect(label(1)).toBe('Dicht');
+    expect(label(3)).toBe('Dicht');
 
     type(ed, EDITED.replace('Dicht', 'Pending'));   // debounce still running
     vi.useRealTimers();
     expect(await ws.open('scripts/main.js')).toBe(true);   // confirm(discard) -> yes
     vi.useFakeTimers();
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS * 2);
-    expect(label(1)).toBe('Open');
+    expect(label(3)).toBe('Open');
     expect(getConnectors().map(c => c.id)).toEqual([0, 1]);
     expect(getPreviewState()).toBeNull();
     expect(dev.files.get('config.json')).toBe(STORED);
@@ -182,18 +182,18 @@ describe('live config.json preview', () => {
     // Editing a script does not touch the preview.
     type(ed, 'print(2);');
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
-    expect(label(1)).toBe('Open');
+    expect(label(3)).toBe('Open');
   });
 
   it('reverting (reopening config.json from storage) restores the stored config', async () => {
     const { ed } = await openConfig();
     type(ed, EDITED);
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
-    expect(label(1)).toBe('Dicht');
+    expect(label(3)).toBe('Dicht');
     vi.useRealTimers();
     expect(await ws.open('config.json', { force: true })).toBe(true);
     expect(ed.content).toBe(STORED);
-    expect(label(1)).toBe('Open');
+    expect(label(3)).toBe('Open');
     expect(getPreviewState()).toBeNull();
   });
 
@@ -204,17 +204,17 @@ describe('live config.json preview', () => {
     vi.useRealTimers();
     expect(await ws.save()).toBe(true);
     expect(dev.files.get('config.json')).toBe(EDITED);
-    expect(label(1)).toBe('Dicht');
+    expect(label(3)).toBe('Dicht');
     expect(getPreviewState()).toBeNull();     // the stored config now
     // Leaving the file keeps the saved config.
     expect(await ws.open('scripts/main.js')).toBe(true);
-    expect(label(1)).toBe('Dicht');
+    expect(label(3)).toBe('Dicht');
   });
 
   it('keeps runtime values (display value, key LED) across a re-render', async () => {
     const { ed } = await openConfig();
     updateDisplayItem(1, 0, { value: '21.5' });
-    updateButton(1, 1, { ledOn: true, ledColor: 'rgb(0,255,0)' });
+    updateButton(1, 3, { ledOn: true, ledColor: 'rgb(0,255,0)' });
     type(ed, EDITED);
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
     expect(getConfig()[0].displayItems[0]).toMatchObject({ label: 'Temperatuur', value: '21.5' });

@@ -266,8 +266,10 @@ export class FbVirtualDevice extends LitElement {
 
   /**
    * Front face. With a known layout every connector renders top to bottom in
-   * id order: a large display shows the TFT above its two keys, a bar shows
-   * its two keys. Without one, the TFT plus the configured keys (legacy).
+   * id order, as on the device: a large display is the TFT only (its two keys,
+   * fb.main.left / right, are presses on the left / right half of the screen,
+   * with no key row or mini displays of their own), a bar shows its two keys.
+   * Without a layout, the TFT plus the configured keys (legacy).
    */
   private _renderFront(page: PageConfig | undefined) {
     const buttons = page?.buttons ?? [];
@@ -281,14 +283,11 @@ export class FbVirtualDevice extends LitElement {
         <fb-button-grid .currentPage=${this.currentPage} .buttons=${buttons}></fb-button-grid>
       `;
     }
-    return slots.map(c => html`
-      ${c.type === 'display'
-        ? html`<fb-tft-display .currentPage=${this.currentPage} .displayItems=${items}
+    return slots.map(c => c.type === 'display'
+      ? html`<fb-tft-display data-connector=${c.id} .currentPage=${this.currentPage} .displayItems=${items}
           .lists=${lists}></fb-tft-display>`
-        : ''}
-      <fb-button-grid data-connector=${c.id} .currentPage=${this.currentPage} .buttons=${buttons}
-        .positions=${positionsForConnector(c.id)}></fb-button-grid>
-    `);
+      : html`<fb-button-grid data-connector=${c.id} .currentPage=${this.currentPage} .buttons=${buttons}
+          .positions=${positionsForConnector(c.id)}></fb-button-grid>`);
   }
 
   /** Subtle note while the preview shows unsaved config.json edits. */
@@ -304,7 +303,7 @@ export class FbVirtualDevice extends LitElement {
   private _faceHeight(): number {
     const slots = this._connectors.filter(c => c.type !== 'empty');
     if (slots.length === 0) return MIN_FACE_H;
-    const h = slots.reduce((sum, c) => sum + KEY_ROW_H + (c.type === 'display' ? TFT_H : 0), 0);
+    const h = slots.reduce((sum, c) => sum + (c.type === 'display' ? TFT_H : KEY_ROW_H), 0);
     return Math.max(MIN_FACE_H, Math.ceil(h));
   }
 

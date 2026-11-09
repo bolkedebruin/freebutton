@@ -345,7 +345,7 @@ describe('fb-button-grid with explicit positions', () => {
 });
 
 describe('fb-virtual-device layout from config.json', () => {
-  it('renders connectors top to bottom: display + its keys, then bars', async () => {
+  it('renders connectors top to bottom as on the device: the display (TFT only), then bars', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();
     window.dispatchEvent(new CustomEvent('device-config', {
@@ -360,7 +360,10 @@ describe('fb-virtual-device layout from config.json', () => {
     await nextFrame();
     expect(el.querySelectorAll('fb-tft-display').length).toBe(1);
     const grids = Array.from(el.querySelectorAll('fb-button-grid')).map(g => g.getAttribute('data-connector'));
-    expect(grids).toEqual(['2', '3']);
+    // The display's keys (positions 5/6 here) are presses on the screen
+    // halves: no key row for them, as on the physical device.
+    expect(grids).toEqual(['3']);
+    expect(el.querySelector('fb-tft-display')?.getAttribute('data-connector')).toBe('2');
     await nextFrame();
     expect(el.textContent).toContain('Open');
     expect(el.textContent).toContain('Dicht');
