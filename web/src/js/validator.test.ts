@@ -238,6 +238,86 @@ describe('MQuickJS Validator', () => {
         });
     });
 
+    describe('Hoisting', () => {
+        it('should accept a top-level call before the function declaration', () => {
+            const result = validateCode(`
+                blink();
+                function blink() { var on = true; }
+            `);
+            expect(result.errors).toHaveLength(0);
+            expect(result.valid).toBe(true);
+        });
+
+        it('should accept a call inside a function to a later top-level function', () => {
+            const result = validateCode(`
+                function start() { return blink(); }
+                function blink() { return 1; }
+                start();
+            `);
+            expect(result.errors).toHaveLength(0);
+        });
+
+        it('should accept a nested function used before its declaration', () => {
+            const result = validateCode(`
+                function outer() {
+                    var x = inner();
+                    return x;
+                    function inner() { return 2; }
+                }
+                outer();
+            `);
+            expect(result.errors).toHaveLength(0);
+        });
+
+        it('should accept a var used before its declaration in the same scope', () => {
+            const result = validateCode(`
+                function f() {
+                    count = 1;
+                    if (count) { var count; }
+                    return count;
+                }
+                total = 0;
+                var total;
+                f();
+            `);
+            expect(result.errors).toHaveLength(0);
+        });
+
+        it('should not leak a nested function or var to the outer scope', () => {
+            const result = validateCode(`
+                function outer() {
+                    var local = 1;
+                    function inner() { return local; }
+                    return inner();
+                }
+                inner();
+                local;
+            `);
+            expect(result.valid).toBe(false);
+            const messages = result.errors.map(e => e.message).join('\n');
+            expect(messages).toContain("'inner' is not defined");
+            expect(messages).toContain("'local' is not defined");
+        });
+
+        it('should still report an undeclared name', () => {
+            const result = validateCode(`
+                blink();
+                function blink() { return missing; }
+            `);
+            expect(result.valid).toBe(false);
+            expect(result.errors.every(e => e.message.includes("'missing' is not defined"))).toBe(true);
+        });
+
+        it('should still report let used before its declaration (TDZ)', () => {
+            const result = validateCode(`
+                x = 1;
+                let x;
+            `);
+            expect(result.valid).toBe(false);
+            expect(result.errors[0]?.message).toContain("'x' is not defined");
+        });
+    });
+
     describe('Stdlib Globals Validation', () => {
         it('should reject undefined function calls', () => {
             const result = validateCode('unknownFunction();');

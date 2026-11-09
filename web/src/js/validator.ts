@@ -205,6 +205,47 @@ function isDeclared(scope: Scope | undefined, name: string): boolean {
 }
 
 /**
+ * Pre-declare the names that JavaScript hoists to the top of a function or
+ * program scope, so references before the declaration are not reported:
+ * - function declarations that are direct statements of the body
+ * - `var` declarations anywhere in the body (blocks, loops, catch bodies),
+ *   but not inside nested functions (those get their own scope)
+ * `let`/`const` are not hoisted here: they are declared when the walk reaches
+ * them, so use before declaration (TDZ) is still reported.
+ */
+function hoistDeclarations(body: any[], scope: Scope): void {
+    for (const stmt of body) {
+        if (stmt?.type === 'FunctionDeclaration' && stmt.id?.type === 'Identifier') {
+            scope.variables.add(stmt.id.name);
+        }
+    }
+    const collectVars = (node: any): void => {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) {
+            node.forEach(collectVars);
+            return;
+        }
+        if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' ||
+            node.type === 'ArrowFunctionExpression') {
+            return;
+        }
+        if (node.type === 'VariableDeclaration' && node.kind === 'var') {
+            for (const decl of node.declarations || []) {
+                if (decl.id?.type === 'Identifier') {
+                    scope.variables.add(decl.id.name);
+                }
+            }
+        }
+        for (const key in node) {
+            if (key === 'loc' || key === 'parent') continue;
+            const child = node[key];
+            if (child && typeof child === 'object') collectVars(child);
+        }
+    };
+    collectVars(body);
+}
+
+/**
  * Walk AST and check for MQuickJS violations
  */
 function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: any): void {
@@ -221,6 +262,9 @@ function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: a
     let currentScope = scope;
     if (!currentScope) {
         currentScope = createScope();
+    }
+    if (node.type === 'Program') {
+        hoistDeclarations(node.body || [], currentScope);
     }
 
     // Track variable declarations
@@ -244,6 +288,9 @@ function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: a
             if (param.type === 'Identifier') {
                 funcScope.variables.add(param.name);
             }
+        }
+        if (node.body?.type === 'BlockStatement') {
+            hoistDeclarations(node.body.body || [], funcScope);
         }
         currentScope = funcScope;
     }
