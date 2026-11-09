@@ -12,6 +12,7 @@
 #include "DisplayItem.h"
 #include "Button.h"
 #include "Clock.h"
+#include "NameTable.h"
 #include "mqtt/Registry.h"
 #include "json/JsonWriter.h"
 #include "config.h"
@@ -189,6 +190,12 @@ public:
     DisplayItem* findDisplayItemById(unsigned long id) const;
 
     /**
+     * Names from config.json ("name" on display items and keys) for the JS
+     * bindings. Filled at boot while config.json loads, read-only afterwards.
+     */
+    const NameTable& names() const { return names_; }
+
+    /**
      * Add a new display item dynamically
      * @return Pointer to the created DisplayItem, or nullptr on failure
      */
@@ -267,6 +274,11 @@ private:
     std::vector<std::unique_ptr<DisplayItem>> displayItems;
     std::vector<std::unique_ptr<Button>> buttons;
     std::vector<std::unique_ptr<Clock>> clocks;
+    NameTable names_;
+
+    // Adds config["name"] (if any) for kind / id; an invalid or duplicate
+    // name is logged and ignored.
+    void addName(NameTable::Kind kind, unsigned long id, const JsonObject& config);
 
     std::string ntpServer;
     std::string timezone;
@@ -371,6 +383,10 @@ void ConfigManager::write(OutputStream &stream) {
         for (auto& button : buttons) {
             auto jbutton = btns.Object();
             button->toJson<OutputStream>(jbutton);
+            const auto name = names_.nameOf(NameTable::Kind::Key, button->getPosition());
+            if (!name.empty()) {
+                jbutton.Add("name", name);
+            }
         }
     }
 
@@ -381,6 +397,10 @@ void ConfigManager::write(OutputStream &stream) {
         for (auto& item : displayItems) {
             auto jitem = items.Object();
             item->toJson<OutputStream>(jitem);
+            const auto name = names_.nameOf(NameTable::Kind::DisplayItem, item->id);
+            if (!name.empty()) {
+                jitem.Add("name", name);
+            }
         }
     }
 

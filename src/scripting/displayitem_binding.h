@@ -6,6 +6,9 @@
 #ifndef DISPLAYITEM_BINDING_H
 #define DISPLAYITEM_BINDING_H
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,6 +44,12 @@ unsigned long displayitem_create(
  * Returns true if successful, false if item not found
  */
 bool displayitem_remove(unsigned long id);
+
+/*
+ * Display item id for a config.json "name" (len bytes, no NUL needed).
+ * Returns false when no display item has that name.
+ */
+bool displayitem_find_by_name(const char* name, size_t len, unsigned long* id);
 
 /* Get the total number of display items */
 int displayitem_count(void);

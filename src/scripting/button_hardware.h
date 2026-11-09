@@ -37,6 +37,10 @@ int button_hw_get_top_label(int position, char* out, size_t capacity);
 // Get button position count
 int button_hw_get_count();
 
+// Key position for a config.json "name" on a "buttons" entry (len bytes, no
+// NUL needed). Returns false when no key has that name.
+bool button_hw_find_by_name(const char* name, size_t len, int* position);
+
 // Register event callbacks
 // These will be called from ButtonManager when events occur
 void button_hw_register_click_callback(int position, ButtonClickCallback callback);

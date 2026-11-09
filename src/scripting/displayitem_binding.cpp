@@ -79,6 +79,17 @@ bool displayitem_remove(unsigned long id)
     return removed;
 }
 
+bool displayitem_find_by_name(const char* name, size_t len, unsigned long* id)
+{
+    uint32_t found = 0;
+    if (name == nullptr || id == nullptr ||
+        !configManager.names().find(freebutton::NameTable::Kind::DisplayItem, std::string_view(name, len), found)) {
+        return false;
+    }
+    *id = found;
+    return true;
+}
+
 int displayitem_count(void)
 {
     return static_cast<int>(configManager.getDisplayItemCount());

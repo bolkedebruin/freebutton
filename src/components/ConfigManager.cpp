@@ -96,6 +96,8 @@ void ConfigManager::loadFromFile(const std::string& filename) {
         ESP_LOGE(TAG, "Failed to parse JSON file: %s", filename.c_str());
     }
 
+    names_.compact();
+
     // Register all component subscriptions now that brokers are configured
     registerAllSubscriptions();
 
@@ -116,6 +118,7 @@ void ConfigManager::clear() {
     oldItems.clear();
     buttons.clear();
     clocks.clear();
+    names_.clear();
 
     // Shrink capacity to free memory (displayItems: swapped with an empty one)
     buttons.shrink_to_fit();
@@ -267,6 +270,7 @@ void ConfigManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
                     break;
                 }
             }
+            addName(NameTable::Kind::DisplayItem, item->id, itemElement.as<ArduinoJson::JsonObject>());
             displayItems.emplace_back(std::move(item));
         } else {
             ESP_LOGW(TAG, "Failed to create DisplayItem from JSON");
@@ -274,6 +278,30 @@ void ConfigManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
     }
 
     ESP_LOGI(TAG, "Successfully loaded %zu display items", getDisplayItemCount());
+}
+
+void ConfigManager::addName(const NameTable::Kind kind, const unsigned long id, const JsonObject& config) {
+    const auto value = config["name"];
+    if (value.isNull()) {
+        return;
+    }
+    const char* what = kind == NameTable::Kind::Key ? "Key at position" : "Display item";
+    const char* name = value.as<const char*>();
+    if (name == nullptr) {
+        ESP_LOGW(TAG, "%s %lu: \"name\" is not a string, ignored", what, id);
+        return;
+    }
+    switch (names_.add(kind, static_cast<uint32_t>(id), name)) {
+    case NameTable::AddResult::Added:
+        break;
+    case NameTable::AddResult::Invalid:
+        ESP_LOGW(TAG, "%s %lu: name \"%s\" is not valid (letters, digits, _; not starting with a digit; max %u), "
+                      "ignored", what, id, name, static_cast<unsigned>(NameTable::kMaxLen));
+        break;
+    case NameTable::AddResult::Duplicate:
+        ESP_LOGW(TAG, "%s %lu: name \"%s\" is already used, ignored (the first one keeps it)", what, id, name);
+        break;
+    }
 }
 
 void ConfigManager::loadButtons(const ArduinoJson::JsonArray& buttonsArray) {
@@ -292,6 +320,7 @@ void ConfigManager::loadButtons(const ArduinoJson::JsonArray& buttonsArray) {
         if (button) {
             ESP_LOGD(TAG, "Created Button: id=%lu, label='%s', topLabel='%s'",
                     button->id, button->label.c_str(), button->topLabel.c_str());
+            addName(NameTable::Kind::Key, button->getPosition(), buttonElement.as<ArduinoJson::JsonObject>());
             buttons.emplace_back(std::move(button));
         } else {
             ESP_LOGW(TAG, "Failed to create Button from JSON");

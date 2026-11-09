@@ -26,6 +26,7 @@ static inline int device_hw_get_main_connector(void) { return -1; }
 static inline int led_hw_set_color(int pos, uint8_t r, uint8_t g, uint8_t b) { return 0; }
 static inline int button_hw_get_label(int position, char* out, size_t capacity) { if (capacity) out[0] = 0; return 0; }
 static inline int button_hw_get_top_label(int position, char* out, size_t capacity) { if (capacity) out[0] = 0; return 0; }
+static inline bool button_hw_find_by_name(const char* name, size_t len, int* position) { return false; }
 #endif
 
 // Method IDs for the proxy dispatcher (encoded in params of JS_NewCFunctionParams)
@@ -53,6 +54,8 @@ enum {
     FB_METHOD_DISP_GET_TOP_LABEL = 19,
     FB_METHOD_DITEM_SHOW_PAGE = 20,
     FB_METHOD_DITEM_GET_SHOWN_PAGE = 21,
+    // fb.key(name): the key object of a config.json key name
+    FB_METHOD_KEY = 22,
 };
 
 /*
@@ -74,6 +77,45 @@ JSValue js_freebutton_device_connectorType(JSContext *ctx, JSValue *this_val, in
 JSValue js_freebutton_device_mainConnector(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     return JS_NewInt32(ctx, device_hw_get_main_connector());
+}
+
+/*
+ * fb.key(name) result: the existing key object for a 1-based key position,
+ * the same object as fb.main.left / .right or fb.bars[i].left / .right
+ * (device_hw_init_fb builds them: position = connector * 2 + 1 (left) or
+ * + 2 (right); bars are numbered by the BAR connectors in connector order).
+ * No object is created: the tree is walked by property reads (each read
+ * makes a short-lived property-name string, garbage right after; call
+ * fb.key() once at setup and keep the result in a local var where it is
+ * used often). The value is kept in a GC ref across the reads (the GC
+ * moves objects).
+ */
+static JSValue fb_key_object(JSContext *ctx, int position)
+{
+    const int conn = (position - 1) / 2;
+    const char *side = ((position - 1) % 2) ? "right" : "left";
+    const int type = position >= 1 ? device_hw_get_connector_type(conn) : 0;
+    const int isMain = type == 2 && conn == device_hw_get_main_connector();
+    if (!isMain && type != 1)
+        return JS_ThrowReferenceError(ctx, "key at position %d is not connected", position);
+
+    JSGCRef ref;
+    JSValue *v = JS_PushGCRef(ctx, &ref);
+    *v = JS_GetGlobalObject(ctx);
+    *v = JS_GetPropertyStr(ctx, *v, "fb");
+    if (isMain) {
+        *v = JS_GetPropertyStr(ctx, *v, "main");
+    } else {
+        uint32_t bar = 0;
+        for (int c = 0; c < conn; c++) {
+            if (device_hw_get_connector_type(c) == 1)
+                bar++;
+        }
+        *v = JS_GetPropertyStr(ctx, *v, "bars");
+        *v = JS_GetPropertyUint32(ctx, *v, bar);
+    }
+    *v = JS_GetPropertyStr(ctx, *v, side);
+    return JS_PopGCRef(ctx, &ref);
 }
 
 /*
@@ -191,6 +233,21 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         return js_freebutton_display_showPage(ctx, this_val, argc, argv);
     case FB_METHOD_DITEM_GET_SHOWN_PAGE:
         return js_freebutton_display_getShownPage(ctx, this_val, argc, argv);
+    case FB_METHOD_KEY: {
+        /* The name is looked up in the firmware's name table (config.json
+         * "name" on a "buttons" entry); it is not copied into the JS heap. */
+        if (argc < 1 || !JS_IsString(ctx, argv[0]))
+            return JS_ThrowTypeError(ctx, "fb.key() requires a key name (string)");
+        JSCStringBuf buf;
+        size_t len;
+        const char *name = JS_ToCStringLen(ctx, &len, argv[0], &buf);
+        if (!name)
+            return JS_EXCEPTION;
+        int position = 0;
+        if (!button_hw_find_by_name(name, len, &position))
+            return JS_ThrowReferenceError(ctx, "unknown key \"%.32s\"", name);
+        return fb_key_object(ctx, position);
+    }
     default:
         return JS_ThrowInternalError(ctx, "unknown fb method %d", method);
     }

@@ -117,6 +117,16 @@ int button_hw_get_count() {
     return BUTTON_COUNT;
 }
 
+bool button_hw_find_by_name(const char* name, size_t len, int* position) {
+    uint32_t found = 0;
+    if (name == nullptr || position == nullptr ||
+        !configManager.names().find(freebutton::NameTable::Kind::Key, std::string_view(name, len), found)) {
+        return false;
+    }
+    *position = static_cast<int>(found);
+    return true;
+}
+
 // Register click callback (positions are 1-based: 1-8)
 void button_hw_register_click_callback(int position, ButtonClickCallback callback) {
     if (position >= 1 && position <= BUTTON_COUNT) {

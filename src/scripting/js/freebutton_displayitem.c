@@ -7,6 +7,7 @@
  * JavaScript API:
  *   display.create(x, y, width, boxType, fontSize, alignment, label, unit, round, page)
  *       - Create a new display item, returns ID
+ *   (id: a display item id, or the item's config.json "name")
  *   display.remove(id)           - Remove a display item
  *   display.count()              - Get number of display items
  *   display.get(id)              - Get display item info
@@ -55,6 +56,7 @@ static inline bool displayitem_set_page(unsigned long id, int p) { return false;
 static inline bool displayitem_show_page(int p) { return p >= 1; }
 static inline int displayitem_get_shown_page(void) { return 1; }
 static inline int displayitem_get_all_ids(unsigned long* ids, int max) { return 0; }
+static inline bool displayitem_find_by_name(const char* n, size_t len, unsigned long* id) { return false; }
 #endif
 
 /* Maximum number of display items for iteration */
@@ -63,6 +65,31 @@ static inline int displayitem_get_all_ids(unsigned long* ids, int max) { return 
 /*
  * JavaScript bindings
  */
+
+/*
+ * First argument of the item methods: a display item id (number) or the
+ * item's config name (string, config.json "name"). The name is looked up in
+ * the firmware's name table; it is not copied into the JS heap. An unknown
+ * name throws a ReferenceError (a typo should not fail silently); an unknown
+ * numeric id keeps returning false as before.
+ */
+static int displayitem_arg_id(JSContext *ctx, int *id, JSValue val)
+{
+    if (!JS_IsString(ctx, val))
+        return JS_ToInt32(ctx, id, val);
+    JSCStringBuf buf;
+    size_t len;
+    const char *name = JS_ToCStringLen(ctx, &len, val, &buf);
+    if (!name)
+        return -1;
+    unsigned long found = 0;
+    if (!displayitem_find_by_name(name, len, &found)) {
+        JS_ThrowReferenceError(ctx, "unknown display item \"%.32s\"", name);
+        return -1;
+    }
+    *id = (int)found;
+    return 0;
+}
 
 /**
  * @jsapi display.create
@@ -120,7 +147,7 @@ JSValue js_freebutton_display_create(JSContext *ctx, JSValue *this_val, int argc
 /**
  * @jsapi display.remove
  * @description Remove a display item by ID
- * @param {number} id - Display item ID
+ * @param {number|string} id - Display item ID, or its config name
  * @returns {boolean} True if removed, false if not found
  */
 JSValue js_freebutton_display_remove(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -128,7 +155,7 @@ JSValue js_freebutton_display_remove(JSContext *ctx, JSValue *this_val, int argc
     int id = 0;
 
     if (argc >= 1) {
-        if (JS_ToInt32(ctx, &id, argv[0]))
+        if (displayitem_arg_id(ctx, &id, argv[0]))
             return JS_EXCEPTION;
     } else {
         return JS_ThrowTypeError(ctx, "display.remove() requires id argument");
@@ -152,7 +179,7 @@ JSValue js_freebutton_display_count(JSContext *ctx, JSValue *this_val, int argc,
 /**
  * @jsapi display.get
  * @description Get display item information by ID
- * @param {number} id - Display item ID
+ * @param {number|string} id - Display item ID, or its config name
  * @returns {object} Display item info with properties: id, x, y, width, boxType, fontSize, alignment, label, unit, round, page
  */
 JSValue js_freebutton_display_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -160,7 +187,7 @@ JSValue js_freebutton_display_get(JSContext *ctx, JSValue *this_val, int argc, J
     int id = 0;
 
     if (argc >= 1) {
-        if (JS_ToInt32(ctx, &id, argv[0]))
+        if (displayitem_arg_id(ctx, &id, argv[0]))
             return JS_EXCEPTION;
     } else {
         return JS_ThrowTypeError(ctx, "display.get() requires id argument");
@@ -211,7 +238,7 @@ JSValue js_freebutton_display_getAll(JSContext *ctx, JSValue *this_val, int argc
 /**
  * @jsapi display.setLabel
  * @description Set display item label text
- * @param {number} id - Display item ID
+ * @param {number|string} id - Display item ID, or its config name
  * @param {string} label - New label text
  * @returns {boolean} True if successful
  */
@@ -224,7 +251,7 @@ JSValue js_freebutton_display_setLabel(JSContext *ctx, JSValue *this_val, int ar
         return JS_ThrowTypeError(ctx, "display.setLabel() requires id and label arguments");
     }
 
-    if (JS_ToInt32(ctx, &id, argv[0]))
+    if (displayitem_arg_id(ctx, &id, argv[0]))
         return JS_EXCEPTION;
 
     size_t len;
@@ -239,7 +266,7 @@ JSValue js_freebutton_display_setLabel(JSContext *ctx, JSValue *this_val, int ar
 /**
  * @jsapi display.setValue
  * @description Set display item value text
- * @param {number} id - Display item ID
+ * @param {number|string} id - Display item ID, or its config name
  * @param {string} value - New value text
  * @returns {boolean} True if successful
  */
@@ -252,7 +279,7 @@ JSValue js_freebutton_display_setValue(JSContext *ctx, JSValue *this_val, int ar
         return JS_ThrowTypeError(ctx, "display.setValue() requires id and value arguments");
     }
 
-    if (JS_ToInt32(ctx, &id, argv[0]))
+    if (displayitem_arg_id(ctx, &id, argv[0]))
         return JS_EXCEPTION;
 
     size_t len;
@@ -267,7 +294,7 @@ JSValue js_freebutton_display_setValue(JSContext *ctx, JSValue *this_val, int ar
 /**
  * @jsapi display.setUnit
  * @description Set display item unit text
- * @param {number} id - Display item ID
+ * @param {number|string} id - Display item ID, or its config name
  * @param {string} unit - New unit text
  * @returns {boolean} True if successful
  */
@@ -280,7 +307,7 @@ JSValue js_freebutton_display_setUnit(JSContext *ctx, JSValue *this_val, int arg
         return JS_ThrowTypeError(ctx, "display.setUnit() requires id and unit arguments");
     }
 
-    if (JS_ToInt32(ctx, &id, argv[0]))
+    if (displayitem_arg_id(ctx, &id, argv[0]))
         return JS_EXCEPTION;
 
     size_t len;
@@ -295,7 +322,7 @@ JSValue js_freebutton_display_setUnit(JSContext *ctx, JSValue *this_val, int arg
 /**
  * @jsapi display.setPosition
  * @description Set display item position
- * @param {number} id - Display item ID
+ * @param {number|string} id - Display item ID, or its config name
  * @param {number} x - New X position
  * @param {number} y - New Y position
  * @returns {boolean} True if successful
@@ -308,7 +335,7 @@ JSValue js_freebutton_display_setPosition(JSContext *ctx, JSValue *this_val, int
         return JS_ThrowTypeError(ctx, "display.setPosition() requires id, x, and y arguments");
     }
 
-    if (JS_ToInt32(ctx, &id, argv[0]))
+    if (displayitem_arg_id(ctx, &id, argv[0]))
         return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &x, argv[1]))
         return JS_EXCEPTION;
@@ -322,7 +349,7 @@ JSValue js_freebutton_display_setPosition(JSContext *ctx, JSValue *this_val, int
 /**
  * @jsapi display.setPage
  * @description Set display item page
- * @param {number} id - Display item ID
+ * @param {number|string} id - Display item ID, or its config name
  * @param {number} page - New page number
  * @returns {boolean} True if successful
  */
@@ -334,7 +361,7 @@ JSValue js_freebutton_display_setPage(JSContext *ctx, JSValue *this_val, int arg
         return JS_ThrowTypeError(ctx, "display.setPage() requires id and page arguments");
     }
 
-    if (JS_ToInt32(ctx, &id, argv[0]))
+    if (displayitem_arg_id(ctx, &id, argv[0]))
         return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &page, argv[1]))
         return JS_EXCEPTION;
