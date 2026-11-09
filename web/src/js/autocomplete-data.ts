@@ -513,6 +513,13 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
   "fb": {
     "methods": [
       {
+        "label": "fb.key",
+        "type": "method",
+        "detail": "(name: string) → FbSide | FbMainSide",
+        "info": "Key by its \"name\" in config.json: the same object as fb.main.left/right (FbMainSide) or fb.bars[i].left/right (FbSide). Throws ReferenceError for an unknown name.",
+        "apply": "fb.key(${1:name})"
+      },
+      {
         "label": "fb.main.display.create",
         "type": "method",
         "detail": "(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number) → number",
@@ -522,9 +529,9 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "fb.main.display.remove",
         "type": "method",
-        "detail": "(id: number) → boolean",
-        "info": "Remove a display item",
-        "apply": "fb.main.display.remove(${1:id})"
+        "detail": "(idOrName: number | string) → boolean",
+        "info": "Remove a display item (by id or config.json name)",
+        "apply": "fb.main.display.remove(${1:idOrName})"
       },
       {
         "label": "fb.main.display.count",
@@ -536,9 +543,9 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "fb.main.display.get",
         "type": "method",
-        "detail": "(id: number) → object",
-        "info": "Get display item by ID",
-        "apply": "fb.main.display.get(${1:id})"
+        "detail": "(idOrName: number | string) → object",
+        "info": "Get a display item by id or config.json name",
+        "apply": "fb.main.display.get(${1:idOrName})"
       },
       {
         "label": "fb.main.display.getAll",
@@ -550,37 +557,37 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
       {
         "label": "fb.main.display.setLabel",
         "type": "method",
-        "detail": "(id: number, label: string) → void",
-        "info": "Set item label",
-        "apply": "fb.main.display.setLabel(${1:id}, ${2:label})"
+        "detail": "(idOrName: number | string, label: string) → void",
+        "info": "Set item label (item by id or config.json name)",
+        "apply": "fb.main.display.setLabel(${1:idOrName}, ${2:label})"
       },
       {
         "label": "fb.main.display.setValue",
         "type": "method",
-        "detail": "(id: number, value: any) → void",
-        "info": "Set item value",
-        "apply": "fb.main.display.setValue(${1:id}, ${2:value})"
+        "detail": "(idOrName: number | string, value: any) → void",
+        "info": "Set item value (item by id or config.json name)",
+        "apply": "fb.main.display.setValue(${1:idOrName}, ${2:value})"
       },
       {
         "label": "fb.main.display.setUnit",
         "type": "method",
-        "detail": "(id: number, unit: string) → void",
-        "info": "Set item unit",
-        "apply": "fb.main.display.setUnit(${1:id}, ${2:unit})"
+        "detail": "(idOrName: number | string, unit: string) → void",
+        "info": "Set item unit (item by id or config.json name)",
+        "apply": "fb.main.display.setUnit(${1:idOrName}, ${2:unit})"
       },
       {
         "label": "fb.main.display.setPosition",
         "type": "method",
-        "detail": "(id: number, x: number, y: number) → void",
-        "info": "Set item position",
-        "apply": "fb.main.display.setPosition(${1:id}, ${2:x}, ${3:y})"
+        "detail": "(idOrName: number | string, x: number, y: number) → void",
+        "info": "Set item position (item by id or config.json name)",
+        "apply": "fb.main.display.setPosition(${1:idOrName}, ${2:x}, ${3:y})"
       },
       {
         "label": "fb.main.display.setPage",
         "type": "method",
-        "detail": "(id: number, page: number) → void",
-        "info": "Set item page (0 = every page)",
-        "apply": "fb.main.display.setPage(${1:id}, ${2:page})"
+        "detail": "(idOrName: number | string, page: number) → void",
+        "info": "Set item page, 0 = every page (item by id or config.json name)",
+        "apply": "fb.main.display.setPage(${1:idOrName}, ${2:page})"
       },
       {
         "label": "fb.main.display.showPage",

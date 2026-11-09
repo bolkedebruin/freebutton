@@ -414,24 +414,24 @@ export interface FbMain {
 export interface FbMainDisplay {
     /** Create a display item; returns its id */
     create(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number): number;
-    /** Remove a display item */
-    remove(id: number): boolean;
+    /** Remove a display item (by id or config.json name) */
+    remove(idOrName: number | string): boolean;
     /** Get number of display items */
     count(): number;
-    /** Get display item by ID */
-    get(id: number): object;
+    /** Get a display item by id or config.json name */
+    get(idOrName: number | string): object;
     /** Get all display items */
     getAll(): Array;
-    /** Set item label */
-    setLabel(id: number, label: string): void;
-    /** Set item value */
-    setValue(id: number, value: any): void;
-    /** Set item unit */
-    setUnit(id: number, unit: string): void;
-    /** Set item position */
-    setPosition(id: number, x: number, y: number): void;
-    /** Set item page (0 = every page) */
-    setPage(id: number, page: number): void;
+    /** Set item label (item by id or config.json name) */
+    setLabel(idOrName: number | string, label: string): void;
+    /** Set item value (item by id or config.json name) */
+    setValue(idOrName: number | string, value: any): void;
+    /** Set item unit (item by id or config.json name) */
+    setUnit(idOrName: number | string, unit: string): void;
+    /** Set item position (item by id or config.json name) */
+    setPosition(idOrName: number | string, x: number, y: number): void;
+    /** Set item page, 0 = every page (item by id or config.json name) */
+    setPage(idOrName: number | string, page: number): void;
     /** Show a page of the main display: items and the clock on this page or on page 0 (every page) are shown, the others hidden. Page 1 is shown at boot. */
     showPage(page: number): void;
     /** Page of the main display shown now */
@@ -468,6 +468,8 @@ export interface FbSmallDisplay {
 }
 
 export interface FbRoot {
+    /** Key by its "name" in config.json: the same object as fb.main.left/right (FbMainSide) or fb.bars[i].left/right (FbSide). Throws ReferenceError for an unknown name. */
+    key(name: string): FbSide | FbMainSide;
     /** Main display unit */
     readonly main: FbMain;
     /** Connected bar modules */

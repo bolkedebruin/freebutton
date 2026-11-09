@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { javascript } from '@codemirror/lang-javascript';
 import type { CompletionContext } from '@codemirror/autocomplete';
-import { freebuttonCompletions } from './autocomplete';
+import { freebuttonCompletions, configNameCompletions, editorCompletions } from './autocomplete';
 
 /**
  * Create a mock completion context for testing
@@ -192,6 +192,51 @@ describe('FreeButton Autocomplete', () => {
             ) || [];
 
             expect(labels).toContain('fb');
+        });
+    });
+
+    describe('config.json names', () => {
+        const names = { keys: ['sceneUp', 'sceneDown'], displayItems: ['volume', 'clock'] };
+        const labelsOf = (result: ReturnType<typeof configNameCompletions>) =>
+            result?.options.map(opt => opt.label) ?? [];
+
+        it('suggests key names inside fb.key("', () => {
+            const code = 'fb.key("sc';
+            const result = configNameCompletions(createContext(code), names);
+            expect(labelsOf(result)).toEqual(['sceneUp', 'sceneDown']);
+            expect(result?.from).toBe(code.length - 2);
+        });
+
+        it('suggests display item names inside the first argument of the display methods', () => {
+            for (const method of ['remove', 'get', 'setLabel', 'setValue', 'setUnit', 'setPosition', 'setPage']) {
+                const code = `fb.main.display.${method}('`;
+                const result = configNameCompletions(createContext(code), names);
+                expect(labelsOf(result)).toEqual(['volume', 'clock']);
+                expect(result?.from).toBe(code.length);
+            }
+        });
+
+        it('works with the closing quote already inserted', () => {
+            const code = 'fb.key("")';
+            const result = configNameCompletions(createContext(code, 'fb.key("'.length), names);
+            expect(labelsOf(result)).toEqual(['sceneUp', 'sceneDown']);
+        });
+
+        it('offers nothing outside a name argument', () => {
+            for (const code of ['fb.key(', 'fb.key(x', 'fb.main.display.setValue("volume", "', 'fb.main.display.create("',
+                'fb.main.display.showPage("', 'print("']) {
+                expect(configNameCompletions(createContext(code), names)).toBeNull();
+            }
+        });
+
+        it('offers no names without a config.json', () => {
+            const result = configNameCompletions(createContext('fb.key("'), null);
+            expect(result).not.toBeNull();
+            expect(result?.options).toEqual([]);
+        });
+
+        it('the editor source falls back to the API outside a name argument', () => {
+            expect(labelsOf(editorCompletions(createContext('f')))).toContain('fb');
         });
     });
 });

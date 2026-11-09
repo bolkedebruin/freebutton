@@ -7,6 +7,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { applyFbExtras } from './fb-api-extras.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -57,7 +58,7 @@ function generateAutocomplete() {
     let stdlib;
     try {
         const stdlibContent = readFileSync(STDLIB_JSON_PATH, 'utf8');
-        stdlib = JSON.parse(stdlibContent);
+        stdlib = applyFbExtras(JSON.parse(stdlibContent));
     } catch (err) {
         console.error(`Error reading ${STDLIB_JSON_PATH}:`, err.message);
         process.exit(1);
@@ -155,8 +156,18 @@ function generateAutocomplete() {
             }
         }
 
-        // Build fb completions from root properties
+        // Build fb completions from root methods (fb.key) and properties
         const methods = [];
+        for (const method of (root && root.methods) || []) {
+            const label = `fb.${method.name}`;
+            methods.push({
+                label,
+                type: 'method',
+                detail: generateDetail(method.params, method.returns),
+                info: method.description || '',
+                apply: generateSnippet(label, method.params)
+            });
+        }
         if (root && root.properties) {
             for (const prop of root.properties) {
                 const propType = prop.type.replace('[]', '');

@@ -583,4 +583,56 @@ describe('MQuickJS Validator', () => {
             expect(result.errors.length).toBeGreaterThanOrEqual(2);
         });
     });
+
+    describe('config.json names', () => {
+        const names = { keys: ['sceneUp'], displayItems: ['volume'] };
+
+        it('accepts known key and display item names', () => {
+            const result = validateCode([
+                'fb.key("sceneUp").button.onClick(function () { print("up"); });',
+                'fb.main.display.setValue("volume", "15%");',
+                "fb.main.display.setLabel('volume', 'Vol');",
+            ].join('\n'), names);
+            expect(result.errors).toEqual([]);
+        });
+
+        it('reports an unknown key name with line and column', () => {
+            const result = validateCode('var x = 1;\n  fb.key("sceneUpp").button.onClick(function () {});', names);
+            expect(result.errors).toEqual([{ message: 'unknown key "sceneUpp" in config.json', line: 2, column: 10 }]);
+        });
+
+        it('reports an unknown display item name for every name-taking method', () => {
+            for (const method of ['remove', 'get', 'setLabel', 'setValue', 'setUnit', 'setPosition', 'setPage']) {
+                const result = validateCode(`fb.main.display.${method}("vol", 1, 2);`, names);
+                expect(result.errors).toEqual([
+                    { message: 'unknown display item "vol" in config.json', line: 1, column: method.length + 18 },
+                ]);
+            }
+        });
+
+        it('keeps the namespaces apart', () => {
+            const result = validateCode('fb.key("volume");\nfb.main.display.setValue("sceneUp", 1);', names);
+            expect(result.errors.map(e => e.message)).toEqual([
+                'unknown key "volume" in config.json',
+                'unknown display item "sceneUp" in config.json',
+            ]);
+        });
+
+        it('does not check numbers, variables or other methods', () => {
+            const result = validateCode([
+                'var n = "nope";',
+                'fb.key(n);',
+                'fb.main.display.setValue(3, "x");',
+                'fb.main.display.setValue(n, "x");',
+                'fb.main.display.showPage(2);',
+                'fb.main.left.display.setLabel("nope");',
+            ].join('\n'), names);
+            expect(result.errors).toEqual([]);
+        });
+
+        it('skips the check without a config.json', () => {
+            expect(validateCode('fb.key("anything"); fb.main.display.setValue("x", 1);', null).valid).toBe(true);
+            expect(validateCode('fb.key("anything");').valid).toBe(true);
+        });
+    });
 });

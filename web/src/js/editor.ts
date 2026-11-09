@@ -31,11 +31,12 @@ import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import { githubDark } from '@fsegurai/codemirror-theme-github-dark';
 import { indentMore, insertTab } from '@codemirror/commands';
 import { acceptCompletion } from '@codemirror/autocomplete';
-import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
+import { linter, lintGutter, forceLinting, type Diagnostic } from '@codemirror/lint';
 import { indentUnit } from '@codemirror/language';
 import { freebuttonAutocomplete } from './autocomplete';
 import { validateCode } from './validator';
-import { emit } from './app-state';
+import { emit, on } from './app-state';
+import { getConfigNames } from './device-config';
 import { examples as examplesList, exampleMap } from './examples';
 import { validateJson, validateConfigShape, type FileKind } from './fs-rules';
 
@@ -261,8 +262,27 @@ export function initEditor(parent: HTMLElement): EditorView {
         state: createState('', currentKind),
         parent: parent
     });
+    relintOnConfigNames();
 
     return editorView;
+}
+
+let relintListening = false;
+
+/**
+ * The script linter checks fb.key("x") etc. against the loaded config.json:
+ * lint the open script again when its key / display item names change.
+ */
+function relintOnConfigNames(): void {
+    if (relintListening) return;
+    relintListening = true;
+    let names = JSON.stringify(getConfigNames());
+    on('device-config', () => {
+        const next = JSON.stringify(getConfigNames());
+        if (next === names) return;
+        names = next;
+        if (editorView && currentKind === 'js') forceLinting(editorView);
+    });
 }
 
 function createState(doc: string, kind: FileKind): EditorState {

@@ -7,6 +7,8 @@ import { autocompletion, snippetCompletion, CompletionContext, CompletionResult 
 import { syntaxTree } from '@codemirror/language';
 import type { FreebuttonAPIDefinition } from './types';
 import { freebuttonAPI, globalCompletions } from './autocomplete-data';
+import { DISPLAY_NAME_METHODS, type ConfigNames } from './config-model';
+import { getConfigNames } from './device-config';
 
 /**
  * FreeButton API definitions and global functions
@@ -123,12 +125,51 @@ export function freebuttonCompletions(context: CompletionContext): CompletionRes
     };
 }
 
+// Cursor inside the string literal first argument of fb.key("... or of
+// fb.main.display.setValue("... etc.; group 1 = the name typed so far.
+const KEY_NAME_ARG = /\bfb\s*\.\s*key\s*\(\s*["']([A-Za-z0-9_]*)$/;
+const DISPLAY_NAME_ARG = new RegExp(
+    `\\bfb\\s*\\.\\s*main\\s*\\.\\s*display\\s*\\.\\s*(?:${DISPLAY_NAME_METHODS.join('|')})\\s*\\(\\s*["']([A-Za-z0-9_]*)$`
+);
+
+/**
+ * Key / display item names from config.json inside the name argument of
+ * fb.key("...") and fb.main.display.setValue("...", ...) etc. Returns null
+ * when the cursor is not in such an argument; no options without a config.
+ * Exported for testing.
+ */
+export function configNameCompletions(
+    context: CompletionContext,
+    names: ConfigNames | null = getConfigNames()
+): CompletionResult | null {
+    const before = context.state.doc.sliceString(Math.max(0, context.pos - 200), context.pos);
+    let match = before.match(KEY_NAME_ARG);
+    let list = names?.keys;
+    let detail = 'key (config.json)';
+    if (!match) {
+        match = before.match(DISPLAY_NAME_ARG);
+        list = names?.displayItems;
+        detail = 'display item (config.json)';
+    }
+    if (!match) return null;
+    return {
+        from: context.pos - match[1]!.length,
+        options: (list ?? []).map(name => ({ label: name, type: 'constant', detail })),
+        validFor: /^[A-Za-z0-9_]*$/
+    };
+}
+
+/** Config names inside a name argument, else the FreeButton API. */
+export function editorCompletions(context: CompletionContext): CompletionResult | null {
+    return configNameCompletions(context) ?? freebuttonCompletions(context);
+}
+
 /**
  * Create and export the autocomplete extension
  * Using closeOnBlur: false to prevent competing with other autocomplete sources
  */
 export const freebuttonAutocomplete = autocompletion({
-    override: [freebuttonCompletions],
+    override: [editorCompletions],
     activateOnTyping: true,
     maxRenderedOptions: 20,
     defaultKeymap: true,  // Enable Tab to accept completions

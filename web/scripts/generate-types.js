@@ -7,6 +7,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { applyFbExtras } from './fb-api-extras.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -91,7 +92,7 @@ function generateTypes() {
     let stdlib;
     try {
         const stdlibContent = readFileSync(STDLIB_JSON_PATH, 'utf8');
-        stdlib = JSON.parse(stdlibContent);
+        stdlib = applyFbExtras(JSON.parse(stdlibContent));
     } catch (err) {
         console.error(`Error reading ${STDLIB_JSON_PATH}:`, err.message);
         process.exit(1);
@@ -235,6 +236,15 @@ function generateTypes() {
         const root = stdlib.fb.root;
         if (root) {
             output += `export interface FbRoot {\n`;
+            for (const method of root.methods || []) {
+                const params = (method.params || [])
+                    .map(p => `${p.name}: ${p.type}`)
+                    .join(', ');
+                if (method.description) {
+                    output += `    /** ${method.description} */\n`;
+                }
+                output += `    ${method.name}(${params}): ${method.returns};\n`;
+            }
             for (const prop of root.properties || []) {
                 if (prop.description) {
                     output += `    /** ${prop.description} */\n`;

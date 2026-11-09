@@ -10,12 +10,16 @@
  * - for...of only works with arrays
  * - ES5 feature set with limited ES6+ extensions
  *
- * Validates against actual MQuickJS and FreeButton stdlib from generated sources
+ * Validates against actual MQuickJS and FreeButton stdlib from generated sources.
+ * With a config.json loaded, a string literal passed to fb.key() or as the
+ * first argument of fb.main.display.setValue() etc. must be a name in it.
  */
 
 import * as acorn from 'acorn';
 import type { Node } from 'acorn';
 import stdlib from './stdlib.json';
+import { DISPLAY_NAME_METHODS, type ConfigNames } from './config-model';
+import { getConfigNames } from './device-config';
 
 export interface ValidationError {
     message: string;
@@ -152,9 +156,12 @@ function mquickjsStricterMode(Parser: typeof acorn.Parser) {
 const MQuickJSParser = acorn.Parser.extend(mquickjsStricterMode);
 
 /**
- * Validate JavaScript code against MQuickJS stricter mode requirements
+ * Validate JavaScript code against MQuickJS stricter mode requirements.
+ * `names`: key / display item names to check fb.key("x") and
+ * fb.main.display.setValue("x", ...) against; defaults to the loaded
+ * config.json, null skips the check.
  */
-export function validateCode(code: string): ValidationResult {
+export function validateCode(code: string, names: ConfigNames | null = getConfigNames()): ValidationResult {
     const errors: ValidationError[] = [];
 
     try {
@@ -168,7 +175,7 @@ export function validateCode(code: string): ValidationResult {
         });
 
         // Walk the AST to check for MQuickJS violations
-        walkAST(ast, errors);
+        walkAST(ast, errors, undefined, undefined, names);
 
     } catch (err: any) {
         // Syntax errors from acorn
@@ -248,7 +255,7 @@ function hoistDeclarations(body: any[], scope: Scope): void {
 /**
  * Walk AST and check for MQuickJS violations
  */
-function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: any): void {
+function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: any, names: ConfigNames | null = null): void {
     if (!node || typeof node !== 'object') return;
 
     // Attach parent reference for context checking
@@ -501,6 +508,8 @@ function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: a
     if (node.type === 'CallExpression') {
         const callee = node.callee;
 
+        if (names) checkConfigName(node, names, errors);
+
         // Check for API method calls to validate argument types
         if (callee?.type === 'MemberExpression' && !callee.computed) {
             const object = callee.object;
@@ -564,11 +573,45 @@ function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: a
 
         const child = node[key];
         if (Array.isArray(child)) {
-            child.forEach(c => walkAST(c, errors, currentScope, node));
+            child.forEach(c => walkAST(c, errors, currentScope, node, names));
         } else if (child && typeof child === 'object') {
-            walkAST(child, errors, currentScope, node);
+            walkAST(child, errors, currentScope, node, names);
         }
     }
+}
+
+function isMember(node: any, objectName: string | null, property: string): boolean {
+    return node?.type === 'MemberExpression' && !node.computed
+        && node.property?.type === 'Identifier' && node.property.name === property
+        && (objectName === null || (node.object?.type === 'Identifier' && node.object.name === objectName));
+}
+
+/**
+ * fb.key("x") / fb.main.display.<DISPLAY_NAME_METHODS>("x", ...): a string
+ * literal name must be in config.json. Other arguments are not checked.
+ */
+function checkConfigName(node: any, names: ConfigNames, errors: ValidationError[]): void {
+    const callee = node.callee;
+    let what: string;
+    let known: string[];
+    if (isMember(callee, 'fb', 'key')) {
+        what = 'key';
+        known = names.keys;
+    } else if (callee?.type === 'MemberExpression' && !callee.computed
+        && callee.property?.type === 'Identifier' && DISPLAY_NAME_METHODS.includes(callee.property.name)
+        && isMember(callee.object, null, 'display') && isMember(callee.object.object, 'fb', 'main')) {
+        what = 'display item';
+        known = names.displayItems;
+    } else {
+        return;
+    }
+    const arg = node.arguments?.[0];
+    if (arg?.type !== 'Literal' || typeof arg.value !== 'string' || known.includes(arg.value)) return;
+    errors.push({
+        message: `unknown ${what} "${arg.value}" in config.json`,
+        line: arg.loc?.start?.line,
+        column: arg.loc ? arg.loc.start.column + 1 : undefined
+    });
 }
 
 /**
