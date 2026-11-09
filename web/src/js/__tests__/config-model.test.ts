@@ -214,7 +214,7 @@ describe('lists', () => {
     expect(mapList({ name: 'a', items: ['x'] })).toEqual({
       name: 'a', page: 1, x: 0, y: 0, width: 50, rows: 3, fontSize: 3,
       items: ['x'], selected: 0,
-      color: '#808080', focusColor: '#ffd45f', focusTextColor: '#000000',
+      color: '#808080', focusColor: '#ffd700', focusTextColor: '#000000',
     });
   });
 

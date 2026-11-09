@@ -86,7 +86,7 @@ private:
     int fontSize_ = 3;
     int page_ = 1;
     unsigned long color_ = 0x808080;
-    unsigned long focusColor_ = 0xFFD45F;
+    unsigned long focusColor_ = 0xFFD700;  // the gold of captions and top labels
     unsigned long focusTextColor_ = 0x000000;
 
     // Items: options_ under the items mutex; count_ and selected_ atomic.

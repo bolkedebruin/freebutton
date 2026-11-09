@@ -12,7 +12,7 @@ items and the selection.
 "lists": [{
   "name": "scenes", "page": 2, "x": 4, "y": 18, "width": 92, "rows": 3, "fontsize": 3,
   "items": ["Bed Time", "Evening"], "selected": 0,
-  "color": "808080", "focuscolor": "ffd45f", "focustextcolor": "000000"
+  "color": "808080", "focuscolor": "ffd700", "focustextcolor": "000000"
 }]
 ```
 
@@ -26,7 +26,7 @@ items and the selection.
 | `items` | [] | Up to 32 texts of up to 48 bytes each. The firmware replaces a newline in an item with a space. Plain text and icon glyphs only: colour codes such as `\c` are not read. |
 | `selected` | 0 | The item selected at boot. |
 | `color` | `808080` | Text colour of the rows that are not selected. |
-| `focuscolor` | `ffd45f` | Colour of the selection bar. |
+| `focuscolor` | `ffd700` | Colour of the selection bar (the gold of captions and top labels). |
 | `focustextcolor` | `000000` | Text colour of the selected item. |
 
 ## Script API

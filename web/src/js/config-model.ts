@@ -50,7 +50,7 @@ export interface ConfigNames {
 /** config.json "lists" entry defaults (the firmware uses the same). */
 export const LIST_DEFAULTS = {
   page: 1, x: 0, y: 0, width: 50, rows: 3, fontsize: 3, selected: 0,
-  color: '808080', focuscolor: 'ffd45f', focustextcolor: '000000',
+  color: '808080', focuscolor: 'ffd700', focustextcolor: '000000',
 } as const;
 export const LIST_MAX_ROWS = 7;
 /** fontsize 1..5 -> px on the 320x240 screen. */
