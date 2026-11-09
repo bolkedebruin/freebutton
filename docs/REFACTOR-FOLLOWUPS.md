@@ -90,14 +90,15 @@ btn_a00002 reported `heapMinFree` 35.9 KB after a session of IDE use and S3 test
 
 The IDE polls `GET /api/device` every 2 s while the device-info face of the virtual device is shown: a new HTTP request (often a new TCP connection, then a TIME_WAIT pcb in lwIP) each time. SSE (`AsyncEventSource`) would add a second permanent connection with its own per-client queue. Instead push it over the WebSocket the IDE already holds open (`/ws/repl`): a `{"type":"device",...}` frame (~500 B, freed after sending) every ~5 s while a client is connected, with the static parts (topology, build identity) sent once on connect. Cleaner variant at the same cost: turn the socket into one device channel (`/ws`) carrying REPL, device info and later events as message types. Keep the HTTP endpoint for clients without the socket (slow fallback poll, only while the panel is visible).
 
-## 9. TODO — Re-relocate bytecode after a firmware update
+## 9. DONE — Re-relocate bytecode after a firmware update
 
-Since `dee8c6f` the registry refuses bytecode uploaded for another app build (relocation writes absolute addresses of the stdlib's ROM atoms, which live in the app's rodata), so after every OTA / flash the scripts stop until the user deploys again. Make that automatic:
+Since `dee8c6f` the registry refuses bytecode uploaded for another app build: relocation writes absolute addresses of the stdlib's ROM atoms, which live in the app's rodata. Now the device fixes that itself at boot, without the position-independent original:
 
-- On upload, keep the **position-independent** bytecode exactly as the IDE sent it (before relocation) on LittleFS next to the source, e.g. `scripts/main.jsc.pi` (~5-7 KB; protected like `js_bytecode_meta.json`).
-- At boot, when `bytecode_registry_find()` sees a stale entry (app id differs) and the `.pi` file exists, run the same streaming relocation as the upload (`BytecodeWriter`, file -> js_user partition, ~16 KB heap only during the relocation, before the JS engine allocates its heap), update the entry's app id, then run it as usual. Log it; fall back to "not running, deploy again" if the file is missing or relocation fails.
-- Re-relocating the flash copy itself is not possible (the old app's atom table is gone), and compiling `scripts/main.js` on the device would need the host-side compiler's RAM.
-- The IDE could also notice `"stale": true` in `/api/bytecode/list` and offer "Redeploy main.js" as a manual fallback.
+- Each registry entry also records where the stdlib ROM table was (`rom`) and which table it was (`lib`, `bytecode_stdlib_id()`: a CRC32 of `js_stdlib_table` with its references to itself counted as offsets, so it is the same in every build with the same table, wherever the table lies).
+- At boot, before any bytecode is found (`BytecodeRegistry::rebaseStale()`, called from `main.cpp`): an entry for another app build with the same `lib` is streamed from mapped flash through a 4 KB buffer into a new region by `JS_RebaseBytecodeWindow()` (engine fork). The bytecode's own pointers move to the new region, and the pointers to ROM atoms move by the table's displacement (same table, so every atom keeps its offset). No JS context, no atom lookups. A pointer into neither range fails the rebase instead of being guessed. The result is read back and CRC-checked, then the entry is replaced and the old region is free.
+- Entries with another `lib` (the new firmware changed the stdlib: new or changed built-ins), or from before these fields existed, stay stale and are logged: "deploy it again". The IDE's wasm compiler has to be rebuilt in that case anyway.
+- Verified on btn_a00001: a build whose table moved by +128 bytes, then the next by −128, both booted the script without a deploy (rebase ~130 ms at boot).
+- Still open: the IDE could notice `"stale": true` in `/api/bytecode/list` and offer "Redeploy main.js" for the stdlib-changed case.
 
 ## 10. TODO — Separate partitions for user data and the IDE
 

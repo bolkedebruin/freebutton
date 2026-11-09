@@ -169,6 +169,10 @@ void setup() {
         // Must load bytecode BEFORE executing any JavaScript to avoid RAM atom conflicts
         JSContext* ctx = scriptEngine.getContext();
 
+        // Bytecode relocated for the previous firmware build: rebased for
+        // this one when the stdlib table is the same (no deploy needed).
+        BytecodeRegistry::instance().rebaseStale();
+
         // Find bytecode in registry: the IDE's boot script "main.jsc", else
         // the legacy "script.jsc".
         BytecodeEntry entry;

@@ -25,12 +25,20 @@ struct BytecodeEntry {
     // App build the bytecode was relocated for: the first 4 bytes of the
     // running app's ELF SHA-256 at upload time. Relocation writes absolute
     // addresses of the stdlib's ROM atoms, which live in the APP's rodata,
-    // so the bytecode is invalid after any firmware update. 0 = unknown
+    // so the bytecode cannot run on another build as it is. 0 = unknown
     // (uploaded before this field existed): treated as stale.
     uint32_t app_id;
+    // Where that build's stdlib ROM table was, and which table it was
+    // (bytecode_stdlib_id()). After a firmware update with the same table
+    // the ROM atoms only moved: rebaseStale() moves the bytecode's pointers
+    // to them by the table's displacement, so no deploy is needed. 0 =
+    // unknown (uploaded before these fields existed): not rebased.
+    uint32_t rom_base;
+    uint32_t stdlib_id;
 
     BytecodeEntry()
-        : offset(0), size(0), checksum(0), flash_addr(0), version(1), active(false), app_id(0) {
+        : offset(0), size(0), checksum(0), flash_addr(0), version(1), active(false), app_id(0),
+          rom_base(0), stdlib_id(0) {
         name[0] = '\0';
     }
 };
@@ -66,7 +74,16 @@ public:
     // Save registry to LittleFS
     bool save();
 
-    // Add new bytecode entry (replaces an existing entry of the same name)
+    // Boot, before any bytecode is found or run: every entry relocated for
+    // another firmware build whose stdlib ROM table is the same as this
+    // build's (same bytecode_stdlib_id()) is rebased into a new region for
+    // this build (JS_RebaseBytecodeWindow: no JS context, a 4 KB buffer).
+    // Entries with another or an unknown table stay stale ("deploy again").
+    void rebaseStale();
+
+    // Add new bytecode entry (replaces an existing entry of the same name).
+    // The bytecode must be relocated for the running build: the entry is
+    // stamped with its app id, ROM table address and stdlib id.
     bool add(const char* name, uint32_t offset, uint32_t size,
              uint32_t checksum, uint32_t flash_addr);
 
@@ -147,6 +164,9 @@ private:
 
     // Map partition to virtual memory (called once at startup)
     bool initVirtualMapping();
+
+    // Rebases one stale entry (lock held); false leaves it as it was.
+    bool rebaseEntry(const BytecodeEntry& entry);
 };
 
 // C interface for mquickjs binding
@@ -160,6 +180,11 @@ bool bytecode_registry_find(const char* name, BytecodeEntry* entry);
 
 // ID of the running app build (see BytecodeEntry::app_id).
 uint32_t bytecode_current_app_id(void);
+
+// ID of the running build's stdlib ROM table (see BytecodeEntry::stdlib_id):
+// a CRC32 of the table with its references to itself taken as offsets, so
+// it is the same in every build with the same table, wherever it lies.
+uint32_t bytecode_stdlib_id(void);
 
 #ifdef __cplusplus
 }

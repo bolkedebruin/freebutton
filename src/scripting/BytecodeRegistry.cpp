@@ -10,6 +10,15 @@
 #include <esp_app_desc.h>
 #include "drivers/BusAwareFileSystem.h"
 
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+
+extern "C" {
+#include "lib/mquickjs/mquickjs.h"
+extern const JSSTDLibraryDef js_stdlib;
+}
+
 using namespace FreeButton;
 
 static auto TAG = "BytecodeRegistry";
@@ -105,6 +114,8 @@ bool BytecodeRegistry::add(const char* name, uint32_t offset, uint32_t size,
             entry.active = true;
             entry.version = 1;
             entry.app_id = bytecode_current_app_id();
+            entry.rom_base = reinterpret_cast<uint32_t>(js_stdlib.stdlib_table);
+            entry.stdlib_id = bytecode_stdlib_id();
             ESP_LOGI(TAG, "Updated entry '%s'", name);
             return true;
         }
@@ -121,6 +132,8 @@ bool BytecodeRegistry::add(const char* name, uint32_t offset, uint32_t size,
     entry.active = true;
     entry.version = 1;
     entry.app_id = bytecode_current_app_id();
+    entry.rom_base = reinterpret_cast<uint32_t>(js_stdlib.stdlib_table);
+    entry.stdlib_id = bytecode_stdlib_id();
 
     entries_.push_back(entry);
 
@@ -152,6 +165,120 @@ std::vector<BytecodeEntry> BytecodeRegistry::list() const {
         }
     }
     return active_entries;
+}
+
+void BytecodeRegistry::rebaseStale() {
+    Lock lock;
+    const uint32_t app = bytecode_current_app_id();
+    const uint32_t lib = bytecode_stdlib_id();
+    bool changed = false;
+    // By index with a copy: rebaseEntry() updates the entry in place (add()).
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        const BytecodeEntry entry = entries_[i];
+        if (!entry.active || entry.app_id == app) {
+            continue;
+        }
+        if (entry.rom_base == 0 || entry.stdlib_id == 0) {
+            ESP_LOGW(TAG, "'%s' was uploaded for another firmware build, before rebasing "
+                          "existed: deploy it again", entry.name);
+            continue;
+        }
+        if (entry.stdlib_id != lib) {
+            ESP_LOGW(TAG, "'%s' was uploaded for a firmware build with another stdlib "
+                          "(%08lx, running %08lx): deploy it again",
+                     entry.name, static_cast<unsigned long>(entry.stdlib_id),
+                     static_cast<unsigned long>(lib));
+            continue;
+        }
+        changed |= rebaseEntry(entry);
+    }
+    if (changed && !save()) {
+        ESP_LOGE(TAG, "Failed to save the registry after rebasing");
+    }
+}
+
+// Lock held. Streams the old image (mapped flash, read-only) through a 4 KB
+// window into a new region: no JS context, no copy of the whole image.
+bool BytecodeRegistry::rebaseEntry(const BytecodeEntry& old) {
+    constexpr uint32_t kWindow = 4096;
+    constexpr uint32_t kHeader = sizeof(JSBytecodeHeader);
+    if (user_partition_ == nullptr || virtual_base_addr_ == 0 || old.size <= kHeader ||
+        old.offset + old.size > usableSize()) {
+        return false;
+    }
+    const auto* src = reinterpret_cast<const uint8_t*>(virtual_base_addr_ + old.offset);
+    if (esp_crc32_le(0, src, old.size) != old.checksum) {
+        ESP_LOGE(TAG, "'%s': checksum mismatch, not rebased: deploy it again", old.name);
+        return false;
+    }
+    const auto* hdr = reinterpret_cast<const JSBytecodeHeader*>(src);
+
+    uint32_t to = 0;
+    if (!allocate(old.size, &to) || !reserve(to, old.size)) {
+        ESP_LOGE(TAG, "'%s': no free region of %lu bytes to rebase it into",
+                 old.name, static_cast<unsigned long>(old.size));
+        return false;
+    }
+    struct Release {
+        BytecodeRegistry* r;
+        ~Release() { r->releaseReservation(); }
+    } release{this};
+
+    const uintptr_t newBase = virtual_base_addr_ + to + kHeader;
+    const uintptr_t romNow = reinterpret_cast<uintptr_t>(js_stdlib.stdlib_table);
+    const JSRebaseRange ranges[2] = {
+        // the bytecode's own pointers: to the new region
+        {hdr->base_addr, hdr->base_addr + (old.size - kHeader), newBase - hdr->base_addr},
+        // the ROM atoms: by the stdlib table's displacement
+        {old.rom_base, old.rom_base + js_stdlib.stdlib_table_len * sizeof(JSWord), romNow - old.rom_base},
+    };
+
+    const uint32_t erase = (old.size + SECTOR_SIZE - 1) / SECTOR_SIZE * SECTOR_SIZE;
+    if (esp_partition_erase_range(user_partition_, to, erase) != ESP_OK) {
+        ESP_LOGE(TAG, "'%s': erase failed, not rebased", old.name);
+        return false;
+    }
+    std::unique_ptr<uint8_t, decltype(&free)> buf(static_cast<uint8_t*>(malloc(kWindow)), &free);
+    if (!buf) {
+        ESP_LOGE(TAG, "'%s': no memory to rebase it", old.name);
+        return false;
+    }
+    uint32_t crc = 0;
+    for (uint32_t off = 0; off < old.size; off += kWindow) {
+        const uint32_t n = old.size - off < kWindow ? old.size - off : kWindow;
+        memcpy(buf.get(), src + off, n);
+        if (JS_RebaseBytecodeWindow(src, old.size, buf.get(), off, n, ranges, 2, newBase) != 0) {
+            ESP_LOGE(TAG, "'%s': bytecode points outside itself and the stdlib, not rebased: "
+                          "deploy it again", old.name);
+            return false;
+        }
+        if (esp_partition_write(user_partition_, to + off, buf.get(), n) != ESP_OK) {
+            ESP_LOGE(TAG, "'%s': write failed, not rebased", old.name);
+            return false;
+        }
+        crc = esp_crc32_le(crc, buf.get(), n);
+    }
+    // Read back what landed in flash.
+    uint32_t check = 0;
+    for (uint32_t off = 0; off < old.size; off += kWindow) {
+        const uint32_t n = old.size - off < kWindow ? old.size - off : kWindow;
+        if (esp_partition_read(user_partition_, to + off, buf.get(), n) != ESP_OK) {
+            return false;
+        }
+        check = esp_crc32_le(check, buf.get(), n);
+    }
+    if (check != crc) {
+        ESP_LOGE(TAG, "'%s': read back differs, not rebased", old.name);
+        return false;
+    }
+    // Replaces the entry (its old region is free again: nothing runs from it yet).
+    if (!add(old.name, to, old.size, crc, getPartitionAddress() + to)) {
+        return false;
+    }
+    ESP_LOGI(TAG, "'%s' rebased for this firmware build (stdlib table moved by %ld bytes, "
+                  "now at offset 0x%lx)",
+             old.name, static_cast<long>(romNow - old.rom_base), static_cast<unsigned long>(to));
+    return true;
 }
 
 bool BytecodeRegistry::remove(const char* name) {
@@ -330,6 +457,8 @@ bool BytecodeRegistry::loadFromFile(const char* path) {
         entry.version = obj["version"].as<uint32_t>();
         entry.active = obj["active"].as<bool>();
         entry.app_id = obj["app"].as<uint32_t>();  // absent (older uploads) -> 0 = stale
+        entry.rom_base = obj["rom"] | 0u;           // absent -> 0 = not rebased
+        entry.stdlib_id = obj["lib"] | 0u;
 
         entries_.push_back(entry);
     }
@@ -361,6 +490,8 @@ bool BytecodeRegistry::saveToFile(const char* path) {
         obj["version"] = entry.version;
         obj["active"] = entry.active;
         obj["app"] = entry.app_id;
+        obj["rom"] = entry.rom_base;
+        obj["lib"] = entry.stdlib_id;
     }
 
     // Serialize to file
@@ -423,6 +554,30 @@ uint32_t bytecode_current_app_id(void) {
     const uint8_t* sha = esp_app_get_description()->app_elf_sha256;
     const uint32_t id = (uint32_t(sha[0]) << 24) | (uint32_t(sha[1]) << 16) | (uint32_t(sha[2]) << 8) | sha[3];
     return id ? id : 1;  // 0 means "unknown" in BytecodeEntry::app_id
+}
+
+uint32_t bytecode_stdlib_id(void) {
+    static uint32_t cached = 0;
+    if (cached != 0) {
+        return cached;
+    }
+    // The table holds tagged pointers to itself (JS_ROM_VALUE): count them
+    // as offsets from its start, so its position does not change the id.
+    const JSWord* table = js_stdlib.stdlib_table;
+    const uintptr_t start = reinterpret_cast<uintptr_t>(table);
+    const uintptr_t end = start + js_stdlib.stdlib_table_len * sizeof(JSWord);
+    const uint32_t layout[] = {js_stdlib.stdlib_table_len, js_stdlib.sorted_atoms_offset,
+                               js_stdlib.global_object_offset, js_stdlib.class_count};
+    uint32_t crc = esp_crc32_le(0, reinterpret_cast<const uint8_t*>(layout), sizeof(layout));
+    for (uint32_t i = 0; i < js_stdlib.stdlib_table_len; ++i) {
+        uint32_t w = table[i];
+        if (w >= start && w < end + sizeof(JSWord)) {
+            w -= start;
+        }
+        crc = esp_crc32_le(crc, reinterpret_cast<const uint8_t*>(&w), sizeof(w));
+    }
+    cached = crc ? crc : 1;  // 0 means "unknown" in BytecodeEntry::stdlib_id
+    return cached;
 }
 
 bool bytecode_registry_find(const char* name, BytecodeEntry* entry) {
