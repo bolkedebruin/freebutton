@@ -30,6 +30,7 @@ import {
 import { virtualFS } from './virtual-fs';
 import { parseConfigText } from './config-model';
 import { setConfig } from './device-config';
+import { ConfigPreview } from './config-preview';
 import { httpBaseFromWs } from './device-info';
 
 /** What the workspace needs from the editor (injectable for tests). */
@@ -99,6 +100,9 @@ export class Workspace {
   private revision = 0;
   private unsubs: Array<() => void> = [];
   private started: Promise<void> | null = null;
+  // Unsaved config.json edits re-render the device preview (never stored).
+  private preview = new ConfigPreview(() =>
+    this.currentKey === CONFIG_KEY && this.deps?.editor.isReady() ? this.deps.editor.getCode() : null);
 
   // ---- public API --------------------------------------------------------
 
@@ -130,6 +134,7 @@ export class Workspace {
       on('editor-doc-change', () => {
         if (this.suppressDirty) return;
         this.revision++;
+        if (this.currentKey === CONFIG_KEY) this.preview.schedule();
         if (!this.dirty) {
           this.dirty = true;
           this.publish();
@@ -154,6 +159,7 @@ export class Workspace {
     this.unsubs.forEach(fn => fn());
     this.unsubs = [];
     this.started = null;
+    this.preview.reset();
     this.deps = null;
     this.mode = 'probing';
     this.message = '';
@@ -257,6 +263,8 @@ export class Workspace {
 
       if (key === CONFIG_KEY) {
         this.applyConfig(text);
+        // Saved: the stored config is the preview now (unless typing went on).
+        if (!this.dirty) this.preview.reset();
         // The firmware reads config.json only at boot (the device also flags
         // this with x-freebutton-reboot-required), so always offer a reboot.
         if (this.mode === 'device') emit('reboot-suggested', { key });
@@ -444,6 +452,8 @@ export class Workspace {
     this.currentKey = key;
     this.dirty = false;
     this.isNew = isNew;
+    // A (re)opened file: unsaved config.json edits are gone, show the stored config.
+    this.preview.reset();
   }
 
   private applyConfig(text: string): void {

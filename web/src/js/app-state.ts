@@ -49,6 +49,9 @@ export interface ButtonConfig {
   page: number;
 }
 
+/** Live preview of an unsaved config.json: 'live' = shown, 'stale' = text not valid JSON (last valid kept). */
+export type PreviewState = 'live' | 'stale';
+
 export interface PageConfig {
   number: number;
   displayItems: DisplayItem[];
@@ -145,7 +148,7 @@ declare global {
 
     // Device events
     // connectors: physical layout (empty = unknown, use the legacy layout).
-    'device-config': CustomEvent<{ pages: PageConfig[]; connectors?: ConnectorConfig[] }>;
+    'device-config': CustomEvent<{ pages: PageConfig[]; connectors?: ConnectorConfig[]; preview?: PreviewState }>;
     // Live device info; data is null when no device is reachable (simulator/dev).
     'device-info': CustomEvent<{ data: DeviceInfoData | null }>;
 

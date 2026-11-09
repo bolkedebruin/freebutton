@@ -1,7 +1,7 @@
 import { LitElement, html, svg } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { on, type PageConfig, type DeviceInfoData, type ConnectorConfig } from '../js/app-state.js';
-import { getConfig, getConnectors, loadDefaultConfig } from '../js/device-config.js';
+import { on, type PageConfig, type DeviceInfoData, type ConnectorConfig, type PreviewState } from '../js/app-state.js';
+import { getConfig, getConnectors, getPreviewState, loadDefaultConfig } from '../js/device-config.js';
 import { positionsForConnector } from '../js/config-model.js';
 import { setDeviceInfoVisible } from '../js/device-info.js';
 import { SettingsIcon } from '../icons/index.js';
@@ -39,6 +39,8 @@ export class FbVirtualDevice extends LitElement {
   @state() private _pages: PageConfig[] = [];
   // Physical layout from config.json info.connectors; empty = legacy layout.
   @state() private _connectors: ConnectorConfig[] = [];
+  // Showing unsaved config.json edits ('stale': the text does not parse right now).
+  @state() private _preview: PreviewState | null = null;
   @state() private _flipped = false;
   @state() private _deviceName = 'btn_fab028';
   @state() private _ntpServer = 'pool.ntp.org';
@@ -57,11 +59,13 @@ export class FbVirtualDevice extends LitElement {
     this._unsub = on('device-config', (e) => {
       this._pages = e.detail.pages;
       this._connectors = e.detail.connectors ?? [];
+      this._preview = e.detail.preview ?? null;
       if (!this._pages.some(p => p.number === this.currentPage)) {
         this.currentPage = this._pages[0]?.number ?? 1;
       }
     });
     this._connectors = getConnectors();
+    this._preview = getPreviewState();
     this._unsubInfo = on('device-info', (e) => this._applyInfo(e.detail.data));
     const cfg = getConfig();
     if (cfg.length > 0) {
@@ -279,6 +283,16 @@ export class FbVirtualDevice extends LitElement {
     `);
   }
 
+  /** Subtle note while the preview shows unsaved config.json edits. */
+  private _renderPreviewHint() {
+    if (!this._preview) return '';
+    const stale = this._preview === 'stale';
+    return html`<span class="ml-auto mr-1 text-[10px] font-mono ${stale ? 'text-status-orange' : 'text-gray-200'}"
+      data-testid="preview-hint" data-state=${this._preview}
+      title=${stale ? 'config.json is not valid JSON: showing the last valid preview' : 'Preview of unsaved config.json edits'}
+      >${stale ? 'unsaved · invalid JSON' : 'unsaved'}</span>`;
+  }
+
   private _faceHeight(): number {
     const slots = this._connectors.filter(c => c.type !== 'empty');
     if (slots.length === 0) return MIN_FACE_H;
@@ -305,6 +319,7 @@ export class FbVirtualDevice extends LitElement {
               >Page ${page.number}</button>
             `)}
           </div>
+          ${this._renderPreviewHint()}
           <button
             class="p-2 rounded-lg hover:bg-white/10 cursor-pointer transition-colors text-gray-200 hover:text-white"
             @click=${() => this._toggleFlip()}

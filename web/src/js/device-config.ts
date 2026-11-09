@@ -4,9 +4,14 @@
  * device-config events on changes. Starts with sample data; the workspace
  * replaces it with the device's config.json (see config-model.ts) when one is
  * available.
+ *
+ * While config.json is edited, an unsaved draft can be shown on top of the
+ * stored config (setPreviewConfig, driven by config-preview.ts). The draft
+ * only drives the preview: nothing here writes it anywhere, and
+ * clearPreviewConfig goes back to the stored config.
  */
-import { emit, type PageConfig, type DisplayItem, type ButtonConfig, type ConnectorConfig } from './app-state';
-import { mapConnectors } from './config-model';
+import { emit, type PageConfig, type DisplayItem, type ButtonConfig, type ConnectorConfig, type PreviewState } from './app-state';
+import { mapConnectors, type DeviceModel } from './config-model';
 
 const defaultConfig: PageConfig[] = [
   {
@@ -33,24 +38,98 @@ let configConnectors: ConnectorConfig[] = [];
 let hardwareConnectors: ConnectorConfig[] = [];
 // Effective layout. Empty = unknown (sample data / no topology anywhere).
 let currentConnectors: ConnectorConfig[] = [];
+// The stored config is the built-in sample (no runtime values worth keeping).
+let isSample = true;
+// Unsaved config.json draft shown instead of the stored config; null = none.
+let draft: DeviceModel | null = null;
+// 'live' = draft shown; 'stale' = the editor text is not valid JSON, the last
+// valid preview stays up. null = the stored config is shown.
+let previewState: PreviewState | null = null;
 
 function effectiveConnectors(): ConnectorConfig[] {
-  return hardwareConnectors.length > 0 ? hardwareConnectors : configConnectors;
+  if (hardwareConnectors.length > 0) return hardwareConnectors;
+  return draft ? draft.connectors : configConnectors;
 }
 
+function publish(): void {
+  emit('device-config', {
+    pages: getConfig(),
+    connectors: currentConnectors,
+    ...(previewState ? { preview: previewState } : {}),
+  });
+}
+
+/** What the preview shows: the unsaved draft if there is one, else the stored config. */
 export function getConfig(): PageConfig[] {
-  return currentConfig;
+  return draft ? draft.pages : currentConfig;
+}
+
+export function getPreviewState(): PreviewState | null {
+  return previewState;
 }
 
 export function getConnectors(): ConnectorConfig[] {
   return currentConnectors;
 }
 
+/** Stored config (config.json as saved/loaded). A draft preview stays on top until cleared. */
 export function setConfig(config: PageConfig[], connectors: ConnectorConfig[] = []): void {
   currentConfig = config;
   configConnectors = connectors;
+  isSample = false;
   currentConnectors = effectiveConnectors();
-  emit('device-config', { pages: config, connectors: currentConnectors });
+  publish();
+}
+
+/**
+ * Show an unsaved config.json draft. Values set at runtime (display values,
+ * key LEDs; config.json does not carry them) are kept for items that are
+ * still there: display items by displayitemid, else page + index; keys by
+ * page + position.
+ */
+export function setPreviewConfig(model: DeviceModel): void {
+  if (!isSample) carryRuntimeState(getConfig(), model.pages);
+  draft = model;
+  previewState = 'live';
+  currentConnectors = effectiveConnectors();
+  publish();
+}
+
+/** The draft does not parse: keep the last valid preview, flag it as stale. */
+export function markPreviewStale(): void {
+  if (previewState === 'stale') return;
+  previewState = 'stale';
+  publish();
+}
+
+/** Back to the stored config (draft saved, discarded or closed). */
+export function clearPreviewConfig(): void {
+  if (!draft && !previewState) return;
+  draft = null;
+  previewState = null;
+  currentConnectors = effectiveConnectors();
+  publish();
+}
+
+function carryRuntimeState(from: PageConfig[], to: PageConfig[]): void {
+  for (const page of to) {
+    const old = from.find(p => p.number === page.number);
+    if (!old) continue;
+    page.displayItems.forEach((item, i) => {
+      const prev = item.id !== undefined
+        ? old.displayItems.find(d => d.id === item.id)
+        : old.displayItems[i]?.id === undefined ? old.displayItems[i] : undefined;
+      if (!prev) return;
+      if (prev.value) item.value = prev.value;
+      if (prev.color !== undefined && item.color === undefined) item.color = prev.color;
+    });
+    for (const btn of page.buttons) {
+      const prev = old.buttons.find(b => b.position === btn.position);
+      if (!prev) continue;
+      btn.ledOn = prev.ledOn;
+      btn.ledColor = prev.ledColor;
+    }
+  }
 }
 
 /**
@@ -63,25 +142,28 @@ export function setHardwareConnectors(raw: { id: number; type: number }[] | unde
   if (JSON.stringify(next) === JSON.stringify(hardwareConnectors)) return;
   hardwareConnectors = next;
   currentConnectors = effectiveConnectors();
-  emit('device-config', { pages: currentConfig, connectors: currentConnectors });
+  publish();
 }
 
 export function loadDefaultConfig(): void {
+  draft = null;
+  previewState = null;
   setConfig(structuredClone(defaultConfig));
+  isSample = true;
 }
 
 export function updateDisplayItem(pageNumber: number, index: number, item: Partial<DisplayItem>): void {
-  const page = currentConfig.find(p => p.number === pageNumber);
+  const page = getConfig().find(p => p.number === pageNumber);
   if (!page || index < 0 || index >= page.displayItems.length) return;
   Object.assign(page.displayItems[index], item);
-  emit('device-config', { pages: currentConfig, connectors: currentConnectors });
+  publish();
 }
 
 export function updateButton(pageNumber: number, position: number, updates: Partial<ButtonConfig>): void {
-  const page = currentConfig.find(p => p.number === pageNumber);
+  const page = getConfig().find(p => p.number === pageNumber);
   if (!page) return;
   const btn = page.buttons.find(b => b.position === position);
   if (!btn) return;
   Object.assign(btn, updates);
-  emit('device-config', { pages: currentConfig, connectors: currentConnectors });
+  publish();
 }
