@@ -18,6 +18,14 @@ namespace FreeButton {
 class BusAwareFile : public fs::File {
 public:
     BusAwareFile(fs::File file = fs::File(), LGFX_ESP32_SPI* display = nullptr);
+    // The destructor closes the file, so a copy would close the handle it
+    // shares with the original (the LVGL fs driver did exactly that: every
+    // file it opened was closed again at once, so reads returned 0 bytes).
+    // Move only: the moved-from object holds no handle.
+    BusAwareFile(BusAwareFile&& other) noexcept;
+    BusAwareFile& operator=(BusAwareFile&& other) noexcept;
+    BusAwareFile(const BusAwareFile&) = delete;
+    BusAwareFile& operator=(const BusAwareFile&) = delete;
     ~BusAwareFile();
 
     // Stream interface

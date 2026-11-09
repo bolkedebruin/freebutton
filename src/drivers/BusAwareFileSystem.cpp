@@ -19,6 +19,25 @@ BusAwareFile::BusAwareFile(fs::File file, LGFX_ESP32_SPI* display)
     }
 }
 
+BusAwareFile::BusAwareFile(BusAwareFile&& other) noexcept
+    : fs::File(std::move(static_cast<fs::File&>(other))),
+      display_(other.display_), busShared_(other.busShared_) {
+    other.display_ = nullptr;
+    other.busShared_ = false;
+}
+
+BusAwareFile& BusAwareFile::operator=(BusAwareFile&& other) noexcept {
+    if (this != &other) {
+        close();
+        fs::File::operator=(std::move(static_cast<fs::File&>(other)));
+        display_ = other.display_;
+        busShared_ = other.busShared_;
+        other.display_ = nullptr;
+        other.busShared_ = false;
+    }
+    return *this;
+}
+
 BusAwareFile::~BusAwareFile() {
     close();
 }
