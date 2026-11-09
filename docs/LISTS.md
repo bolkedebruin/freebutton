@@ -44,7 +44,9 @@ fb.main.list.setItems("scenes", ["Bed Time", "Evening", "Movie"]);
 - An unknown name causes a `ReferenceError`. An index that does not exist
   causes a `RangeError`.
 - `fb.main.list` exists only when `config.json` has lists. It costs about
-  120 B of JS heap.
+  400 B of JS heap: one object, six function objects and their property
+  names. Measured on btn_a00001, minus the script functions removed at
+  the same time.
 
 ## Memory
 
@@ -53,3 +55,8 @@ fb.main.list.setItems("scenes", ["Bed Time", "Evening", "Movie"]);
   page appears and deleted when the page goes away. The roller is its LVGL
   objects, its styles and its own copy of the items.
 - Firmware: the roller widget uses about 11 KB of flash.
+- Measured on btn_a00001 (3 rows, 32 px font, 2 items):
+  - while page 2 is shown, the roller uses 572 B of LVGL memory, and the
+    device gets it back when the page closes;
+  - the two display items that the list replaced used about 3.4 KB of
+    LVGL memory, on every page.

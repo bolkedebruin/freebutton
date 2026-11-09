@@ -196,8 +196,8 @@ void device_hw_init_fb(void* ctx) {
             JS_SetPropertyStr(c, *main_obj, "left", left);
             JSValue right = makeSide(rightPos, -1, -1);
             JS_SetPropertyStr(c, *main_obj, "right", right);
-            // fb.main.list: only with lists in config.json (one object and
-            // six closures, ~120 B of JS heap).
+            // fb.main.list: only with lists in config.json (one object, six
+            // closures and their property names: ~400 B of JS heap, measured).
             if (configManager.findList(0) != nullptr) {
                 JSGCRef list_ref;
                 JSValue* list_obj = JS_PushGCRef(c, &list_ref);
