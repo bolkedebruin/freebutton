@@ -6,205 +6,28 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
 #include "lvgl.h"
 
-typedef struct font_header_bin {
-    uint32_t version;              /* Font format version number */
-    uint16_t tables_count;         /* Number of tables in the font file */
-    uint16_t font_size;            /* Nominal font size in pixels */
-    uint16_t ascent;               /* Distance from baseline to highest ascender */
-    int16_t descent;               /* Distance from baseline to lowest descender (negative value) */
-    uint16_t typo_ascent;          /* Typographic ascent */
-    int16_t typo_descent;          /* Typographic descent (negative value) */
-    uint16_t typo_line_gap;        /* Typographic line gap */
-    int16_t min_y;                 /* Minimum y coordinate across all glyphs */
-    int16_t max_y;                 /* Maximum y coordinate across all glyphs */
-    uint16_t default_advance_width;/* Default advance width for glyphs */
-    uint16_t kerning_scale;        /* Scaling factor for kerning values */
-    uint8_t index_to_loc_format;   /* Format of the index to location table */
-    uint8_t glyph_id_format;       /* Format of glyph IDs */
-    uint8_t advance_width_format;  /* Format of advance width values */
-    uint8_t bits_per_pixel;        /* Number of bits per pixel in glyph bitmaps */
-    uint8_t xy_bits;               /* Number of bits used for x and y coordinates */
-    uint8_t wh_bits;               /* Number of bits used for width and height */
-    uint8_t advance_width_bits;    /* Number of bits used for advance width */
-    uint8_t compression_id;        /* Compression method used for glyph data */
-    uint8_t subpixels_mode;        /* Subpixel rendering mode */
-    uint8_t padding;               /* Padding byte for alignment */
-    int16_t underline_position;    /* Position of underline relative to baseline */
-    uint16_t underline_thickness;  /* Thickness of underline */
-} font_header_bin_t;
+/* The UI fonts. init_fonts() points them at the streaming .bin fonts on
+ * LittleFS (S:/fonts/), or at the compiled-in copy when a file is missing or
+ * invalid. destroy_fonts() points them back at the compiled-in copies. */
+extern lv_font_t *fnt_semibold_14;
+extern lv_font_t *fnt_semibold_18;
 
-/* Structure for iterating over bits in a file */
-typedef struct {
-    lv_fs_file_t * fp;             /* Pointer to LVGL file system file */
-    int8_t bit_pos;                /* Current bit position within the byte */
-    uint8_t byte_value;            /* Current byte value being processed */
-} bit_iterator_t;
-
-/* Structure representing a character map table in the font file */
-typedef struct cmap_table_bin {
-    uint32_t data_offset;          /* Offset to the start of cmap data */
-    uint32_t range_start;          /* Start of the Unicode range covered */
-    uint16_t range_length;         /* Length of the Unicode range covered */
-    uint16_t glyph_id_start;       /* Starting glyph ID for this range */
-    uint16_t data_entries_count;   /* Number of entries in the cmap data */
-    uint8_t format_type;           /* Format type of the cmap table */
-    uint8_t padding;               /* Padding byte for alignment */
-} cmap_table_bin_t;
-
-/* Simple cache structure - no hash table, just linear search with LRU */
-typedef struct font_cache_entry_t {
-    uint32_t unicode;
-    lv_font_glyph_dsc_t glyph_dsc;
-    uint32_t last_used;
-    bool valid;
-} font_cache_entry_t;
-
-/* Structure for managing streaming font data */
-typedef struct {
-    lv_font_t font;                /* LVGL font structure */
-    lv_fs_file_t file;             /* File descriptor for the font file */
-    uint32_t cmaps_start;          /* Starting offset of character maps in file */
-    uint32_t * glyph_offset;       /* Array of offsets to individual glyphs */
-    uint32_t glyph_start;          /* Starting offset of glyph data in file */
-    uint32_t glyph_length;         /* Total length of glyph data */
-    uint32_t glyph_count;          /* Number of glyphs in the font */
-#ifdef FREEBUTTON_ONDEMAND_KERN
-    uint32_t kern_offset;          /* Offset to kerning data in the file */
-    uint32_t kern_length;          /* Length of kerning data */
-    uint8_t kern_format;           /* Format of kerning data */
-#endif
-    lv_font_fmt_txt_dsc_t *font_dsc; /* Pointer to font descriptor */
-    uint32_t nbits;                /* Precalculated number of bits for faster access */
-
-    /* ultra-minimal cache and memory management */
-    font_cache_entry_t cache[4]; /* Fixed-size cache array (4 entries) */
-    uint32_t timestamp_counter;    /* Counter for LRU cache management */
-    uint8_t* temp_bitmap_buffer;   /* Temporary buffer for bitmap decompression */
-    uint32_t temp_buffer_size;     /* Size of temporary buffer */
-} streaming_font_t;
-
-/* LVGL callback functions for streaming fonts */
-bool streaming_font_get_glyph_dsc(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out,
-                                  uint32_t unicode_letter, uint32_t unicode_letter_next);
-const void* streaming_font_get_glyph_bitmap(lv_font_glyph_dsc_t* g_dsc,
-                                            lv_draw_buf_t* draw_buf);
-void streaming_font_release_glyph(const lv_font_t* font, lv_font_glyph_dsc_t* g_dsc);
-
-/* Ultra-minimal cache management functions */
-void font_cache_init(streaming_font_t* font);
-void font_cache_cleanup(streaming_font_t* font);
-font_cache_entry_t* font_cache_get(streaming_font_t* font, uint32_t unicode);
-void font_cache_put(streaming_font_t* font, uint32_t unicode, const lv_font_glyph_dsc_t* glyph_dsc);
+extern lv_font_t *fnt_medium_14;
+extern lv_font_t *fnt_medium_24;
+extern lv_font_t *fnt_medium_32;
+extern lv_font_t *fnt_medium_48;
+extern lv_font_t *fnt_medium_72;
 
 /* Initialize all fonts */
-void init_fonts();
+void init_fonts(void);
 
 /* Destroy all fonts */
-void destroy_fonts();
-
-/* Get the glyph descriptor ID for a given Unicode letter */
-static uint32_t get_glyph_dsc_id(const lv_font_fmt_txt_dsc_t * fdsc, uint32_t letter);
-
-/**
- * Loads the bitmap data for a specific glyph.
- *
- * @param fd Pointer to the streaming font structure.
- * @param gid Glyph ID.
- * @param bitmap_out Pointer to store the bitmap data.
- * @return size of the bitmap in bytes. -1 if an error occurs.
- */
-uint32_t load_bitmap(streaming_font_t * fd, const uint32_t gid, uint8_t ** bitmap_out);
-
-
-/* ported lv_binfont_loader.c */
-/**
- * Initializes a bit iterator for reading bits from a file.
- * @param fp Pointer to an LVGL file system file.
- * @return A bit_iterator_t structure initialized with the file pointer and default values.
- */
-static bit_iterator_t init_bit_iterator(lv_fs_file_t * fp);
-
-/**
- * Reads a specified number of bits from the file using the bit iterator.
- * @param it Pointer to the bit iterator.
- * @param n_bits Number of bits to read.
- * @param res Pointer to store the result of the read operation.
- * @return The unsigned integer value read from the file.
- */
-static unsigned int read_bits(bit_iterator_t * it, int n_bits, lv_fs_res_t * res);
-
-/**
- * Reads a specified number of bits from the file and interprets them as a signed integer.
- * @param it Pointer to the bit iterator.
- * @param n_bits Number of bits to read.
- * @param res Pointer to store the result of the read operation.
- * @return The signed integer value read from the file.
- */
-static int read_bits_signed(bit_iterator_t * it, int n_bits, lv_fs_res_t * res);
-
-/**
- * Reads a label from the file and verifies it matches the expected label.
- * @param fp Pointer to the LVGL file system file.
- * @param start Starting position in the file to read from.
- * @param label Expected label to match.
- * @return The length of the label section if successful, -1 if an error occurs.
- */
-static int read_label(lv_fs_file_t * fp, int start, const char * label);
-
-/**
- * Loads all character maps (cmaps) from the font file.
- * @param fp Pointer to the LVGL file system file.
- * @param font_dsc Pointer to the font descriptor structure.
- * @param cmaps_start Starting position of the cmaps in the file.
- * @return The length of the cmaps section if successful, -1 if an error occurs.
- */
-static int32_t load_cmaps(lv_fs_file_t * fp, lv_font_fmt_txt_dsc_t * font_dsc, uint32_t cmaps_start);
-
-/* provided by lv_binfont.c */
-int32_t load_kern(lv_fs_file_t * fp, lv_font_fmt_txt_dsc_t * font_dsc, uint8_t format, uint32_t start);
-
-/* from lv_font_fmt_txt.c */
-static int unicode_list_compare(const void * ref, const void * element);
-static int kern_pair_8_compare(const void * ref, const void * element);
-static int kern_pair_16_compare(const void * ref, const void * element);
-
-/**
- * Decompresses a compressed glyph bitmap.
- * @param in Pointer to the compressed bitmap data.
- * @param out Pointer to the buffer to store the decompressed bitmap.
- * @param w Width of the glyph.
- * @param h Height of the glyph.
- * @param bpp Bits per pixel of the bitmap.
- * @param prefilter Boolean indicating if the lines are XORed.
- */
-static void decompress(const uint8_t * in, uint8_t * out, int32_t w, int32_t h, uint8_t bpp, bool prefilter);
-
-/**
- * Decompresses one line of a glyph bitmap.
- * @param out Pointer to the output buffer for the decompressed line.
- * @param w Width of the line in pixels.
- */
-static inline void decompress_line(uint8_t * out, int32_t w);
-
-/**
- * Initializes the Run-Length Encoding (RLE) decompression state.
- * @param in Pointer to the input compressed data.
- * @param bpp Bits per pixel of the bitmap.
- */
-static inline void rle_init(const uint8_t * in,  uint8_t bpp);
-
-/**
- * Retrieves the next decompressed value from the RLE stream.
- * @return The next decompressed 8-bit value.
- */
-static inline uint8_t rle_next(void);
+void destroy_fonts(void);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif
-
