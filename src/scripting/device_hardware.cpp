@@ -10,6 +10,9 @@
 #include <Arduino.h>
 #include "device_hardware.h"
 #include "core/HardwareInitializer.h"
+#include "components/ConfigManager.h"
+
+extern freebutton::ConfigManager configManager;
 #include "drivers/ButtonLed.h"
 #include <esp_log.h>
 
@@ -59,6 +62,8 @@ void device_hw_init_fb(void* ctx) {
         DISP_GET_LABEL = 18, DISP_GET_TOP_LABEL = 19,
         DITEM_SHOW_PAGE = 20, DITEM_GET_SHOWN_PAGE = 21,
         FB_KEY = 22,
+        LIST_NEXT = 23, LIST_PREV = 24, LIST_SELECT = 25,
+        LIST_GET_SELECTED = 26, LIST_COUNT = 27, LIST_SET_ITEMS = 28,
     };
 
     const int P = FB_PROXY_FUNC_IDX;
@@ -191,6 +196,21 @@ void device_hw_init_fb(void* ctx) {
             JS_SetPropertyStr(c, *main_obj, "left", left);
             JSValue right = makeSide(rightPos, -1, -1);
             JS_SetPropertyStr(c, *main_obj, "right", right);
+            // fb.main.list: only with lists in config.json (one object and
+            // six closures, ~120 B of JS heap).
+            if (configManager.findList(0) != nullptr) {
+                JSGCRef list_ref;
+                JSValue* list_obj = JS_PushGCRef(c, &list_ref);
+                *list_obj = JS_NewObject(c);
+                setMethod(list_obj, "next",        LIST_NEXT);
+                setMethod(list_obj, "prev",        LIST_PREV);
+                setMethod(list_obj, "select",      LIST_SELECT);
+                setMethod(list_obj, "getSelected", LIST_GET_SELECTED);
+                setMethod(list_obj, "count",       LIST_COUNT);
+                setMethod(list_obj, "setItems",    LIST_SET_ITEMS);
+                JS_SetPropertyStr(c, *main_obj, "list", *list_obj);
+                JS_PopGCRef(c, &list_ref);
+            }
             JS_SetPropertyStr(c, *fb, "main", *main_obj);
             JS_PopGCRef(c, &main_ref);
         } else if (type == 1) {

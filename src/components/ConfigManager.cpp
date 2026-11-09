@@ -82,6 +82,11 @@ void ConfigManager::loadFromFile(const std::string& filename) {
             processClocksFilter(path, json);
         });
 
+    handler.addFilter({"lists"},
+        [this](const std::vector<std::string>& path, const std::string& json) {
+            processListsFilter(path, json);
+        });
+
     // Process the file once
     FreeButton::BusAwareFile file = FreeButton::getBusAwareFileSystem().open(filename.c_str(), "r");
     if (!file) {
@@ -118,6 +123,7 @@ void ConfigManager::clear() {
     oldItems.clear();
     buttons.clear();
     clocks.clear();
+    lists.clear();
     names_.clear();
 
     // Shrink capacity to free memory (displayItems: swapped with an empty one)
@@ -285,7 +291,9 @@ void ConfigManager::addName(const NameTable::Kind kind, const unsigned long id, 
     if (value.isNull()) {
         return;
     }
-    const char* what = kind == NameTable::Kind::Key ? "Key at position" : "Display item";
+    const char* what = kind == NameTable::Kind::Key    ? "Key at position"
+                     : kind == NameTable::Kind::List   ? "List"
+                                                       : "Display item";
     const char* name = value.as<const char*>();
     if (name == nullptr) {
         ESP_LOGW(TAG, "%s %lu: \"name\" is not a string, ignored", what, id);
@@ -550,6 +558,37 @@ void ConfigManager::processClocksFilter(const std::vector<std::string>& path, co
 
     if (doc.is<JsonArray>()) {
         loadClocks(doc.as<JsonArray>());
+    }
+}
+
+void ConfigManager::loadLists(const JsonArray& listsArray) {
+    for (const auto& element : listsArray) {
+        if (!element.is<JsonObject>()) {
+            ESP_LOGW(TAG, "List element is not a JSON object, skipping");
+            continue;
+        }
+        const auto config = element.as<ArduinoJson::JsonObject>();
+        auto l = List::fromJson(config);
+        const size_t index = lists.size();
+        addName(NameTable::Kind::List, index, config);
+        if (names_.nameOf(NameTable::Kind::List, static_cast<uint32_t>(index)).empty()) {
+            ESP_LOGW(TAG, "List %u has no valid name: scripts can only use its index", static_cast<unsigned>(index));
+        }
+        l->attach();
+        ESP_LOGI(TAG, "List %u: %d items on page %d", static_cast<unsigned>(index), l->count(), l->getPage());
+        lists.emplace_back(std::move(l));
+    }
+}
+
+void ConfigManager::processListsFilter(const std::vector<std::string>& path, const std::string& json) {
+    JsonDocument doc;
+    const auto error = deserializeJson(doc, json);
+    if (error) {
+        ESP_LOGE(TAG, "Failed to parse lists JSON: %s", error.c_str());
+        return;
+    }
+    if (doc.is<JsonArray>()) {
+        loadLists(doc.as<JsonArray>());
     }
 }
 

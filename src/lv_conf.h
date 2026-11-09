@@ -132,7 +132,7 @@
 #define LV_USE_IMG        1  /* Required for SVG/image support */
 #define LV_USE_LABEL      1  /* Essential */
 #define LV_USE_LINE       1  /* Required by scale */
-#define LV_USE_ROLLER     0
+#define LV_USE_ROLLER     1  /* Main-display lists (components/List) */
 #define LV_USE_SLIDER     0
 #define LV_USE_SWITCH     0
 #define LV_USE_TEXTAREA   1  /* Required by keyboard and spinbox */

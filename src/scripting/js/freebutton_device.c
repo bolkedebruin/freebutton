@@ -19,6 +19,7 @@
 #include "../device_hardware.h"
 #include "../led_hardware.h"
 #include "../button_hardware.h"
+#include "../list_binding.h"
 #else
 // Host build stubs for generator
 static inline int device_hw_get_connector_type(int connector) { return 0; }
@@ -27,6 +28,15 @@ static inline int led_hw_set_color(int pos, uint8_t r, uint8_t g, uint8_t b) { r
 static inline int button_hw_get_label(int position, char* out, size_t capacity) { if (capacity) out[0] = 0; return 0; }
 static inline int button_hw_get_top_label(int position, char* out, size_t capacity) { if (capacity) out[0] = 0; return 0; }
 static inline bool button_hw_find_by_name(const char* name, size_t len, int* position) { return false; }
+static inline int list_hw_find(const char* name, size_t len) { return -1; }
+static inline int list_hw_count(int index) { return -1; }
+static inline int list_hw_get_selected(int index) { return -1; }
+static inline int list_hw_move(int index, int step) { return -1; }
+static inline bool list_hw_select(int index, int item) { return false; }
+static inline void* list_hw_items_new(void) { return NULL; }
+static inline bool list_hw_items_add(void* b, const char* text, size_t len) { return false; }
+static inline bool list_hw_items_commit(int index, void* b) { return false; }
+static inline void list_hw_items_free(void* b) {}
 #endif
 
 // Method IDs for the proxy dispatcher (encoded in params of JS_NewCFunctionParams)
@@ -56,6 +66,13 @@ enum {
     FB_METHOD_DITEM_GET_SHOWN_PAGE = 21,
     // fb.key(name): the key object of a config.json key name
     FB_METHOD_KEY = 22,
+    // fb.main.list.*(nameOrIndex, ...): main-display lists (config "lists")
+    FB_METHOD_LIST_NEXT = 23,
+    FB_METHOD_LIST_PREV = 24,
+    FB_METHOD_LIST_SELECT = 25,
+    FB_METHOD_LIST_GET_SELECTED = 26,
+    FB_METHOD_LIST_COUNT = 27,
+    FB_METHOD_LIST_SET_ITEMS = 28,
 };
 
 /*
@@ -116,6 +133,74 @@ static JSValue fb_key_object(JSContext *ctx, int position)
     }
     *v = JS_GetPropertyStr(ctx, *v, side);
     return JS_PopGCRef(ctx, &ref);
+}
+
+/*
+ * First argument of fb.main.list.*: a list's config name (looked up in the
+ * firmware's name table, not copied into the JS heap) or its index in
+ * config.json "lists". Unknown name: ReferenceError; no list at the index:
+ * RangeError.
+ */
+static int fb_list_arg(JSContext *ctx, int argc, JSValue *argv, int *index)
+{
+    if (argc < 1) {
+        JS_ThrowTypeError(ctx, "fb.main.list: a list name is required");
+        return -1;
+    }
+    if (JS_IsString(ctx, argv[0])) {
+        JSCStringBuf buf;
+        size_t len;
+        const char *name = JS_ToCStringLen(ctx, &len, argv[0], &buf);
+        if (!name)
+            return -1;
+        *index = list_hw_find(name, len);
+        if (*index < 0) {
+            JS_ThrowReferenceError(ctx, "unknown list \"%.32s\"", name);
+            return -1;
+        }
+        return 0;
+    }
+    if (JS_ToInt32(ctx, index, argv[0]))
+        return -1;
+    if (list_hw_count(*index) < 0) {
+        JS_ThrowRangeError(ctx, "no list %d", *index);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * fb.main.list.setItems(list, items): items is an array of strings (other
+ * values are converted). The texts go straight into a builder in the
+ * general heap; argv[1] is re-read for every element (a GC may move it).
+ */
+static JSValue fb_list_set_items(JSContext *ctx, int index, int argc, JSValue *argv)
+{
+    if (argc < 2 || !JS_IsArray(ctx, argv[1]))
+        return JS_ThrowTypeError(ctx, "fb.main.list.setItems() requires an array of strings");
+    int count = 0;
+    if (JS_ToInt32(ctx, &count, JS_GetPropertyStr(ctx, argv[1], "length")))
+        return JS_EXCEPTION;
+    void *builder = list_hw_items_new();
+    if (!builder)
+        return JS_ThrowOutOfMemory(ctx);
+    for (int i = 0; i < count; i++) {
+        JSValue item = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+        if (JS_IsException(item)) {
+            list_hw_items_free(builder);
+            return JS_EXCEPTION;
+        }
+        JSCStringBuf buf;
+        size_t len;
+        const char *text = JS_ToCStringLen(ctx, &len, item, &buf);
+        if (!text) {
+            list_hw_items_free(builder);
+            return JS_EXCEPTION;
+        }
+        if (!list_hw_items_add(builder, text, len))
+            break;  /* full: the rest is left out */
+    }
+    return JS_NewBool(list_hw_items_commit(index, builder));
 }
 
 /*
@@ -233,6 +318,34 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         return js_freebutton_display_showPage(ctx, this_val, argc, argv);
     case FB_METHOD_DITEM_GET_SHOWN_PAGE:
         return js_freebutton_display_getShownPage(ctx, this_val, argc, argv);
+    case FB_METHOD_LIST_NEXT:
+    case FB_METHOD_LIST_PREV:
+    case FB_METHOD_LIST_SELECT:
+    case FB_METHOD_LIST_GET_SELECTED:
+    case FB_METHOD_LIST_COUNT:
+    case FB_METHOD_LIST_SET_ITEMS: {
+        int index = 0;
+        if (fb_list_arg(ctx, argc, argv, &index))
+            return JS_EXCEPTION;
+        switch (method) {
+        case FB_METHOD_LIST_NEXT:
+            return JS_NewInt32(ctx, list_hw_move(index, 1));
+        case FB_METHOD_LIST_PREV:
+            return JS_NewInt32(ctx, list_hw_move(index, -1));
+        case FB_METHOD_LIST_SELECT: {
+            int item = 0;
+            if (argc < 2 || JS_ToInt32(ctx, &item, argv[1]))
+                return argc < 2 ? JS_ThrowTypeError(ctx, "fb.main.list.select() requires an index") : JS_EXCEPTION;
+            return JS_NewBool(list_hw_select(index, item));
+        }
+        case FB_METHOD_LIST_GET_SELECTED:
+            return JS_NewInt32(ctx, list_hw_get_selected(index));
+        case FB_METHOD_LIST_COUNT:
+            return JS_NewInt32(ctx, list_hw_count(index));
+        default:
+            return fb_list_set_items(ctx, index, argc, argv);
+        }
+    }
     case FB_METHOD_KEY: {
         /* The name is looked up in the firmware's name table (config.json
          * "name" on a "buttons" entry); it is not copied into the JS heap. */

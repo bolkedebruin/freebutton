@@ -13,6 +13,7 @@
 #include "Button.h"
 #include "Clock.h"
 #include "NameTable.h"
+#include "List.h"
 #include "mqtt/Registry.h"
 #include "json/JsonWriter.h"
 #include "config.h"
@@ -196,6 +197,12 @@ public:
     const NameTable& names() const { return names_; }
 
     /**
+     * Main-display list by its index in config.json "lists" (nullptr when
+     * out of range). The lists are created at boot and never removed.
+     */
+    List* findList(size_t index) const { return index < lists.size() ? lists[index].get() : nullptr; }
+
+    /**
      * Add a new display item dynamically
      * @return Pointer to the created DisplayItem, or nullptr on failure
      */
@@ -274,6 +281,7 @@ private:
     std::vector<std::unique_ptr<DisplayItem>> displayItems;
     std::vector<std::unique_ptr<Button>> buttons;
     std::vector<std::unique_ptr<Clock>> clocks;
+    std::vector<std::unique_ptr<List>> lists;
     NameTable names_;
 
     // Adds config["name"] (if any) for kind / id; an invalid or duplicate
@@ -302,6 +310,12 @@ private:
      * Load clocks from JSON array
      */
     void loadClocks(const JsonArray& clocksArray);
+
+    /**
+     * Load main-display lists from JSON array
+     */
+    void loadLists(const JsonArray& listsArray);
+    void processListsFilter(const std::vector<std::string>& path, const std::string& json);
 
     /**
      * Filter callback for processing core configuration
@@ -410,6 +424,19 @@ void ConfigManager::write(OutputStream &stream) {
         for (auto& clock : clocks) {
             auto jclock = clocksArr.Object();
             clock->toJson<OutputStream>(jclock);
+        }
+    }
+
+    // lists array (main-display rollers)
+    {
+        auto arr = doc.Array("lists");
+        for (size_t i = 0; i < lists.size(); ++i) {
+            auto jlist = arr.Object();
+            const auto name = names_.nameOf(NameTable::Kind::List, static_cast<uint32_t>(i));
+            if (!name.empty()) {
+                jlist.Add("name", name);
+            }
+            lists[i]->toJson<OutputStream>(jlist);
         }
     }
 
