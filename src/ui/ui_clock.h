@@ -26,13 +26,12 @@ typedef struct {
 
 
 // Function declarations
-void clock_init(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, lv_align_t align);
+// Creates the single clock and its timer. Caller holds the LVGL lock.
+// false when a clock already exists (only one clock is drawn).
+bool clock_init(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, lv_align_t align);
 analog_clock_t* clock_create(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, lv_align_t align);
 
 void clock_destroy(void);
 
-// Hide or show the clock (main display page switching). While hidden its
-// timer is paused. Caller must hold the LVGL lock; no-op without a clock.
-void clock_set_hidden(bool hidden);
 
 #endif //FREEBUTTON_CLOCK_H

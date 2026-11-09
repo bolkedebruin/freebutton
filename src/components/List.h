@@ -98,6 +98,7 @@ private:
 
     lv_obj_t* roller_ = nullptr;  // LVGL lock held
     bool linked_ = false;         // LVGL lock held
+    bool buildFailed_ = false;    // LVGL lock held; logged once
 };
 
 template<typename OutputStream>

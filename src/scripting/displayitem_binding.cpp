@@ -56,8 +56,8 @@ unsigned long displayitem_create(
 
     unsigned long id = item->id;
 
-    // Create the UI box
-    item->createBox();
+    // Linked for rendering; the box is built when its page is shown.
+    item->attach();
 
     // Add to ConfigManager (this transfers ownership)
     freebutton::DisplayItem* added = configManager.addDisplayItem(std::move(item));
@@ -123,7 +123,7 @@ const DisplayItemInfo* displayitem_get_info(unsigned long id)
 // renders it on its next tick. They take no LVGL lock and allocate nothing,
 // so a JS mqtt.subscribe() callback updating many items stays cheap. They do
 // not change item->label / item->unit: those std::strings are
-// the configured defaults (read by createBox() and the config writer in other
+// the configured defaults (read when the box is built and the config writer in other
 // tasks); the slot is the runtime state.
 bool displayitem_set_label(const unsigned long id, const char* label)
 {
@@ -176,7 +176,7 @@ bool displayitem_set_position(unsigned long id, int x, int y)
     item->y = y;
 
     // Redraw to apply changes
-    item->createBox();
+    item->attach();
 
     return true;
 }

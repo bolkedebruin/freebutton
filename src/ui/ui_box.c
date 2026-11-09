@@ -96,6 +96,10 @@ lv_obj_t* ui_box_create(lv_obj_t* parent)
 	lv_obj_set_scrollable(box, false);
 
 	box_dsc_t* b = lv_malloc(sizeof(box_dsc_t));
+	if (b == NULL) {
+		lv_obj_delete(box);
+		return NULL;
+	}
 
     /* Set the base font size so that the text can be scaled later relatively */
     b->base_font_size = 1;
@@ -118,6 +122,21 @@ lv_obj_t* ui_box_create(lv_obj_t* parent)
 	lv_obj_add_style(b->hint, &style_hint, 0);
 
 	return box;
+}
+
+/**
+ * Delete a box made by ui_box_create(), with its descriptor (user data, in
+ * the LVGL pool: lv_obj_delete() alone would leak it on every delete).
+ */
+void ui_box_delete(lv_obj_t* box)
+{
+	if (box == NULL) {
+		return;
+	}
+	box_dsc_t* b = lv_obj_get_user_data(box);
+	lv_obj_set_user_data(box, NULL);
+	lv_obj_delete(box);
+	lv_free(b);
 }
 
 void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit, int x, int y, int font, int width, int align, int boxtype) {

@@ -9,7 +9,8 @@ extern "C" {
 // Box creation and manipulation functions
 void ui_box_create_styles(void);
 void ui_box_set_default_title_color(long color);
-lv_obj_t* ui_box_create(lv_obj_t* parent);
+lv_obj_t* ui_box_create(lv_obj_t* parent); // NULL when LVGL is out of memory
+void ui_box_delete(lv_obj_t* box);  // the box and its descriptor
 void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit,
                    int x, int y, int font, int width, int align, int boxtype);
 void ui_box_set_caption(lv_obj_t* box, const char* caption);

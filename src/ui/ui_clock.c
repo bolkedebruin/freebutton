@@ -14,20 +14,29 @@ static const char* TAG = "clock";
 static analog_clock_t* g_clock = NULL;
 lv_timer_t* g_timer = NULL;
 
+// Last time drawn (clock_update skips a redraw within the same second);
+// reset when a clock is created, so a new clock draws its hands at once.
+static int last_hour = -1;
+static int last_minute = -1;
+static int last_second = -1;
+
 void clock_timer_cb(lv_timer_t* timer);
 static void get_current_time(int* hour, int* minute, int* second);
 static void lv_scale_set_line_needle_value_with_tail(lv_obj_t * scale, lv_obj_t * needle_line,
                                                       int32_t needle_length, int32_t tail_length,
                                                       int32_t value);
 
-void clock_init(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, const lv_align_t align)
+bool clock_init(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_coord_t height, const lv_align_t align)
 {
     if (g_clock != NULL) {
-        return;
+        return false;
     }
 
+    last_hour = last_minute = last_second = -1;
     g_clock = clock_create(parent, x, y, width, height, align);
     g_timer = lv_timer_create(clock_timer_cb, 250, g_clock);
+    lv_timer_ready(g_timer);  // hands right on the next tick
+    return true;
 }
 
 analog_clock_t* clock_create(lv_obj_t* parent, const lv_coord_t x, const lv_coord_t y, const lv_coord_t width, const lv_coord_t height, const lv_align_t align)
@@ -69,32 +78,39 @@ analog_clock_t* clock_create(lv_obj_t* parent, const lv_coord_t x, const lv_coor
     static const char * hour_ticks[] = {"12", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", NULL};
     lv_scale_set_text_src(clock->scale, hour_ticks);
 
+    // The styles never change: set them up once. The clock is created again
+    // each time its page is shown, and lv_style_init() on a style already in
+    // use would leak its property array in the LVGL pool.
+    static bool styles_ready = false;
     static lv_style_t indicator_style;
-    lv_style_init(&indicator_style);
-
-    /* Label style properties */
-    lv_style_set_text_font(&indicator_style, LV_FONT_DEFAULT);
-    lv_style_set_text_color(&indicator_style, lv_color_hex(0x0d2034));  // Light blue-gray
-
-    /* Major tick properties */
-    lv_style_set_line_color(&indicator_style, lv_color_hex(0x0d2034));  // Light blue-gray
-    lv_style_set_length(&indicator_style, 12); /* tick length */
-    lv_style_set_line_width(&indicator_style, 3); /* tick width */
-    lv_obj_add_style(clock->scale, &indicator_style, LV_PART_INDICATOR);
-
-    /* Minor tick properties */
     static lv_style_t minor_ticks_style;
-    lv_style_init(&minor_ticks_style);
-    lv_style_set_line_color(&minor_ticks_style, lv_color_hex(0x0d2034));  // Light blue-gray
-    lv_style_set_length(&minor_ticks_style, 6); /* tick length */
-    lv_style_set_line_width(&minor_ticks_style, 1); /* tick width */
-    lv_obj_add_style(clock->scale, &minor_ticks_style, LV_PART_ITEMS);
-
-    /* Main line properties */
     static lv_style_t main_line_style;
-    lv_style_init(&main_line_style);
-    lv_style_set_arc_color(&main_line_style, lv_color_hex(0x0d2034));  // Light blue-gray border
-    lv_style_set_arc_width(&main_line_style, 2);
+    if (!styles_ready) {
+        lv_style_init(&indicator_style);
+
+        /* Label style properties */
+        lv_style_set_text_font(&indicator_style, LV_FONT_DEFAULT);
+        lv_style_set_text_color(&indicator_style, lv_color_hex(0x0d2034));  // Light blue-gray
+
+        /* Major tick properties */
+        lv_style_set_line_color(&indicator_style, lv_color_hex(0x0d2034));  // Light blue-gray
+        lv_style_set_length(&indicator_style, 12); /* tick length */
+        lv_style_set_line_width(&indicator_style, 3); /* tick width */
+
+        /* Minor tick properties */
+        lv_style_init(&minor_ticks_style);
+        lv_style_set_line_color(&minor_ticks_style, lv_color_hex(0x0d2034));  // Light blue-gray
+        lv_style_set_length(&minor_ticks_style, 6); /* tick length */
+        lv_style_set_line_width(&minor_ticks_style, 1); /* tick width */
+
+        /* Main line properties */
+        lv_style_init(&main_line_style);
+        lv_style_set_arc_color(&main_line_style, lv_color_hex(0x0d2034));  // Light blue-gray border
+        lv_style_set_arc_width(&main_line_style, 2);
+        styles_ready = true;
+    }
+    lv_obj_add_style(clock->scale, &indicator_style, LV_PART_INDICATOR);
+    lv_obj_add_style(clock->scale, &minor_ticks_style, LV_PART_ITEMS);
     lv_obj_add_style(clock->scale, &main_line_style, LV_PART_MAIN);
 
     lv_scale_set_range(clock->scale, 0, 60);
@@ -165,11 +181,6 @@ void clock_update(analog_clock_t* clock)
     int hour, minute, second;
     get_current_time(&hour, &minute, &second);
 
-    // Static variables to track last update
-    static int last_hour = -1;
-    static int last_minute = -1;
-    static int last_second = -1;
-
     // Only update if minute or hour changed
     if (hour == last_hour && minute == last_minute && last_second == second) {
         return;  // No change, skip expensive drawing
@@ -210,22 +221,6 @@ void clock_destroy(void)
         }
         memset(g_clock, 0, sizeof(*g_clock));  // static instance: never free()
         g_clock = NULL;
-    }
-}
-
-void clock_set_hidden(const bool hidden)
-{
-    if (g_clock == NULL || g_clock->container == NULL) {
-        return;
-    }
-    lv_obj_set_hidden(g_clock->container, hidden);
-    if (g_timer != NULL) {
-        if (hidden) {
-            lv_timer_pause(g_timer);
-        } else {
-            lv_timer_resume(g_timer);
-            lv_timer_ready(g_timer);  // hands right on the next tick
-        }
     }
 }
 

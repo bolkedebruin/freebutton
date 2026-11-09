@@ -39,7 +39,7 @@ public:
     static std::unique_ptr<Clock> fromJson(const ArduinoJson::JsonObject& config) {
         auto clock = std::make_unique<Clock>();
         clock->configure(config);
-        clock->createClock();  // Create UI clock after configuration
+        clock->attach();
         return clock;
     }
 
@@ -56,8 +56,13 @@ public:
 
 private:
     static constexpr auto TAG = "Clock";
-    bool hiddenByPage_ = false;  // LVGL lock held
-    void applyPage();
+    // LVGL lock held.
+    bool built_ = false;        // the clock's LVGL objects exist
+    bool buildFailed_ = false;  // a build was skipped for lack of memory (logged once)
+    void buildClock();
+    void deleteClock();
+    // Unlinks and deletes the clock (destructor). Takes the LVGL lock.
+    void detach();
 
     void configure(const JsonObject &data) {
         x = data["x"].isNull() ? x : data["x"].as<int>();
@@ -69,11 +74,12 @@ private:
     }
 
 public:
-    // UI methods
-    void createClock();
-    void destroyClock();
+    // Links the clock for rendering; it is built when its page is shown and
+    // deleted when it goes (objects and timer), so a hidden clock costs no
+    // LVGL memory. Takes the LVGL lock.
+    void attach();
 
-    // PendingRender (LVGL task, LVGL lock held): hide / show for the shown page.
+    // PendingRender (LVGL task, LVGL lock held): build / delete for the shown page.
     bool applyPending() override;
 
     // Getters for ConfigManager

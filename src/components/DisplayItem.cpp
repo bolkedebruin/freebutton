@@ -5,6 +5,7 @@
 #include "DisplayItem.h"
 #include "mqtt/Registry.h"
 #include "drivers/LvglDisplay.h"
+#include "ui/LvglRoom.h"
 #include "ui/MainPage.h"
 #include "types.h"
 
@@ -32,7 +33,7 @@ DisplayItem::~DisplayItem() {
     // subscription lock, so it waits for an onMessage() running on the MQTT
     // task to finish and no new one can start. Only then destroy the UI box.
     unregisterTopics();
-    destroyBox();
+    detach();
 }
 
 namespace {
@@ -86,13 +87,19 @@ void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic
     }
 }
 
-// LVGL task, LVGL lock held. Each slot hands over a stable stack copy of its
-// text (at most 59 bytes), rendered once.
+// LVGL task, LVGL lock held. Builds the box when the page is shown and
+// deletes it when the page goes; while shown, renders the newest text of each
+// field. Each slot hands over a stable stack copy of its text (at most 59
+// bytes), rendered once. Runs on every render request of any widget, so the
+// hidden case is one page check.
 bool DisplayItem::applyPending() {
-    if (!box) {
-        return false;  // createBox() requests a render once the box exists
+    if (!ui::visibleOnPage(page, ui::shownPage())) {
+        deleteBox();
+        return false;
     }
-    applyPage();
+    if (box == nullptr && !buildBox()) {
+        return false;  // no LVGL memory now; the next render request retries
+    }
     bool again = false;
     again |= valueSlot_.apply([this](const char* text) { ui_box_set_text(box, text); })
              == TextSlotApply::Busy;
@@ -103,24 +110,51 @@ bool DisplayItem::applyPending() {
     return again;
 }
 
-// LVGL lock held, box exists. draw_box() just rendered the configured label
-// and unit and an empty value; render the last text received for each field
-// over them on the next tick.
-void DisplayItem::invalidatePending() {
+// LVGL lock held, box exists. Draws the configured label and unit and an
+// empty value, then has the next apply render the last text received for
+// each field over them (a slot never written keeps the configured default).
+void DisplayItem::drawConfigured() {
+    const int adjustedWidth = width == 0 ? 45 : width;
+    draw_box(box, label.c_str(), "", unit.c_str(), x, y, fontSize, adjustedWidth, alignment, boxType);
     valueSlot_.invalidate();
     captionSlot_.invalidate();
     unitSlot_.invalidate();
-    linkPending();
-    ui::requestPendingRender();
 }
 
-// LVGL lock held, box exists. Touches LVGL only when the visibility changes;
-// every pending render walks all items, so this runs often.
-void DisplayItem::applyPage() {
-    const bool hide = !ui::visibleOnPage(page, ui::shownPage());
-    if (hide != hiddenByPage_) {
-        lv_obj_set_hidden(box, hide);
-        hiddenByPage_ = hide;
+// LVGL lock held.
+bool DisplayItem::buildBox() {
+    lv_obj_t* parent = FreeButton::getLvglDisplay().getMainScreen();
+    if (parent == nullptr) {
+        return false;
+    }
+    if (!ui::lvglHasRoom(ui::kRoomForBox)) {
+        if (!buildFailed_) {
+            ESP_LOGE(TAG, "DisplayItem %lu: no LVGL memory to show it", id);
+            buildFailed_ = true;
+        }
+        return false;
+    }
+    static bool styles_initialized = false;  // shared by all boxes
+    if (!styles_initialized) {
+        ui_box_create_styles();
+        styles_initialized = true;
+    }
+    box = ui_box_create(parent);
+    if (box == nullptr) {
+        ESP_LOGE(TAG, "DisplayItem %lu: no LVGL memory for its box", id);
+        buildFailed_ = true;
+        return false;
+    }
+    buildFailed_ = false;
+    drawConfigured();
+    return true;
+}
+
+// LVGL lock held.
+void DisplayItem::deleteBox() {
+    if (box != nullptr) {
+        ui_box_delete(box);
+        box = nullptr;
     }
 }
 
@@ -138,71 +172,23 @@ void DisplayItem::unregisterTopics() {
     clearSubscriptions();
 }
 
-void DisplayItem::createBox() {
-    // Get the main screen from LVGL display
+void DisplayItem::attach() {
     auto& lvglDisplay = FreeButton::getLvglDisplay();
-    lv_obj_t* parent = lvglDisplay.getMainScreen();
-
-    if (!parent) {
-        ESP_LOGE(TAG, "Main screen not available for DisplayItem %lu", id);
-        return;
-    }
-
-    // Lock screen access for thread safety
     lvglDisplay.lock();
-
-    // If box already exists, just redraw it with new configuration
+    linkPending();
     if (box != nullptr) {
-        ESP_LOGI(TAG, "Redrawing existing box for DisplayItem %lu", id);
-        const int adjustedWidth = width == 0 ? 45 : width;
-        draw_box(box, label.c_str(), "", unit.c_str(), x, y, fontSize, adjustedWidth, alignment, boxType);
-        applyPage();
-        invalidatePending();
-        lvglDisplay.unlock();
-        return;
+        drawConfigured();  // configuration changed: redraw the shown box
     }
-
-    // Initialize box styles if not already done (should be done once globally)
-    static bool styles_initialized = false;
-    if (!styles_initialized) {
-        ui_box_create_styles();
-        styles_initialized = true;
-    }
-
-    // Create the box
-    box = ui_box_create(parent);
-    if (!box) {
-        ESP_LOGE(TAG, "Failed to create UI box for DisplayItem %lu", id);
-        lvglDisplay.unlock();
-        return;
-    }
-
-    // Apply the initial configuration using draw_box
-    const int adjustedWidth = width == 0 ? 45 : width;
-    draw_box(box, label.c_str(), "", unit.c_str(), x, y, fontSize, adjustedWidth, alignment, boxType);
-    // A new box is visible; hide it right away when its page is not shown.
-    hiddenByPage_ = false;
-    applyPage();
-    invalidatePending();
-
     lvglDisplay.unlock();
+    ui::requestPendingRender();  // builds the box if its page is shown
 }
 
-void DisplayItem::destroyBox() {
-    if (box == nullptr) {
-        return;
-    }
-
-    // Lock screen access for thread safety
+void DisplayItem::detach() {
     auto& lvglDisplay = FreeButton::getLvglDisplay();
     lvglDisplay.lock();
-
     // Off the LVGL task's list before the box (and later this item) goes.
     unlinkPending();
-    lv_obj_del(box);
-    box = nullptr;
-    ESP_LOGD(TAG, "Destroyed UI box for DisplayItem %lu", id);
-
+    deleteBox();
     lvglDisplay.unlock();
 }
 

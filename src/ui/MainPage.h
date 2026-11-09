@@ -7,9 +7,12 @@
 // changes when a script calls fb.main.display.showPage().
 //
 // showPage() runs in any task: it stores the page and asks the LVGL task to
-// re-render (PendingRender). Each widget hides or shows itself in its
-// applyPending() under the LVGL lock, so no lock is taken here and nothing
-// is allocated.
+// re-render (PendingRender). Each widget builds or deletes its LVGL objects
+// in its applyPending() under the LVGL lock: display items, the clock and
+// lists exist in LVGL only while their page is shown (they keep their
+// configuration and last texts outside LVGL), so the LVGL pool has to hold
+// the fullest page, not all pages together. No lock is taken here and
+// nothing is allocated.
 //
 
 #ifndef FREEBUTTON_MAINPAGE_H

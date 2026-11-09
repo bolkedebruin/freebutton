@@ -44,9 +44,11 @@ public:
     DisplayItem() : DisplayItem(0, 0, 100, 0, 14, 0, "", "", 0, 1, {}) {}
 
 private:
-    lv_obj_t* box = nullptr;  // UI box element; written only with the LVGL lock held
-    // Whether box is hidden because its page is not shown (LVGL lock held).
-    bool hiddenByPage_ = false;
+    // The UI box; exists only while the item's page is shown (built and
+    // deleted in applyPending()). LVGL lock held.
+    lv_obj_t* box = nullptr;
+    // A build was skipped for lack of LVGL memory; logged once (LVGL lock held).
+    bool buildFailed_ = false;
 
     // Text set from other tasks (MQTT, JS), rendered by the LVGL task in
     // applyPending(). Sizes are whole footprints (see TextSlot.h):
@@ -57,7 +59,7 @@ private:
     //  * caption and unit, 32 B (26 text bytes) each. Plain members, so
     //    nothing is ever allocated (or freed) on the message path.
     // The configured label / unit strings above stay the defaults that
-    // createBox() draws; these slots are the runtime state.
+    // a newly built box draws; these slots are the runtime state.
     static constexpr size_t kValueSlotBytes = 64;
     static constexpr size_t kCaptionSlotBytes = 32;
     static constexpr size_t kUnitSlotBytes = 32;
@@ -65,9 +67,12 @@ private:
     TextSlot<kCaptionSlotBytes> captionSlot_;
     TextSlot<kUnitSlotBytes> unitSlot_;
 
-    void invalidatePending();
-    // LVGL lock held, box exists: hide / show the box for the shown page.
-    void applyPage();
+    // Unlinks and deletes the box (destructor). Takes the LVGL lock.
+    void detach();
+    // LVGL lock held.
+    bool buildBox();
+    void deleteBox();
+    void drawConfigured();  // box exists
 
 public:
 
@@ -111,7 +116,7 @@ public:
     static std::unique_ptr<DisplayItem> fromJson(const JsonObject& config) {
         auto displayItem = std::make_unique<DisplayItem>();
         displayItem->configure(config);
-        displayItem->createBox();  // Create UI box after configuration
+        displayItem->attach();
         return displayItem;
     }
 
@@ -176,9 +181,11 @@ public:
     void registerTopics();
     void unregisterTopics();
 
-    // UI methods
-    void createBox();
-    void destroyBox();
+    // Links the item for rendering; its box is built when its page is shown
+    // (and deleted when it goes, so a hidden item costs no LVGL memory). Call
+    // after configuration, and again after a change to position, size or
+    // the configured label/unit: a shown box is redrawn. Takes the LVGL lock.
+    void attach();
 
     // Programmatic updates (JS). Any task: they only store the text; the
     // LVGL task renders it on its next tick. No LVGL lock is taken.

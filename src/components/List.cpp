@@ -5,6 +5,7 @@
 #include "List.h"
 
 #include "drivers/LvglDisplay.h"
+#include "ui/LvglRoom.h"
 #include "ui/MainPage.h"
 
 #include <esp_log.h>
@@ -203,6 +204,14 @@ void List::createRoller() {
     if (parent == nullptr) {
         return;
     }
+    if (!ui::lvglHasRoom(ui::kRoomForList)) {
+        if (!buildFailed_) {
+            ESP_LOGE(TAG, "List: no LVGL memory to show it");
+            buildFailed_ = true;
+        }
+        return;  // the next render request retries
+    }
+    buildFailed_ = false;
     lv_obj_t* r = lv_roller_create(parent);
     if (r == nullptr) {
         ESP_LOGE(TAG, "List: no LVGL memory for the roller");

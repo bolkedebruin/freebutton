@@ -6,6 +6,7 @@
 
 #include "drivers/LvglDisplay.h"
 #include "mqtt/Registry.h"
+#include "ui/LvglRoom.h"
 #include "ui/MainPage.h"
 
 extern "C" {
@@ -24,61 +25,78 @@ Clock::Clock(const int x, const int y, const int width, const int height, const 
 }
 
 Clock::~Clock() {
-    destroyClock();
+    detach();
 }
 
-void Clock::createClock() {
-    /*
-    if (clock_widget) {
-        ESP_LOGW(TAG, "Clock %lu already created", id);
-        return;
-    }
-    */
+namespace {
+// The clock that is drawn: ui_clock draws a single clock, so a second one in
+// the config is left out (as before). LVGL lock held.
+Clock* g_drawnClock = nullptr;
+} // namespace
 
+void Clock::attach() {
     auto& lvglDisplay = FreeButton::getLvglDisplay();
-    lv_obj_t* parent = lvglDisplay.getMainScreen();
-
-    if (!parent) {
-        ESP_LOGE(TAG, "No active screen available for Clock %lu", id);
-        return;
-    }
-
     lvglDisplay.lock();
-
-    clock_init(parent, x, y, width, height, align);
-    hiddenByPage_ = false;
-    applyPage();
-    linkPending();  // follows later page changes
-
+    linkPending();  // follows page changes
+    if (g_drawnClock == nullptr) {
+        g_drawnClock = this;
+    } else if (g_drawnClock != this) {
+        ESP_LOGW(TAG, "Clock %lu: only one clock is drawn, this one is left out", id);
+    }
     lvglDisplay.unlock();
-
-    ESP_LOGI(TAG, "Clock %lu created at (%d,%d) with size %dx%d on page %d",
-             id, x, y, width, height, page);
+    ui::requestPendingRender();  // builds the clock if its page is shown
 }
 
-void Clock::destroyClock() {
+void Clock::detach() {
     // Deletes LVGL objects and a timer: must hold the (non-recursive) LVGL
     // lock, so ~Clock must not run while the caller holds it.
     auto& lvglDisplay = FreeButton::getLvglDisplay();
     lvglDisplay.lock();
     unlinkPending();
-    clock_destroy();
+    if (g_drawnClock == this) {
+        deleteClock();
+        g_drawnClock = nullptr;
+    }
     lvglDisplay.unlock();
 }
 
-// LVGL lock held.
-void Clock::applyPage() {
-    const bool hide = !ui::visibleOnPage(page, ui::shownPage());
-    if (hide != hiddenByPage_) {
-        clock_set_hidden(hide);
-        hiddenByPage_ = hide;
-    }
-}
-
+// LVGL task, LVGL lock held. The clock (objects and timer) exists only while
+// its page is shown.
 bool Clock::applyPending() {
-    applyPage();
+    if (g_drawnClock != this) {
+        return false;
+    }
+    if (!ui::visibleOnPage(page, ui::shownPage())) {
+        deleteClock();
+    } else if (!built_) {
+        buildClock();
+    }
     return false;
 }
 
+// LVGL lock held.
+void Clock::buildClock() {
+    lv_obj_t* parent = FreeButton::getLvglDisplay().getMainScreen();
+    if (parent == nullptr) {
+        return;
+    }
+    if (!ui::lvglHasRoom(ui::kRoomForClock)) {
+        if (!buildFailed_) {
+            ESP_LOGE(TAG, "Clock %lu: no LVGL memory to show it", id);
+            buildFailed_ = true;
+        }
+        return;  // the next render request retries
+    }
+    buildFailed_ = false;
+    built_ = clock_init(parent, x, y, width, height, align);
+}
+
+// LVGL lock held.
+void Clock::deleteClock() {
+    if (built_) {
+        clock_destroy();
+        built_ = false;
+    }
+}
 
 } // namespace freebutton
