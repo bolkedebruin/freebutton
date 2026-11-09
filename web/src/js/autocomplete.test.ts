@@ -3,6 +3,7 @@ import { EditorState } from '@codemirror/state';
 import { javascript } from '@codemirror/lang-javascript';
 import type { CompletionContext } from '@codemirror/autocomplete';
 import { freebuttonCompletions, configNameCompletions, editorCompletions } from './autocomplete';
+import { freebuttonAPI } from './autocomplete-data';
 
 /**
  * Create a mock completion context for testing
@@ -196,7 +197,7 @@ describe('FreeButton Autocomplete', () => {
     });
 
     describe('config.json names', () => {
-        const names = { keys: ['sceneUp', 'sceneDown'], displayItems: ['volume', 'clock'] };
+        const names = { keys: ['sceneUp', 'sceneDown'], displayItems: ['volume', 'clock'], lists: ['scenes', 'rooms'] };
         const labelsOf = (result: ReturnType<typeof configNameCompletions>) =>
             result?.options.map(opt => opt.label) ?? [];
 
@@ -214,6 +215,25 @@ describe('FreeButton Autocomplete', () => {
                 expect(labelsOf(result)).toEqual(['volume', 'clock']);
                 expect(result?.from).toBe(code.length);
             }
+        });
+
+        it('suggests list names inside the first argument of the fb.main.list methods', () => {
+            for (const method of ['next', 'prev', 'select', 'getSelected', 'count', 'setItems']) {
+                const code = `fb.main.list.${method}("r`;
+                const result = configNameCompletions(createContext(code), names);
+                expect(labelsOf(result)).toEqual(['scenes', 'rooms']);
+                expect(result?.from).toBe(code.length - 1);
+                expect(result?.options[0]?.detail).toBe('list (config.json)');
+            }
+            expect(configNameCompletions(createContext('fb.main.list.select("scenes", "'), names)).toBeNull();
+            expect(configNameCompletions(createContext('fb.main.list.reset("'), names)).toBeNull();
+        });
+
+        it('has generated completion data for the fb.main.list methods', () => {
+            const labels = freebuttonAPI.fb!.methods.map(m => m.label).filter(l => l.startsWith('fb.main.list.'));
+            expect(labels).toEqual(['next', 'prev', 'select', 'getSelected', 'count', 'setItems'].map(m => `fb.main.list.${m}`));
+            const select = freebuttonAPI.fb!.methods.find(m => m.label === 'fb.main.list.select');
+            expect(select?.apply).toBe('fb.main.list.select(${1:nameOrIndex}, ${2:index})');
         });
 
         it('works with the closing quote already inserted', () => {

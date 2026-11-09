@@ -702,6 +702,48 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.right.display.getTopLabel()"
       },
       {
+        "label": "fb.main.list.next",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number) → number",
+        "info": "Select the next item (one down; stops at the last, no wrap); returns the new index",
+        "apply": "fb.main.list.next(${1:nameOrIndex})"
+      },
+      {
+        "label": "fb.main.list.prev",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number) → number",
+        "info": "Select the previous item (one up; stops at the first, no wrap); returns the new index",
+        "apply": "fb.main.list.prev(${1:nameOrIndex})"
+      },
+      {
+        "label": "fb.main.list.select",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number, index: number) → boolean",
+        "info": "Select an item by index; false when the index is out of range",
+        "apply": "fb.main.list.select(${1:nameOrIndex}, ${2:index})"
+      },
+      {
+        "label": "fb.main.list.getSelected",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number) → number",
+        "info": "Index of the selected item; -1 when the list is empty",
+        "apply": "fb.main.list.getSelected(${1:nameOrIndex})"
+      },
+      {
+        "label": "fb.main.list.count",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number) → number",
+        "info": "Number of items in the list",
+        "apply": "fb.main.list.count(${1:nameOrIndex})"
+      },
+      {
+        "label": "fb.main.list.setItems",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number, items: string[]) → boolean",
+        "info": "Replace the items (no newlines in an item); the selection is clamped to the new items",
+        "apply": "fb.main.list.setItems(${1:nameOrIndex}, ${2:items})"
+      },
+      {
         "label": "fb.bars[n].left.led.setColor",
         "type": "method",
         "detail": "(r: number, g: number, b: number) → void",

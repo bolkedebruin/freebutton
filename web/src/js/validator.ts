@@ -18,7 +18,7 @@
 import * as acorn from 'acorn';
 import type { Node } from 'acorn';
 import stdlib from './stdlib.json';
-import { DISPLAY_NAME_METHODS, type ConfigNames } from './config-model';
+import { DISPLAY_NAME_METHODS, LIST_NAME_METHODS, type ConfigNames } from './config-model';
 import { getConfigNames } from './device-config';
 
 export interface ValidationError {
@@ -586,9 +586,17 @@ function isMember(node: any, objectName: string | null, property: string): boole
         && (objectName === null || (node.object?.type === 'Identifier' && node.object.name === objectName));
 }
 
+/** callee is fb.main.<object>.<one of methods> */
+function isMainMethod(callee: any, object: string, methods: string[]): boolean {
+    return callee?.type === 'MemberExpression' && !callee.computed
+        && callee.property?.type === 'Identifier' && methods.includes(callee.property.name)
+        && isMember(callee.object, null, object) && isMember(callee.object.object, 'fb', 'main');
+}
+
 /**
- * fb.key("x") / fb.main.display.<DISPLAY_NAME_METHODS>("x", ...): a string
- * literal name must be in config.json. Other arguments are not checked.
+ * fb.key("x") / fb.main.display.<DISPLAY_NAME_METHODS>("x", ...) /
+ * fb.main.list.<LIST_NAME_METHODS>("x", ...): a string literal name must be
+ * in config.json. Other arguments (and numeric indexes) are not checked.
  */
 function checkConfigName(node: any, names: ConfigNames, errors: ValidationError[]): void {
     const callee = node.callee;
@@ -597,11 +605,12 @@ function checkConfigName(node: any, names: ConfigNames, errors: ValidationError[
     if (isMember(callee, 'fb', 'key')) {
         what = 'key';
         known = names.keys;
-    } else if (callee?.type === 'MemberExpression' && !callee.computed
-        && callee.property?.type === 'Identifier' && DISPLAY_NAME_METHODS.includes(callee.property.name)
-        && isMember(callee.object, null, 'display') && isMember(callee.object.object, 'fb', 'main')) {
+    } else if (isMainMethod(callee, 'display', DISPLAY_NAME_METHODS)) {
         what = 'display item';
         known = names.displayItems;
+    } else if (isMainMethod(callee, 'list', LIST_NAME_METHODS)) {
+        what = 'list';
+        known = names.lists ?? [];
     } else {
         return;
     }

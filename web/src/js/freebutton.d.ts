@@ -409,6 +409,8 @@ export interface FbMain {
     readonly left: FbMainSide;
     /** Right side (button + display; main has no LEDs) */
     readonly right: FbMainSide;
+    /** Lists (rollers) on the main display, from config.json "lists" */
+    readonly list: FbMainList;
 }
 
 export interface FbMainDisplay {
@@ -465,6 +467,21 @@ export interface FbSmallDisplay {
     getLabel(): string;
     /** Top label currently shown (last setTopLabel / MQTT text, else the config label) */
     getTopLabel(): string;
+}
+
+export interface FbMainList {
+    /** Select the next item (one down; stops at the last, no wrap); returns the new index */
+    next(nameOrIndex: string | number): number;
+    /** Select the previous item (one up; stops at the first, no wrap); returns the new index */
+    prev(nameOrIndex: string | number): number;
+    /** Select an item by index; false when the index is out of range */
+    select(nameOrIndex: string | number, index: number): boolean;
+    /** Index of the selected item; -1 when the list is empty */
+    getSelected(nameOrIndex: string | number): number;
+    /** Number of items in the list */
+    count(nameOrIndex: string | number): number;
+    /** Replace the items (no newlines in an item); the selection is clamped to the new items */
+    setItems(nameOrIndex: string | number, items: string[]): boolean;
 }
 
 export interface FbRoot {

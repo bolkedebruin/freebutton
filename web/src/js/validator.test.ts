@@ -585,7 +585,7 @@ describe('MQuickJS Validator', () => {
     });
 
     describe('config.json names', () => {
-        const names = { keys: ['sceneUp'], displayItems: ['volume'] };
+        const names = { keys: ['sceneUp'], displayItems: ['volume'], lists: ['scenes'] };
 
         it('accepts known key and display item names', () => {
             const result = validateCode([
@@ -608,6 +608,25 @@ describe('MQuickJS Validator', () => {
                     { message: 'unknown display item "vol" in config.json', line: 1, column: method.length + 18 },
                 ]);
             }
+        });
+
+        it('checks list names for every fb.main.list method', () => {
+            for (const method of ['next', 'prev', 'select', 'getSelected', 'count', 'setItems']) {
+                expect(validateCode(`fb.main.list.${method}("scenes", 1);`, names).errors).toEqual([]);
+                const result = validateCode(`fb.main.list.${method}("scene", 1);`, names);
+                expect(result.errors).toEqual([
+                    { message: 'unknown list "scene" in config.json', line: 1, column: method.length + 15 },
+                ]);
+            }
+        });
+
+        it('accepts a list index and keeps lists apart from keys and display items', () => {
+            expect(validateCode('fb.main.list.next(0);\nfb.main.list.setItems(1, ["a"]);', names).errors).toEqual([]);
+            const result = validateCode('fb.main.list.next("volume");\nfb.key("scenes");', names);
+            expect(result.errors.map(e => e.message)).toEqual([
+                'unknown list "volume" in config.json',
+                'unknown key "scenes" in config.json',
+            ]);
         });
 
         it('keeps the namespaces apart', () => {
