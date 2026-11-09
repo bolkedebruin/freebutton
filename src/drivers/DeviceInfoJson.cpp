@@ -63,6 +63,9 @@ std::string toJson(const DeviceInfo& info) {
     appendNumber(out, "heapMinFree", static_cast<long long>(info.heapMinFree)); out += ',';
     appendNumber(out, "lvglFree", static_cast<long long>(info.lvglFree));       out += ',';
     appendNumber(out, "lvglTotal", static_cast<long long>(info.lvglTotal));  out += ',';
+    appendNumber(out, "jsHeapUsed", static_cast<long long>(info.jsHeapUsed)); out += ',';
+    appendNumber(out, "jsHeapFree", static_cast<long long>(info.jsHeapFree)); out += ',';
+    appendNumber(out, "jsHeapSize", static_cast<long long>(info.jsHeapSize)); out += ',';
     // Hardware topology (the web IDE lays out its virtual device from it).
     appendNumber(out, "mainConnector", info.mainConnector);                  out += ',';
     out += "\"connectors\":[";

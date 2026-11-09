@@ -33,6 +33,8 @@ enum VirtualSensorIds {
     FREE_HEAP_ID = 100,
     LV_USED_MEM_ID = 101,
     LV_FREE_MEM_ID = 102,
+    JS_USED_MEM_ID = 103,   // JS heap, live data after a GC
+    JS_FREE_MEM_ID = 104,   // JS heap free (for objects and the stack)
 
     // Network sensors (110-119)
     // System sensors (120-129)

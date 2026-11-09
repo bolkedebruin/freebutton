@@ -97,6 +97,18 @@ public:
     // engine lock). Returns milliseconds until next timer, or -1 if no timers pending
     int64_t processTimers() const;
 
+    // JS heap: used = live data after a garbage collection, free = what is
+    // left for new objects and the stack; size = the whole heap buffer.
+    // Collects garbage, under the engine lock with a short wait; while the
+    // engine is busy (or not initialized) it returns the last measurement
+    // (0 before the first). Any task; for diagnostics (sensors, /api/device).
+    struct HeapUsage {
+        size_t used{0};
+        size_t free{0};
+        size_t size{0};
+    };
+    HeapUsage heapUsage() const;
+
 private:
     explicit ScriptEngine(size_t heapSize = DEFAULT_HEAP_SIZE);
     ~ScriptEngine();

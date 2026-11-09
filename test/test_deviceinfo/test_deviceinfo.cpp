@@ -29,6 +29,9 @@ static DeviceInfo makeSample() {
     info.heapMinFree     = 153600;
     info.lvglFree        = 40960;
     info.lvglTotal       = 61440;
+    info.jsHeapUsed      = 7200;
+    info.jsHeapFree      = 8100;
+    info.jsHeapSize      = 16384;
     return info;
 }
 
@@ -60,6 +63,9 @@ void test_memory_is_bytes_not_kb() {
     TEST_ASSERT_TRUE(contains(json, "\"heapMinFree\":153600"));
     TEST_ASSERT_TRUE(contains(json, "\"lvglFree\":40960"));
     TEST_ASSERT_TRUE(contains(json, "\"lvglTotal\":61440"));
+    TEST_ASSERT_TRUE(contains(json, "\"jsHeapUsed\":7200"));
+    TEST_ASSERT_TRUE(contains(json, "\"jsHeapFree\":8100"));
+    TEST_ASSERT_TRUE(contains(json, "\"jsHeapSize\":16384"));
 }
 
 void test_valid_json_shape() {
@@ -88,6 +94,7 @@ void test_exact_key_set() {
              "\"deviceName\"", "\"ipv4\"", "\"ipv6\"", "\"ssid\"", "\"rssi\"",
              "\"mac\"", "\"firmware\"", "\"uptime\"", "\"heapFree\"", "\"heapTotal\"",
              "\"heapMinFree\"", "\"lvglFree\"", "\"lvglTotal\"",
+             "\"jsHeapUsed\"", "\"jsHeapFree\"", "\"jsHeapSize\"",
              "\"mainConnector\"", "\"connectors\"", "\"commit\"", "\"dirty\"", "\"model\"" }) {
         TEST_ASSERT_TRUE_MESSAGE(contains(json, key), key);
     }

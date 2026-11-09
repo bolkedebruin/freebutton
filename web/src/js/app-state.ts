@@ -81,6 +81,10 @@ export interface DeviceInfoData {
   heapMinFree: number; // bytes
   lvglFree: number;   // bytes
   lvglTotal: number;  // bytes
+  /** JS heap (newer firmware; absent before): live data after a GC, free, buffer size. */
+  jsHeapUsed?: number; // bytes
+  jsHeapFree?: number; // bytes
+  jsHeapSize?: number; // bytes
   /** Build identity (newer firmware; absent before). */
   commit?: string;    // short git hash
   dirty?: boolean;    // built from a working tree with uncommitted changes

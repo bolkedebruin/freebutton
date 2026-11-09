@@ -23,6 +23,9 @@ struct DeviceInfo {
     size_t heapMinFree;  // internal heap low-water mark since boot
     size_t lvglFree;     // LVGL allocator free bytes
     size_t lvglTotal;    // LVGL allocator total bytes
+    size_t jsHeapUsed = 0;  // JS heap, live data after a GC
+    size_t jsHeapFree = 0;  // JS heap free (objects and the JS stack)
+    size_t jsHeapSize = 0;  // JS heap buffer
 
     // Hardware topology from the I2C scan at boot: type per connector 0..3
     // (0 = empty, 1 = bar, 2 = large display; same encoding as config.json

@@ -10,6 +10,7 @@ import { SettingsIcon } from '../icons/index.js';
 interface MemorySample {
   heap: number;
   lvgl: number;
+  js: number;   // 0 on firmware without the JS heap figures
 }
 
 const MAX_SAMPLES = 60;
@@ -97,7 +98,7 @@ export class FbVirtualDevice extends LitElement {
       this._deviceName = data.deviceName;
       this._deviceNameSeeded = true;
     }
-    const next = [...this._memorySamples, { heap: data.heapFree, lvgl: data.lvglFree }];
+    const next = [...this._memorySamples, { heap: data.heapFree, lvgl: data.lvglFree, js: data.jsHeapFree ?? 0 }];
     this._memorySamples = next.length > MAX_SAMPLES ? next.slice(next.length - MAX_SAMPLES) : next;
   }
 
@@ -140,6 +141,10 @@ export class FbVirtualDevice extends LitElement {
       { key: 'heap', color: '#6B26FF', label: 'Heap', total: this._info?.heapTotal ?? 320 * 1024 },
       { key: 'lvgl', color: '#19D95D', label: 'LVGL', total: this._info?.lvglTotal ?? 64 * 1024 },
     ];
+    // JS heap: firmware that reports it (jsHeapSize); free = for objects and the stack.
+    if (this._info?.jsHeapSize) {
+      lines.push({ key: 'js', color: '#F5A524', label: 'JS', total: this._info.jsHeapSize });
+    }
 
     const latest = samples[samples.length - 1];
 

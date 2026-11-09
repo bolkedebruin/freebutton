@@ -5,6 +5,7 @@
 #include <lvgl.h>
 #include "LvglDisplay.h"
 #include "../scripting/device_hardware.h"
+#include "../scripting/ScriptEngine.h"
 
 #include "config.h"
 
@@ -35,6 +36,10 @@ DeviceInfo DeviceInfoCollector::collectInfo() const {
     info.heapTotal = getTotalHeap();
     info.heapMinFree = getMinFreeHeap();
     getLvglMemory(info.lvglFree, info.lvglTotal);
+    const auto js = Scripting::ScriptEngine::getInstance().heapUsage();
+    info.jsHeapUsed = js.used;
+    info.jsHeapFree = js.free;
+    info.jsHeapSize = js.size;
     for (int c = 0; c < DeviceInfo::kConnectors; ++c) {
         info.connectorTypes[c] = static_cast<int8_t>(device_hw_get_connector_type(c));
     }

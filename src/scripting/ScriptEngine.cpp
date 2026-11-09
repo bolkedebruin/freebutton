@@ -244,6 +244,26 @@ void ScriptEngine::printException() const {
     ESP_LOGE(TAG, "Exception: %s", exceptionStr.c_str());
 }
 
+ScriptEngine::HeapUsage ScriptEngine::heapUsage() const {
+    // Last measurement, for callers while the engine is busy. Written only
+    // under the engine lock; the fields are word-sized (a torn read between
+    // them only mixes two measurements).
+    static HeapUsage last;
+    if (ctx_ != nullptr) {
+        const EngineLock lock(pdMS_TO_TICKS(20));
+        if (lock.owned()) {
+            JS_GC(ctx_);
+            size_t used = 0;
+            size_t free = 0;
+            JS_GetMemoryUsage(ctx_, &used, &free);
+            last.used = used;
+            last.free = free;
+            last.size = heapSize_;
+        }
+    }
+    return last;
+}
+
 int64_t ScriptEngine::processTimers() const {
     if (!ctx_) {
         return -1;  // No timers when engine not initialized

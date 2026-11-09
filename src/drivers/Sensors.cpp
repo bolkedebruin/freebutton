@@ -5,6 +5,7 @@
 #include "../mqtt/Registry.h"
 #include <cstdio>
 #include "../scripting/sensor_binding.h"
+#include "../scripting/ScriptEngine.h"
 
 #include "../../lib/vendored/stscommon/sensirion_arch_config.h"
 #include "../../lib/vendored/stscommon/sensirion_i2c.h"
@@ -298,6 +299,40 @@ void initializeSensors() {
     );
 
     sensorComponents[VirtualSensorIds::LV_FREE_MEM_ID] = std::move(lvglFreeComponent);
+
+    // JS heap used / free. heapUsage() collects garbage under the engine lock
+    // (short wait; while the engine is busy it gives the last measurement).
+    // Read one after the other, so the second one measures right after the
+    // first: the GC then has little to do.
+    const auto jsUsedMem = std::make_shared<VirtualSensor>(
+        VirtualSensorIds::JS_USED_MEM_ID,
+        "JS Used Memory"sv,
+        "data_size"sv,
+        "B"sv,
+        []() {
+            return static_cast<float>(Scripting::ScriptEngine::getInstance().heapUsage().used);
+        }
+    );
+    sensorDevices[VirtualSensorIds::JS_USED_MEM_ID] = jsUsedMem;
+    sensorComponents[VirtualSensorIds::JS_USED_MEM_ID] = std::make_unique<SensorMqttComponent>(
+        VirtualSensorIds::JS_USED_MEM_ID,
+        std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/js_used_memory"
+    );
+
+    const auto jsFreeMem = std::make_shared<VirtualSensor>(
+        VirtualSensorIds::JS_FREE_MEM_ID,
+        "JS Free Memory"sv,
+        "data_size"sv,
+        "B"sv,
+        []() {
+            return static_cast<float>(Scripting::ScriptEngine::getInstance().heapUsage().free);
+        }
+    );
+    sensorDevices[VirtualSensorIds::JS_FREE_MEM_ID] = jsFreeMem;
+    sensorComponents[VirtualSensorIds::JS_FREE_MEM_ID] = std::make_unique<SensorMqttComponent>(
+        VirtualSensorIds::JS_FREE_MEM_ID,
+        std::string(PUBLICMQTTID) + "/" + deviceId + "/sensor/js_free_memory"
+    );
 }
 
 namespace {
@@ -345,6 +380,8 @@ public:
                 name = id == VirtualSensorIds::FREE_HEAP_ID     ? "free_memory"
                      : id == VirtualSensorIds::LV_USED_MEM_ID   ? "lvgl_used_memory"
                      : id == VirtualSensorIds::LV_FREE_MEM_ID   ? "lvgl_free_memory"
+                     : id == VirtualSensorIds::JS_USED_MEM_ID   ? "js_used_memory"
+                     : id == VirtualSensorIds::JS_FREE_MEM_ID   ? "js_free_memory"
                      : nullptr;
                 break;
             default:
