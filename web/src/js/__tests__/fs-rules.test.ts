@@ -127,6 +127,16 @@ describe('JSON validation', () => {
     expect(validateConfigShape({ buttons: [{ position: 0 }, { label: 'x' }] })).toHaveLength(2);
     expect(validateConfigShape({ displayitems: 'x' })).toEqual(['"displayitems" must be an array']);
   });
+
+  it('includes invalid and duplicate key / display item names', () => {
+    expect(validateConfigShape({
+      buttons: [{ position: 1, name: 'up' }, { position: 2, name: 'up' }],
+      mqttdisplays: [{ displayitemid: '1', name: 'bad-name' }],
+    })).toEqual([
+      'buttons[1].name "up" is already used by buttons[0] (key names must be unique)',
+      'mqttdisplays[0].name "bad-name" is not a valid name (1-24 letters, digits or _, not starting with a digit)',
+    ]);
+  });
 });
 
 describe('validateBody', () => {
@@ -138,6 +148,14 @@ describe('validateBody', () => {
   it('applies the shape check to config.json only', () => {
     expect(validateBody('config.json', '[]')).toMatch(/config\.json/);
     expect(validateBody('other.json', '[]')).toBeNull();
+  });
+
+  it('blocks saving config.json with a duplicate name', () => {
+    const text = JSON.stringify({ mqttdisplays: [{ name: 'v' }, { name: 'v' }] });
+    expect(validateBody('config.json', text)).toBe(
+      'config.json: mqttdisplays[1].name "v" is already used by mqttdisplays[0] (display item names must be unique)'
+    );
+    expect(validateBody('config.json', JSON.stringify({ mqttdisplays: [{ name: 'v' }], buttons: [{ position: 1, name: 'v' }] }))).toBeNull();
   });
 
   it('does not syntax-check .js (the source is always saved)', () => {

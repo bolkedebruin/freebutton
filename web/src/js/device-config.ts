@@ -1,9 +1,9 @@
 /**
  * Device Configuration Manager
- * Manages PageConfig[] (+ the physical connector layout) and emits
- * device-config events on changes. Starts with sample data; the workspace
- * replaces it with the device's config.json (see config-model.ts) when one is
- * available.
+ * Manages PageConfig[] (+ the physical connector layout and the config.json
+ * key / display item names) and emits device-config events on changes.
+ * Starts with sample data; the workspace replaces it with the device's
+ * config.json (see config-model.ts) when one is available.
  *
  * While config.json is edited, an unsaved draft can be shown on top of the
  * stored config (setPreviewConfig, driven by config-preview.ts). The draft
@@ -11,7 +11,7 @@
  * clearPreviewConfig goes back to the stored config.
  */
 import { emit, type PageConfig, type DisplayItem, type ButtonConfig, type ConnectorConfig, type PreviewState } from './app-state';
-import { mapConnectors, type DeviceModel } from './config-model';
+import { mapConnectors, type ConfigNames, type DeviceModel } from './config-model';
 
 const defaultConfig: PageConfig[] = [
   {
@@ -45,6 +45,8 @@ let draft: DeviceModel | null = null;
 // 'live' = draft shown; 'stale' = the editor text is not valid JSON, the last
 // valid preview stays up. null = the stored config is shown.
 let previewState: PreviewState | null = null;
+// Names from the stored config.json; null = no config.json loaded (sample data).
+let configNames: ConfigNames | null = null;
 
 function effectiveConnectors(): ConnectorConfig[] {
   if (hardwareConnectors.length > 0) return hardwareConnectors;
@@ -72,10 +74,19 @@ export function getConnectors(): ConnectorConfig[] {
   return currentConnectors;
 }
 
+/**
+ * Key and display item names of the stored config.json, for script
+ * completion and validation. null when no config.json is loaded.
+ */
+export function getConfigNames(): ConfigNames | null {
+  return configNames;
+}
+
 /** Stored config (config.json as saved/loaded). A draft preview stays on top until cleared. */
-export function setConfig(config: PageConfig[], connectors: ConnectorConfig[] = []): void {
+export function setConfig(config: PageConfig[], connectors: ConnectorConfig[] = [], names: ConfigNames | null = null): void {
   currentConfig = config;
   configConnectors = connectors;
+  configNames = names;
   isSample = false;
   currentConnectors = effectiveConnectors();
   publish();

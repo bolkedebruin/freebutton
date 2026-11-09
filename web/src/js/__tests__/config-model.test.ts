@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { configToModel, parseConfigText, positionsForConnector, mapButton, mapDisplayItem } from '../config-model';
+import {
+  configToModel, parseConfigText, positionsForConnector, mapButton, mapDisplayItem,
+  configNames, validateConfigNames, NAME_PATTERN,
+} from '../config-model';
 
 describe('config.json -> button model', () => {
   it('maps label and toplabel per position/page', () => {
@@ -117,5 +120,77 @@ describe('parseConfigText', () => {
     expect(model.connectors.map(c => c.type)).toEqual(['display', 'bar']);
     expect(model.pages[0].buttons.map(b => b.label)).toEqual(['Open', 'Dicht']);
     expect(model.pages[0].displayItems[0].label).toBe('Home');
+  });
+});
+
+describe('key and display item names', () => {
+  it('keeps "name" on mapped keys and display items', () => {
+    expect(mapButton({ position: 3, name: 'sceneUp' })?.name).toBe('sceneUp');
+    expect(mapButton({ position: 3 })).not.toHaveProperty('name');
+    expect(mapDisplayItem({ displayitemid: '1', name: 'volume' })?.item.name).toBe('volume');
+  });
+
+  it('collects valid names per namespace; the first duplicate wins', () => {
+    const names = configNames({
+      buttons: [
+        { position: 3, name: 'sceneUp' },
+        { position: 4, name: 'volume' },
+        { position: 5, name: 'sceneUp' },
+        { position: 6, name: '9lives' },
+        { position: 7 },
+      ],
+      mqttdisplays: [{ displayitemid: '1', name: 'volume' }, { displayitemid: '2', name: 'x'.repeat(25) }],
+      displayitems: [{ displayitemid: '3', name: 'clock' }],
+    });
+    expect(names).toEqual({ keys: ['sceneUp', 'volume'], displayItems: ['volume', 'clock'] });
+  });
+
+  it('reads legacy mqttbuttons and is empty for a config without names', () => {
+    expect(configNames({ mqttbuttons: [{ position: 1, name: 'old' }] }).keys).toEqual(['old']);
+    expect(configNames({})).toEqual({ keys: [], displayItems: [] });
+    expect(configNames(null)).toEqual({ keys: [], displayItems: [] });
+  });
+
+  it('configToModel carries the names', () => {
+    const model = configToModel({ buttons: [{ position: 1, name: 'a' }], mqttdisplays: [{ name: 'b' }] });
+    expect(model.names).toEqual({ keys: ['a'], displayItems: ['b'] });
+  });
+
+  it('NAME_PATTERN: letters, digits and _, not starting with a digit, 1..24 chars', () => {
+    for (const ok of ['a', '_', 'sceneUp', 'A_1', 'x'.repeat(24)]) expect(NAME_PATTERN.test(ok)).toBe(true);
+    for (const bad of ['', '1a', 'a-b', 'a b', 'é', 'x'.repeat(25)]) expect(NAME_PATTERN.test(bad)).toBe(false);
+  });
+});
+
+describe('validateConfigNames', () => {
+  it('accepts unique valid names; a key and a display item may share one', () => {
+    expect(validateConfigNames({
+      buttons: [{ position: 1, name: 'volume' }, { position: 2, name: 'mute' }, { position: 3 }],
+      mqttdisplays: [{ displayitemid: '1', name: 'volume' }],
+    })).toEqual([]);
+  });
+
+  it('reports invalid names with the entry', () => {
+    expect(validateConfigNames({ buttons: [{ position: 1, name: '1up' }, { position: 2, name: 7 }] })).toEqual([
+      'buttons[0].name "1up" is not a valid name (1-24 letters, digits or _, not starting with a digit)',
+      'buttons[1].name 7 is not a valid name (1-24 letters, digits or _, not starting with a digit)',
+    ]);
+    expect(validateConfigNames({ mqttdisplays: [{ name: '' }] })[0]).toMatch(/^mqttdisplays\[0\]\.name "" is not a valid name/);
+  });
+
+  it('reports duplicates within keys and within display items, naming both entries', () => {
+    expect(validateConfigNames({
+      buttons: [{ position: 1, name: 'a' }, { position: 2, name: 'b' }, { position: 3, name: 'a' }],
+      mqttdisplays: [{ name: 'v' }],
+      displayitems: [{ name: 'v' }],
+    })).toEqual([
+      'buttons[2].name "a" is already used by buttons[0] (key names must be unique)',
+      'displayitems[0].name "v" is already used by mqttdisplays[0] (display item names must be unique)',
+    ]);
+  });
+
+  it('ignores non-objects', () => {
+    expect(validateConfigNames(null)).toEqual([]);
+    expect(validateConfigNames({ buttons: [null, 'x'] })).toEqual([]);
   });
 });

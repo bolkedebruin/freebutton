@@ -30,6 +30,8 @@ export interface DisplayItem {
   color?: string;
   /** Stable id from config.json "displayitemid". */
   id?: string;
+  /** Script name from config.json "name" (fb.main.display.setValue("name", ...)). */
+  name?: string;
   /** lv_align_t from config.json. */
   align?: number;
 }
@@ -47,6 +49,8 @@ export interface ButtonConfig {
   ledOn: boolean;
   ledColor: string;
   page: number;
+  /** Script name from config.json "name" (fb.key("name")). */
+  name?: string;
 }
 
 /** Live preview of an unsaved config.json: 'live' = shown, 'stale' = text not valid JSON (last valid kept). */

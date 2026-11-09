@@ -6,6 +6,9 @@
  *   displayitems[]       (legacy: mqttdisplays[]) {displayitemid, x, y, width (% of 320x240),
  *                         page (0 = every page), fontsize, align (lv_align_t), label, unit}
  *   info.connectors[]    {id (0-based), type: 1 = bar, 2 = large display, 0 = empty}
+ *   "name" on keys and display items: the names scripts use with fb.key("name")
+ *                        and fb.main.display.setValue("name", ...) (configNames,
+ *                        validateConfigNames)
  * Key position on connector `id` is id*2+1 (left) and id*2+2 (right), the
  * same mapping the firmware uses (ButtonManager: position0 = connector*2+side).
  */
@@ -15,6 +18,24 @@ export interface DeviceModel {
   pages: PageConfig[];
   /** Sorted by id. Empty when config.json has no info.connectors. */
   connectors: ConnectorConfig[];
+  /** Key and display item names scripts can use. */
+  names: ConfigNames;
+}
+
+/** Valid key / display item name; the firmware enforces the same rule. */
+export const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,23}$/;
+
+/** fb.main.display methods whose first argument is an item id or name. */
+export const DISPLAY_NAME_METHODS = ['remove', 'get', 'setLabel', 'setValue', 'setUnit', 'setPosition', 'setPage'];
+
+/**
+ * Names a script can pass to fb.key() (keys) and to the
+ * DISPLAY_NAME_METHODS (display items). Valid names only, first one wins:
+ * what the firmware resolves. Keys and display items are separate namespaces.
+ */
+export interface ConfigNames {
+  keys: string[];
+  displayItems: string[];
 }
 
 type Obj = Record<string, unknown>;
@@ -69,6 +90,7 @@ export function mapButton(raw: unknown): ButtonConfig | null {
     topLabel,
     ledOn: false,
     ledColor: 'rgb(0,0,0)',
+    ...(typeof raw.name === 'string' ? { name: raw.name } : {}),
   };
 }
 
@@ -87,6 +109,7 @@ export function mapDisplayItem(raw: unknown): { page: number; item: DisplayItem 
     fontSize: num(raw.fontsize ?? raw.fontSize, 1),
     align: raw.align === undefined ? undefined : num(raw.align, 0),
     id: raw.displayitemid === undefined ? undefined : str(raw.displayitemid),
+    ...(typeof raw.name === 'string' ? { name: raw.name } : {}),
   };
   return { page: num(raw.page, 0), item };
 }
@@ -124,7 +147,72 @@ export function configToModel(cfg: unknown): DeviceModel {
     displayItems: items.filter(d => d.page < 1 || d.page === n).map(d => d.item),
   }));
 
-  return { pages, connectors: mapConnectors(o) };
+  return { pages, connectors: mapConnectors(o), names: configNames(o) };
+}
+
+// The firmware reads both spellings of each list, in file order.
+const KEY_LISTS = ['buttons', 'mqttbuttons'];
+const ITEM_LISTS = ['mqttdisplays', 'displayitems'];
+
+interface NameEntry {
+  /** "buttons[2]" */
+  where: string;
+  name: unknown;
+}
+
+/** Entries that have a "name" field, from every spelling of the list, in file order. */
+function nameEntries(o: Obj, lists: string[]): NameEntry[] {
+  const out: NameEntry[] = [];
+  for (const key of Object.keys(o)) {
+    const arr = o[key];
+    if (!lists.includes(key) || !Array.isArray(arr)) continue;
+    arr.forEach((e, i) => {
+      if (isObj(e) && 'name' in e) out.push({ where: `${key}[${i}]`, name: e.name });
+    });
+  }
+  return out;
+}
+
+function validNames(entries: NameEntry[]): string[] {
+  const names = new Set<string>();
+  for (const e of entries) {
+    if (typeof e.name === 'string' && NAME_PATTERN.test(e.name)) names.add(e.name);
+  }
+  return [...names];
+}
+
+/** Key and display item names in a parsed config.json (see ConfigNames). */
+export function configNames(cfg: unknown): ConfigNames {
+  const o: Obj = isObj(cfg) ? cfg : {};
+  return { keys: validNames(nameEntries(o, KEY_LISTS)), displayItems: validNames(nameEntries(o, ITEM_LISTS)) };
+}
+
+/**
+ * Problems with "name" fields: a name that does not match NAME_PATTERN, and
+ * a name used twice among keys or twice among display items (the firmware
+ * ignores those; the first one wins). Empty list = OK.
+ */
+export function validateConfigNames(cfg: unknown): string[] {
+  if (!isObj(cfg)) return [];
+  const problems: string[] = [];
+  const groups: [string, string[]][] = [['key', KEY_LISTS], ['display item', ITEM_LISTS]];
+  for (const [what, lists] of groups) {
+    const firstAt = new Map<string, string>();
+    for (const { where, name } of nameEntries(cfg, lists)) {
+      if (typeof name !== 'string' || !NAME_PATTERN.test(name)) {
+        problems.push(`${where}.name ${JSON.stringify(name)} is not a valid name `
+          + '(1-24 letters, digits or _, not starting with a digit)');
+        continue;
+      }
+      const first = firstAt.get(name);
+      if (first) {
+        problems.push(`${where}.name "${name}" is already used by ${first} (${what} names must be unique)`);
+      } else {
+        firstAt.set(name, where);
+      }
+    }
+  }
+  return problems;
 }
 
 /** Parse config.json text. Returns null if it is not valid JSON. */

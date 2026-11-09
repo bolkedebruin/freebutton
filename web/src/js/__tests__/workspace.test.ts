@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Workspace, deviceHttpBase, LOCAL_MESSAGE, type EditorAdapter } from '../workspace';
 import { _setClientFactory, REBOOT_FIELD, type S3Like } from '../device-storage';
 import { emit } from '../app-state';
-import { getConfig, getConnectors, loadDefaultConfig } from '../device-config';
+import { getConfig, getConfigNames, getConnectors, loadDefaultConfig } from '../device-config';
 import { virtualFS } from '../virtual-fs';
 import { MAIN_SCRIPT_TEMPLATE } from '../fs-rules';
 
@@ -185,6 +185,20 @@ describe('workspace on a device', () => {
     expect(suggested).toBe(1);
     expect(dev.files.get('config.json')).toContain('Dicht');
     expect(getConfig()[0].buttons[0]).toMatchObject({ position: 8, label: 'Dicht', topLabel: 'Oud' });
+  });
+
+  it('saving config.json updates the names for scripts; duplicate names are not saved', async () => {
+    const dev = fakeDevice({ 'config.json': CONFIG });
+    const ed = await start();
+    await ws.open('config.json');
+    type(ed, JSON.stringify({ buttons: [{ position: 8, name: 'up' }], mqttdisplays: [{ displayitemid: '1', name: 'up' }] }));
+    expect(await ws.save()).toBe(true);
+    expect(getConfigNames()).toEqual({ keys: ['up'], displayItems: ['up'] });
+
+    type(ed, JSON.stringify({ buttons: [{ position: 7, name: 'up' }, { position: 8, name: 'up' }] }));
+    expect(await ws.save()).toBe(false);
+    expect(ws.snapshot().message).toMatch(/Not saved: config\.json: buttons\[1\]\.name "up" is already used by buttons\[0\]/);
+    expect(dev.files.get('config.json')).toContain('mqttdisplays');
   });
 
   it('asks before discarding unsaved changes when switching files', async () => {

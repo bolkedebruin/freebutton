@@ -458,7 +458,7 @@ export class Workspace {
 
   private applyConfig(text: string): void {
     const model = parseConfigText(text);
-    if (model) setConfig(model.pages, model.connectors);
+    if (model) setConfig(model.pages, model.connectors, model.names);
   }
 
   private confirmDiscard(): boolean {

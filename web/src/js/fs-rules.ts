@@ -12,8 +12,11 @@
  *   - not under www/, fonts/ or scripts/examples/ (those belong to the
  *     read-only buckets; the device answers 400 for such `app` keys)
  *   - key <= 63 chars, body <= 64 KiB
- *   - config.json must be valid JSON (and cannot be deleted)
+ *   - config.json must be valid JSON (and cannot be deleted), with valid,
+ *     unique key / display item names
  */
+
+import { validateConfigNames } from './config-model';
 
 export const MAX_KEY_LENGTH = 63;
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -219,8 +222,9 @@ export function validateJson(text: string): JsonError | null {
 }
 
 /**
- * Light structural check of a parsed config.json: only things that would make
- * the firmware ignore whole sections. Returns a list of problems (empty = OK).
+ * Light structural check of a parsed config.json: things that would make
+ * the firmware ignore whole sections, and invalid or duplicate key / display
+ * item names (validateConfigNames). Returns a list of problems (empty = OK).
  */
 export function validateConfigShape(cfg: unknown): string[] {
   const problems: string[] = [];
@@ -245,6 +249,7 @@ export function validateConfigShape(cfg: unknown): string[] {
       }
     });
   }
+  problems.push(...validateConfigNames(o));
   return problems;
 }
 

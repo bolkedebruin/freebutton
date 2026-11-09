@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { ConnectorConfig } from '../app-state';
-import { getConfig, getConnectors, setConfig, setHardwareConnectors, loadDefaultConfig, updateDisplayItem, updateButton } from '../device-config';
+import {
+  getConfig, getConfigNames, getConnectors, setConfig, setHardwareConnectors, loadDefaultConfig, updateDisplayItem, updateButton,
+} from '../device-config';
 
 beforeEach(() => {
   loadDefaultConfig();
@@ -142,5 +144,17 @@ describe('device-config', () => {
     setHardwareConnectors(undefined);                                  // older firmware / no device
     expect(getConnectors()).toEqual(fromConfig);
     window.removeEventListener('device-config', handler);
+  });
+
+  it('config names: none for sample data, set with config.json, kept on hardware updates', () => {
+    expect(getConfigNames()).toBeNull();
+    const names = { keys: ['up'], displayItems: ['volume'] };
+    setConfig(getConfig(), [], names);
+    expect(getConfigNames()).toEqual(names);
+    setHardwareConnectors([{ id: 1, type: 1 }]);
+    expect(getConfigNames()).toEqual(names);
+    setHardwareConnectors(undefined);
+    loadDefaultConfig();
+    expect(getConfigNames()).toBeNull();
   });
 });
