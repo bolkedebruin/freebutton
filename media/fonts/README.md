@@ -3,7 +3,8 @@
 The device draws its UI with these TrueType files, rendered by LVGL
 `tiny_ttf` from the media store (S3 bucket `fonts`, see
 [docs/MEDIA-STORE.md](../../docs/MEDIA-STORE.md)). Upload a file under the same
-key to replace a font; it takes effect at the next boot. A missing or invalid
+key to replace a font; the device reloads its fonts 1.5 s after the last
+upload or delete in the bucket (no reboot). A missing or invalid
 file falls back to LVGL's built-in Montserrat 14 (text) or to no icons.
 
 | Key | Used for | Source | License |

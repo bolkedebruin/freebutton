@@ -11,7 +11,7 @@ The UI fonts are TrueType files in the media store (S3 bucket `fonts`: `medium.t
 
 Fallback: text font → icons font of the same size → LVGL's built-in Montserrat 14 (`LV_FONT_DEFAULT`, the only compiled font). A missing or invalid text file makes its slots the built-in font (one log line per file).
 
-Measured on the device (2026-11-10): a new glyph renders in 0.55-1.2 ms from mapped flash (the `.bin` fonts: 1.6-5.3 ms). Glyph caches are off (see the comment in `fonts.c` for why); a font uploaded to the bucket takes effect at the next boot.
+Measured on the device (2026-11-10): a new glyph renders in 0.55-1.2 ms from mapped flash (the `.bin` fonts: 1.6-5.3 ms). Glyph caches are off (see the comment in `fonts.c` for why); an upload or delete in the bucket reloads the fonts 1.5 s after the last change (`fonts_request_reload()` from the S3 server; the swap runs on the LVGL task, `fnt_*` keep their addresses).
 
 ## 2. On-device verification checklist (can't be done headless)
 

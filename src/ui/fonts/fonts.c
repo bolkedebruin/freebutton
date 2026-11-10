@@ -13,18 +13,41 @@
 //
 // Fallback chain of a text font: text -> icons (same size) -> LV_FONT_DEFAULT
 // (LVGL's built-in Montserrat 14, the only compiled font). A missing or
-// invalid text file makes its slots LV_FONT_DEFAULT; a missing icons file
-// leaves the text fonts without icons.
+// invalid text file makes its slots the built-in font (still falling back to
+// the icons); a missing icons file leaves the text fonts without icons.
 //
-// The files stay mapped until destroy_fonts(): the media store keeps the
-// pages of a replaced or deleted font until then, so a font uploaded to the
-// bucket takes effect at the next boot.
+// Online changes: fnt_* point at static lv_font_t wrappers that never move,
+// because styles and objects keep the pointer (ui_box.c and ui_button.c
+// styles, every label's local style). A wrapper holds a copy of a tiny_ttf
+// font (or of the built-in font). After an upload or a delete in the bucket
+// (fonts_request_reload(), from the S3 server) the LVGL task loads a new set
+// from the bucket, copies it into the wrappers, refreshes every object of
+// every display, then destroys the old set and closes its files; the store
+// frees the pages of a replaced or deleted file at that close.
+//
+// Why copying a tiny_ttf lv_font_t is safe (LVGL 9.6 lv_tiny_ttf.c):
+//  - the font's state is all behind font->dsc (ttf_font_desc_t: stb info,
+//    its three caches, the data pointer), which has no pointer back to the
+//    lv_font_t; the copy shares dsc, the original keeps owning it;
+//  - the callbacks read only font->dsc, font->kerning and font->line_height
+//    of the font LVGL passes them, which is the wrapper (lv_font_get_glyph_dsc
+//    sets resolved_font to the font in the chain that has the glyph);
+//  - its caches are keyed by codepoint / glyph index, not by font pointer
+//    (and are off here, see below); LVGL keeps no cache keyed by font;
+//  - lv_tiny_ttf_destroy() is only ever called on the original (it frees
+//    dsc and that lv_font_t), after no wrapper points at its dsc;
+//  - fallback pointers go wrapper -> wrapper (text -> icons of the size)
+//    -> built-in font, so they stay valid across a swap.
+// The swap runs inside lv_timer_handler() with the LVGL lock held: no
+// refresh is in progress, so no glyph descriptor of the old set is in use.
 //
 
 #include "fonts.h"
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "../../media/media_store.h"
 #include "ttf_check.h"
@@ -39,25 +62,21 @@ lv_font_t *fnt_medium_48;
 lv_font_t *fnt_medium_72;
 
 /* The one compiled font: LVGL's Montserrat 14 (ASCII plus LVGL's symbols). */
-#define BUILTIN_FONT ((lv_font_t *)LV_FONT_DEFAULT)
+#define BUILTIN_FONT ((const lv_font_t *)LV_FONT_DEFAULT)
 
 typedef enum { FACE_MEDIUM, FACE_SEMIBOLD, FACE_ICONS, FACE_COUNT } face_t;
-
-typedef struct {
-    const char *key; /* in MEDIA_BUCKET_FONTS */
-    lv_font_kerning_t kerning;
-    media_file_t file;
-    bool usable; /* mapped and passed ttf_check */
-} face_slot_t;
 
 /* Montserrat kerns through GPOS pair adjustment (lookup type 2, formats 1
  * and 2, x advance only), which stb_truetype reads; tools/fonts/check_fonts.py
  * verifies that its result equals the font's 'kern' feature. The icons have
  * no kerning; NONE also skips the per-glyph pair lookup. */
-static face_slot_t faces[FACE_COUNT] = {
-    [FACE_MEDIUM] = {"medium.ttf", LV_FONT_KERNING_NORMAL, {0}, false},
-    [FACE_SEMIBOLD] = {"semibold.ttf", LV_FONT_KERNING_NORMAL, {0}, false},
-    [FACE_ICONS] = {"icons.ttf", LV_FONT_KERNING_NONE, {0}, false},
+static const struct {
+    const char *key; /* in MEDIA_BUCKET_FONTS */
+    lv_font_kerning_t kerning;
+} faces[FACE_COUNT] = {
+    [FACE_MEDIUM] = {"medium.ttf", LV_FONT_KERNING_NORMAL},
+    [FACE_SEMIBOLD] = {"semibold.ttf", LV_FONT_KERNING_NORMAL},
+    [FACE_ICONS] = {"icons.ttf", LV_FONT_KERNING_NONE},
 };
 
 /* Glyph cache per font (tiny_ttf caches that many glyphs: metrics and the
@@ -90,107 +109,235 @@ typedef struct {
     lv_font_t **slot;
     face_t face;
     int32_t px;
-    uint16_t cache;          /* glyphs */
-    uint16_t line_em_x100;   /* line height, 1/100 em; 0 = from the font */
-    uint16_t base_em_x1000;  /* baseline above the line bottom, 1/1000 em */
-    lv_font_t *font;
-} font_slot_t;
+    uint16_t cache;         /* glyphs */
+    uint16_t line_em_x100;  /* line height, 1/100 em; 0 = from the font */
+    uint16_t base_em_x1000; /* baseline above the line bottom, 1/1000 em */
+} text_slot_t;
 
-static font_slot_t font_slots[] = {
-    {&fnt_semibold_14, FACE_SEMIBOLD, 14, 0, 0, 0, NULL},
-    {&fnt_semibold_18, FACE_SEMIBOLD, 18, 0, 0, 0, NULL},
-    {&fnt_medium_14, FACE_MEDIUM, 14, 0, 0, 0, NULL},
-    {&fnt_medium_24, FACE_MEDIUM, 24, 0, 0, 0, NULL},
-    {&fnt_medium_32, FACE_MEDIUM, 32, 0, 0, 0, NULL},
-    {&fnt_medium_48, FACE_MEDIUM, 48, 0, 103, 155, NULL},
-    {&fnt_medium_72, FACE_MEDIUM, 72, 0, 103, 155, NULL},
+static const text_slot_t text_slots[] = {
+    {&fnt_semibold_14, FACE_SEMIBOLD, 14, 0, 0, 0},
+    {&fnt_semibold_18, FACE_SEMIBOLD, 18, 0, 0, 0},
+    {&fnt_medium_14, FACE_MEDIUM, 14, 0, 0, 0},
+    {&fnt_medium_24, FACE_MEDIUM, 24, 0, 0, 0},
+    {&fnt_medium_32, FACE_MEDIUM, 32, 0, 0, 0},
+    {&fnt_medium_48, FACE_MEDIUM, 48, 0, 103, 155},
+    {&fnt_medium_72, FACE_MEDIUM, 72, 0, 103, 155},
 };
-#define FONT_SLOT_COUNT (sizeof(font_slots) / sizeof(font_slots[0]))
+#define TEXT_COUNT (sizeof(text_slots) / sizeof(text_slots[0]))
 
 /* One icons font per size the text fonts use. */
+static const int32_t icon_px[] = {14, 18, 24, 32, 48, 72};
+#define ICON_COUNT (sizeof(icon_px) / sizeof(icon_px[0]))
+
+/* The stable fonts fnt_* point at. */
+static lv_font_t text_wrap[TEXT_COUNT];
+static lv_font_t icon_wrap[ICON_COUNT];
+
+/* One loaded set: the mapped files and the tiny_ttf fonts made from them
+ * (NULL = not loaded, the wrapper holds the built-in font). Two sets exist
+ * only during a reload. */
 typedef struct {
-    int32_t px;
-    lv_font_t *font;
-} icon_slot_t;
+    media_file_t file[FACE_COUNT];
+    bool usable[FACE_COUNT]; /* mapped and passed ttf_check */
+    lv_font_t *text[TEXT_COUNT];
+    lv_font_t *icons[ICON_COUNT];
+} font_set_t;
 
-static icon_slot_t icon_slots[] = {{14, NULL}, {18, NULL}, {24, NULL}, {32, NULL}, {48, NULL}, {72, NULL}};
-#define ICON_SLOT_COUNT (sizeof(icon_slots) / sizeof(icon_slots[0]))
+static font_set_t sets[2];
+static font_set_t *current; /* NULL before init_fonts / after destroy_fonts */
 
-static void open_face(face_slot_t *f) {
-    media_err_t err = media_open(MEDIA_BUCKET_FONTS, f->key, &f->file);
+/* ---- loading ---------------------------------------------------------------- */
+
+static void open_face(font_set_t *s, face_t face) {
+    const char *key = faces[face].key;
+    media_err_t err = media_open(MEDIA_BUCKET_FONTS, key, &s->file[face]);
     if (err != MEDIA_OK) {
-        LV_LOG_WARN("font %s not loaded (media error %d)", f->key, (int)err);
+        LV_LOG_WARN("font %s not loaded (media error %d)", key, (int)err);
         return;
     }
-    ttf_check_t chk = ttf_check(f->file.data, f->file.size);
+    ttf_check_t chk = ttf_check(s->file[face].data, s->file[face].size);
     if (chk != TTF_OK) {
-        LV_LOG_WARN("font %s not loaded: %s", f->key, ttf_check_str(chk));
-        media_close(&f->file);
+        LV_LOG_WARN("font %s not loaded: %s", key, ttf_check_str(chk));
+        media_close(&s->file[face]);
         return;
     }
-    f->usable = true;
+    s->usable[face] = true;
 }
 
-static lv_font_t *create(face_t face, int32_t px, size_t cache) {
-    face_slot_t *f = &faces[face];
-    if (!f->usable) return NULL;
-    return lv_tiny_ttf_create_data_ex(f->file.data, f->file.size, px, f->kerning, cache);
+static lv_font_t *create(font_set_t *s, face_t face, int32_t px, size_t cache) {
+    if (!s->usable[face]) return NULL;
+    lv_font_t *f = lv_tiny_ttf_create_data_ex(s->file[face].data, s->file[face].size, px, faces[face].kerning, cache);
+    if (!f) LV_LOG_WARN("font %s %d px: out of memory", faces[face].key, (int)px);
+    return f;
 }
 
-static lv_font_t *icons_for(int32_t px) {
-    for (size_t i = 0; i < ICON_SLOT_COUNT; i++) {
-        if (icon_slots[i].px == px) return icon_slots[i].font;
+/* Map the files of the bucket and make every font. Same file as the set in
+ * use: the store hands back the same mapping (one more reference). */
+static void load_set(font_set_t *s) {
+    memset(s, 0, sizeof(*s));
+    for (int f = 0; f < FACE_COUNT; f++) open_face(s, (face_t)f);
+    for (size_t i = 0; i < ICON_COUNT; i++) s->icons[i] = create(s, FACE_ICONS, icon_px[i], 0);
+    for (size_t i = 0; i < TEXT_COUNT; i++) {
+        const text_slot_t *t = &text_slots[i];
+        s->text[i] = create(s, t->face, t->px, t->cache);
+    }
+}
+
+/* Fonts first: they read the mappings until destroyed. */
+static void release_set(font_set_t *s) {
+    for (size_t i = 0; i < TEXT_COUNT; i++) {
+        if (s->text[i]) lv_tiny_ttf_destroy(s->text[i]);
+        s->text[i] = NULL;
+    }
+    for (size_t i = 0; i < ICON_COUNT; i++) {
+        if (s->icons[i]) lv_tiny_ttf_destroy(s->icons[i]);
+        s->icons[i] = NULL;
+    }
+    for (int f = 0; f < FACE_COUNT; f++) {
+        media_close(&s->file[f]);
+        s->usable[f] = false;
+    }
+}
+
+static lv_font_t *icon_wrap_for(int32_t px) {
+    for (size_t i = 0; i < ICON_COUNT; i++) {
+        if (icon_px[i] == px) return &icon_wrap[i];
     }
     return NULL;
 }
 
-void init_fonts(void) {
-    /* Idempotent; the store may already be up (S3 server). */
-    media_init();
-    for (size_t i = 0; i < FACE_COUNT; i++) open_face(&faces[i]);
-
-    for (size_t i = 0; i < ICON_SLOT_COUNT; i++) {
-        icon_slot_t *s = &icon_slots[i];
-        s->font = create(FACE_ICONS, s->px, 0);
-        if (s->font) s->font->fallback = BUILTIN_FONT;
+/* Point the wrappers at `s` (NULL: the built-in font everywhere). */
+static void apply_set(const font_set_t *s) {
+    for (size_t i = 0; i < ICON_COUNT; i++) {
+        const lv_font_t *src = s && s->icons[i] ? s->icons[i] : BUILTIN_FONT;
+        icon_wrap[i] = *src;
+        /* the built-in font's own fallback is NULL; a missing icons file
+         * makes this wrapper a second built-in font, which is harmless */
+        icon_wrap[i].fallback = src == BUILTIN_FONT ? NULL : BUILTIN_FONT;
     }
-
-    for (size_t i = 0; i < FONT_SLOT_COUNT; i++) {
-        font_slot_t *s = &font_slots[i];
-        s->font = create(s->face, s->px, s->cache);
-        if (!s->font) {
-            if (faces[s->face].usable) LV_LOG_WARN("font %s %d px: out of memory", faces[s->face].key, (int)s->px);
-            *s->slot = BUILTIN_FONT;
-            continue;
+    for (size_t i = 0; i < TEXT_COUNT; i++) {
+        const text_slot_t *t = &text_slots[i];
+        lv_font_t *w = &text_wrap[i];
+        if (s && s->text[i]) {
+            *w = *s->text[i];
+            if (t->line_em_x100) {
+                w->line_height = (int32_t)((t->px * t->line_em_x100 + 50) / 100);
+                w->base_line = (int32_t)((t->px * t->base_em_x1000 + 500) / 1000);
+            }
+            /* tiny_ttf leaves these 0; Montserrat's are ~0.1 em below the
+             * baseline and ~0.05 em thick */
+            w->underline_position = (int8_t)(-(t->px + 5) / 10);
+            w->underline_thickness = (int8_t)((t->px + 10) / 20);
+        } else {
+            *w = *BUILTIN_FONT;
         }
-        if (s->line_em_x100) {
-            s->font->line_height = (int32_t)((s->px * s->line_em_x100 + 50) / 100);
-            s->font->base_line = (int32_t)((s->px * s->base_em_x1000 + 500) / 1000);
-        }
-        /* tiny_ttf leaves these 0; Montserrat's are ~0.1 em below the
-         * baseline and ~0.05 em thick */
-        s->font->underline_position = (int8_t)(-(s->px + 5) / 10);
-        s->font->underline_thickness = (int8_t)((s->px + 10) / 20);
-        lv_font_t *icons = icons_for(s->px);
-        s->font->fallback = icons ? icons : BUILTIN_FONT;
-        *s->slot = s->font;
+        lv_font_t *icons = s ? icon_wrap_for(t->px) : NULL;
+        w->fallback = icons;
+        *t->slot = w;
     }
 }
 
+/* Re-measure and redraw everything: what lv_obj_report_style_change(NULL)
+ * does for the screens, plus the top/sys/bottom layers it skips (modals),
+ * on every display (main and mini). lv_obj_refresh_style(ANY) sends
+ * LV_EVENT_STYLE_CHANGED to the whole subtree (labels re-measure their
+ * text) and invalidates it. */
+static void refresh_all(void) {
+    for (lv_display_t *d = lv_display_get_next(NULL); d; d = lv_display_get_next(d)) {
+        lv_obj_t *roots[] = {lv_display_get_layer_bottom(d), lv_display_get_layer_top(d),
+                             lv_display_get_layer_sys(d)};
+        for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+            if (roots[i]) lv_obj_refresh_style(roots[i], LV_PART_ANY, LV_STYLE_PROP_ANY);
+        }
+        lv_obj_t *active = lv_display_get_screen_active(d);
+        if (active) lv_obj_invalidate(active);
+    }
+    lv_obj_report_style_change(NULL); /* every screen of every display */
+}
+
+/* Room the new set needs in the LVGL pool while the old one still exists:
+ * ~430 B per font (descriptor + three cache headers) x 13, with margin.
+ * LVGL halts on some failed allocations inside tiny_ttf (lv_cache_create
+ * asserts), so a reload waits for room instead of trying. */
+#define RELOAD_POOL_NEEDED 8192u
+
+/* false: not enough pool now, try again later */
+static bool reload_fonts(void) {
+    if (!current) return true;
+    font_set_t *next = current == &sets[0] ? &sets[1] : &sets[0];
+    lv_mem_monitor_t before;
+    lv_mem_monitor(&before);
+    if (before.free_size < RELOAD_POOL_NEEDED || before.free_biggest_size < 1024) {
+        LV_LOG_WARN("fonts: reload postponed, LVGL pool free %u", (unsigned)before.free_size);
+        return false;
+    }
+    load_set(next);
+    apply_set(next);
+    refresh_all();
+    release_set(current); /* the store frees replaced/deleted pages here */
+    current = next;
+    lv_mem_monitor_t after;
+    lv_mem_monitor(&after);
+    LV_LOG_WARN("fonts reloaded: medium %s, semibold %s, icons %s; LVGL pool free %u -> %u",
+                next->usable[FACE_MEDIUM] ? "ok" : "built-in", next->usable[FACE_SEMIBOLD] ? "ok" : "built-in",
+                next->usable[FACE_ICONS] ? "ok" : "none", (unsigned)before.free_size, (unsigned)after.free_size);
+    return true;
+}
+
+/* ---- reload requests -------------------------------------------------------- */
+
+/* Bumped by fonts_request_reload() from any task; read by the LVGL task. */
+static atomic_uint reload_requests;
+
+#define RELOAD_POLL_MS 250u
+#define RELOAD_QUIET_MS 1500u /* one reload after the last change of a batch */
+
+static lv_timer_t *reload_timer;
+static unsigned seen_requests;
+static uint32_t last_change_tick;
+static bool reload_pending;
+
+void fonts_request_reload(void) { atomic_fetch_add_explicit(&reload_requests, 1u, memory_order_relaxed); }
+
+/* LVGL task, inside lv_timer_handler(), lock held. */
+static void reload_poll_cb(lv_timer_t *timer) {
+    LV_UNUSED(timer);
+    unsigned n = atomic_load_explicit(&reload_requests, memory_order_relaxed);
+    if (n != seen_requests) {
+        seen_requests = n;
+        last_change_tick = lv_tick_get();
+        reload_pending = true;
+        return;
+    }
+    if (reload_pending && lv_tick_elaps(last_change_tick) >= RELOAD_QUIET_MS) {
+        if (reload_fonts()) {
+            reload_pending = false;
+        } else {
+            last_change_tick = lv_tick_get(); /* retry after another quiet period */
+        }
+    }
+}
+
+/* ---- public API ----------------------------------------------------------------- */
+
+void init_fonts(void) {
+    if (current) return;
+    /* Idempotent; the store may already be up (S3 server). */
+    media_init();
+    current = &sets[0];
+    load_set(current);
+    apply_set(current);
+    seen_requests = atomic_load_explicit(&reload_requests, memory_order_relaxed);
+    reload_pending = false;
+    if (!reload_timer) reload_timer = lv_timer_create(reload_poll_cb, RELOAD_POLL_MS, NULL);
+}
+
 void destroy_fonts(void) {
-    for (size_t i = 0; i < FONT_SLOT_COUNT; i++) {
-        font_slot_t *s = &font_slots[i];
-        *s->slot = BUILTIN_FONT;
-        if (s->font) lv_tiny_ttf_destroy(s->font);
-        s->font = NULL;
+    if (reload_timer) {
+        lv_timer_delete(reload_timer);
+        reload_timer = NULL;
     }
-    for (size_t i = 0; i < ICON_SLOT_COUNT; i++) {
-        if (icon_slots[i].font) lv_tiny_ttf_destroy(icon_slots[i].font);
-        icon_slots[i].font = NULL;
-    }
-    /* after the fonts: they read the mapping until destroyed */
-    for (size_t i = 0; i < FACE_COUNT; i++) {
-        media_close(&faces[i].file);
-        faces[i].usable = false;
-    }
+    apply_set(NULL); /* fnt_* keep their addresses: the built-in font */
+    if (current) release_set(current);
+    current = NULL;
 }
