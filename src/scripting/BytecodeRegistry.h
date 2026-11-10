@@ -79,6 +79,8 @@ public:
     // build's (same bytecode_stdlib_id()) is rebased into a new region for
     // this build (JS_RebaseBytecodeWindow: no JS context, a 4 KB buffer).
     // Entries with another or an unknown table stay stale ("deploy again").
+    // Also rebased: entries of this build whose js_user mapping moved (the
+    // partition maps at another virtual address than at upload time).
     void rebaseStale();
 
     // Add new bytecode entry (replaces an existing entry of the same name).
@@ -167,6 +169,7 @@ private:
 
     // Rebases one stale entry (lock held); false leaves it as it was.
     bool rebaseEntry(const BytecodeEntry& entry);
+    bool mappingMoved(const BytecodeEntry& entry) const;
 };
 
 // C interface for mquickjs binding

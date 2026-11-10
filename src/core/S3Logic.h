@@ -71,8 +71,9 @@ inline bool endsWith(const char* s, size_t len, const char* suffix) {
 // Object keys are relative to the bucket's directory. A bucket's directory
 // tree excludes the directories of the other buckets below it, so every
 // object is reachable through exactly one bucket: in `app` (the root) the
-// subtrees www/, fonts/ and scripts/examples/ are not listed, not readable
-// (404) and not writable (400).
+// subtrees www/ and scripts/examples/ are not listed, not readable (404)
+// and not writable (400). A LittleFS fonts/ directory is an ordinary part
+// of `app`: the bucket `fonts` is in the media store.
 
 constexpr size_t cLen(const char* s) {
     size_t n = 0;

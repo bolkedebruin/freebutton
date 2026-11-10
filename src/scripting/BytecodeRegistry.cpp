@@ -175,7 +175,7 @@ void BytecodeRegistry::rebaseStale() {
     // By index with a copy: rebaseEntry() updates the entry in place (add()).
     for (size_t i = 0; i < entries_.size(); ++i) {
         const BytecodeEntry entry = entries_[i];
-        if (!entry.active || entry.app_id == app) {
+        if (!entry.active || (entry.app_id == app && !mappingMoved(entry))) {
             continue;
         }
         if (entry.rom_base == 0 || entry.stdlib_id == 0) {
@@ -195,6 +195,18 @@ void BytecodeRegistry::rebaseStale() {
     if (changed && !save()) {
         ESP_LOGE(TAG, "Failed to save the registry after rebasing");
     }
+}
+
+// Lock held. The bytecode's own pointers were relocated for the virtual
+// address js_user had at upload time; another mapping order at boot (e.g. a
+// different set of memory-mapped media files before it) moves that address.
+bool BytecodeRegistry::mappingMoved(const BytecodeEntry& entry) const {
+    constexpr uint32_t kHeader = sizeof(JSBytecodeHeader);
+    if (virtual_base_addr_ == 0 || entry.size <= kHeader || entry.offset + entry.size > usableSize()) {
+        return false;
+    }
+    const auto* hdr = reinterpret_cast<const JSBytecodeHeader*>(virtual_base_addr_ + entry.offset);
+    return hdr->base_addr != virtual_base_addr_ + entry.offset + kHeader;
 }
 
 // Lock held. Streams the old image (mapped flash, read-only) through a 4 KB

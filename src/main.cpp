@@ -20,6 +20,7 @@
 #include "scripting/ScriptEngine.h"
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/mqtt_binding.h"
+#include "media/media_store.h"
 
 // Forward declaration - avoid include order issues with ESPAsyncWebServer
 namespace Scripting {
@@ -81,6 +82,11 @@ void setup() {
         ESP_LOGE(TAG, "Hardware initialization failed!");
         return;
     }
+
+    // Map js_user before anything else memory-maps flash (the fonts in the
+    // media partition, in initializeLvgl): bytecode is relocated for that
+    // virtual address, which depends on the mapping order.
+    BytecodeRegistry::instance();
 
     auto &displayManager = getDisplayManager();
     initBusAwareFileSystem(displayManager.getMainDisplay(), true, "", 10, "data");
@@ -281,6 +287,17 @@ void loop() {
     if (currentTime - lastSensorUpdateTime > SENSOR_UPDATE_INTERVAL) {
         lastSensorUpdateTime = currentTime;
         sampleSensors();
+    }
+
+    // Media store upkeep (src/media): verify or erase one free page ahead of
+    // uploads, or finish a directory rollover / compaction step. Every 250 ms
+    // while work is pending, else every 10 s (an erase briefly stalls flash
+    // reads, so it runs here rather than in an upload).
+    static unsigned long lastMediaMaintainTime = 0;
+    static bool mediaWorkPending = true;
+    if (currentTime - lastMediaMaintainTime > (mediaWorkPending ? 250UL : 10000UL)) {
+        lastMediaMaintainTime = currentTime;
+        mediaWorkPending = media_maintain();
     }
 
     // Clean up stale WebSocket clients every second

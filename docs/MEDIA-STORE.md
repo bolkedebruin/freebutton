@@ -23,15 +23,22 @@ was file I/O, not rasterizing.
 ## Partition layout (`tools/partition_tables/button_v2.csv`)
 
 ```
-# Name,    Type, SubType,  Offset,    Size
-nvs,       data, nvs,      0x9000,    0x5000,     # 20 KB
+# FreeButton partition table v2 (16 MB flash). Layout and rationale:
+# docs/MEDIA-STORE.md; moving a device from v1: docs/MIGRATION-PARTITIONS-V2.md.
+# gen_esp32part.py rejects comments after a row (read as flags): keep them on
+# their own lines.
+# No phy_init: CONFIG_ESP_PHY_INIT_DATA_IN_PARTITION is off (PHY data is in the app).
+#   nvs 20 KB | app0/app1 3 MB each | coredump 64 KB | js_user 256 KB compiled
+#   scripts | media 5 MB media store (fonts, bucket "fonts") | data 4.6 MB LittleFS
+# Name,    Type, SubType,  Offset,    Size,      Flags
+nvs,       data, nvs,      0x9000,    0x5000,
 otadata,   data, ota,      0xE000,    0x2000,
-app0,      app,  ota_0,    0x10000,   0x300000,   # 3 MB
-app1,      app,  ota_1,    0x310000,  0x300000,   # 3 MB
-coredump,  data, coredump, 0x610000,  0x10000,    # 64 KB
-js_user,   data, 0x41,     0x620000,  0x40000,    # 256 KB, compiled scripts
-media,     data, 0x42,     0x660000,  0x500000,   # 5 MB, this store
-data,      data, spiffs,   0xB60000,  0x4A0000,   # 4.6 MB LittleFS
+app0,      app,  ota_0,    0x10000,   0x300000,
+app1,      app,  ota_1,    0x310000,  0x300000,
+coredump,  data, coredump, 0x610000,  0x10000,
+js_user,   data, 0x41,     0x620000,  0x40000,
+media,     data, 0x42,     0x660000,  0x500000,
+data,      data, spiffs,   0xB60000,  0x4A0000,
 ```
 
 Moving to this layout erases the device once (serial flash with erase):
@@ -278,3 +285,18 @@ font.
 | `medium.ttf` | text, medium weight (all `fnt_medium_*` sizes) |
 | `semibold.ttf` | text, semibold (`fnt_semibold_*`) |
 | `icons.ttf` | Material Design Icons; fallback of both text fonts |
+
+- `icons.ttf` is the full Material Design Icons 7.4.47 set (7,447 icons,
+  1.06 MB), addressed by MDI's own codepoints; it also maps the media and
+  check symbols Montserrat lacks (⏭⏮⏯⏴⏵⏶⏷⏸⏹⏩⏪⏺ ✓✔✗✘) to MDI glyphs.
+  Built by `tools/fonts/build_fonts.py`, checked by `tools/fonts/check_fonts.py`.
+- tiny_ttf glyph and kerning caches are off (`lv_conf.h`): LVGL draws in
+  bands and fetches each glyph again per band, so a cache smaller than the
+  page's working set only misses, and a large one does not fit the LVGL pool.
+  An uncached glyph costs 0.6-1 ms.
+- 48 and 72 px keep the old 1.03 em line box (page layouts unchanged); a
+  descender or an accent on a capital can be clipped by up to ~0.1 em.
+- `ttf_check.c` validates a font's tables before stb_truetype reads them (it
+  trusts every offset); a damaged upload falls back to the built-in font.
+- Fonts are opened at boot: an uploaded or deleted font takes effect at the
+  next reboot.
