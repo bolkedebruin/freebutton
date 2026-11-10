@@ -13,6 +13,7 @@
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/WebSocketREPL.h"
 #include "drivers/DeviceInfo.h"
+#include "drivers/LvglDisplay.h"
 #include "S3Server.h"
 #include "Auth.h"
 #include <ArduinoJson.h>
@@ -542,6 +543,12 @@ void webserver_start() {
     server.on("/api/bytecode/upload", HTTP_POST, handleBytecodeUpload, onBytecodeUpload);
     server.on("/api/bytecode/list", HTTP_GET, handleBytecodeList);
     server.on("/api/reboot", HTTP_POST, handleReboot);
+    // Debug: repaint every display once and save what is flushed to LittleFS
+    // /screenshot-*.rgb565 (bucket app; tools/scripts/screenshot.py).
+    server.on("/api/screenshot", HTTP_POST, [](AsyncWebServerRequest *request){
+        FreeButton::LvglDisplay::requestScreenshot();
+        request->send(202, "application/json", "{\"status\":\"requested\"}");
+    });
 
     // Reports where the next (small) uploaded bytecode blob would land in the
     // js_user partition and the free gap there (the device relocates uploads

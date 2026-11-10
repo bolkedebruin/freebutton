@@ -53,6 +53,7 @@ constexpr const char* kProtected[] = {
     "/api/bytecode/upload", // POST multipart
     "/config",              // GET: contains secrets (WiFi / MQTT passwords)
     "/ws/repl",             // GET: WebSocket upgrade (presigned URL)
+    "/api/screenshot",      // POST: repaint + write the displays to LittleFS
 };
 
 uint8_t randomByte() {

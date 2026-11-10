@@ -3,6 +3,8 @@
 #include "../ui/ota_modal.h"
 #include "../ui/PendingRender.h"
 #include "../core/FileSystem.h"
+#include "BusAwareFileSystem.h"
+#include <atomic>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
@@ -26,6 +28,35 @@ static auto TAG = "LvglDisplay";
 
 // Global instance
 std::unique_ptr<LvglDisplay> g_lvglDisplay;
+
+// Screenshot capture (requestScreenshot / captureScreens): set only inside
+// captureScreens(), on the LVGL task, around one lv_refr_now() of s_capDisp;
+// the flush callbacks (same task) append what they send.
+static std::atomic<bool> s_screenshotRequested{false};
+static lv_display_t* s_capDisp = nullptr;
+static BusAwareFile s_capFile;
+static bool s_capOk = false;
+static constexpr size_t kCapHeader = 8;
+
+static void captureArea(lv_display_t* disp, const lv_area_t* area, const uint8_t* px) {
+    if (disp != s_capDisp || !s_capFile) return;
+    const size_t w = static_cast<size_t>(lv_display_get_horizontal_resolution(disp));
+    const size_t aw = static_cast<size_t>(area->x2 - area->x1 + 1);
+    const size_t ah = static_cast<size_t>(area->y2 - area->y1 + 1);
+    if (area->x1 == 0 && aw == w) {  // full-width band: one write
+        if (!s_capFile.seek(kCapHeader + static_cast<size_t>(area->y1) * w * 2) ||
+            s_capFile.write(px, aw * ah * 2) != aw * ah * 2) {
+            s_capOk = false;
+        }
+        return;
+    }
+    for (size_t row = 0; row < ah; ++row) {
+        const size_t off = kCapHeader + ((static_cast<size_t>(area->y1) + row) * w + area->x1) * 2;
+        if (!s_capFile.seek(off) || s_capFile.write(px + row * aw * 2, aw * 2) != aw * 2) {
+            s_capOk = false;
+        }
+    }
+}
 
 // Reference to display manager for flush callback
 static DisplayManager* g_display_mgr = nullptr;
@@ -208,12 +239,17 @@ void LvglDisplay::flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* p
         vTaskDelay(1);
     }
     main_gfx->pushImageDMA(area->x1, area->y1, width, height, reinterpret_cast<uint16_t *>(px_map));
+    if (disp == s_capDisp) {
+        main_gfx->waitDMA();  // the capture writes to LittleFS next: bus free
+    }
 
     // End write operation
     main_gfx->endWrite();
 
     // Deselect all displays after operation
     g_display_mgr->deselectAllDisplays();
+
+    captureArea(disp, area, px_map);
 
     // Signal LVGL that flushing is complete
     lv_display_flush_ready(disp);
@@ -234,6 +270,10 @@ void LvglDisplay::task() {
 
     lv_timer_handler();
 
+    if (s_screenshotRequested.exchange(false)) {
+        captureScreens();
+    }
+
     // Process any pending WiFi QR modal operations
     wifi_qr_modal_process_pending();
 
@@ -252,6 +292,48 @@ void LvglDisplay::task() {
     }
 
     unlock();
+}
+
+void LvglDisplay::requestScreenshot() {
+    s_screenshotRequested.store(true);
+}
+
+// LVGL task, lock held. One full repaint per display, captured by the flush
+// callbacks. A mini display without an LVGL buffer (no Button) is skipped.
+void LvglDisplay::captureScreens() {
+    auto& fs = getBusAwareFileSystem();
+    const int64_t t0 = esp_timer_get_time();
+    const size_t count = 1 + small_displays_.size();
+    for (size_t i = 0; i < count; ++i) {
+        lv_display_t* disp = i == 0 ? main_display_ : small_displays_[i - 1];
+        if (!disp || !lv_display_get_buf_active(disp)) continue;
+        lv_obj_t* scr = lv_display_get_screen_active(disp);
+        if (!scr) continue;
+        char path[40];
+        if (i == 0) {
+            snprintf(path, sizeof path, "/screenshot-main.rgb565");
+        } else {
+            snprintf(path, sizeof path, "/screenshot-mini%u.rgb565", static_cast<unsigned>(i - 1));
+        }
+        s_capFile = fs.open(path, FILE_WRITE, true);
+        if (!s_capFile) {
+            ESP_LOGE(TAG, "screenshot: cannot open %s", path);
+            continue;
+        }
+        const uint16_t w = static_cast<uint16_t>(lv_display_get_horizontal_resolution(disp));
+        const uint16_t h = static_cast<uint16_t>(lv_display_get_vertical_resolution(disp));
+        const uint8_t hdr[kCapHeader] = {'F', 'B', 'S', 'S', static_cast<uint8_t>(w), static_cast<uint8_t>(w >> 8),
+                                         static_cast<uint8_t>(h), static_cast<uint8_t>(h >> 8)};
+        s_capOk = s_capFile.write(hdr, sizeof hdr) == sizeof hdr;
+        s_capDisp = disp;
+        lv_obj_invalidate(scr);
+        lv_refr_now(disp);
+        s_capDisp = nullptr;
+        s_capFile.close();
+        s_capFile = BusAwareFile();
+        ESP_LOGI(TAG, "screenshot: %s %ux%u %s", path, w, h, s_capOk ? "written" : "FAILED");
+    }
+    ESP_LOGI(TAG, "screenshot: done in %lld ms", (esp_timer_get_time() - t0) / 1000);
 }
 
 void LvglDisplay::getLvglMemory(size_t& freeBytes, size_t& totalBytes) const {
@@ -384,6 +466,8 @@ void LvglDisplay::flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint
     small_gfx->endWrite();
 
     g_display_mgr->deselectAllDisplays();
+
+    captureArea(disp, area, px_map);
 
     lv_display_flush_ready(disp);
 }

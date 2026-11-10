@@ -72,11 +72,19 @@ public:
     // Utility
     bool isInitialized() const { return initialized_; }
 
+    // Screenshot (debug, POST /api/screenshot): from any task. The LVGL task
+    // then repaints every display once and writes what it flushes to
+    // LittleFS /screenshot-<main|miniN>.rgb565: an 8-byte header ("FBSS",
+    // uint16 LE width, uint16 LE height) and RGB565 big-endian pixels, row by
+    // row (tools/scripts/screenshot.py turns them into PNGs).
+    static void requestScreenshot();
+
     // Last LVGL pool snapshot (free/total bytes). Safe from any task: it
     // never touches the pool, unlike lv_mem_monitor().
     void getLvglMemory(size_t& freeBytes, size_t& totalBytes) const;
 
 private:
+    void captureScreens();
     static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
     static void flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
     void initializeSmallDisplays(DisplayManager& displayManager);
