@@ -1,28 +1,33 @@
 //
 // Created by Bolke de Bruin on 24/06/2024.
 //
-// LVGL adapter for the streaming .bin fonts on LittleFS. The format itself is
-// handled by font_bin.c; this file only maps it onto LVGL's public font API
-// (lv_font_t callbacks, lv_font_glyph_dsc_t, lv_draw_buf_t, lv_fs_*).
+// The UI fonts: TrueType files in the media store (bucket `fonts`, see
+// docs/MEDIA-STORE.md), rendered by LVGL's tiny_ttf (stb_truetype) straight
+// from memory-mapped flash. Nothing is copied to RAM: each file is mapped
+// once (media_open) and every size of that face reads the same mapping.
 //
-// RAM per font: the stream_font_t below plus the cmap subtable headers
-// (16 bytes each, 11-12 for our fonts). Glyph metrics, sparse cmap lists and
-// kerning are read from the file on demand; bitmaps are decoded straight into
-// LVGL's glyph draw buffer through a small stack buffer. Shared by all fonts:
-// a 1 KB block cache of file reads (static) and at most two open files.
+//   medium.ttf    fnt_medium_14/24/32/48/72
+//   semibold.ttf  fnt_semibold_14/18
+//   icons.ttf     Material Design Icons, one font per size, the fallback of
+//                 the text fonts of that size
+//
+// Fallback chain of a text font: text -> icons (same size) -> LV_FONT_DEFAULT
+// (LVGL's built-in Montserrat 14, the only compiled font). A missing or
+// invalid text file makes its slots LV_FONT_DEFAULT; a missing icons file
+// leaves the text fonts without icons.
+//
+// The files stay mapped until destroy_fonts(): the media store keeps the
+// pages of a replaced or deleted font until then, so a font uploaded to the
+// bucket takes effect at the next boot.
 //
 
 #include "fonts.h"
 
-#include <string.h>
+#include <stdbool.h>
+#include <stddef.h>
 
-#include "font_bin.h"
-
-/* The one compiled font: LVGL's own Montserrat 14 (LV_FONT_DEFAULT, ASCII
- * plus LVGL's symbols). Every UI font falls back to it when its file is
- * missing or unreadable, so the device still shows text, at 14 px and without
- * the extra symbols and icons. */
-#define BUILTIN_FONT LV_FONT_DEFAULT
+#include "../../media/media_store.h"
+#include "ttf_check.h"
 
 lv_font_t *fnt_semibold_14;
 lv_font_t *fnt_semibold_18;
@@ -33,279 +38,159 @@ lv_font_t *fnt_medium_32;
 lv_font_t *fnt_medium_48;
 lv_font_t *fnt_medium_72;
 
-typedef struct {
-    lv_font_t font; /* font.dsc points back at this struct */
-    font_bin_t bin;
-    font_bin_cache_t cache;
-    lv_fs_file_t file;
-    bool file_open;
-    const char *path; /* string literal, used to reopen the file lazily */
-} stream_font_t;
+/* The one compiled font: LVGL's Montserrat 14 (ASCII plus LVGL's symbols). */
+#define BUILTIN_FONT ((lv_font_t *)LV_FONT_DEFAULT)
 
-/* ---- font_bin_io_t over lv_fs ------------------------------------------- */
-
-/* At most two font files are open at a time: LittleFS is mounted with few
- * file slots and every open file holds ~1 KB of buffers, while an open costs
- * ~9 ms (path lookup). Two covers a page that alternates a caption and a value
- * font; most reads are served by the block cache below without the file. */
-#define OPEN_FILES_MAX 2u
-static stream_font_t *open_fonts[OPEN_FILES_MAX]; /* [0] most recently used */
-
-static void close_file(stream_font_t *sf) {
-    if (!sf->file_open) return;
-    lv_fs_close(&sf->file);
-    sf->file_open = false;
-    for (uint32_t i = 0; i < OPEN_FILES_MAX; i++) {
-        if (open_fonts[i] == sf) {
-            memmove(&open_fonts[i], &open_fonts[i + 1], (OPEN_FILES_MAX - 1 - i) * sizeof(open_fonts[0]));
-            open_fonts[OPEN_FILES_MAX - 1] = NULL;
-            break;
-        }
-    }
-}
-
-static bool ensure_open(stream_font_t *sf) {
-    if (!sf->file_open) {
-        if (open_fonts[OPEN_FILES_MAX - 1]) close_file(open_fonts[OPEN_FILES_MAX - 1]);
-        if (lv_fs_open(&sf->file, sf->path, LV_FS_MODE_RD) != LV_FS_RES_OK) return false;
-        sf->file_open = true;
-        memmove(&open_fonts[1], &open_fonts[0], (OPEN_FILES_MAX - 1) * sizeof(open_fonts[0]));
-        open_fonts[0] = sf;
-        return true;
-    }
-    /* move to front */
-    uint32_t i = 0;
-    while (i < OPEN_FILES_MAX && open_fonts[i] != sf) i++;
-    if (i && i < OPEN_FILES_MAX) {
-        memmove(&open_fonts[1], &open_fonts[0], i * sizeof(open_fonts[0]));
-        open_fonts[0] = sf;
-    }
-    return true;
-}
-
-/* A small block cache shared by all fonts. A glyph costs a dozen small reads
- * (cmap search, loca, header, bitmap, kerning) that cluster in a few places,
- * and every read that reaches the file (lv_fs, VFS, LittleFS) costs ~0.5 ms
- * on the device, however few bytes it reads. Measured
- * at the same 1 KB: 16 x 64 B needs 170 file reads for the first 100 glyphs,
- * 8 x 128 B 220, 4 x 256 B 374; without the cache, 1552. LVGL draws from one
- * thread, so one static cache needs no lock. */
-#define READ_BLOCK_SIZE 64u
-#define READ_BLOCK_COUNT 16u
+typedef enum { FACE_MEDIUM, FACE_SEMIBOLD, FACE_ICONS, FACE_COUNT } face_t;
 
 typedef struct {
-    const stream_font_t *font; /* NULL: free */
-    uint32_t start;            /* file offset, multiple of READ_BLOCK_SIZE */
-    uint32_t used;             /* read_clock at the last hit (LRU) */
-    uint16_t len;              /* valid bytes, < READ_BLOCK_SIZE at the end of the file */
-    uint8_t data[READ_BLOCK_SIZE];
-} read_block_t;
+    const char *key; /* in MEDIA_BUCKET_FONTS */
+    lv_font_kerning_t kerning;
+    media_file_t file;
+    bool usable; /* mapped and passed ttf_check */
+} face_slot_t;
 
-static read_block_t read_blocks[READ_BLOCK_COUNT];
-static uint32_t read_clock;
+/* Montserrat kerns through GPOS pair adjustment (lookup type 2, formats 1
+ * and 2, x advance only), which stb_truetype reads; tools/fonts/check_fonts.py
+ * verifies that its result equals the font's 'kern' feature. The icons have
+ * no kerning; NONE also skips the per-glyph pair lookup. */
+static face_slot_t faces[FACE_COUNT] = {
+    [FACE_MEDIUM] = {"medium.ttf", LV_FONT_KERNING_NORMAL, {0}, false},
+    [FACE_SEMIBOLD] = {"semibold.ttf", LV_FONT_KERNING_NORMAL, {0}, false},
+    [FACE_ICONS] = {"icons.ttf", LV_FONT_KERNING_NONE, {0}, false},
+};
 
-static void forget_blocks(const stream_font_t *sf) {
-    for (uint32_t i = 0; i < READ_BLOCK_COUNT; i++) {
-        if (read_blocks[i].font == sf) read_blocks[i].font = NULL;
-    }
-}
-
-static const read_block_t *get_block(stream_font_t *sf, uint32_t start) {
-    read_block_t *lru = &read_blocks[0];
-    for (uint32_t i = 0; i < READ_BLOCK_COUNT; i++) {
-        read_block_t *b = &read_blocks[i];
-        if (b->font == sf && b->start == start) {
-            b->used = ++read_clock;
-            return b;
-        }
-        if (!b->font) {
-            if (lru->font) lru = b; /* a free block beats any used one */
-        } else if (lru->font && b->used < lru->used) {
-            lru = b;
-        }
-    }
-
-    /* miss: refill the least recently used block */
-    lru->font = NULL;
-    if (!ensure_open(sf)) return NULL;
-    uint32_t got = 0;
-    if (lv_fs_seek(&sf->file, start, LV_FS_SEEK_SET) != LV_FS_RES_OK) return NULL;
-    if (lv_fs_read(&sf->file, lru->data, READ_BLOCK_SIZE, &got) != LV_FS_RES_OK || got == 0) return NULL;
-    lru->font = sf;
-    lru->start = start;
-    lru->len = (uint16_t)got;
-    lru->used = ++read_clock;
-    return lru;
-}
-
-static bool io_read_at(void *ctx, uint32_t pos, void *dst, uint32_t len) {
-    stream_font_t *sf = (stream_font_t *)ctx;
-    uint8_t *out = (uint8_t *)dst;
-    while (len) {
-        uint32_t start = pos - pos % READ_BLOCK_SIZE;
-        const read_block_t *b = get_block(sf, start);
-        if (!b || pos - start >= b->len) return false; /* read error or past the end */
-        uint32_t n = b->len - (pos - start);
-        if (n > len) n = len;
-        memcpy(out, b->data + (pos - start), n);
-        out += n;
-        pos += n;
-        len -= n;
-    }
-    return true;
-}
-
-static void *io_alloc(size_t size) { return lv_malloc(size); }
-static void io_free(void *p) { lv_free(p); }
-
-/* ---- lv_font_t callbacks -------------------------------------------------- */
-
-static bool stream_get_glyph_dsc(const lv_font_t *font, lv_font_glyph_dsc_t *dsc,
-                                 uint32_t letter, uint32_t letter_next) {
-    stream_font_t *sf = (stream_font_t *)font->dsc;
-
-    /* Same as LVGL's own fonts: a tab is a space of double width. */
-    bool is_tab = letter == '\t';
-    if (is_tab) letter = ' ';
-
-    font_bin_cache_entry_t e;
-    if (!font_bin_lookup_entry(&sf->bin, &sf->cache, letter, &e)) return false;
-    const font_bin_glyph_t g = e.glyph;
-    const uint16_t gid = e.gid;
-
-    int32_t adv = g.adv_w; /* 1/16 px */
-    if (is_tab) adv *= 2;
-    if (letter_next && sf->bin.kern_pos) {
-        font_bin_cache_entry_t e_next;
-        if (font_bin_lookup_entry(&sf->bin, &sf->cache, letter_next, &e_next)) {
-            adv += font_bin_kern_entries(&sf->bin, &e, &e_next);
-        }
-    }
-    if (adv < 0) adv = 0;
-
-    dsc->adv_w = (uint16_t)((adv + 8) >> 4); /* round to whole pixels */
-    dsc->box_w = is_tab ? g.box_w * 2 : g.box_w;
-    dsc->box_h = g.box_h;
-    dsc->ofs_x = g.ofs_x;
-    dsc->ofs_y = g.ofs_y;
-    dsc->stride = 0;
-    /* Like fmt_txt fonts: report the source depth, get_glyph_bitmap always
-     * hands back an A8 draw buffer. */
-    dsc->format = (lv_font_glyph_format_t)sf->bin.bpp;
-    dsc->is_placeholder = 0;
-    dsc->gid.index = gid;
-    dsc->entry = NULL; /* nothing to release */
-    dsc->resolved_font = font;
-    return true;
-}
-
-static const void *stream_get_glyph_bitmap(lv_font_glyph_dsc_t *g_dsc, lv_draw_buf_t *draw_buf) {
-    const lv_font_t *font = g_dsc->resolved_font;
-    if (!font || !draw_buf || g_dsc->gid.index == 0) return NULL;
-    stream_font_t *sf = (stream_font_t *)font->dsc;
-
-    font_bin_glyph_t g;
-    if (!font_bin_glyph_cached(&sf->bin, &sf->cache, (uint16_t)g_dsc->gid.index, &g)) return NULL;
-    if (g.box_w == 0 || g.box_h == 0) return NULL;
-
-    uint32_t stride = draw_buf->header.stride;
-    if (stride < g.box_w || (uint64_t)stride * g.box_h > draw_buf->data_size) return NULL;
-
-    if (!font_bin_decode(&sf->bin, &g, draw_buf->data, stride, true)) {
-        LV_LOG_WARN("font: failed to decode glyph %u", (unsigned)g_dsc->gid.index);
-        return NULL;
-    }
-    lv_draw_buf_flush_cache(draw_buf, NULL);
-    return draw_buf;
-}
-
-/* ---- create / destroy ----------------------------------------------------- */
-
-static void stream_font_destroy(stream_font_t *sf) {
-    if (!sf) return;
-    font_bin_close(&sf->bin);
-    close_file(sf);
-    forget_blocks(sf);
-    lv_free(sf);
-}
-
-static stream_font_t *stream_font_create(const char *path, const lv_font_t *fallback) {
-    stream_font_t *sf = (stream_font_t *)lv_malloc(sizeof(stream_font_t));
-    if (!sf) return NULL;
-    memset(sf, 0, sizeof(*sf));
-    sf->path = path;
-
-    const font_bin_io_t io = {io_read_at, io_alloc, io_free, sf};
-    if (!font_bin_open(&sf->bin, &io)) {
-        close_file(sf);
-        forget_blocks(sf);
-        lv_free(sf);
-        return NULL;
-    }
-    /* Only the index is needed now; glyph reads reopen the file on demand. */
-    close_file(sf);
-
-    lv_font_t *font = &sf->font;
-    font->dsc = sf;
-    font->get_glyph_dsc = stream_get_glyph_dsc;
-    font->get_glyph_bitmap = stream_get_glyph_bitmap;
-    font->release_glyph = NULL; /* bitmaps live in LVGL's draw buffer */
-    font->line_height = sf->bin.ascent - sf->bin.descent;
-    font->base_line = -sf->bin.descent;
-    font->subpx = sf->bin.subpx;
-    font->kerning = LV_FONT_KERNING_NORMAL;
-    font->static_bitmap = 0;
-    /* lv_font_conv loses the underline position in .bin files (it writes the
-     * thickness over it); Montserrat's is size / 10 below the baseline. */
-    font->underline_position = (int8_t)(-(int32_t)(sf->bin.font_size + 5) / 10);
-    font->underline_thickness = (int8_t)sf->bin.underline_thickness;
-    /* If a glyph read fails later on (file gone), LVGL draws it with the
-     * built-in font instead. */
-    font->fallback = fallback;
-
-    LV_LOG_INFO("font %s: %u glyphs, index RAM %u bytes", path, (unsigned)sf->bin.glyph_count,
-                (unsigned)(sizeof(stream_font_t) + sf->bin.cmap_count * sizeof(font_bin_cmap_t)));
-    return sf;
-}
-
-/* ---- public API ------------------------------------------------------------ */
-
+/* Glyph cache per font (tiny_ttf caches that many glyphs: metrics and the
+ * rendered A8 bitmap, in the LVGL pool), and the line box of the old fonts.
+ *
+ * Cache: 0 for every size. Measured on the device: a cached glyph holds
+ * ~0.45 KB of the pool at 14 px, ~0.75 KB at 32 px, ~2 KB at 72 px, and the
+ * pool (64 KB) has ~47 KB free at boot, which the page's widgets (~2 KB per
+ * display box) and the render scratch below must share. A cache only helps
+ * when it holds every glyph a refresh draws: LVGL renders the screen in
+ * bands (20 lines main, 5 lines mini displays) and fetches each glyph again
+ * for every band it crosses, in the same order, so an LRU cache smaller than
+ * that working set misses on every fetch. The working sets (~30-60 glyphs at
+ * 14 px on a page, ~10-16 digits and units per large size) would cost
+ * 15-30 KB per size. Uncached, tiny_ttf renders a glyph in 0.6-1 ms from
+ * mapped flash (the old .bin fonts, also uncached, took 1.6-5.3 ms) and
+ * needs 3-7 KB of pool while it does (up to ~12 KB for a 72 px '@'), freed
+ * right after: a value update in 72 px ("21.5°C", ~4 bands) re-renders in
+ * ~30 ms. LV_TINY_TTF_CACHE_KERNING_CNT is 0 too: a GPOS pair lookup in
+ * mapped flash is a few binary searches. Raise a size's count here only
+ * with a pool measurement of the pages in use.
+ *
+ * Line box: tiny_ttf takes the line height from the font's hhea metrics
+ * (1.22 em for Montserrat). For 14-32 px that is within 2 px of the old
+ * .bin fonts; the old 48 and 72 px fonts held digits and units only, with a
+ * 1.03 em line box, which page layouts were made with. Those two sizes keep
+ * it (line_em_x100, base_em_x1000 below): numbers fit, a descender or an
+ * accent above a capital is clipped by up to ~0.1 em. 0 = font metrics. */
 typedef struct {
-    const char *path;
     lv_font_t **slot;
-    stream_font_t *stream;
+    face_t face;
+    int32_t px;
+    uint16_t cache;          /* glyphs */
+    uint16_t line_em_x100;   /* line height, 1/100 em; 0 = from the font */
+    uint16_t base_em_x1000;  /* baseline above the line bottom, 1/1000 em */
+    lv_font_t *font;
 } font_slot_t;
 
 static font_slot_t font_slots[] = {
-    {"S:/fonts/mnt_semibold_14.bin", &fnt_semibold_14, NULL},
-    {"S:/fonts/mnt_semibold_18.bin", &fnt_semibold_18, NULL},
-    {"S:/fonts/mnt_medium_14.bin", &fnt_medium_14, NULL},
-    {"S:/fonts/mnt_medium_24.bin", &fnt_medium_24, NULL},
-    {"S:/fonts/mnt_medium_32.bin", &fnt_medium_32, NULL},
-    {"S:/fonts/mnt_medium_48.bin", &fnt_medium_48, NULL},
-    {"S:/fonts/mnt_medium_72.bin", &fnt_medium_72, NULL},
+    {&fnt_semibold_14, FACE_SEMIBOLD, 14, 0, 0, 0, NULL},
+    {&fnt_semibold_18, FACE_SEMIBOLD, 18, 0, 0, 0, NULL},
+    {&fnt_medium_14, FACE_MEDIUM, 14, 0, 0, 0, NULL},
+    {&fnt_medium_24, FACE_MEDIUM, 24, 0, 0, 0, NULL},
+    {&fnt_medium_32, FACE_MEDIUM, 32, 0, 0, 0, NULL},
+    {&fnt_medium_48, FACE_MEDIUM, 48, 0, 103, 155, NULL},
+    {&fnt_medium_72, FACE_MEDIUM, 72, 0, 103, 155, NULL},
 };
-
 #define FONT_SLOT_COUNT (sizeof(font_slots) / sizeof(font_slots[0]))
 
+/* One icons font per size the text fonts use. */
+typedef struct {
+    int32_t px;
+    lv_font_t *font;
+} icon_slot_t;
+
+static icon_slot_t icon_slots[] = {{14, NULL}, {18, NULL}, {24, NULL}, {32, NULL}, {48, NULL}, {72, NULL}};
+#define ICON_SLOT_COUNT (sizeof(icon_slots) / sizeof(icon_slots[0]))
+
+static void open_face(face_slot_t *f) {
+    media_err_t err = media_open(MEDIA_BUCKET_FONTS, f->key, &f->file);
+    if (err != MEDIA_OK) {
+        LV_LOG_WARN("font %s not loaded (media error %d)", f->key, (int)err);
+        return;
+    }
+    ttf_check_t chk = ttf_check(f->file.data, f->file.size);
+    if (chk != TTF_OK) {
+        LV_LOG_WARN("font %s not loaded: %s", f->key, ttf_check_str(chk));
+        media_close(&f->file);
+        return;
+    }
+    f->usable = true;
+}
+
+static lv_font_t *create(face_t face, int32_t px, size_t cache) {
+    face_slot_t *f = &faces[face];
+    if (!f->usable) return NULL;
+    return lv_tiny_ttf_create_data_ex(f->file.data, f->file.size, px, f->kerning, cache);
+}
+
+static lv_font_t *icons_for(int32_t px) {
+    for (size_t i = 0; i < ICON_SLOT_COUNT; i++) {
+        if (icon_slots[i].px == px) return icon_slots[i].font;
+    }
+    return NULL;
+}
+
 void init_fonts(void) {
+    /* Idempotent; the store may already be up (S3 server). */
+    media_init();
+    for (size_t i = 0; i < FACE_COUNT; i++) open_face(&faces[i]);
+
+    for (size_t i = 0; i < ICON_SLOT_COUNT; i++) {
+        icon_slot_t *s = &icon_slots[i];
+        s->font = create(FACE_ICONS, s->px, 0);
+        if (s->font) s->font->fallback = BUILTIN_FONT;
+    }
+
     for (size_t i = 0; i < FONT_SLOT_COUNT; i++) {
         font_slot_t *s = &font_slots[i];
-        s->stream = stream_font_create(s->path, BUILTIN_FONT);
-        if (s->stream) {
-            *s->slot = &s->stream->font;
-        } else {
-            LV_LOG_WARN("font %s not loaded, using the built-in 14 px font", s->path);
-            *s->slot = (lv_font_t *)BUILTIN_FONT;
+        s->font = create(s->face, s->px, s->cache);
+        if (!s->font) {
+            if (faces[s->face].usable) LV_LOG_WARN("font %s %d px: out of memory", faces[s->face].key, (int)s->px);
+            *s->slot = BUILTIN_FONT;
+            continue;
         }
+        if (s->line_em_x100) {
+            s->font->line_height = (int32_t)((s->px * s->line_em_x100 + 50) / 100);
+            s->font->base_line = (int32_t)((s->px * s->base_em_x1000 + 500) / 1000);
+        }
+        /* tiny_ttf leaves these 0; Montserrat's are ~0.1 em below the
+         * baseline and ~0.05 em thick */
+        s->font->underline_position = (int8_t)(-(s->px + 5) / 10);
+        s->font->underline_thickness = (int8_t)((s->px + 10) / 20);
+        lv_font_t *icons = icons_for(s->px);
+        s->font->fallback = icons ? icons : BUILTIN_FONT;
+        *s->slot = s->font;
     }
 }
 
 void destroy_fonts(void) {
     for (size_t i = 0; i < FONT_SLOT_COUNT; i++) {
         font_slot_t *s = &font_slots[i];
-        *s->slot = (lv_font_t *)BUILTIN_FONT;
-        stream_font_destroy(s->stream);
-        s->stream = NULL;
+        *s->slot = BUILTIN_FONT;
+        if (s->font) lv_tiny_ttf_destroy(s->font);
+        s->font = NULL;
+    }
+    for (size_t i = 0; i < ICON_SLOT_COUNT; i++) {
+        if (icon_slots[i].font) lv_tiny_ttf_destroy(icon_slots[i].font);
+        icon_slots[i].font = NULL;
+    }
+    /* after the fonts: they read the mapping until destroyed */
+    for (size_t i = 0; i < FACE_COUNT; i++) {
+        media_close(&faces[i].file);
+        faces[i].usable = false;
     }
 }

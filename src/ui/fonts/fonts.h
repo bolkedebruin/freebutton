@@ -8,9 +8,12 @@ extern "C" {
 
 #include "lvgl.h"
 
-/* The UI fonts. init_fonts() points them at the streaming .bin fonts on
- * LittleFS (S:/fonts/), or at LVGL's built-in 14 px Montserrat when a file is
- * missing or invalid. destroy_fonts() points them all back at that font. */
+/* The UI fonts. init_fonts() points them at TrueType fonts rendered by LVGL
+ * tiny_ttf from the media store (bucket `fonts`: medium.ttf, semibold.ttf,
+ * icons.ttf; see fonts.c), or at LVGL's built-in 14 px Montserrat when a file
+ * is missing or invalid. destroy_fonts() points them all back at that font
+ * and releases the files. Call both with the LVGL lock held (or before the
+ * LVGL task runs). */
 extern lv_font_t *fnt_semibold_14;
 extern lv_font_t *fnt_semibold_18;
 

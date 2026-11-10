@@ -168,7 +168,14 @@
 #define LV_USE_FREETYPE 0
 #define LV_USE_RLOTTIE 0
 #define LV_USE_FFMPEG 0
-#define LV_USE_TINY_TTF 0
+/* The UI fonts (src/ui/fonts/fonts.c): TrueType from the memory-mapped
+ * media store, never from a file. Caches: see the comment in fonts.c; the
+ * glyph cache size is given per font (lv_tiny_ttf_create_data_ex), the count
+ * below only applies to lv_tiny_ttf_create_data(). */
+#define LV_USE_TINY_TTF 1
+#define LV_TINY_TTF_FILE_SUPPORT 0
+#define LV_TINY_TTF_CACHE_GLYPH_CNT 0
+#define LV_TINY_TTF_CACHE_KERNING_CNT 0
 #define LV_USE_BARCODE 0
 
 /*==================
