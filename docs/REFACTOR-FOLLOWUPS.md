@@ -36,13 +36,9 @@ Then browse `http://freebutton.local/` (or the device IP):
 
 ---
 
-## 3. Partition migration (BEFORE shipping an OTA)
+## 3. DONE — Partition migration
 
-WS-E1 grew the `data` LittleFS partition **1MB → 4MB** (`tools/partition_tables/button_v1.csv`). An OTA that changes the partition table **reformats/relocates the filesystem** on already-deployed devices → on-device config + user JS scripts are lost. Options before shipping:
-- One-time full reflash (erase + flash firmware + fs) rather than OTA for this version, OR
-- A migration path: back up `/` (config.json, user scripts) before the partition change and restore after, OR
-- Stage the partition growth so existing user data is preserved.
-Decide and document per your deployment/fleet situation. New devices are unaffected.
+Superseded by partition table v2 (`tools/partition_tables/button_v2.csv`, layout in `docs/MEDIA-STORE.md`): 3 MB app slots, a `coredump` partition, the 5 MB `media` partition (fonts, bucket `fonts`) in place of the unused `img_data`, and a 4.6 MB `data` LittleFS. Moving a device is a one-time serial erase + flash with a backup/restore around it: `docs/MIGRATION-PARTITIONS-V2.md`. `button_v1.csv` is gone; new devices are flashed with v2 directly.
 
 ---
 
@@ -74,7 +70,7 @@ Refactor committed in workstream chunks; **pre-existing uncommitted work is left
 **Options:**
 1. **Save + restore around `uploadfs`** (cheapest): a PlatformIO pre/post hook or `tools/` script that, before `uploadfs`, downloads every user object through the S3 API (`GET /app?list-type=2`; bucket `app` no longer contains `www/`, `fonts/` or `scripts/examples/`, see section 10) and the bytecode names (`/api/bytecode/list`), and afterwards puts them back (S3 PUT, and the bytecode via `/api/bytecode/upload` or a fresh compile of `scripts/main.js`). Works only while the device is on the network; serial-only flashes still lose data.
 2. **Update `www/` through the S3 API**: allow writes to `www/` (and `fonts/`) for an authenticated client (needs the SigV4 / shared-key auth that is not there yet), and ship IDE updates as object uploads (`aws s3 sync web/dist s3://web/` after gzipping; bucket `web`, see section 10). User files are never touched. Mind LittleFS space during the update (old + new bundle) and that the IDE serves itself while it is replaced.
-3. **Separate partition for the IDE**: put `www/` (and `fonts/`) in their own read-only image (e.g. the unused `img_data` partition, 1 MB, or a new one), flashed independently of the user `data` partition. Clean separation, but changes the partition table (serial flash once per device, like the other layout migration).
+3. **Separate partition for the IDE**: put `www/` (and `fonts/`) in their own read-only image (a new partition; v2 gave the old `img_data` slot to the `media` partition), flashed independently of the user `data` partition. Clean separation, but changes the partition table (serial flash once per device, like the other layout migration).
 
 **Leaning:** 1 now (no firmware change, removes the trap), then 3 when the partition table is touched anyway; 2 only together with real auth. Also make the firmware recover from a missing registry index (rebuild it from the partition, or at least run `scripts/main.js`' bytecode if present).
 
@@ -98,11 +94,11 @@ Since `dee8c6f` the registry refuses bytecode uploaded for another app build: re
 
 ## 10. TODO — Separate partitions for user data and the IDE
 
-Today one LittleFS `data` partition (4 MB) holds the IDE bundle (`www/`, ~1.5 MB gzipped), the fonts and the user's files, so every IDE update has to rewrite (and preserve) user data; `tools/scripts/ota_fs.py` does that by backing the user files up over S3 and rebuilding the image around them. Split it:
+Today one LittleFS `data` partition (4.6 MB in partition table v2) holds the IDE bundle (`www/`, ~0.6 MB gzipped) and the user's files (the fonts moved to the `media` partition with v2, `docs/MEDIA-STORE.md`), so every IDE update has to rewrite (and preserve) user data; `tools/scripts/ota_fs.py` does that by backing the user files up over S3 and rebuilding the image around them. Split it:
 
 - **`ide` partition** (read-only for the firmware): `www/` and `fonts/`, built and updated as a whole image (`pio run -t buildfs` / filesystem OTA to that partition only). Size it for the bundle plus headroom (~2 MB), mounted e.g. at `/ide`, served by `serveStatic`; S3 lists it read-only (or not at all).
 - **`data` partition** (user): `config.json`, `scripts/`, the bytecode registry index, user assets. Never rewritten by updates; formatted only on first boot / factory reset.
-- The unused `img_data` (1 MB, subtype 0x42) can be folded into one of them.
+- Partition table v2 has no free space left (16 MB fully allocated): an `ide` partition has to come out of `data` (4.6 MB) or `media` (5 MB).
 - Needs a partition-table change, so one serial flash per device (as with the earlier layout migration; Garage still has the old table and needs that anyway). Plan the migration: back up user files over S3, flash the new table + both images, restore. OTA for the app and the IDE image separately afterwards; `ota_fs.py` then becomes a plain IDE-image upload.
 
 **One S3 bucket per kind of content — DONE (single partition).** The S3 API no longer has the one bucket `fs`; it has one bucket per kind of content, each a directory on today's `data` partition (table `s3::kBuckets` in `src/core/S3Logic.h`):

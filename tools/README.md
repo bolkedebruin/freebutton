@@ -11,9 +11,14 @@ tools/
 │   ├── get_mdi_codes.sh # Material Design Icons code extractor
 │   └── *.ttf           # Font files (Montserrat + Material Design Icons)
 ├── scripts/            # Build and utility scripts
-│   ├── sync_version.py     # Version management (VERSION -> config.h + web/package.json)
-│   └── build_info.py      # Build metadata generation
-└── partition_tables/   # ESP32 partition table definitions
+│   ├── sync_version.py      # Version management (VERSION -> config.h + web/package.json)
+│   ├── build_info.py        # Build metadata generation
+│   ├── assemble_littlefs.py # Stages the LittleFS image (config, examples, gzipped web IDE)
+│   ├── ota_fs.py            # LittleFS image OTA keeping the user's files; backups, --restore
+│   ├── media_sync.py        # push / pull / ls of the media bucket `fonts` (S3, SigV4)
+│   └── fb_sigv4.py          # SigV4 signing for the device API (library + CLI)
+└── partition_tables/
+    └── button_v2.csv    # 16 MB layout: docs/MEDIA-STORE.md, migration: docs/MIGRATION-PARTITIONS-V2.md
 ```
 
 ## Font Generation
@@ -87,14 +92,16 @@ The build pipeline automatically:
    - Builds and tests the web IDE, checks generated artifacts for engine drift
    - Builds firmware for ESP32 and the LittleFS image
    - Compile-checks the native environment
-   - Uploads build artifacts (firmware.bin, bootloader.bin, partitions.bin, littlefs.bin)
+   - Checks firmware.bin against app0 and littlefs.bin against the `data` partition
+   - Uploads build artifacts (firmware.bin, firmware.elf, bootloader.bin, partitions.bin, littlefs.bin)
    - Fonts and wasm assets are committed, so no font/emcc generation runs
 
 2. **Release Pipeline** (`.github/workflows/release.yml`):
    - Triggered on GitHub releases or manual dispatch
    - Syncs the firmware version via `sync_version.py`
    - Builds the web IDE, firmware, and the LittleFS image
-   - Packages firmware.bin, bootloader.bin, partitions.bin and littlefs.bin together
+   - Packages firmware.bin, firmware.elf, bootloader.bin, partitions.bin, littlefs.bin
+     and FLASHING.txt (flash offsets) together
    - Uploads release assets
 
 ## Local Development
@@ -146,8 +153,11 @@ pio run -e native && pio test -e native
 
 The release artifacts include:
 - `freebutton_X.Y.Z_firmware.tar.gz` - Complete firmware package
-- Contains: firmware.bin, bootloader.bin, partitions.bin, littlefs.bin (the
-  LittleFS image bundling the web IDE, config, and fonts)
+- Contains: firmware.bin, firmware.elf (for core dumps), bootloader.bin,
+  partitions.bin, littlefs.bin (the LittleFS image bundling the web IDE,
+  config and examples) and FLASHING.txt. The fonts live in the `media`
+  partition, not in littlefs.bin: upload them with
+  `python3 tools/scripts/media_sync.py push <device URL>`.
 
 ## Flashing Firmware
 
@@ -155,10 +165,13 @@ Use ESP-IDF tools or PlatformIO to flash the firmware:
 
 ```bash
 # Using PlatformIO
-pio run -e esp32 -t upload
+pio run -e esp32 -t upload     # bootloader, partition table, otadata, app
+pio run -e esp32 -t uploadfs   # LittleFS image (web IDE, config, examples)
 
 # Using ESP-IDF
 idf.py flash
 ```
 
-Requires ESP-IDF tools to be installed and configured.
+Requires ESP-IDF tools to be installed and configured. A device still on
+partition table v1 needs a full erase first: see
+[docs/MIGRATION-PARTITIONS-V2.md](../docs/MIGRATION-PARTITIONS-V2.md).

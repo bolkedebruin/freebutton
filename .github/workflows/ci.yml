@@ -52,9 +52,9 @@ jobs:
       - name: Install PlatformIO Core
         run: uv pip install --upgrade platformio setuptools
 
-      # Fonts are committed (data/fonts/*.bin, test/font_reference/*.c) and the mquickjs wasm assets
-      # in web/public/assets are committed real files, so CI does NOT install
-      # lv_font_conv, run generatefonts.sh, or run emcc.
+      # The fonts (media/fonts/*.ttf, for the media partition) and the mquickjs
+      # wasm assets in web/public/assets are committed real files, so CI does
+      # NOT generate fonts or run emcc.
 
       - name: Check web IDE wasm compiler matches the firmware stdlib
         # Bytecode refers to stdlib ROM atoms by offset: a stale committed
@@ -87,8 +87,31 @@ jobs:
         # via our config). See .wolf/buglog.json bug-004. Retry once on failure.
         run: pio run -e esp32 || pio run -e esp32
 
-      - name: Build LittleFS image (web IDE + config + fonts)
+      - name: Build LittleFS image (web IDE + config + examples)
         run: pio run -e esp32 -t buildfs
+
+      - name: Check images against the partition table
+        # tools/partition_tables/button_v2.csv: firmware.bin must fit app0 (PlatformIO
+        # checks this too), littlefs.bin must be exactly the `data` partition.
+        run: |
+          python3 - <<'PY'
+          import csv, os, sys
+          parts = {}
+          with open("tools/partition_tables/button_v2.csv") as f:
+              for row in csv.reader(l for l in f if not l.lstrip().startswith("#")):
+                  if len(row) >= 5 and row[0].strip():
+                      parts[row[0].strip()] = int(row[4].strip(), 0)
+          fw = os.path.getsize(".pio/build/esp32/firmware.bin")
+          fs = os.path.getsize(".pio/build/esp32/littlefs.bin")
+          print(f"firmware.bin {fw} of app0 {parts['app0']} ({parts['app0'] - fw} free)")
+          print(f"littlefs.bin {fs}, data partition {parts['data']}")
+          if fw > parts["app0"] or fs != parts["data"]:
+              sys.exit("image does not match the partition table")
+          PY
+
+      # TODO: once tools/scripts/flash_media.py exists, build the media partition
+      # image from media/<bucket>/<key> here (no device: image only) and add it
+      # (media.bin) to the artefacts below.
 
       - name: Build native (compile check)
         # Compile-only sanity check. test/ has no Unity suites, so `pio test`
@@ -101,6 +124,7 @@ jobs:
           name: firmware-${{ github.sha }}
           path: |
             .pio/build/esp32/firmware.bin
+            .pio/build/esp32/firmware.elf
             .pio/build/esp32/bootloader.bin
             .pio/build/esp32/partitions.bin
             .pio/build/esp32/littlefs.bin

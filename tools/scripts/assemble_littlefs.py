@@ -9,9 +9,13 @@ zero external dependencies at runtime:
   * config + data files at the image root (config.json, virt*.json, ...);
     FREEBUTTON_CONFIG=<path> takes config.json from another file
     (e.g. devices/<id>/config.json)
+  * example scripts from ``data/scripts/examples/``
   * the built web bundle from ``web/dist/`` as ``www/<relpath>.gz``
-  * device fonts from ``data/fonts/*.bin``, streamed by src/ui/fonts/fonts.c
-    (the compiled fonts are the fallback when a file is missing)
+
+Fonts are not on LittleFS: they live in the raw ``media`` partition (bucket
+``fonts``, docs/MEDIA-STORE.md), uploaded with tools/scripts/media_sync.py or
+flashed with tools/scripts/flash_media.py. A ``data/fonts/`` directory, if
+any, is ignored.
 
 Build output is NEVER written back into ``data/``; everything lands in the
 throwaway ``.pio/staging_data`` staging dir, which becomes PlatformIO's
@@ -22,6 +26,7 @@ auto-invoked as a PlatformIO ``pre:`` extra-script for filesystem targets
 (``buildfs`` / ``uploadfs``) only.
 """
 
+import csv
 import gzip
 import os
 import shutil
@@ -38,6 +43,20 @@ ROOT_FILES = [
 ]
 
 STAGING_SUBDIR = os.path.join(".pio", "staging_data")
+PARTITIONS = os.path.join("tools", "partition_tables", "button_v2.csv")
+DATA_PARTITION = "data"  # LittleFS, mounted by src/main.cpp
+
+
+def data_partition_size(partitions_csv):
+    """Size of the LittleFS partition in the partition table, or None."""
+    try:
+        with open(partitions_csv) as f:
+            for row in csv.reader(line for line in f if not line.lstrip().startswith("#")):
+                if row and row[0].strip() == DATA_PARTITION:
+                    return int(row[4].strip(), 0)
+    except (OSError, IndexError, ValueError):
+        pass
+    return None
 
 
 def _gzip_file(src, dst):
@@ -49,7 +68,7 @@ def _gzip_file(src, dst):
         f_out.write(data)
 
 
-def assemble(project_dir):
+def assemble(project_dir, partitions_csv=None):
     data_dir = os.path.join(project_dir, "data")
     dist_dir = os.path.join(project_dir, "web", "dist")
     staging = os.path.join(project_dir, STAGING_SUBDIR)
@@ -92,18 +111,12 @@ def assemble(project_dir):
                              os.path.join(examples_dst, name))
                 copied += 1
 
-    # 3. Device fonts: data/fonts/*.bin -> fonts/
-    fonts_src = os.path.join(data_dir, "fonts")
-    if os.path.isdir(fonts_src):
-        fonts_dst = os.path.join(staging, "fonts")
-        os.makedirs(fonts_dst, exist_ok=True)
-        for name in sorted(os.listdir(fonts_src)):
-            if name.endswith(".bin"):
-                shutil.copy2(os.path.join(fonts_src, name),
-                             os.path.join(fonts_dst, name))
-                copied += 1
+    # Fonts are in the media partition, not in this image.
+    if os.path.isdir(os.path.join(data_dir, "fonts")):
+        print("[assemble_littlefs] NOTE: data/fonts/ is ignored (fonts live in the "
+              "media partition: tools/scripts/media_sync.py push)", file=sys.stderr)
 
-    # 4. Web bundle: gzip every file in web/dist/ into www/<relpath>.gz
+    # 3. Web bundle: gzip every file in web/dist/ into www/<relpath>.gz
     www_files = 0
     if os.path.isdir(dist_dir):
         for root, _dirs, files in os.walk(dist_dir):
@@ -117,13 +130,26 @@ def assemble(project_dir):
         print(f"[assemble_littlefs] WARN: web/dist not found at {dist_dir}; "
               "run `cd web && npm run build` first", file=sys.stderr)
 
-    # Report total staged size vs the 4MB `data` partition.
+    # Report total staged size vs the LittleFS `data` partition.
     total = 0
     for root, _dirs, files in os.walk(staging):
         for name in files:
             total += os.path.getsize(os.path.join(root, name))
     print(f"[assemble_littlefs] staged {copied} data files + {www_files} "
           f"gzipped www/ files ({total} bytes) into {staging}")
+    csv_path = partitions_csv or os.path.join(project_dir, PARTITIONS)
+    size = data_partition_size(csv_path)
+    if size:
+        print(f"[assemble_littlefs] {total / size:.1%} of the {size} byte (0x{size:X}) "
+              f"'{DATA_PARTITION}' partition in {os.path.relpath(csv_path, project_dir)} "
+              "(file bytes; LittleFS metadata needs some more)")
+        if total > size:
+            print("[assemble_littlefs] ERROR: the staged files do not fit the partition",
+                  file=sys.stderr)
+            sys.exit(1)
+    else:
+        print(f"[assemble_littlefs] WARN: no '{DATA_PARTITION}' partition in {csv_path}",
+              file=sys.stderr)
     return staging
 
 
@@ -147,7 +173,9 @@ except NameError:
 if _UNDER_PIO:
     from SCons.Script import COMMAND_LINE_TARGETS  # type: ignore
     if any(t in ("buildfs", "uploadfs") for t in COMMAND_LINE_TARGETS):
-        assemble(env.subst("$PROJECT_DIR"))  # noqa: F821
+        _csv = env.GetProjectOption("board_build.partitions", "")  # noqa: F821
+        assemble(env.subst("$PROJECT_DIR"),  # noqa: F821
+                 os.path.join(env.subst("$PROJECT_DIR"), _csv) if _csv else None)  # noqa: F821
 
 if __name__ == "__main__" and not _UNDER_PIO:
     assemble(_project_dir())
