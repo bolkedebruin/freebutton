@@ -298,5 +298,8 @@ font.
   descender or an accent on a capital can be clipped by up to ~0.1 em.
 - `ttf_check.c` validates a font's tables before stb_truetype reads them (it
   trusts every offset); a damaged upload falls back to the built-in font.
-- Fonts are opened at boot: an uploaded or deleted font takes effect at the
-  next reboot.
+- Fonts reload about 1.5 s after the last PUT or DELETE in bucket `fonts`
+  (no reboot): `fnt_*` are stable wrappers, the new set is loaded, swapped
+  in and every display restyled, then the old fonts are destroyed and their
+  files closed (the store frees a replaced file's pages then). A reload waits
+  while the LVGL pool has less than 8 KB free.
