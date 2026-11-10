@@ -58,9 +58,9 @@ jobs:
       - name: Install PlatformIO Core
         run: uv pip install --upgrade platformio setuptools
 
-      # Fonts are committed and the mquickjs wasm assets are committed real
-      # files, so release does NOT install lv_font_conv, run generatefonts.sh,
-      # or run emcc.
+      # The fonts (media/fonts/*.ttf, for the media partition) and the mquickjs
+      # wasm assets are committed real files, so release does NOT generate
+      # fonts or run emcc.
 
       - name: Extract version
         id: version
@@ -94,7 +94,7 @@ jobs:
         # bug-004 (esp_insights/esp_rainmaker crt.S ordering race).
         run: pio run -e esp32 || pio run -e esp32
 
-      - name: Build LittleFS image (web IDE + config + fonts)
+      - name: Build LittleFS image (web IDE + config + examples)
         run: pio run -e esp32 -t buildfs
 
       - name: Create firmware package
@@ -104,12 +104,21 @@ jobs:
           echo "package_version=${VERSION}" >> $GITHUB_ENV
           mkdir -p release
           cd .pio/build/esp32
-          cp firmware.bin bootloader.bin partitions.bin littlefs.bin ../../../release/
+          cp firmware.bin firmware.elf bootloader.bin partitions.bin littlefs.bin ../../../release/
           cd ../../../release
+          # Flash offsets of partition table v2 (tools/partition_tables/button_v2.csv).
+          # firmware.elf is for reading core dumps (docs/MIGRATION-PARTITIONS-V2.md).
+          printf '%s\n' \
+            'Partition table v2 (16 MB). esptool.py --chip esp32s3 write_flash:' \
+            '0x0      bootloader.bin' '0x8000   partitions.bin' '0x10000  firmware.bin' \
+            '0xB60000 littlefs.bin' \
+            'A v1 device needs a full erase first: docs/MIGRATION-PARTITIONS-V2.md' > FLASHING.txt
+          # TODO: once tools/scripts/flash_media.py exists, add the media partition
+          # image (0x660000, fonts) to the package.
           # Ship firmware AND the LittleFS image (with the web IDE) together so a
           # single tag flashes a consistent device.
           tar -czf "freebutton_${VERSION}_firmware.tar.gz" \
-            firmware.bin bootloader.bin partitions.bin littlefs.bin
+            firmware.bin firmware.elf bootloader.bin partitions.bin littlefs.bin FLASHING.txt
 
       - name: Upload release assets
         if: github.event_name == 'release'
