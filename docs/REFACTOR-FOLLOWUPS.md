@@ -112,10 +112,10 @@ Today one LittleFS `data` partition (4 MB) holds the IDE bundle (`www/`, ~1.5 MB
 | `app` | `/` minus the other buckets' directories | read/write (.js/.json/.txt, 64 KiB, `config.json` validated and not deletable, `js_bytecode_meta.json` protected) |
 | `web` | `/www` (IDE bundle, gzipped) | read-only (PUT/DELETE: 403 "bucket is read-only") |
 | `examples` | `/scripts/examples` | read-only |
-| `fonts` | `/fonts` (device fonts) | read-only; GET/HEAD reach it only from S3 clients, because `/fonts/*.woff2` is also the IDE's own font URL |
+| `fonts` | media store (`media` partition, docs/MEDIA-STORE.md), not LittleFS | read/write (signed; flat `.ttf`/`.otf` keys, <= 2 MiB); GET/HEAD reach it only from S3 clients, because `/fonts/*.woff2` is also the IDE's own font URL |
 
-Keys are relative to the bucket directory; an object is reachable through exactly one bucket (`app` does not list `www/`, `fonts/`, `scripts/examples/`, answers 404 for reads and 400 InvalidArgument for writes of such keys). The IDE edits `app` and lists the read-only buckets on demand; `ota_fs.py` backs up all of `app`. Moving a bucket to its own partition later only changes its directory (mount point) in the table, not the API.
+Keys are relative to the bucket directory; an object is reachable through exactly one bucket (`app` does not list `www/`, `scripts/examples/`, answers 404 for reads and 400 InvalidArgument for writes of such keys). The IDE edits `app` and lists the read-only buckets on demand; `ota_fs.py` backs up all of `app`. Moving a bucket to its own partition later only changes its directory (mount point) in the table, not the API.
 
 **Authentication: DONE** (SigV4, docs/AUTH.md): writes and reads of `app` are signed; `web`, `examples`, `fonts` are publicly readable.
 
-**Still TODO:** the partition split above, and letting signed clients write `web` (and `fonts`), so they become writable for IDE updates as `aws s3 sync web/dist s3://web/` (gzipped objects) without touching user data or rebuilding images. A writable bucket below the root also needs `PutState::path` / `kWriteKeyMax` to account for its directory (static_assert in `S3Server.cpp`).
+**Still TODO:** the partition split above, and letting signed clients write `web` (`fonts` is writable since it moved to the media store), so it becomes writable for IDE updates as `aws s3 sync web/dist s3://web/` (gzipped objects) without touching user data or rebuilding images. A writable bucket below the root also needs `PutState::path` / `kWriteKeyMax` to account for its directory (static_assert in `S3Server.cpp`).

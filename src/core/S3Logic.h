@@ -1,7 +1,8 @@
 //
 // S3Logic - the pure parts of the minimal S3-compatible file API (S3Server):
-// the bucket table (bucket -> LittleFS directory), URL -> bucket/key parsing,
-// key validation and key -> path mapping, the aws-chunked body decoder,
+// the bucket table (bucket -> LittleFS directory or media store bucket),
+// URL -> bucket/key parsing, key validation and key -> path mapping, size
+// limits, media store result -> HTTP mapping, the aws-chunked body decoder,
 // XML/URL escaping written on the fly into a sink, ETag / date formatting and
 // the ListObjects roll-up rules for the "/" delimiter.
 //
@@ -17,6 +18,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "../media/media_store.h"
+
 namespace s3 {
 
 // LittleFS here: name_max 64 per path component (mklittlefs image built with
@@ -31,6 +34,8 @@ constexpr size_t kReadKeyMax = 96;
 constexpr size_t kDirMax = 16;
 // Largest object a PutObject accepts (decoded size) = MAX_JS_SOURCE_SIZE.
 constexpr size_t kMaxObjectSize = 64 * 1024;
+// Largest object a media store bucket (fonts) accepts.
+constexpr size_t kMaxMediaObjectSize = 2 * 1024 * 1024;
 constexpr const char* kTmpSuffix = ".tmp";
 constexpr size_t kTmpSuffixLen = 4;
 
@@ -60,8 +65,9 @@ inline bool endsWith(const char* s, size_t len, const char* suffix) {
 // Buckets
 // ---------------------------------------------------------------------------
 //
-// One bucket per kind of content, each a directory on the LittleFS partition
-// (later each may move to its own partition without changing the API).
+// One bucket per kind of content: a directory on the LittleFS partition, or
+// a bucket of the media store (docs/MEDIA-STORE.md; then dir is "" and media
+// >= 0: a flat key space of its own, outside LittleFS).
 // Object keys are relative to the bucket's directory. A bucket's directory
 // tree excludes the directories of the other buckets below it, so every
 // object is reachable through exactly one bucket: in `app` (the root) the
@@ -86,18 +92,24 @@ struct Bucket {
     // Reads (GET/HEAD objects, listings, HeadBucket, location) need no
     // signature. Everything else on the S3 API is SigV4-signed (Auth.h).
     bool publicRead;
+    // media_bucket_t of a media store bucket (objects live in the `media`
+    // partition, not on LittleFS); -1 = the LittleFS directory `dir`.
+    int8_t media;
 
-    constexpr Bucket(const char* n, const char* d, bool w, bool s, bool p)
+    constexpr Bucket(const char* n, const char* d, bool w, bool s, bool p, int8_t m = -1)
         : name(n), dir(d), nameLen(static_cast<uint8_t>(cLen(n))), dirLen(static_cast<uint8_t>(cLen(d))),
-          writable(w), sharesStaticPath(s), publicRead(p) {}
+          writable(w), sharesStaticPath(s), publicRead(p), media(m) {}
+
+    constexpr bool isMedia() const { return media >= 0; }
+    media_bucket_t mediaBucket() const { return static_cast<media_bucket_t>(media); }
 };
 
 inline constexpr Bucket kBuckets[] = {
-    // name       dir                 writable static  publicRead
+    // name       dir                 writable static  publicRead media
     {"app", "", true, false, false},                         // user data: config.json (secrets), scripts/, bytecode index
     {"web", "www", false, false, true},                      // the IDE bundle (gzipped)
     {"examples", "scripts/examples", false, false, true},    // example scripts
-    {"fonts", "fonts", false, true, true},                   // device fonts; the IDE loads /fonts/*.woff2 itself
+    {"fonts", "", true, true, true, MEDIA_BUCKET_FONTS},     // TrueType fonts (media store); the IDE loads /fonts/*.woff2 itself
 };
 inline constexpr size_t kBucketCount = sizeof(kBuckets) / sizeof(kBuckets[0]);
 
@@ -105,10 +117,12 @@ constexpr bool bucketTableValid() {
     for (const Bucket& b : kBuckets) {
         if (b.dirLen > kDirMax || b.nameLen == 0) return false;
         if (b.dirLen && (b.dir[0] == '/' || b.dir[b.dirLen - 1] == '/')) return false;
+        if (b.isMedia() && (b.dirLen || b.media >= MEDIA_BUCKET_COUNT)) return false;
     }
     return true;
 }
-static_assert(bucketTableValid(), "bucket directories: at most kDirMax, no leading/trailing '/'");
+static_assert(bucketTableValid(), "bucket directories: at most kDirMax, no leading/trailing '/'; media buckets none");
+static_assert(MEDIA_KEY_MAX <= kReadKeyMax, "media keys must fit the listing's key buffers");
 
 // Requests that need no signature: reads of a publicly readable bucket,
 // ListBuckets (b == nullptr) and requests for an unknown bucket (b ==
@@ -139,8 +153,9 @@ inline const Bucket* findBucket(const char* name, size_t len) {
 // directory key ending in '/'), or nullptr when the key belongs to b. Used to
 // reject such keys and to prune the walk before opening those directories.
 inline const Bucket* keyOwner(const Bucket& b, const char* key, size_t len) {
+    if (b.isMedia()) return nullptr;  // a key space of its own
     for (const Bucket& c : kBuckets) {
-        if (&c == &b || c.dirLen <= b.dirLen) continue;
+        if (&c == &b || c.isMedia() || c.dirLen <= b.dirLen) continue;
         // c.dir relative to b.dir, if c lies below b.
         size_t off = 0;
         if (b.dirLen) {
@@ -233,16 +248,38 @@ inline bool keyProtected(const Bucket& b, const char* key, size_t len) {
 // PutObject / DeleteObject rules. kWriteKeyMax bounds the whole path below
 // the mount point, so writable buckets must be the root (static_assert in
 // S3Server).
+inline bool keyCharOk(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+           c == '-';
+}
+
+// Extensions a media bucket stores (lower case only, as in app).
+inline bool mediaKeyExtensionOk(const Bucket& b, const char* key, size_t len) {
+    if (b.media == MEDIA_BUCKET_FONTS) return endsWith(key, len, ".ttf") || endsWith(key, len, ".otf");
+    return false;  // no other media bucket is exposed yet
+}
+
+// Media bucket keys: flat (no '/'), at most MEDIA_KEY_MAX of [A-Za-z0-9._-],
+// no "..", a non-empty name plus a known extension.
+// (Not LittleFS: no name_max per component.)
+inline KeyCheck checkMediaKey(const Bucket& b, const char* key, size_t len) {
+    if (!key || len == 0 || len > MEDIA_KEY_MAX) return KeyCheck::Invalid;
+    for (size_t i = 0; i < len; ++i) {
+        if (!keyCharOk(key[i])) return KeyCheck::Invalid;
+        if (key[i] == '.' && i + 1 < len && key[i + 1] == '.') return KeyCheck::Invalid;
+    }
+    if (len < 5 || !mediaKeyExtensionOk(b, key, len)) return KeyCheck::Invalid;
+    return KeyCheck::Ok;
+}
+
 inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len) {
     if (!b.writable) return KeyCheck::ReadOnly;
+    if (b.isMedia()) return checkMediaKey(b, key, len);
     if (!keyWellFormed(key, len, kWriteKeyMax)) return KeyCheck::Invalid;
     if (keyOwner(b, key, len)) return KeyCheck::OtherBucket;
     if (keyProtected(b, key, len)) return KeyCheck::Forbidden;
     for (size_t i = 0; i < len; ++i) {
-        const char c = key[i];
-        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                        (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' || c == '/';
-        if (!ok) return KeyCheck::Invalid;
+        if (!keyCharOk(key[i]) && key[i] != '/') return KeyCheck::Invalid;
     }
     // The "<name>.tmp" sibling written first must fit name_max too.
     size_t last = 0;
@@ -255,7 +292,196 @@ inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len) {
 }
 
 inline bool keyIsConfig(const Bucket& b, const char* key, size_t len) {
-    return b.dirLen == 0 && len == 11 && memcmp(key, "config.json", 11) == 0;
+    return !b.isMedia() && b.dirLen == 0 && len == 11 && memcmp(key, "config.json", 11) == 0;
+}
+
+// An HTTP error answer: status (0 = none), S3 error code, message.
+struct HttpError {
+    uint16_t status;
+    const char* code;
+    const char* msg;
+};
+
+// The answer to a PutObject / DeleteObject key that checkWriteKey refuses
+// (status 0: allowed).
+inline HttpError writeRefusal(const Bucket& b, const char* key, size_t len) {
+    switch (checkWriteKey(b, key, len)) {
+        case KeyCheck::Ok:
+            return {0, nullptr, nullptr};
+        case KeyCheck::ReadOnly:
+            return {403, "AccessDenied", "bucket is read-only"};
+        case KeyCheck::Forbidden:
+            return {403, "AccessDenied", "this path is read-only"};
+        case KeyCheck::OtherBucket:
+            return {400, "InvalidArgument", "key lies in another bucket's directory (see ListBuckets)"};
+        case KeyCheck::Invalid:
+            break;
+    }
+    if (b.isMedia()) {
+        if (len > MEDIA_KEY_MAX) return {400, "KeyTooLongError", "key longer than 96 characters"};
+        return {400, "InvalidArgument", "key must be a flat name of [A-Za-z0-9._-], no '..', ending in .ttf or .otf"};
+    }
+    if (len > kWriteKeyMax) return {400, "KeyTooLongError", "key longer than 63 characters"};
+    return {400, "InvalidArgument",
+            "key must be [A-Za-z0-9._-/], no '..' or empty segments, and end in .js, .json or .txt"};
+}
+
+// GetObject / HeadObject key in a media bucket.
+enum class MediaReadKey : uint8_t {
+    Ok,
+    Malformed,  // 400 InvalidArgument (as in the LittleFS buckets)
+    Missing,    // 404 NoSuchKey: well-formed, but no such key can exist
+};
+
+inline MediaReadKey checkMediaReadKey(const char* key, size_t len) {
+    if (!key || len == 0 || len > kReadKeyMax) return MediaReadKey::Malformed;
+    bool slash = false;
+    for (size_t i = 0; i < len; ++i) {
+        const auto c = static_cast<unsigned char>(key[i]);
+        if (c < 0x20 || c == 0x7F) return MediaReadKey::Malformed;
+        if (c == '.' && i + 1 < len && key[i + 1] == '.') return MediaReadKey::Malformed;
+        if (c == '/') slash = true;
+    }
+    if (len > MEDIA_KEY_MAX || slash) return MediaReadKey::Missing;
+    return MediaReadKey::Ok;
+}
+
+// Largest decoded body a PutObject into b accepts, and the 413 message.
+inline uint32_t objectSizeLimit(const Bucket& b) {
+    return static_cast<uint32_t>(b.isMedia() ? kMaxMediaObjectSize : kMaxObjectSize);
+}
+
+inline const char* tooLargeMessage(const Bucket& b) {
+    return b.isMedia() ? "object larger than 2 MiB" : "object larger than 64 KiB";
+}
+
+// PutObject body length. A plain body: Content-Length; aws-chunked:
+// x-amz-decoded-content-length (Content-Length counts the encoding). The
+// decoded length is used whenever given. Media buckets reserve the exact
+// size before the first body byte, so there the length must be known;
+// LittleFS buckets accept aws-chunked without it (capped while streaming).
+struct PutLength {
+    bool known;
+    uint32_t expected;
+    HttpError error;  // status 0: accepted
+};
+
+inline PutLength putLength(const Bucket& b, bool chunked, const char* decodedLength, bool hasContentLength,
+                           uint64_t contentLength) {
+    PutLength r{false, 0, {0, nullptr, nullptr}};
+    const uint32_t limit = objectSizeLimit(b);
+    uint64_t v = 0;
+    if (decodedLength) {
+        const char* p = decodedLength;
+        while (*p == ' ') ++p;
+        if (*p < '0' || *p > '9') {
+            r.error = {400, "InvalidArgument", "invalid x-amz-decoded-content-length"};
+            return r;
+        }
+        for (; *p >= '0' && *p <= '9'; ++p) {
+            if (v <= 0xFFFFFFFFull) v = v * 10 + static_cast<uint64_t>(*p - '0');  // saturates above 2^32
+        }
+        while (*p == ' ') ++p;
+        if (*p) {
+            r.error = {400, "InvalidArgument", "invalid x-amz-decoded-content-length"};
+            return r;
+        }
+    } else if (!chunked && hasContentLength) {
+        v = contentLength;
+    } else {
+        if (b.isMedia() || !hasContentLength) {
+            r.error = {411, "MissingContentLength", "Content-Length or x-amz-decoded-content-length required"};
+        }
+        return r;
+    }
+    if (v > limit) {
+        r.error = {413, "EntityTooLarge", tooLargeMessage(b)};
+        return r;
+    }
+    r.known = true;
+    r.expected = static_cast<uint32_t>(v);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// Media store results
+// ---------------------------------------------------------------------------
+
+enum class MediaOp : uint8_t {
+    Read,    // media_open / media_stat / media_next
+    Write,   // media_put_begin / _write / _commit
+    Delete,  // media_delete
+};
+
+// The HTTP answer for a media store result (status 0: success). Deleting a
+// missing key succeeds (S3 answers 204 either way). NO_SPACE has a generic
+// message; S3Server replaces it with formatNoSpaceMessage().
+inline HttpError mediaError(media_err_t e, MediaOp op) {
+    switch (e) {
+        case MEDIA_OK:
+            return {0, nullptr, nullptr};
+        case MEDIA_ERR_UNAVAILABLE:
+            return {503, "ServiceUnavailable", "media store unavailable"};
+        case MEDIA_ERR_NOT_FOUND:
+            if (op == MediaOp::Delete) return {0, nullptr, nullptr};
+            if (op == MediaOp::Write) return {500, "InternalError", "upload lost by the media store"};
+            return {404, "NoSuchKey", "The specified key does not exist."};
+        case MEDIA_ERR_NO_SPACE:
+            return {507, "InsufficientStorage", "not enough free space in the media store"};
+        case MEDIA_ERR_INVALID:
+            if (op == MediaOp::Read) return {404, "NoSuchKey", "The specified key does not exist."};
+            return {400, "InvalidArgument", "refused by the media store (key, size or state)"};
+        case MEDIA_ERR_BUSY:
+            return {503, "SlowDown", op == MediaOp::Read ? "too many open files, retry" : "media store busy, retry"};
+        case MEDIA_ERR_SIZE:
+            return {400, "IncompleteBody", "body length differs from the declared length"};
+        case MEDIA_ERR_IO:
+            return {500, "InternalError", "media flash I/O failed"};
+    }
+    return {500, "InternalError", "media store error"};
+}
+
+// "object of <needed> bytes does not fit: <free> bytes free, <reclaimable>
+// reclaimable once released" into out (NUL-terminated, cut to cap).
+inline void formatNoSpaceMessage(uint32_t needed, uint32_t freeBytes, uint32_t reclaimable, char* out, size_t cap) {
+    if (!cap) return;
+    size_t n = 0;
+    auto emit = [&](char c) {
+        if (n + 1 < cap) out[n++] = c;
+    };
+    auto emitStr = [&](const char* s) {
+        while (*s) emit(*s++);
+    };
+    auto emitNum = [&](uint32_t v) {
+        char tmp[10];
+        size_t k = 0;
+        do {
+            tmp[k++] = static_cast<char>('0' + v % 10);
+            v /= 10;
+        } while (v);
+        while (k) emit(tmp[--k]);
+    };
+    emitStr("object of ");
+    emitNum(needed);
+    emitStr(" bytes does not fit: ");
+    emitNum(freeBytes);
+    emitStr(" bytes free, ");
+    emitNum(reclaimable);
+    emitStr(" reclaimable once released");
+    out[n] = '\0';
+}
+
+// HeadBucket and listing headers of a media bucket (decimal bytes, from
+// media_usage()).
+inline constexpr const char* kMediaTotalHeader = "x-fb-media-total";
+inline constexpr const char* kMediaUsedHeader = "x-fb-media-used";
+inline constexpr const char* kMediaFreeHeader = "x-fb-media-free";
+inline constexpr const char* kMediaReclaimableHeader = "x-fb-media-reclaimable";
+
+// The mtime stored with an upload: now when the clock is set, else 0.
+inline uint32_t mediaMtime(bool clockValid, int64_t now) {
+    if (!clockValid || now <= 0) return 0;
+    return now > 0xFFFFFFFFll ? 0xFFFFFFFFu : static_cast<uint32_t>(now);
 }
 
 inline const char* contentTypeFor(const char* key, size_t len) {
@@ -264,6 +490,8 @@ inline const char* contentTypeFor(const char* key, size_t len) {
     if (endsWith(key, len, ".txt")) return "text/plain";
     if (endsWith(key, len, ".html")) return "text/html";
     if (endsWith(key, len, ".gz")) return "application/gzip";
+    if (endsWith(key, len, ".ttf")) return "font/ttf";
+    if (endsWith(key, len, ".otf")) return "font/otf";
     return "application/octet-stream";
 }
 
@@ -525,6 +753,19 @@ inline void formatETag(uint64_t size, uint64_t mtime, char out[40]) {
     putHexNum(mtime);
     out[n++] = '"';
     out[n] = '\0';
+}
+
+// "\"<32 hex digits>\"" including the quotes: the MD5 of the content, the
+// ETag S3 gives a non-multipart object (media buckets store it). 35 B.
+inline void formatMd5ETag(const uint8_t md5[16], char out[35]) {
+    static constexpr char hex[] = "0123456789abcdef";
+    out[0] = '"';
+    for (int i = 0; i < 16; ++i) {
+        out[1 + 2 * i] = hex[md5[i] >> 4];
+        out[2 + 2 * i] = hex[md5[i] & 0xF];
+    }
+    out[33] = '"';
+    out[34] = '\0';
 }
 
 // ---------------------------------------------------------------------------

@@ -1,47 +1,74 @@
 //
-// S3Server - minimal S3-compatible API over LittleFS.
+// S3Server - minimal S3-compatible API over LittleFS and the media store.
 //
-// Path-style addressing, one bucket per kind of content, each a directory on
-// the LittleFS partition (table: s3::kBuckets in S3Logic.h):
+// Path-style addressing, one bucket per kind of content (table: s3::kBuckets
+// in S3Logic.h), a directory on the LittleFS partition or a bucket of the
+// media store (src/media/media_store.h, docs/MEDIA-STORE.md):
 //
-//   app       /  minus the other buckets' directories   read/write
-//   web       /www (the IDE bundle, gzipped)             read-only
-//   examples  /scripts/examples                          read-only
-//   fonts     /fonts (device fonts)                      read-only
+//   app       LittleFS /, minus the other buckets' dirs   read/write
+//   web       LittleFS /www (the IDE bundle, gzipped)     read-only
+//   examples  LittleFS /scripts/examples                  read-only
+//   fonts     media store MEDIA_BUCKET_FONTS (TrueType)   read/write
 //
 // Object key = path relative to the bucket's directory ("config.json",
 // "scripts/main.js" in app; "index.html.gz" in web; "button.js" in examples).
-// Every object is reachable through exactly one bucket: app does not list
-// www/, fonts/ or scripts/examples/ (the walk skips them without opening
-// them), answers 404 NoSuchKey for reads and 400 InvalidArgument for writes
-// of such keys.
+// Every LittleFS object is reachable through exactly one bucket: app does not
+// list www/ or scripts/examples/ (the walk skips them without opening them),
+// answers 404 NoSuchKey for reads and 400 InvalidArgument for writes of such
+// keys. A media bucket is a flat key space of its own (no LittleFS paths).
 //
 //   GET  /                      ListBuckets (only for S3 clients: Authorization
 //                               AWS*, any x-amz-* header, or ?x-id=...; browsers
 //                               keep getting the web IDE)
-//   HEAD /<b>[/]                HeadBucket
+//   HEAD /<b>[/]                HeadBucket (media buckets: + usage headers)
 //   GET  /<b>[/]?list-type=2    ListObjectsV2 (prefix, delimiter "/", max-keys,
 //                               continuation-token, start-after, encoding-type)
 //   GET  /<b>[/]                ListObjects v1 (marker)
 //   GET  /<b>[/]?location       GetBucketLocation
 //   GET|HEAD /<b>/<key>         GetObject / HeadObject (Range ignored)
-//   PUT  /<b>/<key>             PutObject (plain or aws-chunked body; app only,
-//                               read-only buckets answer 403 AccessDenied)
-//   DELETE /<b>/<key>           DeleteObject (app only, as PUT)
+//   PUT  /<b>/<key>             PutObject (plain or aws-chunked body; app and
+//                               fonts, read-only buckets answer 403 AccessDenied)
+//   DELETE /<b>/<key>           DeleteObject (as PUT)
 //   OPTIONS /<b>[/...]          CORS preflight
 //
 // /fonts/... is also the URL of the IDE's own web fonts (www/fonts/*.woff2):
 // GET/HEAD there reach bucket fonts only from S3 clients (see isS3Request);
-// a browser gets the IDE file. Unknown buckets: 404 NoSuchBucket (S3 clients).
+// a browser gets the IDE file. PUT/DELETE always reach the bucket. Unknown
+// buckets: 404 NoSuchBucket (S3 clients).
 //
-// No authentication: Authorization headers are accepted and ignored.
+// Authentication (Auth.h): reads of web, examples and fonts are anonymous;
+// everything else, every write included, is SigV4-signed.
+//
+// Bucket fonts (media store):
+//   keys      flat names of [A-Za-z0-9._-], at most MEDIA_KEY_MAX (96), ending
+//             in .ttf or .otf (else 400 InvalidArgument / KeyTooLongError).
+//   PUT       at most 2 MiB (413 EntityTooLarge). The size must be known up
+//             front: Content-Length, or x-amz-decoded-content-length for
+//             aws-chunked bodies (else 411 MissingContentLength), because
+//             media_put_begin() reserves exactly that before any body byte is
+//             written. 507 InsufficientStorage (message: needed / free /
+//             reclaimable bytes) when it does not fit; 503 SlowDown when the
+//             store is busy; 503 ServiceUnavailable without a store. The
+//             decoded body streams into the store (chunk signatures, SHA-256,
+//             Content-MD5 and CRC32 checked as for app); the commit is atomic
+//             and stores the body's MD5. Any failure, or a client that
+//             disconnects, aborts the upload: the old version stays.
+//   GET/HEAD  sent straight from the memory-mapped flash; ETag = the stored
+//             MD5 ("<32 hex>"), Last-Modified = upload time (1970 when the
+//             clock was not set), Content-Type font/ttf or font/otf.
+//   DELETE    204, also for a missing key.
+//   HeadBucket and listings also carry (decimal bytes, media_usage()):
+//             x-fb-media-total        data area of the media partition
+//             x-fb-media-used         allocated to live entries
+//             x-fb-media-free         free now
+//             x-fb-media-reclaimable  deleted/replaced, freed once closed
 //
 // Memory: per request one small fixed struct in request->_tempObject
 // (malloc'd; the server free()s it), nothing that grows with the number of
 // files or the object size. Listings are generated on the fly into the
 // chunked response buffer; object bodies go straight between the TCP buffers
-// and LittleFS. All handlers run on the async_tcp task, so the slot counters
-// below need no locking.
+// and LittleFS or the media store. All handlers run on the async_tcp task,
+// so the slot counters below need no locking.
 //
 
 // RapidJSON's default assert() embeds the full template signature of every
@@ -71,6 +98,7 @@
 #include <new>
 #include <strings.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static auto TAG = "s3";
@@ -82,7 +110,8 @@ using s3::put;
 constexpr const char* kXmlDecl = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
 constexpr const char* kXmlNs = " xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"";
 constexpr const char* kExposeHeaders =
-    "ETag, x-amz-checksum-crc32, x-freebutton-reboot-required, x-freebutton-auth, Date, x-amz-date";
+    "ETag, x-amz-checksum-crc32, x-freebutton-reboot-required, x-freebutton-auth, Date, x-amz-date, "
+    "x-fb-media-total, x-fb-media-used, x-fb-media-free, x-fb-media-reclaimable";
 constexpr size_t kMountMax = 15;   // ESP_VFS_PATH_MAX
 constexpr int kMaxDepth = 6;       // directory levels walked by a listing
 constexpr uint8_t kMaxGets = 2;    // concurrent GetObject file handles
@@ -112,25 +141,32 @@ uint8_t s_getsActive = 0;
 
 struct GetState {
     Kind kind = Kind::Get;
-    int fd = -1;
+    int fd = -1;           // LittleFS
+    uint32_t mediaSize = 0;
+    media_file_t file{};   // media store: mapped while file.handle != 0
 };
 
 struct PutState {
     Kind kind = Kind::Put;
     bool chunked = false;
     bool lengthKnown = false;
-    bool haveMd5 = false;
+    bool haveMd5 = false;  // Content-MD5 given: verify it
+    bool md5Live = false;  // md5 needs mbedtls_md5_free (Content-MD5 or media bucket)
     bool haveCrc = false;
     bool isConfig = false;
     bool ownsSlot = false;
     bool committed = false;
     bool authFailed = false;  // the error is an authentication refusal
+    bool noSpace = false;     // the error is MEDIA_ERR_NO_SPACE: message with the sizes
     bool shaLive = true;      // sha needs mbedtls_sha256_free (the memory is free()d, no destructor)
     fbauth::Payload payload = fbauth::Payload::Unsigned;
     uint16_t status = 0;  // != 0: request failed, respond with this
     const char* errCode = nullptr;
     const char* errMsg = nullptr;
+    const char* tooLargeMsg = nullptr;
     int fd = -1;
+    media_writer_t* writer = nullptr;  // media store upload in progress
+    uint32_t limit = 0;                // largest body for the bucket
     uint32_t expected = 0;
     uint32_t written = 0;
     uint32_t crc = 0;
@@ -151,7 +187,27 @@ struct PutState {
         errCode = code;
         errMsg = msg;
     }
+    void fail(const s3::HttpError& e) { fail(e.status, e.code, e.msg); }
+    void failMedia(media_err_t e) {
+        if (!status && e == MEDIA_ERR_NO_SPACE) noSpace = true;
+        fail(s3::mediaError(e, s3::MediaOp::Write));
+    }
 };
+
+// Releases the media store reservation of an upload that will not be
+// committed; idempotent (the pointer is cleared).
+void dropWriter(PutState* p) {
+    if (!p->writer) return;
+    media_put_abort(p->writer);
+    p->writer = nullptr;
+}
+
+// Drops the mapping of a media GetObject; idempotent.
+void closeMediaFile(GetState* g) {
+    if (!g->file.handle) return;
+    media_close(&g->file);
+    memset(&g->file, 0, sizeof g->file);
+}
 
 struct ListState {
     enum Phase : uint8_t { Header, Items, Footer, Done };
@@ -179,6 +235,7 @@ struct ListState {
     uint32_t pieceOff = 0;
     uint32_t itemSize = 0;
     int64_t itemMtime = 0;
+    uint8_t itemMd5[16] = {};  // media buckets: the ETag
     int64_t startedUs = 0;
     const s3::Bucket* bucket = nullptr;
     char prefix[s3::kReadKeyMax + 1] = {};
@@ -212,19 +269,21 @@ void releaseState(AsyncWebServerRequest* request) {
             g->fd = -1;
             if (s_getsActive) --s_getsActive;
         }
+        closeMediaFile(g);
     } else if (*kind == Kind::Put) {
         auto* p = reinterpret_cast<PutState*>(kind);
         if (p->fd >= 0) {
             close(p->fd);
             p->fd = -1;
         }
+        dropWriter(p);  // not committed (a commit clears it)
         if (!p->committed && p->path[0]) {
             unlink(p->path);  // the .tmp file
             p->path[0] = '\0';
         }
-        if (p->haveMd5) {
+        if (p->md5Live) {
             mbedtls_md5_free(&p->md5);
-            p->haveMd5 = false;
+            p->md5Live = false;
         }
         if (p->shaLive) {
             p->sha.~Sha256();
@@ -293,6 +352,39 @@ void sendXmlError(AsyncWebServerRequest* request, int status, const char* code, 
     addCommonHeaders(response);
     if (authDenied) fbauth::addDeniedHeaders(response);
     request->send(response);
+}
+
+void sendHttpError(AsyncWebServerRequest* request, const s3::HttpError& e) {
+    sendXmlError(request, e.status, e.code, e.msg);
+}
+
+void addMediaUsageHeaders(AsyncWebServerResponse* response) {
+    media_usage_t u{};
+    media_usage(&u);
+    char num[11];
+    const auto add = [&](const char* name, uint32_t v) {
+        snprintf(num, sizeof num, "%lu", static_cast<unsigned long>(v));
+        response->addHeader(name, num);
+    };
+    add(s3::kMediaTotalHeader, u.total);
+    add(s3::kMediaUsedHeader, u.used);
+    add(s3::kMediaFreeHeader, u.free);
+    add(s3::kMediaReclaimableHeader, u.reclaimable);
+}
+
+// MEDIA_OK / NOT_FOUND when the media bucket can be read (an empty bucket
+// is fine), else the store's error (UNAVAILABLE without a partition).
+media_err_t probeMediaBucket(const s3::Bucket& b) {
+    media_stat_t first;
+    const media_err_t e = media_next(b.mediaBucket(), nullptr, &first);
+    return e == MEDIA_ERR_NOT_FOUND ? MEDIA_OK : e;
+}
+
+// The NUL-terminated media key (keyLen <= MEDIA_KEY_MAX checked by the caller).
+void copyMediaKey(const s3::UrlTarget& t, char out[MEDIA_KEY_MAX + 1]) {
+    const size_t n = t.keyLen > MEDIA_KEY_MAX ? MEDIA_KEY_MAX : t.keyLen;
+    memcpy(out, t.key, n);
+    out[n] = '\0';
 }
 
 void sendAuthError(AsyncWebServerRequest* request, const fbauth::Result& r) {
@@ -500,10 +592,45 @@ void scanDir(ListState* s, size_t relLen, int depth) {
 
 // Finds the smallest listing value > marker into best. Stateless between
 // calls: one walk per entry, pruned to the subtrees that can hold it.
+// Media bucket: the store iterates in byte-wise key order, so the next value
+// is the first key > marker that has the prefix, rolled up at the delimiter.
+// best doubles as the iteration cursor; the item's size, mtime and MD5 are
+// taken from the same record.
+bool findNextMedia(ListState* s) {
+    media_stat_t st;
+    const char* after = s->hasMarker ? s->marker : nullptr;
+    for (;;) {
+        const media_err_t e = media_next(s->bucket->mediaBucket(), after, &st);
+        if (e == MEDIA_ERR_NOT_FOUND) return false;
+        if (e != MEDIA_OK) {
+            ESP_LOGW(TAG, "list %s: media_next failed (%d), listing cut short", s->bucket->name, e);
+            s->noMatch = true;
+            return false;
+        }
+        const size_t len = strnlen(st.key, sizeof st.key - 1);
+        memcpy(s->best, st.key, len);
+        s->best[len] = '\0';
+        after = s->best;
+        const int c = strncmp(s->best, s->prefix, s->prefixLen);
+        if (c < 0) continue;      // before the prefix range
+        if (c > 0) return false;  // past it: nothing more can match
+        bool isPrefix = false;
+        const size_t rl = s3::rollup(s->best, len, s->prefixLen, s->delimiter, &isPrefix);
+        if (s->hasMarker && cmpN(s->best, rl, s->marker) <= 0) continue;  // inside the listed common prefix
+        s->best[rl] = '\0';
+        s->bestIsPrefix = isPrefix;
+        s->itemSize = st.size;
+        s->itemMtime = st.mtime;
+        memcpy(s->itemMd5, st.md5, sizeof s->itemMd5);
+        return true;
+    }
+}
+
 bool findNext(ListState* s) {
     s->haveBest = false;
     ++s->searches;
     if (s->noMatch) return false;
+    if (s->bucket->isMedia()) return s->haveBest = findNextMedia(s);
     s->rel()[0] = '\0';
     scanDir(s, 0, 0);
     return s->haveBest;
@@ -563,7 +690,8 @@ void renderPiece(const ListState* s, S& w) {
             put(w, iso);
             put(w, "</LastModified><ETag>");
             char etag[40];
-            s3::formatETag(s->itemSize, static_cast<uint64_t>(s->itemMtime), etag);
+            if (s->bucket->isMedia()) s3::formatMd5ETag(s->itemMd5, etag);
+            else s3::formatETag(s->itemSize, static_cast<uint64_t>(s->itemMtime), etag);
             s3::putXml(w, etag);
             put(w, "</ETag><Size>");
             s3::putUint(w, s->itemSize);
@@ -625,7 +753,7 @@ bool prepareNext(ListState* s, int& budget, bool haveOutput) {
         memcpy(s->marker, s->best, sizeof(s->marker));
         s->hasMarker = true;
         s->itemIsPrefix = s->bestIsPrefix;
-        if (!s->itemIsPrefix) {
+        if (!s->itemIsPrefix && !s->bucket->isMedia()) {  // media: findNext took the record
             const size_t len = strlen(s->marker);
             memcpy(s->rel(), s->marker, len + 1);
             struct stat st{};
@@ -701,14 +829,23 @@ void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
     s->v2 = v2;
     s->delimiter = delim && *delim == "/";
     s->urlEncode = enc && *enc == "url";
-    char mount[kMountMax + 1];
-    const int mountLen = mountPoint(mount);
-    if (mountLen < 0) {
-        sendXmlError(request, 503, "ServiceUnavailable", "filesystem not mounted");
-        return;
+    if (bucket.isMedia()) {
+        // Refuse up front: once the chunked response has started, an error
+        // can only cut the listing short.
+        if (const media_err_t e = probeMediaBucket(bucket); e != MEDIA_OK) {
+            sendHttpError(request, s3::mediaError(e, s3::MediaOp::Read));
+            return;
+        }
+    } else {
+        char mount[kMountMax + 1];
+        const int mountLen = mountPoint(mount);
+        if (mountLen < 0) {
+            sendXmlError(request, 503, "ServiceUnavailable", "filesystem not mounted");
+            return;
+        }
+        s->baseLen = static_cast<uint8_t>(
+            s3::bucketBase(bucket, mount, static_cast<size_t>(mountLen), s->path, sizeof(s->path)));
     }
-    s->baseLen = static_cast<uint8_t>(
-        s3::bucketBase(bucket, mount, static_cast<size_t>(mountLen), s->path, sizeof(s->path)));
     if (prefix) {
         if (prefix->length() > s3::kReadKeyMax) {
             s->noMatch = true;  // no key can be that long
@@ -738,6 +875,7 @@ void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
         "application/xml", [request](uint8_t* buffer, size_t maxLen, size_t) -> size_t {
             return listFill(request, buffer, maxLen);
         });
+    if (bucket.isMedia()) addMediaUsageHeaders(response);
     addCommonHeaders(response);
     request->send(response);
 }
@@ -746,7 +884,85 @@ void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
 // Objects: GET / HEAD / DELETE
 // ---------------------------------------------------------------------------
 
+void addMediaStatHeaders(AsyncWebServerResponse* response, const uint8_t md5[16], uint32_t mtime) {
+    char etag[35];
+    s3::formatMd5ETag(md5, etag);
+    response->addHeader("ETag", etag);
+    char date[30];
+    s3::formatHttpDate(static_cast<int64_t>(mtime), date);
+    response->addHeader("Last-Modified", date);
+}
+
+// GetObject / HeadObject in a media bucket. GET maps the file and copies it
+// from the mapping straight into the TCP buffer; the mapping is dropped once
+// the last byte is copied, or when the client goes away (releaseState).
+void handleMediaGet(AsyncWebServerRequest* request, const Target& t) {
+    switch (s3::checkMediaReadKey(t.key, t.keyLen)) {
+        case s3::MediaReadKey::Ok:
+            break;
+        case s3::MediaReadKey::Malformed:
+            sendXmlError(request, 400, "InvalidArgument", "invalid key");
+            return;
+        case s3::MediaReadKey::Missing:
+            sendXmlError(request, 404, "NoSuchKey", "The specified key does not exist.");
+            return;
+    }
+    char key[MEDIA_KEY_MAX + 1];
+    copyMediaKey(t, key);
+    const media_bucket_t mb = t.bucket->mediaBucket();
+    const char* type = s3::contentTypeFor(t.key, t.keyLen);
+
+    media_stat_t st;
+    if (const media_err_t e = media_stat(mb, key, &st); e != MEDIA_OK) {
+        sendHttpError(request, s3::mediaError(e, s3::MediaOp::Read));
+        return;
+    }
+    AsyncWebServerResponse* response;
+    if (request->method() == HTTP_HEAD || st.size == 0) {
+        response = request->beginResponse(200, type, "");
+        response->setContentLength(st.size);
+    } else {
+        GetState* g = allocState<GetState>(request);
+        if (!g) {
+            sendXmlError(request, 503, "SlowDown", "out of memory");
+            return;
+        }
+        watchState(request);
+        if (const media_err_t e = media_open(mb, key, &g->file); e != MEDIA_OK) {
+            memset(&g->file, 0, sizeof g->file);
+            sendHttpError(request, s3::mediaError(e, s3::MediaOp::Read));
+            return;
+        }
+        if (g->file.size != st.size) {
+            // Replaced between media_stat and media_open: describe what is sent.
+            if (media_stat(mb, key, &st) != MEDIA_OK || st.size != g->file.size) {
+                closeMediaFile(g);
+                sendXmlError(request, 503, "SlowDown", "object changed while opening, retry");
+                return;
+            }
+        }
+        g->mediaSize = g->file.size;
+        response = request->beginResponse(type, g->mediaSize,
+                                          [request](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+            auto* gs = static_cast<GetState*>(request->_tempObject);
+            if (!gs || gs->kind != Kind::Get || !gs->file.handle || index >= gs->mediaSize) return 0;
+            size_t n = gs->mediaSize - index;
+            if (n > maxLen) n = maxLen;
+            memcpy(buffer, gs->file.data + index, n);
+            if (index + n >= gs->mediaSize) closeMediaFile(gs);  // all copied: the mapping is no longer needed
+            return n;
+        });
+    }
+    addMediaStatHeaders(response, st.md5, st.mtime);
+    addCommonHeaders(response);
+    request->send(response);
+}
+
 void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
+    if (t.bucket->isMedia()) {
+        handleMediaGet(request, t);
+        return;
+    }
     if (!s3::keyWellFormed(t.key, t.keyLen, s3::kReadKeyMax)) {
         sendXmlError(request, 400, "InvalidArgument", "invalid key");
         return;
@@ -803,41 +1019,35 @@ void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
     request->send(response);
 }
 
-constexpr const char* kKeyRulesMsg =
-    "key must be [A-Za-z0-9._-/], no '..' or empty segments, and end in .js, .json or .txt";
-
-// Status, code and message of a refused write key (status 0: allowed).
-struct WriteRefusal {
-    uint16_t status;
-    const char* code;
-    const char* msg;
-};
-
-WriteRefusal checkWrite(const Target& t) {
-    switch (s3::checkWriteKey(*t.bucket, t.key, t.keyLen)) {
-        case s3::KeyCheck::Ok:
-            return {0, nullptr, nullptr};
-        case s3::KeyCheck::ReadOnly:
-            return {403, "AccessDenied", "bucket is read-only"};
-        case s3::KeyCheck::Forbidden:
-            return {403, "AccessDenied", "this path is read-only"};
-        case s3::KeyCheck::OtherBucket:
-            return {400, "InvalidArgument", "key lies in another bucket's directory (see ListBuckets)"};
-        case s3::KeyCheck::Invalid:
-            break;
-    }
-    if (t.keyLen > s3::kWriteKeyMax) return {400, "KeyTooLongError", "key longer than 63 characters"};
-    return {400, "InvalidArgument", kKeyRulesMsg};
+s3::HttpError checkWrite(const Target& t) {
+    return s3::writeRefusal(*t.bucket, t.key, t.keyLen);
 }
 
 bool writeKeyAllowed(AsyncWebServerRequest* request, const Target& t) {
-    const WriteRefusal r = checkWrite(t);
-    if (r.status) sendXmlError(request, r.status, r.code, r.msg);
+    const s3::HttpError r = checkWrite(t);
+    if (r.status) sendHttpError(request, r);
     return r.status == 0;
 }
 
 void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
     if (!writeKeyAllowed(request, t)) return;
+    if (t.bucket->isMedia()) {
+        char key[MEDIA_KEY_MAX + 1];
+        copyMediaKey(t, key);
+        const media_err_t e = media_delete(t.bucket->mediaBucket(), key);
+        if (const s3::HttpError r = s3::mediaError(e, s3::MediaOp::Delete); r.status) {
+            sendHttpError(request, r);
+            return;
+        }
+        if (e == MEDIA_OK && t.bucket->media == MEDIA_BUCKET_FONTS) {
+            ESP_LOGI(TAG, "DELETE %s", request->url().c_str());
+            // TODO(integration): fonts changed (deleted: key) - notify the font loader here.
+        }
+        AsyncWebServerResponse* response = request->beginResponse(204);
+        addCommonHeaders(response);
+        request->send(response);
+        return;
+    }
     if (s3::keyIsConfig(*t.bucket, t.key, t.keyLen)) {
         sendXmlError(request, 403, "AccessDenied", "config.json cannot be deleted");
         return;
@@ -875,8 +1085,8 @@ void mkdirParents(char* path, size_t mountLen) {
 
 void putSink(PutState* st, const uint8_t* data, size_t len) {
     if (st->status || len == 0) return;
-    if (st->written + len > s3::kMaxObjectSize) {
-        st->fail(413, "EntityTooLarge", "object larger than 64 KiB");
+    if (st->written + len > st->limit) {
+        st->fail(413, "EntityTooLarge", st->tooLargeMsg);
         return;
     }
     if (st->lengthKnown && st->written + len > st->expected) {
@@ -884,9 +1094,18 @@ void putSink(PutState* st, const uint8_t* data, size_t len) {
         return;
     }
     st->crc = esp_rom_crc32_le(st->crc, data, static_cast<uint32_t>(len));
-    if (st->haveMd5) mbedtls_md5_update(&st->md5, data, len);
+    if (st->md5Live) mbedtls_md5_update(&st->md5, data, len);
     if (st->payload == fbauth::Payload::Sha256 || st->payload == fbauth::Payload::Streaming) st->sha.update(data, len);
     st->written += static_cast<uint32_t>(len);
+    if (st->writer) {
+        // Straight from the TCP buffer into flash. Not yet trusted: the
+        // chunk signature / body hash are checked at chunk / body end, and
+        // nothing becomes visible before media_put_commit.
+        if (const media_err_t e = media_put_write(st->writer, data, static_cast<uint32_t>(len)); e != MEDIA_OK) {
+            st->failMedia(e);
+        }
+        return;
+    }
     while (len) {
         const ssize_t n = write(st->fd, data, len);
         if (n <= 0) {
@@ -898,7 +1117,8 @@ void putSink(PutState* st, const uint8_t* data, size_t len) {
     }
 }
 
-// First body byte (or end of an empty-body PUT): validate and open the temp file.
+// First body byte (or end of an empty-body PUT): validate and open the temp
+// file, or reserve the space in the media store.
 PutState* putBegin(AsyncWebServerRequest* request) {
     PutState* st = allocState<PutState>(request);
     if (!st) return nullptr;
@@ -928,10 +1148,13 @@ PutState* putBegin(AsyncWebServerRequest* request) {
     }
 
     const Target t = parseTarget(request->url());
-    if (const WriteRefusal r = checkWrite(t); r.status) {
-        st->fail(r.status, r.code, r.msg);
+    if (const s3::HttpError r = checkWrite(t); r.status) {
+        st->fail(r);
         return st;
     }
+    const bool media = t.bucket->isMedia();
+    st->limit = s3::objectSizeLimit(*t.bucket);
+    st->tooLargeMsg = s3::tooLargeMessage(*t.bucket);
     if (request->hasParam("uploads") || request->hasParam("uploadId") || request->hasHeader("x-amz-copy-source")) {
         st->fail(501, "NotImplemented", "multipart upload and copy are not supported");
         return st;
@@ -948,28 +1171,26 @@ PutState* putBegin(AsyncWebServerRequest* request) {
         st->fail(400, "InvalidRequest", "x-amz-content-sha256 does not match the body encoding");
         return st;
     }
-    if (const char* decoded = headerValue(request, "x-amz-decoded-content-length")) {
-        st->expected = static_cast<uint32_t>(strtoul(decoded, nullptr, 10));
-        st->lengthKnown = true;
-    } else if (!st->chunked && request->hasHeader("Content-Length")) {
-        st->expected = static_cast<uint32_t>(request->contentLength());
-        st->lengthKnown = true;
-    } else if (!request->hasHeader("Content-Length")) {
-        st->fail(411, "MissingContentLength", "Content-Length or x-amz-decoded-content-length required");
+    const s3::PutLength length =
+        s3::putLength(*t.bucket, st->chunked, headerValue(request, "x-amz-decoded-content-length"),
+                      request->hasHeader("Content-Length"), request->contentLength());
+    if (length.error.status) {
+        st->fail(length.error);
         return st;
     }
-    if (st->lengthKnown && st->expected > s3::kMaxObjectSize) {
-        st->fail(413, "EntityTooLarge", "object larger than 64 KiB");
-        return st;
-    }
+    st->lengthKnown = length.known;
+    st->expected = length.expected;
     if (const char* md5 = headerValue(request, "Content-MD5")) {
         if (s3::base64Decode(md5, strlen(md5), st->wantMd5, sizeof st->wantMd5) != 16) {
             st->fail(400, "InvalidDigest", "Content-MD5 is not a base64 MD5");
             return st;
         }
+        st->haveMd5 = true;
+    }
+    if (st->haveMd5 || media) {  // media: the stored MD5 is the object's ETag
         mbedtls_md5_init(&st->md5);
         mbedtls_md5_starts(&st->md5);
-        st->haveMd5 = true;
+        st->md5Live = true;
     }
     if (const char* crc = headerValue(request, "x-amz-checksum-crc32")) {
         if (!s3::parseCrc32B64(crc, strlen(crc), &st->wantCrc)) {
@@ -977,6 +1198,23 @@ PutState* putBegin(AsyncWebServerRequest* request) {
             return st;
         }
         st->haveCrc = true;
+    }
+    if (media) {
+        // Reserve exactly the decoded size before any body byte is written
+        // (fails with NO_SPACE without writing anything). The store
+        // serialises uploads itself (BUSY), so no s_putActive slot: it
+        // guards LittleFS files only (s3_idle).
+        char key[MEDIA_KEY_MAX + 1];
+        copyMediaKey(t, key);
+        const uint32_t mtime = s3::mediaMtime(fbauth::clockValid(), static_cast<int64_t>(time(nullptr)));
+        media_writer_t* w = nullptr;
+        const media_err_t e = media_put_begin(t.bucket->mediaBucket(), key, st->expected, mtime, &w);
+        if (e != MEDIA_OK) {
+            st->failMedia(e);
+            return st;
+        }
+        st->writer = w;
+        return st;
     }
     if (s_putActive) {
         st->fail(503, "SlowDown", "another upload is in progress, retry");
@@ -999,13 +1237,8 @@ PutState* putBegin(AsyncWebServerRequest* request) {
     return st;
 }
 
-void putBody(AsyncWebServerRequest* request, const uint8_t* data, size_t len) {
-    auto* st = static_cast<PutState*>(request->_tempObject);
-    if (!st) {
-        st = putBegin(request);
-        if (!st) return;
-    }
-    if (st->kind != Kind::Put || st->status || st->fd < 0) return;
+void putFeed(PutState* st, const uint8_t* data, size_t len) {
+    if (st->status || (st->fd < 0 && !st->writer)) return;
     if (!st->chunked) {
         putSink(st, data, len);
         return;
@@ -1031,6 +1264,19 @@ void putBody(AsyncWebServerRequest* request, const uint8_t* data, size_t len) {
     if (!st->dec.feed(data, len, onData)) {
         st->fail(400, "InvalidRequest", "malformed aws-chunked body");
     }
+}
+
+void putBody(AsyncWebServerRequest* request, const uint8_t* data, size_t len) {
+    auto* st = static_cast<PutState*>(request->_tempObject);
+    if (!st) {
+        st = putBegin(request);
+        if (!st) return;
+    }
+    if (st->kind != Kind::Put) return;
+    putFeed(st, data, len);
+    // A failed media upload gives its reservation back now, not only once
+    // the rest of the body is drained.
+    if (st->status) dropWriter(st);
 }
 
 class FdReadStream {
@@ -1083,10 +1329,10 @@ void putFinish(AsyncWebServerRequest* request) {
             st->fail(400, "XAmzContentSHA256Mismatch", "x-amz-content-sha256 does not match the body");
         }
     }
-    if (!st->status && st->haveMd5) {
-        uint8_t digest[16];
-        mbedtls_md5_finish(&st->md5, digest);
-        if (memcmp(digest, st->wantMd5, sizeof digest) != 0) {
+    uint8_t md5[16] = {};
+    if (!st->status && st->md5Live) {
+        mbedtls_md5_finish(&st->md5, md5);
+        if (st->haveMd5 && memcmp(md5, st->wantMd5, sizeof md5) != 0) {
             st->fail(400, "BadDigest", "Content-MD5 does not match the body");
         }
     }
@@ -1119,8 +1365,26 @@ void putFinish(AsyncWebServerRequest* request) {
         }
     }
 
+    const Target t = parseTarget(request->url());
+    const bool media = t.type == Target::Object && t.bucket->isMedia();
     char finalPath[sizeof st->path];
-    if (!st->status) {
+    finalPath[0] = '\0';
+    if (!st->status && media) {
+        if (!st->writer) {
+            st->fail(500, "InternalError", "upload not open");  // cannot happen: a failure sets status
+        } else {
+            // Atomic: until here the previous version (if any) stays live.
+            // The commit consumes the writer, also when it fails.
+            media_writer_t* w = st->writer;
+            st->writer = nullptr;
+            const media_err_t e = media_put_commit(w, md5);
+            if (e != MEDIA_OK) {
+                st->failMedia(e);
+            } else {
+                st->committed = true;
+            }
+        }
+    } else if (!st->status) {
         memcpy(finalPath, st->path, st->finalLen);
         finalPath[st->finalLen] = '\0';
         if (rename(st->path, finalPath) != 0) {
@@ -1132,9 +1396,14 @@ void putFinish(AsyncWebServerRequest* request) {
     }
 
     if (st->status) {
-        char msg[48];
+        char msg[112];
         const char* text = st->errMsg;
-        if (!text) {
+        if (st->noSpace) {
+            media_usage_t u{};
+            media_usage(&u);
+            s3::formatNoSpaceMessage(st->expected, u.free, u.reclaimable, msg, sizeof msg);
+            text = msg;
+        } else if (!text) {
             snprintf(msg, sizeof msg, "invalid JSON at offset %lu", static_cast<unsigned long>(st->jsonOffset));
             text = msg;
         }
@@ -1147,12 +1416,19 @@ void putFinish(AsyncWebServerRequest* request) {
         return;
     }
 
-    struct stat fst{};
-    stat(finalPath, &fst);
     ESP_LOGI(TAG, "PUT %s: %lu bytes", request->url().c_str(), static_cast<unsigned long>(st->written));
     AsyncWebServerResponse* response = request->beginResponse(200);
     char etag[40];
-    s3::formatETag(st->written, static_cast<uint64_t>(fst.st_mtime), etag);
+    if (media) {
+        s3::formatMd5ETag(md5, etag);
+        if (t.bucket->media == MEDIA_BUCKET_FONTS) {
+            // TODO(integration): fonts changed (written: t.key) - notify the font loader here.
+        }
+    } else {
+        struct stat fst{};
+        stat(finalPath, &fst);
+        s3::formatETag(st->written, static_cast<uint64_t>(fst.st_mtime), etag);
+    }
     response->addHeader("ETag", etag);
     if (st->haveCrc) {
         char crc[9];
@@ -1239,8 +1515,15 @@ public:
                 return;
             case Target::BucketRoot:
                 if (method == HTTP_HEAD) {
+                    if (t.bucket->isMedia()) {
+                        if (const media_err_t e = probeMediaBucket(*t.bucket); e != MEDIA_OK) {
+                            sendHttpError(request, s3::mediaError(e, s3::MediaOp::Read));
+                            return;
+                        }
+                    }
                     AsyncWebServerResponse* response = request->beginResponse(200);
                     response->addHeader("x-amz-bucket-region", "us-east-1");
+                    if (t.bucket->isMedia()) addMediaUsageHeaders(response);
                     addCommonHeaders(response);
                     request->send(response);
                 } else if (method == HTTP_GET && request->hasParam("location")) {
