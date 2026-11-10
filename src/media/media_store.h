@@ -53,7 +53,7 @@ typedef struct {
 
 typedef struct {
     uint32_t total;       /* data bytes (pages * 64 KB, directory excluded) */
-    uint32_t used;        /* allocated to live entries (incl. page tails) */
+    uint32_t used;        /* allocated to live entries (incl. page tails) and uploads in progress */
     uint32_t reclaimable; /* dead but still open (freed on close) */
     uint32_t derived;     /* used by MEDIA_BUCKET_RENDER (evictable) */
     uint32_t free;        /* total - used - reclaimable */

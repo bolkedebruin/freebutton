@@ -3,7 +3,7 @@
 //
 // RAM: two uint16 masks per page (sector in use, sector known erased), a
 // liveness bitmap of the directory records, the open-file and mapping
-// tables and two upload slots (about 1.6 KB static plus 4 bytes per page).
+// tables and two upload slots (about 1.7 KB static plus 4 bytes per page).
 // Everything else is read from the directory in flash when needed.
 #include "media_core.h"
 
