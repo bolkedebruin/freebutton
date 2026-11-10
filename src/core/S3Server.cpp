@@ -85,6 +85,7 @@
 #include "S3Logic.h"
 #include "json/JsonValidator.h"
 #include "json/WindowOutputStream.h"
+#include "ui/fonts/fonts.h"  // fonts_request_reload
 
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
@@ -1041,7 +1042,7 @@ void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
         }
         if (e == MEDIA_OK && t.bucket->media == MEDIA_BUCKET_FONTS) {
             ESP_LOGI(TAG, "DELETE %s", request->url().c_str());
-            // TODO(integration): fonts changed (deleted: key) - notify the font loader here.
+            fonts_request_reload();  // the LVGL task reloads the fonts 1.5 s after the last change
         }
         AsyncWebServerResponse* response = request->beginResponse(204);
         addCommonHeaders(response);
@@ -1422,7 +1423,7 @@ void putFinish(AsyncWebServerRequest* request) {
     if (media) {
         s3::formatMd5ETag(md5, etag);
         if (t.bucket->media == MEDIA_BUCKET_FONTS) {
-            // TODO(integration): fonts changed (written: t.key) - notify the font loader here.
+            fonts_request_reload();  // the LVGL task reloads the fonts 1.5 s after the last change
         }
     } else {
         struct stat fst{};
