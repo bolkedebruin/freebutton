@@ -53,7 +53,7 @@ typedef struct {
 
 typedef struct {
     uint32_t total;       /* data bytes (pages * 64 KB, directory excluded) */
-    uint32_t used;        /* allocated to live entries (incl. page tails) */
+    uint32_t used;        /* allocated to live entries (incl. page tails) and uploads in progress */
     uint32_t reclaimable; /* dead but still open (freed on close) */
     uint32_t derived;     /* used by MEDIA_BUCKET_RENDER (evictable) */
     uint32_t free;        /* total - used - reclaimable */
@@ -65,15 +65,31 @@ typedef struct media_writer media_writer_t;
  * store when it is blank or its directory is unreadable. Idempotent. */
 media_err_t media_init(void);
 
-/* Map a file and take a reference. */
+/* Map a file and take a reference. Opening a key that is already open
+ * shares its mapping and reference count (the same handle comes back). A
+ * 0-byte file opens with data == NULL. Up to 16 distinct files can be open
+ * (MEDIA_ERR_BUSY beyond that). */
 media_err_t media_open(media_bucket_t bucket, const char *key, media_file_t *out);
 /* Drop the reference; unmaps, and frees the pages of a deleted/replaced file
- * once nothing uses it. Safe on a zeroed media_file_t. */
+ * once nothing uses it. Call once per successful media_open(). Zeroes
+ * *file; safe on a zeroed media_file_t. */
 void media_close(media_file_t *file);
 
 /* Upload: reserve `size` bytes (fails before anything is written), stream
  * exactly `size` bytes, then commit (atomic: until then any previous version
- * stays the live one). Abort releases the reservation. */
+ * stays the live one). Abort releases the reservation.
+ *
+ * - size 0 is allowed (a 0-byte file); size > 4 MB is MEDIA_ERR_INVALID;
+ *   MEDIA_ERR_NO_SPACE when it does not fit even after evicting RENDER
+ *   entries (nothing is evicted then), MEDIA_ERR_BUSY with 2 uploads open.
+ * - After a media_put_write() error the writer stays valid: the caller still
+ *   calls media_put_abort() (or commit) exactly once. Writing more than the
+ *   rest of `size` is MEDIA_ERR_SIZE and writes nothing.
+ * - media_put_commit() always consumes the writer, on success and on any
+ *   error (fewer bytes than `size` = MEDIA_ERR_SIZE); never abort after it.
+ * - media_put_write() erases flash only where media_maintain() has not
+ *   pre-erased it, at most the sectors (or 64 KB pages) it is about to fill.
+ * - Two uploads of the same key may run at once: the last commit wins. */
 media_err_t media_put_begin(media_bucket_t bucket, const char *key, uint32_t size, uint32_t mtime,
                             media_writer_t **out);
 media_err_t media_put_write(media_writer_t *w, const void *data, uint32_t len);
@@ -84,7 +100,8 @@ media_err_t media_delete(media_bucket_t bucket, const char *key);
 media_err_t media_stat(media_bucket_t bucket, const char *key, media_stat_t *out);
 
 /* Iterate a bucket in byte-wise key order: the first key greater than
- * `after` (NULL or "" = from the start). MEDIA_ERR_NOT_FOUND at the end. */
+ * `after` (NULL or "" = from the start). MEDIA_ERR_NOT_FOUND at the end.
+ * `after` may be out->key of the previous call (same buffer). */
 media_err_t media_next(media_bucket_t bucket, const char *after, media_stat_t *out);
 
 void media_usage(media_usage_t *out);
