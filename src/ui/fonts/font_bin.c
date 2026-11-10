@@ -358,6 +358,27 @@ int32_t font_bin_kern(const font_bin_t *f, uint16_t left, uint16_t right) {
     return ((int32_t)font_bin_kern_raw(f, left, right) * f->kern_scale) >> 4;
 }
 
+/* Class matrix kerning: the classes of a glyph (0 = none). */
+static void kern_classes(const font_bin_t *f, uint16_t gid, uint8_t *lc, uint8_t *rc) {
+    *lc = *rc = 0;
+    if (!f->kern_pos || f->kern_format != 3 || gid >= f->kern_map_len) return;
+    uint32_t maps = f->kern_pos + 4;
+    if (!rd8(f, maps + gid, lc) || *lc > f->kern_left_classes) *lc = 0;
+    if (!rd8(f, maps + f->kern_map_len + gid, rc) || *rc > f->kern_right_classes) *rc = 0;
+}
+
+int32_t font_bin_kern_entries(const font_bin_t *f, const font_bin_cache_entry_t *left,
+                              const font_bin_cache_entry_t *right) {
+    if (!f->kern_pos) return 0;
+    if (f->kern_format != 3) return font_bin_kern(f, left->gid, right->gid);
+    if (!left->kern_left || !right->kern_right) return 0;
+    uint8_t v;
+    uint32_t values = f->kern_pos + 4 + 2u * f->kern_map_len;
+    if (!rd8(f, values + (uint32_t)(left->kern_left - 1) * f->kern_right_classes + (right->kern_right - 1), &v))
+        return 0;
+    return ((int32_t)(int8_t)v * f->kern_scale) >> 4;
+}
+
 /* ---- bitmap decoding ----------------------------------------------------- */
 
 /* Writes decoded pixels row by row into the strided output. */
@@ -455,6 +476,15 @@ bool font_bin_decode(const font_bin_t *f, const font_bin_glyph_t *g, uint8_t *ou
 
 bool font_bin_lookup(const font_bin_t *f, font_bin_cache_t *c, uint32_t codepoint,
                      uint16_t *gid, font_bin_glyph_t *glyph) {
+    font_bin_cache_entry_t e;
+    if (!font_bin_lookup_entry(f, c, codepoint, &e)) return false;
+    *gid = e.gid;
+    *glyph = e.glyph;
+    return true;
+}
+
+bool font_bin_lookup_entry(const font_bin_t *f, font_bin_cache_t *c, uint32_t codepoint,
+                           font_bin_cache_entry_t *out) {
     font_bin_cache_entry_t hit;
     uint8_t i;
     for (i = 0; i < c->used; i++) {
@@ -470,6 +500,7 @@ bool font_bin_lookup(const font_bin_t *f, font_bin_cache_t *c, uint32_t codepoin
             return false; /* read error: do not cache, a retry may work */
         }
         if (!hit.gid) memset(&hit.glyph, 0, sizeof(hit.glyph));
+        kern_classes(f, hit.gid, &hit.kern_left, &hit.kern_right);
         if (c->used < FONT_BIN_CACHE_SIZE) c->used++;
         i = (uint8_t)(c->used - 1); /* drop the last (least recently used) entry */
     }
@@ -479,8 +510,7 @@ bool font_bin_lookup(const font_bin_t *f, font_bin_cache_t *c, uint32_t codepoin
     c->e[0] = hit;
 
     if (!hit.gid) return false;
-    *gid = hit.gid;
-    *glyph = hit.glyph;
+    *out = hit;
     return true;
 }
 

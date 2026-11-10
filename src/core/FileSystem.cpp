@@ -10,6 +10,9 @@
 
 static auto TAG = "filesystem";
 
+// stdio buffer of a read-only LVGL file, see fs_open
+static constexpr size_t kReadBufferSize = 128;
+
 using namespace FreeButton;
 
 static void * fs_open(lv_fs_drv_t *drv, const char *path, const lv_fs_mode_t mode) {
@@ -24,10 +27,14 @@ static void * fs_open(lv_fs_drv_t *drv, const char *path, const lv_fs_mode_t mod
     BusAwareFile file = getBusAwareFileSystem().open(path, mode_str);
     if (!file)
         return NULL;
-    else {
-        const auto fp = new BusAwareFile(std::move(file));
-        return (void *)fp;
-    }
+    // Arduino's VFS gives every file a 4 KB stdio buffer (heap, allocated on
+    // the first read) and refills all of it after each seek. LVGL readers
+    // seek a lot and read little (fonts: a few bytes per lookup, through
+    // their own block cache), so a read-only file gets a small buffer: 128 B
+    // of heap instead of 4 KB, and a seek costs one small read.
+    if (mode == LV_FS_MODE_RD)
+        file.setBufferSize(kReadBufferSize);
+    return new BusAwareFile(std::move(file));
 }
 
 static lv_fs_res_t fs_close(lv_fs_drv_t *drv, void *file_p) {

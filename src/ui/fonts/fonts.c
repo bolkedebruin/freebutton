@@ -8,7 +8,8 @@
 // RAM per font: the stream_font_t below plus the cmap subtable headers
 // (16 bytes each, 11-12 for our fonts). Glyph metrics, sparse cmap lists and
 // kerning are read from the file on demand; bitmaps are decoded straight into
-// LVGL's glyph draw buffer through a small stack buffer.
+// LVGL's glyph draw buffer through a small stack buffer. Shared by all fonts:
+// a 1 KB block cache of file reads (static) and at most two open files.
 //
 
 #include "fonts.h"
@@ -46,28 +47,115 @@ typedef struct {
 
 /* ---- font_bin_io_t over lv_fs ------------------------------------------- */
 
-/* The file is opened on first use, so fonts that are never drawn do not hold
- * a LittleFS handle (each one carries its own cache buffer). */
-static bool ensure_open(stream_font_t *sf) {
-    if (sf->file_open) return true;
-    if (lv_fs_open(&sf->file, sf->path, LV_FS_MODE_RD) != LV_FS_RES_OK) return false;
-    sf->file_open = true;
-    return true;
-}
+/* At most two font files are open at a time: LittleFS is mounted with few
+ * file slots and every open file holds ~1 KB of buffers, while an open costs
+ * ~9 ms (path lookup). Two covers a page that alternates a caption and a value
+ * font; most reads are served by the block cache below without the file. */
+#define OPEN_FILES_MAX 2u
+static stream_font_t *open_fonts[OPEN_FILES_MAX]; /* [0] most recently used */
 
 static void close_file(stream_font_t *sf) {
     if (!sf->file_open) return;
     lv_fs_close(&sf->file);
     sf->file_open = false;
+    for (uint32_t i = 0; i < OPEN_FILES_MAX; i++) {
+        if (open_fonts[i] == sf) {
+            memmove(&open_fonts[i], &open_fonts[i + 1], (OPEN_FILES_MAX - 1 - i) * sizeof(open_fonts[0]));
+            open_fonts[OPEN_FILES_MAX - 1] = NULL;
+            break;
+        }
+    }
+}
+
+static bool ensure_open(stream_font_t *sf) {
+    if (!sf->file_open) {
+        if (open_fonts[OPEN_FILES_MAX - 1]) close_file(open_fonts[OPEN_FILES_MAX - 1]);
+        if (lv_fs_open(&sf->file, sf->path, LV_FS_MODE_RD) != LV_FS_RES_OK) return false;
+        sf->file_open = true;
+        memmove(&open_fonts[1], &open_fonts[0], (OPEN_FILES_MAX - 1) * sizeof(open_fonts[0]));
+        open_fonts[0] = sf;
+        return true;
+    }
+    /* move to front */
+    uint32_t i = 0;
+    while (i < OPEN_FILES_MAX && open_fonts[i] != sf) i++;
+    if (i && i < OPEN_FILES_MAX) {
+        memmove(&open_fonts[1], &open_fonts[0], i * sizeof(open_fonts[0]));
+        open_fonts[0] = sf;
+    }
+    return true;
+}
+
+/* A small block cache shared by all fonts. A glyph costs a dozen small reads
+ * (cmap search, loca, header, bitmap, kerning) that cluster in a few places,
+ * and every read that reaches the file (lv_fs, VFS, LittleFS) costs ~0.5 ms
+ * on the device, however few bytes it reads. Measured
+ * at the same 1 KB: 16 x 64 B needs 170 file reads for the first 100 glyphs,
+ * 8 x 128 B 220, 4 x 256 B 374; without the cache, 1552. LVGL draws from one
+ * thread, so one static cache needs no lock. */
+#define READ_BLOCK_SIZE 64u
+#define READ_BLOCK_COUNT 16u
+
+typedef struct {
+    const stream_font_t *font; /* NULL: free */
+    uint32_t start;            /* file offset, multiple of READ_BLOCK_SIZE */
+    uint32_t used;             /* read_clock at the last hit (LRU) */
+    uint16_t len;              /* valid bytes, < READ_BLOCK_SIZE at the end of the file */
+    uint8_t data[READ_BLOCK_SIZE];
+} read_block_t;
+
+static read_block_t read_blocks[READ_BLOCK_COUNT];
+static uint32_t read_clock;
+
+static void forget_blocks(const stream_font_t *sf) {
+    for (uint32_t i = 0; i < READ_BLOCK_COUNT; i++) {
+        if (read_blocks[i].font == sf) read_blocks[i].font = NULL;
+    }
+}
+
+static const read_block_t *get_block(stream_font_t *sf, uint32_t start) {
+    read_block_t *lru = &read_blocks[0];
+    for (uint32_t i = 0; i < READ_BLOCK_COUNT; i++) {
+        read_block_t *b = &read_blocks[i];
+        if (b->font == sf && b->start == start) {
+            b->used = ++read_clock;
+            return b;
+        }
+        if (!b->font) {
+            if (lru->font) lru = b; /* a free block beats any used one */
+        } else if (lru->font && b->used < lru->used) {
+            lru = b;
+        }
+    }
+
+    /* miss: refill the least recently used block */
+    lru->font = NULL;
+    if (!ensure_open(sf)) return NULL;
+    uint32_t got = 0;
+    if (lv_fs_seek(&sf->file, start, LV_FS_SEEK_SET) != LV_FS_RES_OK) return NULL;
+    if (lv_fs_read(&sf->file, lru->data, READ_BLOCK_SIZE, &got) != LV_FS_RES_OK || got == 0) return NULL;
+    lru->font = sf;
+    lru->start = start;
+    lru->len = (uint16_t)got;
+    lru->used = ++read_clock;
+    return lru;
 }
 
 static bool io_read_at(void *ctx, uint32_t pos, void *dst, uint32_t len) {
     stream_font_t *sf = (stream_font_t *)ctx;
-    if (!ensure_open(sf)) return false;
-    uint32_t got = 0;
-    if (lv_fs_seek(&sf->file, pos, LV_FS_SEEK_SET) != LV_FS_RES_OK) return false;
-    if (lv_fs_read(&sf->file, dst, len, &got) != LV_FS_RES_OK) return false;
-    return got == len;
+    uint8_t *out = (uint8_t *)dst;
+    while (len) {
+        uint32_t start = pos - pos % READ_BLOCK_SIZE;
+        const read_block_t *b = get_block(sf, start);
+        if (!b || pos - start >= b->len) return false; /* read error or past the end */
+        uint32_t n = b->len - (pos - start);
+        if (n > len) n = len;
+        memcpy(out, b->data + (pos - start), n);
+        out += n;
+        pos += n;
+        len -= n;
+    }
+    return true;
 }
 
 static void *io_alloc(size_t size) { return lv_malloc(size); }
@@ -83,17 +171,17 @@ static bool stream_get_glyph_dsc(const lv_font_t *font, lv_font_glyph_dsc_t *dsc
     bool is_tab = letter == '\t';
     if (is_tab) letter = ' ';
 
-    uint16_t gid;
-    font_bin_glyph_t g;
-    if (!font_bin_lookup(&sf->bin, &sf->cache, letter, &gid, &g)) return false;
+    font_bin_cache_entry_t e;
+    if (!font_bin_lookup_entry(&sf->bin, &sf->cache, letter, &e)) return false;
+    const font_bin_glyph_t g = e.glyph;
+    const uint16_t gid = e.gid;
 
     int32_t adv = g.adv_w; /* 1/16 px */
     if (is_tab) adv *= 2;
     if (letter_next && sf->bin.kern_pos) {
-        uint16_t gid_next;
-        font_bin_glyph_t g_next;
-        if (font_bin_lookup(&sf->bin, &sf->cache, letter_next, &gid_next, &g_next)) {
-            adv += font_bin_kern(&sf->bin, gid, gid_next);
+        font_bin_cache_entry_t e_next;
+        if (font_bin_lookup_entry(&sf->bin, &sf->cache, letter_next, &e_next)) {
+            adv += font_bin_kern_entries(&sf->bin, &e, &e_next);
         }
     }
     if (adv < 0) adv = 0;
@@ -140,6 +228,7 @@ static void stream_font_destroy(stream_font_t *sf) {
     if (!sf) return;
     font_bin_close(&sf->bin);
     close_file(sf);
+    forget_blocks(sf);
     lv_free(sf);
 }
 
@@ -152,6 +241,7 @@ static stream_font_t *stream_font_create(const char *path, const lv_font_t *fall
     const font_bin_io_t io = {io_read_at, io_alloc, io_free, sf};
     if (!font_bin_open(&sf->bin, &io)) {
         close_file(sf);
+        forget_blocks(sf);
         lv_free(sf);
         return NULL;
     }

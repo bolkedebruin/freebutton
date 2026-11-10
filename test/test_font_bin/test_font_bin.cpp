@@ -331,6 +331,7 @@ static void compare_font(const FontCase &fc) {
 
     // cmap: Basic Multilingual Plane plus the MDI icon block, hits and misses
     size_t mapped = 0;
+    std::vector<font_bin_cache_entry_t> entries(f.glyph_count); // by glyph id, for the kerning check
     auto check_range = [&](uint32_t from, uint32_t to) {
         for (uint32_t cp = from; cp < to; cp++) {
             uint32_t want = ref_glyph_id(d, cp);
@@ -339,7 +340,11 @@ static void compare_font(const FontCase &fc) {
                 snprintf(msg, sizeof(msg), "%s U+%04X", fc.bin, cp);
                 TEST_ASSERT_EQUAL_MESSAGE(want, got, msg);
             }
-            if (want) mapped++;
+            if (want) {
+                mapped++;
+                font_bin_cache_t fresh = {};
+                TEST_ASSERT_TRUE(font_bin_lookup_entry(&f, &fresh, cp, &entries[want]));
+            }
         }
     };
     check_range(0, 0x10000);
@@ -357,6 +362,12 @@ static void compare_font(const FontCase &fc) {
                 TEST_ASSERT_EQUAL_MESSAGE(want, got, msg);
             }
             if (want) kerned++;
+            // the cached-class path gives the same, scaled
+            int32_t scaled = font_bin_kern_entries(&f, &entries[l], &entries[r]);
+            if (scaled != font_bin_kern(&f, l, r)) {
+                snprintf(msg, sizeof(msg), "%s kern entries %u,%u", fc.bin, l, r);
+                TEST_ASSERT_EQUAL_MESSAGE(font_bin_kern(&f, l, r), scaled, msg);
+            }
         }
     }
 

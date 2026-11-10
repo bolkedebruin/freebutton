@@ -10,8 +10,8 @@ zero external dependencies at runtime:
     FREEBUTTON_CONFIG=<path> takes config.json from another file
     (e.g. devices/<id>/config.json)
   * the built web bundle from ``web/dist/`` as ``www/<relpath>.gz``
-  * device fonts from ``data/fonts/*.bin`` (staged for the future WS-G
-    streaming-font path; nothing reads them yet)
+  * device fonts from ``data/fonts/*.bin``, streamed by src/ui/fonts/fonts.c
+    (the compiled fonts are the fallback when a file is missing)
 
 Build output is NEVER written back into ``data/``; everything lands in the
 throwaway ``.pio/staging_data`` staging dir, which becomes PlatformIO's

@@ -123,6 +123,11 @@ bool font_bin_decode(const font_bin_t *f, const font_bin_glyph_t *g,
 typedef struct {
     uint32_t codepoint;
     uint16_t gid; /* 0 = cached miss */
+    /* Kerning classes of the glyph (class matrix kerning only, 0 = none):
+     * LVGL asks for the same pairs over and over, so a pair then costs one
+     * read of the matrix value instead of three. */
+    uint8_t kern_left;
+    uint8_t kern_right;
     font_bin_glyph_t glyph;
 } font_bin_cache_entry_t;
 
@@ -134,6 +139,15 @@ typedef struct {
 /* Code point -> glyph through the cache. False if the font lacks it. */
 bool font_bin_lookup(const font_bin_t *f, font_bin_cache_t *c, uint32_t codepoint,
                      uint16_t *gid, font_bin_glyph_t *glyph);
+
+/* As font_bin_lookup, but hands back the whole entry (with the kerning
+ * classes for font_bin_kern_entries). */
+bool font_bin_lookup_entry(const font_bin_t *f, font_bin_cache_t *c, uint32_t codepoint,
+                           font_bin_cache_entry_t *out);
+
+/* font_bin_kern for two looked-up glyphs, using their cached classes. */
+int32_t font_bin_kern_entries(const font_bin_t *f, const font_bin_cache_entry_t *left,
+                              const font_bin_cache_entry_t *right);
 
 /* Glyph by id, using the cache when it holds it (the bitmap path). */
 bool font_bin_glyph_cached(const font_bin_t *f, const font_bin_cache_t *c,
