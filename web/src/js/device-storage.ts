@@ -1,14 +1,17 @@
 /**
  * Device storage - thin wrapper around the AWS SDK v3 S3 client.
  *
- * The device exposes LittleFS as a minimal S3-compatible API, path-style, with
- * one bucket per kind of content (each a directory on the device):
+ * The device exposes its storage as a minimal S3-compatible API, path-style,
+ * with one bucket per kind of content (a LittleFS directory, or the media
+ * store for fonts):
  *   - `app`      the user's files: LittleFS root minus the other buckets'
  *                directories; key = LittleFS path without the leading slash
  *                ("config.json", "scripts/main.js"). Read/write.
  *   - `examples` /scripts/examples ("button.js"). Read-only.
  *   - `web`      /www, the IDE bundle ("index.html.gz"). Read-only.
- *   - `fonts`    /fonts, the device fonts. Read-only.
+ *   - `fonts`    the TrueType fonts the device renders with (media store,
+ *                flat keys "medium.ttf"). Writable by signed S3 clients
+ *                (.ttf/.otf, <= 2 MiB); the IDE only lists it.
  * Every function takes the bucket as an option and defaults to `app`. The
  * rest of the IDE talks to this module only, never to the SDK directly.
  *
@@ -40,7 +43,10 @@ import { addAuthRequiredMiddleware, credentialsProvider, deviceS3Signer, signedF
 
 /** The user's files (read/write). */
 export const APP_BUCKET = 'app';
-/** Read-only buckets: device examples, the IDE bundle, the device fonts. */
+/**
+ * Buckets the IDE only lists (on request): device examples, the IDE bundle,
+ * the device fonts. (`fonts` is writable on the device, but not from the IDE.)
+ */
 export const READ_ONLY_BUCKETS = ['examples', 'web', 'fonts'] as const;
 export type ReadOnlyBucket = typeof READ_ONLY_BUCKETS[number];
 export type Bucket = typeof APP_BUCKET | ReadOnlyBucket;

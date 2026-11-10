@@ -24,7 +24,7 @@ const READ_ONLY_GROUPS: readonly ReadOnlyGroup[] = [
   {
     id: 'system',
     title: 'System',
-    tooltip: 'Device buckets "web" (the IDE bundle) and "fonts" (read-only)',
+    tooltip: 'Device buckets "web" (the IDE bundle, read-only) and "fonts" (the display fonts; upload with an S3 client)',
     buckets: ['web', 'fonts'],
   },
 ];
