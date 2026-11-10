@@ -145,12 +145,14 @@ def _print_usage(usage):
 
 
 def local_files(directory):
-    """{key: path} for every regular file below directory (dotfiles skipped)."""
+    """{key: path} for every font file (.ttf/.otf) below directory: the bucket
+    refuses other keys, so media/fonts/README.md and the license texts stay
+    local (dotfiles skipped too)."""
     files = {}
     for root, dirs, names in os.walk(directory):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         for name in sorted(names):
-            if name.startswith("."):
+            if name.startswith(".") or not name.lower().endswith((".ttf", ".otf")):
                 continue
             path = os.path.join(root, name)
             key = os.path.relpath(path, directory).replace(os.sep, "/")

@@ -50,6 +50,8 @@
 #include <string.h>
 
 #include "../../media/media_store.h"
+#include "esp_heap_caps.h"
+#include "src/draw/lv_draw_buf_private.h" /* lv_draw_buf_handlers_t fields */
 #include "ttf_check.h"
 
 lv_font_t *fnt_semibold_14;
@@ -206,6 +208,40 @@ static lv_font_t *icon_wrap_for(int32_t px) {
     return NULL;
 }
 
+/* stb_truetype rasterizes a glyph with temporary allocations from the LVGL
+ * pool (measured up to ~5 KB at 14 px and ~12 KB at 72 px) and asserts when
+ * one fails, which aborts and reboots the device (seen with a busy page;
+ * lv_conf.h now makes STBTT_assert a no-op as a second line of defence).
+ * The wrappers' bitmap callback renders only when the pool has room for the
+ * worst case of this glyph's size; otherwise LVGL skips this one glyph
+ * ("Couldn't get the bitmap of a glyph") until its next redraw.
+ * lv_mem_monitor() walks the pool: microseconds, against ~0.6 ms per glyph.
+ * The rendered glyph bitmap itself (A8, ~5 KB at 72 px) is not in the pool:
+ * see font_buf_malloc. */
+static const void *(*tiny_get_bitmap)(lv_font_glyph_dsc_t *, lv_draw_buf_t *);
+static uint32_t skipped_glyphs;
+
+static const void *guarded_get_bitmap(lv_font_glyph_dsc_t *g, lv_draw_buf_t *buf) {
+    lv_mem_monitor_t m;
+    lv_mem_monitor(&m);
+    const uint32_t need = 5120u + (uint32_t)g->box_w * (uint32_t)g->box_h * 3u / 2u;
+    if (m.free_size < need || m.free_biggest_size < 4096u) {
+        if ((skipped_glyphs++ & 63u) == 0) {
+            LV_LOG_WARN("fonts: glyph skipped (%lu so far): LVGL pool %lu B free, biggest %lu B, need %lu B",
+                        (unsigned long)skipped_glyphs, (unsigned long)m.free_size,
+                        (unsigned long)m.free_biggest_size, (unsigned long)need);
+        }
+        return NULL;
+    }
+    return tiny_get_bitmap(g, buf);
+}
+
+/* A wrapper of a tiny_ttf font renders through the guard. */
+static void guard(lv_font_t *w) {
+    tiny_get_bitmap = w->get_glyph_bitmap; /* the same tiny_ttf callback for every font */
+    w->get_glyph_bitmap = guarded_get_bitmap;
+}
+
 /* Point the wrappers at `s` (NULL: the built-in font everywhere). */
 static void apply_set(const font_set_t *s) {
     for (size_t i = 0; i < ICON_COUNT; i++) {
@@ -214,12 +250,14 @@ static void apply_set(const font_set_t *s) {
         /* the built-in font's own fallback is NULL; a missing icons file
          * makes this wrapper a second built-in font, which is harmless */
         icon_wrap[i].fallback = src == BUILTIN_FONT ? NULL : BUILTIN_FONT;
+        if (src != BUILTIN_FONT) guard(&icon_wrap[i]);
     }
     for (size_t i = 0; i < TEXT_COUNT; i++) {
         const text_slot_t *t = &text_slots[i];
         lv_font_t *w = &text_wrap[i];
         if (s && s->text[i]) {
             *w = *s->text[i];
+            guard(w);
             if (t->line_em_x100) {
                 w->line_height = (int32_t)((t->px * t->line_em_x100 + 50) / 100);
                 w->base_line = (int32_t)((t->px * t->base_em_x1000 + 500) / 1000);
@@ -320,8 +358,23 @@ static void reload_poll_cb(lv_timer_t *timer) {
 
 /* ---- public API ----------------------------------------------------------------- */
 
+/* Glyph bitmaps (LVGL's font draw buffers: tiny_ttf renders each glyph into
+ * one, uncached, and LVGL frees it after drawing the letter) come from the
+ * internal heap instead of the LVGL pool: they live only while one letter is
+ * drawn, and the pool is what a busy page fills up. A failed allocation makes
+ * tiny_ttf return no bitmap: that glyph is skipped, nothing aborts. */
+static void *font_buf_malloc(size_t size, lv_color_format_t cf) {
+    (void)cf;
+    return heap_caps_malloc(size + LV_DRAW_BUF_ALIGN - 1, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+static void font_buf_free(void *buf) { heap_caps_free(buf); }
+
 void init_fonts(void) {
     if (current) return;
+    lv_draw_buf_handlers_t *fh = lv_draw_buf_get_font_handlers();
+    fh->buf_malloc_cb = font_buf_malloc;
+    fh->buf_free_cb = font_buf_free;
     /* Idempotent; the store may already be up (S3 server). */
     media_init();
     current = &sets[0];

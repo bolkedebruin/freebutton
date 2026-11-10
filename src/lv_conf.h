@@ -174,6 +174,10 @@
  * below only applies to lv_tiny_ttf_create_data(). */
 #define LV_USE_TINY_TTF 1
 #define LV_TINY_TTF_FILE_SUPPORT 0
+/* stb_truetype asserts (abort, reboot) when a rasterizer allocation from
+ * the LVGL pool fails; without the assert it skips that edge or glyph.
+ * fonts.c also renders only when the pool has room (guarded_get_bitmap). */
+#define STBTT_assert(x) ((void)0)
 #define LV_TINY_TTF_CACHE_GLYPH_CNT 0
 #define LV_TINY_TTF_CACHE_KERNING_CNT 0
 #define LV_USE_BARCODE 0

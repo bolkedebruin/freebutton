@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fb_sigv4 import credentials, presign_url  # noqa: E402
 
 FIRST_PAGE = 11
+PARK_PAGE = 99
 
 # (fontsize, [(y %, caption, value), ...]). x 0, width 100 %, box type 1.
 ICONS = "\\u{F0599}\\u{F0590}\\u{F0597}\\u{F0335}\\u{F0D43}\\u{F0536}\\u{F075D}\\u{F1C56}"
@@ -158,7 +159,14 @@ def main():
     repl = Repl(base)
     shown = repl.eval("fb.main.display.getShownPage()")
     created = []
+    # Items on page 0 show on every page: park them on an unused page while
+    # the test runs (runtime only) so the test pages are drawn alone.
+    parked = repl.eval("var r=[];var a=fb.main.display.getAll();"
+                       "for(var i=0;i<a.length;i++){if(fb.main.display.get(a[i]).page===0)r.push(a[i]);}r.join(',')") or ""
+    parked = [int(x) for x in str(parked).split(",") if x.strip()]
     try:
+        for iid in parked:
+            repl.eval(f"fb.main.display.setPage({iid}, {PARK_PAGE})")
         for i, (size, rows) in enumerate(PAGES):
             page = FIRST_PAGE + i
             for y, caption, value in rows:
@@ -187,6 +195,12 @@ def main():
                     repl.eval(f"fb.main.display.remove({iid})")
                 except Exception as e:  # noqa: BLE001
                     print(f"remove {iid}: {e}", file=sys.stderr)
+        for iid in parked:
+            try:
+                repl.eval(f"fb.main.display.setPage({iid}, 0)")
+            except Exception as e:  # noqa: BLE001
+                print(f"restore page of {iid}: {e}", file=sys.stderr)
+        if not args.keep:
             repl.eval(f"fb.main.display.showPage({int(shown or 0)})")
         repl.ws.close()
 
