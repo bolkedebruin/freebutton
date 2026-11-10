@@ -6,39 +6,37 @@ This directory contains build automation tools and scripts for the FreeButton pr
 
 ```
 tools/
-├── fonts/               # Font generation and management
-│   ├── generatefonts.sh # Main font generation script
-│   ├── get_mdi_codes.sh # Material Design Icons code extractor
-│   └── *.ttf           # Font files (Montserrat + Material Design Icons)
+├── fonts/               # UI font build (dev only; outputs committed in media/fonts/)
+│   ├── build_fonts.py   # Montserrat + MDI sources -> media/fonts/*.ttf
+│   ├── check_fonts.py   # coverage + kerning check, as the device reads them
+│   ├── requirements.txt # fontTools (pinned)
+│   ├── mdi_glyphs.txt   # curated icon list (--curated build, coverage check)
+│   └── *.ttf            # source fonts (Montserrat + Material Design Icons)
 ├── scripts/            # Build and utility scripts
 │   ├── sync_version.py     # Version management (VERSION -> config.h + web/package.json)
 │   └── build_info.py      # Build metadata generation
 └── partition_tables/   # ESP32 partition table definitions
 ```
 
-## Font Generation
+## Fonts
 
-The font generation system creates LVGL-compatible fonts with Material Design Icons:
-
-### Usage
+The device renders TrueType fonts with LVGL tiny_ttf from the media store
+(bucket `fonts`). The defaults are committed in `media/fonts/` (see its
+README for sources, licenses and what the build changes), so a normal build
+does not touch fonts. Rebuild them only when the sources, coverage or symbol
+mapping change:
 
 ```bash
-cd tools/fonts
-./generatefonts.sh
+python3 -m venv /tmp/fbfonts
+/tmp/fbfonts/bin/pip install -r tools/fonts/requirements.txt
+/tmp/fbfonts/bin/python tools/fonts/build_fonts.py   # writes media/fonts/*.ttf
+/tmp/fbfonts/bin/python tools/fonts/check_fonts.py   # must pass before committing
 ```
 
-This generates:
-- Multiple font sizes (14, 18, 20, 24, 32, 48, 72)
-- Both C source files (.c) and binary files (.bin)
-- Extended Unicode symbols for international support
-- Material Design Icons integration
-
-### Customization
-
-Edit `generatefonts.sh` to:
-- Add/remove font sizes: Modify `FONT_SIZES` array
-- Add/remove symbols: Modify `USER_SYMBOLS` and `LARGE_SYMBOLS`
-- Add/remove icons: Modify `ICON_NAMES` array
+Both scripts work offline. `check_fonts.py` also scans the repo (configs,
+device scripts, web IDE, firmware, tests) for MDI codepoints and fails when
+`icons.ttf` lacks one. Sizes are chosen at runtime (`src/ui/fonts/fonts.c`),
+not in the font files.
 
 ## Version Management
 
@@ -104,20 +102,13 @@ The build pipeline automatically:
 - Python 3.12+
 - Node.js 20+
 - PlatformIO Core
-- lv_font_conv (npm package)
-- jq (for icon processing)
+- fontTools (only to rebuild the fonts, see above)
 
 ### Setup
 
 ```bash
 # Install PlatformIO
 pip install platformio
-
-# Install font converter
-npm install -g lv_font_conv
-
-# Generate fonts (first time)
-cd tools/fonts && ./generatefonts.sh
 
 # Build firmware
 pio run
