@@ -21,17 +21,17 @@ describe('path rules', () => {
 
   it('treats the read-only buckets\' directories as not editable', () => {
     expect(isSystemKey('www/index.html.gz')).toBe(true);
-    expect(isSystemKey('/fonts/a.json')).toBe(true);
+    expect(isSystemKey('/fonts/a.json')).toBe(false);  // bucket fonts is in the media store, not fonts/
     expect(isSystemKey('scripts/examples/button.js')).toBe(true);
     expect(isSystemKey('wwwx/a.js')).toBe(false);
     expect(isSystemKey('scripts/examplesx.js')).toBe(false);
     expect(otherBucketOf('www/index.html.gz')).toBe('web');
-    expect(otherBucketOf('fonts/a.bin')).toBe('fonts');
+    expect(otherBucketOf('fonts/a.bin')).toBeNull();
     expect(otherBucketOf('scripts/examples/a.js')).toBe('examples');
     expect(otherBucketOf('scripts/main.js')).toBeNull();
     expect(isEditableKey('scripts/examples/a.js')).toBe(false);
     expect(isEditableKey('www/app.js')).toBe(false);
-    expect(isEditableKey('fonts/x.txt')).toBe(false);
+    expect(isEditableKey('fonts/x.txt')).toBe(true);
   });
 
   it('allows only .js/.json/.txt user files', () => {
@@ -54,7 +54,7 @@ describe('path rules', () => {
     expect(validateKey('')).toMatch(/empty/);
     expect(validateKey('/config.json')).toMatch(/must not start/);
     expect(validateKey('www/index.js')).toMatch(/read-only/);
-    expect(validateKey('fonts/a.txt')).toMatch(/read-only/);
+    expect(validateKey('fonts/a.txt')).toBeNull();
     expect(validateKey('scripts/examples/x.js')).toMatch(/read-only \(device bucket "examples"\)/);
     expect(validateKey('a.png')).toMatch(/Only \.js/);
     expect(validateKey('scripts/../x.js')).toMatch(/relative/);

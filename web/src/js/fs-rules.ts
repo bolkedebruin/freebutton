@@ -2,15 +2,17 @@
  * Device file rules (pure).
  *
  * The IDE edits the device's S3 bucket `app`: the LittleFS root minus the
- * directories of the read-only buckets (`web` = www/, `fonts` = fonts/,
- * `examples` = scripts/examples/). An `app` object key is the LittleFS path
- * without the leading slash ("config.json", "scripts/main.js"). These helpers
+ * directories of the read-only buckets (`web` = www/, `examples` =
+ * scripts/examples/; bucket `fonts` is in the media store, not on LittleFS,
+ * so an `app` key under fonts/ is an ordinary user file). An `app` object
+ * key is the LittleFS path without the leading slash ("config.json",
+ * "scripts/main.js"). These helpers
  * mirror the device's write rules so the IDE rejects a bad save before it
  * costs a request (the device enforces the same rules and stays the
  * authority):
  *   - extensions .js .json .txt only
- *   - not under www/, fonts/ or scripts/examples/ (those belong to the
- *     read-only buckets; the device answers 400 for such `app` keys)
+ *   - not under www/ or scripts/examples/ (those belong to the read-only
+ *     buckets; the device answers 400 for such `app` keys)
  *   - key <= 63 chars, body <= 64 KiB
  *   - config.json must be valid JSON (and cannot be deleted), with valid,
  *     unique key / display item / list names and well-formed "lists"
@@ -31,7 +33,6 @@ const EDITABLE_EXTENSIONS = ['js', 'json', 'txt'] as const;
 /** `app` key prefixes that are the directories of the read-only buckets. */
 const OTHER_BUCKET_PREFIXES: ReadonlyArray<readonly [prefix: string, bucket: string]> = [
   ['www/', 'web'],
-  ['fonts/', 'fonts'],
   ['scripts/examples/', 'examples'],
 ];
 
@@ -58,7 +59,7 @@ export function fileKind(key: string): FileKind {
 
 /**
  * The read-only bucket whose directory holds this LittleFS path (www/ -> web,
- * fonts/ -> fonts, scripts/examples/ -> examples), or null for an `app` key.
+ * scripts/examples/ -> examples), or null for an `app` key.
  */
 export function otherBucketOf(key: string): string | null {
   const k = normalizeKey(key);

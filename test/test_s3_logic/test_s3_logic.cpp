@@ -41,10 +41,15 @@ void test_bucket_table() {
     TEST_ASSERT_EQUAL(3, bucket("web").dirLen);
     TEST_ASSERT_EQUAL_STRING("scripts/examples", bucket("examples").dir);
     TEST_ASSERT_EQUAL(16, bucket("examples").dirLen);
-    TEST_ASSERT_EQUAL_STRING("fonts", bucket("fonts").dir);
+    TEST_ASSERT_EQUAL_STRING("", bucket("fonts").dir);  // media store, not LittleFS
+    TEST_ASSERT_TRUE(bucket("fonts").isMedia());
+    TEST_ASSERT_EQUAL(MEDIA_BUCKET_FONTS, bucket("fonts").mediaBucket());
+    TEST_ASSERT_FALSE(bucket("app").isMedia());
+    TEST_ASSERT_FALSE(bucket("web").isMedia());
+    TEST_ASSERT_FALSE(bucket("examples").isMedia());
     TEST_ASSERT_FALSE(bucket("web").writable);
     TEST_ASSERT_FALSE(bucket("examples").writable);
-    TEST_ASSERT_FALSE(bucket("fonts").writable);
+    TEST_ASSERT_TRUE(bucket("fonts").writable);
     TEST_ASSERT_TRUE(bucket("fonts").sharesStaticPath);
     TEST_ASSERT_FALSE(bucket("app").sharesStaticPath);
     TEST_ASSERT_NULL(s3::findBucket("fs", 2));
@@ -101,7 +106,9 @@ void test_key_owner() {
     // app: the other buckets' directories, file and directory keys.
     TEST_ASSERT_EQUAL_STRING("web", owner("app", "www/index.html.gz"));
     TEST_ASSERT_EQUAL_STRING("web", owner("app", "www/"));
-    TEST_ASSERT_EQUAL_STRING("fonts", owner("app", "fonts/mnt_medium_14.bin"));
+    // fonts is in the media store: a LittleFS fonts/ directory is app's.
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "fonts/mnt_medium_14.bin"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "fonts/"));
     TEST_ASSERT_EQUAL_STRING("examples", owner("app", "scripts/examples/button.js"));
     TEST_ASSERT_EQUAL_STRING("examples", owner("app", "scripts/examples/"));
     TEST_ASSERT_EQUAL_STRING("", owner("app", "scripts/"));
@@ -136,8 +143,6 @@ void test_bucket_paths() {
     TEST_ASSERT_EQUAL_STRING("/www/index.html.gz", out);
     s3::objectPath(bucket("examples"), "", 0, "button.js", 9, "", out, sizeof out);
     TEST_ASSERT_EQUAL_STRING("/scripts/examples/button.js", out);
-    s3::objectPath(bucket("fonts"), "", 0, "mnt_medium_14.bin", 17, "", out, sizeof out);
-    TEST_ASSERT_EQUAL_STRING("/fonts/mnt_medium_14.bin", out);
     // A real mount point.
     s3::objectPath(bucket("web"), "/littlefs", 9, "a.gz", 4, "", out, sizeof out);
     TEST_ASSERT_EQUAL_STRING("/littlefs/www/a.gz", out);
@@ -152,13 +157,15 @@ void test_bucket_paths() {
 void test_write_rules_per_bucket() {
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("web"), "a.js", 4) == s3::KeyCheck::ReadOnly);
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("examples"), "button.js", 9) == s3::KeyCheck::ReadOnly);
-    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "x.txt", 5) == s3::KeyCheck::ReadOnly);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "x.txt", 5) == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "x.ttf", 5) == s3::KeyCheck::Ok);
     // Read-only even for keys that would be invalid anyway.
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("web"), "../x", 4) == s3::KeyCheck::ReadOnly);
     // config.json / the bytecode index are special in app only.
     TEST_ASSERT_TRUE(s3::keyIsConfig(bucket("app"), "config.json", 11));
     TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("examples"), "config.json", 11));
     TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("app"), "scripts/config.json", 19));
+    TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("fonts"), "config.json", 11));
 }
 
 // --- keys -------------------------------------------------------------------
@@ -192,7 +199,7 @@ void test_write_key_extensions() {
 
 void test_write_key_other_buckets_and_protected() {
     TEST_ASSERT_TRUE(wk("www/index.js") == s3::KeyCheck::OtherBucket);
-    TEST_ASSERT_TRUE(wk("fonts/x.json") == s3::KeyCheck::OtherBucket);
+    TEST_ASSERT_TRUE(wk("fonts/x.json") == s3::KeyCheck::Ok);  // fonts is not a LittleFS directory
     TEST_ASSERT_TRUE(wk("scripts/examples/x.js") == s3::KeyCheck::OtherBucket);
     TEST_ASSERT_TRUE(wk("js_bytecode_meta.json") == s3::KeyCheck::Forbidden);
     TEST_ASSERT_TRUE(wk("wwwx/a.js") == s3::KeyCheck::Ok);
@@ -224,7 +231,7 @@ void test_read_key() {
     TEST_ASSERT_FALSE(readable("app", "a//b"));
     // Reachable through exactly one bucket.
     TEST_ASSERT_FALSE(readable("app", "www/index.html.gz"));
-    TEST_ASSERT_FALSE(readable("app", "fonts/mnt_medium_14.bin"));
+    TEST_ASSERT_TRUE(readable("app", "fonts/mnt_medium_14.bin"));  // fonts is in the media store
     TEST_ASSERT_FALSE(readable("app", "scripts/examples/button.js"));
     std::string longk(97, 'a');
     TEST_ASSERT_FALSE(readable("web", longk.c_str()));
@@ -235,6 +242,8 @@ void test_content_types() {
     TEST_ASSERT_EQUAL_STRING("application/javascript", s3::contentTypeFor("a/main.js", 9));
     TEST_ASSERT_EQUAL_STRING("text/plain", s3::contentTypeFor("x.txt", 5));
     TEST_ASSERT_EQUAL_STRING("application/octet-stream", s3::contentTypeFor("fonts/a.bin", 11));
+    TEST_ASSERT_EQUAL_STRING("font/ttf", s3::contentTypeFor("medium.ttf", 10));
+    TEST_ASSERT_EQUAL_STRING("font/otf", s3::contentTypeFor("medium.otf", 10));
 }
 
 // --- escaping / encoding -------------------------------------------------------
@@ -558,6 +567,202 @@ static void test_chunked_signatures() {
     }
 }
 
+// --- media store bucket (fonts) --------------------------------------------
+
+static s3::KeyCheck fk(const char* k) { return s3::checkWriteKey(bucket("fonts"), k, strlen(k)); }
+
+void test_media_write_keys() {
+    TEST_ASSERT_TRUE(fk("medium.ttf") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(fk("semibold.ttf") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(fk("Icons_v2-1.otf") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(fk("a.ttf") == s3::KeyCheck::Ok);
+    // Flat: no '/'.
+    TEST_ASSERT_TRUE(fk("sub/medium.ttf") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("/medium.ttf") == s3::KeyCheck::Invalid);
+    // Extensions: .ttf / .otf, lower case.
+    TEST_ASSERT_TRUE(fk("medium.TTF") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("medium.woff2") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("medium.bin") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("medium.js") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("medium.ttf.tmp") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk(".ttf") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("ttf") == s3::KeyCheck::Invalid);
+    // Shape and characters.
+    TEST_ASSERT_TRUE(fk("") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("a..b.ttf") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("my font.ttf") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("a\x01.ttf") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(fk("caf\xc3\xa9.ttf") == s3::KeyCheck::Invalid);
+    // Length: MEDIA_KEY_MAX (96), not app's 63; no name_max per component.
+    const std::string k96 = std::string(92, 'a') + ".ttf";
+    TEST_ASSERT_EQUAL(MEDIA_KEY_MAX, k96.size());
+    TEST_ASSERT_TRUE(fk(k96.c_str()) == s3::KeyCheck::Ok);
+    const std::string k97 = std::string(93, 'a') + ".ttf";
+    TEST_ASSERT_TRUE(fk(k97.c_str()) == s3::KeyCheck::Invalid);
+}
+
+void test_media_write_refusals() {
+    const s3::Bucket& f = bucket("fonts");
+    TEST_ASSERT_EQUAL(0, s3::writeRefusal(f, "medium.ttf", 10).status);
+    s3::HttpError e = s3::writeRefusal(f, "medium.txt", 10);
+    TEST_ASSERT_EQUAL(400, e.status);
+    TEST_ASSERT_EQUAL_STRING("InvalidArgument", e.code);
+    TEST_ASSERT_TRUE(strstr(e.msg, ".ttf") != nullptr);
+    e = s3::writeRefusal(f, "a/b.ttf", 7);
+    TEST_ASSERT_EQUAL(400, e.status);
+    TEST_ASSERT_EQUAL_STRING("InvalidArgument", e.code);
+    const std::string k97 = std::string(93, 'a') + ".ttf";
+    e = s3::writeRefusal(f, k97.c_str(), k97.size());
+    TEST_ASSERT_EQUAL(400, e.status);
+    TEST_ASSERT_EQUAL_STRING("KeyTooLongError", e.code);
+    // The LittleFS buckets keep their answers.
+    e = s3::writeRefusal(bucket("web"), "a.js", 4);
+    TEST_ASSERT_EQUAL(403, e.status);
+    TEST_ASSERT_EQUAL_STRING("AccessDenied", e.code);
+    e = s3::writeRefusal(bucket("app"), "js_bytecode_meta.json", 21);
+    TEST_ASSERT_EQUAL(403, e.status);
+    e = s3::writeRefusal(bucket("app"), "www/a.js", 8);
+    TEST_ASSERT_EQUAL(400, e.status);
+    TEST_ASSERT_EQUAL_STRING("InvalidArgument", e.code);
+    const std::string a64 = std::string(61, 'a') + ".js";
+    e = s3::writeRefusal(bucket("app"), a64.c_str(), a64.size());
+    TEST_ASSERT_EQUAL_STRING("KeyTooLongError", e.code);
+    e = s3::writeRefusal(bucket("app"), "a.ttf", 5);
+    TEST_ASSERT_EQUAL(400, e.status);
+    TEST_ASSERT_TRUE(strstr(e.msg, ".json") != nullptr);
+}
+
+void test_media_read_keys() {
+    using R = s3::MediaReadKey;
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey("medium.ttf", 10) == R::Ok);
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey("anything.bin", 12) == R::Ok);  // the store answers 404
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey("a/b.ttf", 7) == R::Missing);
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey("", 0) == R::Malformed);
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey("../x.ttf", 8) == R::Malformed);
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey("a//b", 4) == R::Missing);
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey("a\x01.ttf", 6) == R::Malformed);
+    const std::string k96(96, 'a');  // longer than LittleFS' name_max: fine here
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey(k96.c_str(), k96.size()) == R::Ok);
+    const std::string k97(97, 'a');
+    TEST_ASSERT_TRUE(s3::checkMediaReadKey(k97.c_str(), k97.size()) == R::Malformed);
+    // Media keys never collide with LittleFS paths.
+    TEST_ASSERT_NULL(s3::keyOwner(bucket("fonts"), "www/a", 5));
+}
+
+void test_media_size_limits() {
+    TEST_ASSERT_EQUAL(64u * 1024, s3::objectSizeLimit(bucket("app")));
+    TEST_ASSERT_EQUAL(2u * 1024 * 1024, s3::objectSizeLimit(bucket("fonts")));
+    TEST_ASSERT_EQUAL_STRING("object larger than 64 KiB", s3::tooLargeMessage(bucket("app")));
+    TEST_ASSERT_EQUAL_STRING("object larger than 2 MiB", s3::tooLargeMessage(bucket("fonts")));
+}
+
+void test_put_length() {
+    const s3::Bucket& f = bucket("fonts");
+    const s3::Bucket& a = bucket("app");
+    // Plain body: Content-Length.
+    s3::PutLength r = s3::putLength(f, false, nullptr, true, 300000);
+    TEST_ASSERT_EQUAL(0, r.error.status);
+    TEST_ASSERT_TRUE(r.known);
+    TEST_ASSERT_EQUAL(300000u, r.expected);
+    r = s3::putLength(f, false, nullptr, true, 0);
+    TEST_ASSERT_TRUE(r.known);
+    TEST_ASSERT_EQUAL(0u, r.expected);
+    // aws-chunked: the decoded length, never the encoded Content-Length.
+    r = s3::putLength(f, true, "123456", true, 130000);
+    TEST_ASSERT_TRUE(r.known);
+    TEST_ASSERT_EQUAL(123456u, r.expected);
+    r = s3::putLength(a, true, "100", true, 300);
+    TEST_ASSERT_EQUAL(100u, r.expected);
+    // aws-chunked without a decoded length: media 411, app streams capped.
+    r = s3::putLength(f, true, nullptr, true, 1000);
+    TEST_ASSERT_EQUAL(411, r.error.status);
+    TEST_ASSERT_EQUAL_STRING("MissingContentLength", r.error.code);
+    r = s3::putLength(a, true, nullptr, true, 1000);
+    TEST_ASSERT_EQUAL(0, r.error.status);
+    TEST_ASSERT_FALSE(r.known);
+    // No length at all: 411 everywhere.
+    TEST_ASSERT_EQUAL(411, s3::putLength(f, false, nullptr, false, 0).error.status);
+    TEST_ASSERT_EQUAL(411, s3::putLength(a, false, nullptr, false, 0).error.status);
+    TEST_ASSERT_EQUAL(411, s3::putLength(a, true, nullptr, false, 0).error.status);
+    // Limits per bucket.
+    TEST_ASSERT_EQUAL(0, s3::putLength(f, false, nullptr, true, 2u * 1024 * 1024).error.status);
+    r = s3::putLength(f, false, nullptr, true, 2u * 1024 * 1024 + 1);
+    TEST_ASSERT_EQUAL(413, r.error.status);
+    TEST_ASSERT_EQUAL_STRING("EntityTooLarge", r.error.code);
+    TEST_ASSERT_EQUAL_STRING("object larger than 2 MiB", r.error.msg);
+    TEST_ASSERT_EQUAL(413, s3::putLength(f, true, "2097153", true, 3000000).error.status);
+    TEST_ASSERT_EQUAL(413, s3::putLength(a, false, nullptr, true, 65537).error.status);
+    TEST_ASSERT_EQUAL(0, s3::putLength(a, false, nullptr, true, 65536).error.status);
+    TEST_ASSERT_EQUAL(413, s3::putLength(f, true, "99999999999999999999", true, 1).error.status);  // saturates
+    TEST_ASSERT_EQUAL(413, s3::putLength(f, false, nullptr, true, 0x100000000ull).error.status);
+    // Malformed decoded length.
+    TEST_ASSERT_EQUAL(400, s3::putLength(f, true, "", true, 1).error.status);
+    TEST_ASSERT_EQUAL(400, s3::putLength(f, true, "12x", true, 1).error.status);
+    TEST_ASSERT_EQUAL(400, s3::putLength(f, true, "-1", true, 1).error.status);
+    TEST_ASSERT_EQUAL(5u, s3::putLength(f, true, " 5 ", true, 1).expected);
+}
+
+void test_media_error_mapping() {
+    using s3::MediaOp;
+    auto st = [](media_err_t e, MediaOp op) { return s3::mediaError(e, op).status; };
+    auto code = [](media_err_t e, MediaOp op) { return s3::mediaError(e, op).code; };
+    for (MediaOp op : {MediaOp::Read, MediaOp::Write, MediaOp::Delete}) {
+        TEST_ASSERT_EQUAL(0, st(MEDIA_OK, op));
+        TEST_ASSERT_EQUAL(503, st(MEDIA_ERR_UNAVAILABLE, op));
+        TEST_ASSERT_EQUAL_STRING("ServiceUnavailable", code(MEDIA_ERR_UNAVAILABLE, op));
+        TEST_ASSERT_EQUAL(503, st(MEDIA_ERR_BUSY, op));
+        TEST_ASSERT_EQUAL_STRING("SlowDown", code(MEDIA_ERR_BUSY, op));
+        TEST_ASSERT_EQUAL(507, st(MEDIA_ERR_NO_SPACE, op));
+        TEST_ASSERT_EQUAL_STRING("InsufficientStorage", code(MEDIA_ERR_NO_SPACE, op));
+        TEST_ASSERT_EQUAL(500, st(MEDIA_ERR_IO, op));
+        TEST_ASSERT_EQUAL(400, st(MEDIA_ERR_SIZE, op));
+        TEST_ASSERT_EQUAL(500, st(static_cast<media_err_t>(99), op));
+    }
+    TEST_ASSERT_EQUAL(404, st(MEDIA_ERR_NOT_FOUND, MediaOp::Read));
+    TEST_ASSERT_EQUAL_STRING("NoSuchKey", code(MEDIA_ERR_NOT_FOUND, MediaOp::Read));
+    TEST_ASSERT_EQUAL(0, st(MEDIA_ERR_NOT_FOUND, MediaOp::Delete));  // S3: 204 for a missing key
+    TEST_ASSERT_EQUAL(500, st(MEDIA_ERR_NOT_FOUND, MediaOp::Write));
+    TEST_ASSERT_EQUAL(400, st(MEDIA_ERR_INVALID, MediaOp::Write));
+    TEST_ASSERT_EQUAL_STRING("InvalidArgument", code(MEDIA_ERR_INVALID, MediaOp::Write));
+    TEST_ASSERT_EQUAL(400, st(MEDIA_ERR_INVALID, MediaOp::Delete));
+    TEST_ASSERT_EQUAL(404, st(MEDIA_ERR_INVALID, MediaOp::Read));
+}
+
+void test_no_space_message() {
+    char out[112];
+    s3::formatNoSpaceMessage(1234567, 65536, 0, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("object of 1234567 bytes does not fit: 65536 bytes free, 0 reclaimable once released",
+                             out);
+    s3::formatNoSpaceMessage(4294967295u, 0, 131072, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING(
+        "object of 4294967295 bytes does not fit: 0 bytes free, 131072 reclaimable once released", out);
+    char small[12];
+    s3::formatNoSpaceMessage(1, 2, 3, small, sizeof small);
+    TEST_ASSERT_EQUAL_STRING("object of 1", small);
+    s3::formatNoSpaceMessage(1, 2, 3, small, 1);
+    TEST_ASSERT_EQUAL_STRING("", small);
+}
+
+void test_md5_etag_and_mtime() {
+    // MD5("") = d41d8cd98f00b204e9800998ecf8427e
+    const uint8_t md5[16] = {0xd4, 0x1d, 0x8c, 0xd9, 0x8f, 0x00, 0xb2, 0x04,
+                             0xe9, 0x80, 0x09, 0x98, 0xec, 0xf8, 0x42, 0x7e};
+    char etag[35];
+    s3::formatMd5ETag(md5, etag);
+    TEST_ASSERT_EQUAL_STRING("\"d41d8cd98f00b204e9800998ecf8427e\"", etag);
+    TEST_ASSERT_EQUAL(0u, s3::mediaMtime(false, 1800000000));
+    TEST_ASSERT_EQUAL(1800000000u, s3::mediaMtime(true, 1800000000));
+    TEST_ASSERT_EQUAL(0u, s3::mediaMtime(true, -5));
+    TEST_ASSERT_EQUAL(0xFFFFFFFFu, s3::mediaMtime(true, 0x1FFFFFFFFll));
+}
+
+void test_media_usage_headers() {
+    TEST_ASSERT_EQUAL_STRING("x-fb-media-total", s3::kMediaTotalHeader);
+    TEST_ASSERT_EQUAL_STRING("x-fb-media-used", s3::kMediaUsedHeader);
+    TEST_ASSERT_EQUAL_STRING("x-fb-media-free", s3::kMediaFreeHeader);
+    TEST_ASSERT_EQUAL_STRING("x-fb-media-reclaimable", s3::kMediaReclaimableHeader);
+}
+
 // Which S3 requests need no signature.
 static void test_anonymous_access() {
     TEST_ASSERT_TRUE(s3::anonymousAllowed(nullptr, true));    // ListBuckets, unknown bucket
@@ -606,5 +811,14 @@ int main() {
     RUN_TEST(test_json_validator_bounds);
     RUN_TEST(test_chunked_signatures);
     RUN_TEST(test_anonymous_access);
+    RUN_TEST(test_media_write_keys);
+    RUN_TEST(test_media_write_refusals);
+    RUN_TEST(test_media_read_keys);
+    RUN_TEST(test_media_size_limits);
+    RUN_TEST(test_put_length);
+    RUN_TEST(test_media_error_mapping);
+    RUN_TEST(test_no_space_message);
+    RUN_TEST(test_md5_etag_and_mtime);
+    RUN_TEST(test_media_usage_headers);
     return UNITY_END();
 }
