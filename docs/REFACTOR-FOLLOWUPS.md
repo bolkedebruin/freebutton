@@ -5,13 +5,13 @@ Full plan: `~/.claude/plans/abundant-nibbling-sundae.md`. Learnings: `.wolf/cere
 
 ---
 
-## 1. DONE — Streaming fonts (WS-G)
+## 1. DONE — TrueType fonts from the media store (WS-G, replaced)
 
-The UI fonts are the `.bin` files on LittleFS (`data/fonts/*.bin` → `/fonts/`), read on demand by `src/ui/fonts/fonts.c` + `font_bin.c` through LVGL's public font API only (no LVGL internals, so no pin on the LVGL version for this). The 7 compiled `mnt_*.c` fonts are gone from the firmware (app ~3.14 MB → ~2.16 MB, flash 85.6% → 58.9%); they live on in `test/font_reference/` as the reference for `test/test_font_bin`, which checks every glyph, kerning pair and code point of the `.bin` files against them.
+The UI fonts are TrueType files in the media store (S3 bucket `fonts`: `medium.ttf`, `semibold.ttf`, `icons.ttf`; defaults in `media/fonts/`, see its README and `docs/MEDIA-STORE.md`), rendered by LVGL `tiny_ttf` (stb_truetype) straight from memory-mapped flash (`src/ui/fonts/fonts.c`). They replace the streamed lv_font_conv `.bin` files on LittleFS (`font_bin.c`, `data/fonts/*.bin`, `test/test_font_bin`, `test/font_reference/`, all removed). `ttf_check.c` rejects a damaged upload before stb_truetype reads it (`test/test_ttf_check`). The fonts are built and checked offline by `tools/fonts/build_fonts.py` and `check_fonts.py` (fontTools); `generatefonts.sh` and lv_font_conv are gone.
 
-Fallback: LVGL's built-in Montserrat 14 (`LV_FONT_DEFAULT`, ASCII + LVGL symbols, already compiled in). A font whose file is missing or invalid is replaced by it, and each streamed font falls back to it per glyph, so the device still shows text (at 14 px, without icons).
+Fallback: text font → icons font of the same size → LVGL's built-in Montserrat 14 (`LV_FONT_DEFAULT`, the only compiled font). A missing or invalid text file makes its slots the built-in font (one log line per file).
 
-Measured on btn_a00002: ~490 B LVGL pool per font; the first 100 glyphs cost 170 file reads / 83 ms (shared 1 KB block cache, at most two open font files, kerning classes cached per glyph).
+Measured on the device (2026-11-10): a new glyph renders in 0.55-1.2 ms from mapped flash (the `.bin` fonts: 1.6-5.3 ms). Glyph caches are off (see the comment in `fonts.c` for why); a font uploaded to the bucket takes effect at the next boot.
 
 ## 2. On-device verification checklist (can't be done headless)
 

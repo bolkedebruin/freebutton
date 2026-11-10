@@ -29,9 +29,9 @@ static void * fs_open(lv_fs_drv_t *drv, const char *path, const lv_fs_mode_t mod
         return NULL;
     // Arduino's VFS gives every file a 4 KB stdio buffer (heap, allocated on
     // the first read) and refills all of it after each seek. LVGL readers
-    // seek a lot and read little (fonts: a few bytes per lookup, through
-    // their own block cache), so a read-only file gets a small buffer: 128 B
-    // of heap instead of 4 KB, and a seek costs one small read.
+    // (image decoders) read in large chunks, which bypass the buffer, or
+    // seek and read little, which a large buffer only slows down; so a
+    // read-only file gets a small buffer: 128 B of heap instead of 4 KB.
     if (mode == LV_FS_MODE_RD)
         file.setBufferSize(kReadBufferSize);
     return new BusAwareFile(std::move(file));
