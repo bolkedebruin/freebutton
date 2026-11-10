@@ -5,17 +5,13 @@ Full plan: `~/.claude/plans/abundant-nibbling-sundae.md`. Learnings: `.wolf/cere
 
 ---
 
-## 1. WS-G — Streaming-font port to LVGL 9.5 (deferred, hardware-gated)
+## 1. DONE — Streaming fonts (WS-G)
 
-**Why deferred:** needs LVGL-internals work AND on-device verification (rendering + RAM) that can't be done headless. The compiled-in fonts remain the LIVE render path and work today; the `.bin` assets are already staged in the LittleFS image (`data/fonts/*.bin` → `/fonts/`) ready for the switch.
+The UI fonts are the `.bin` files on LittleFS (`data/fonts/*.bin` → `/fonts/`), read on demand by `src/ui/fonts/fonts.c` + `font_bin.c` through LVGL's public font API only (no LVGL internals, so no pin on the LVGL version for this). The 7 compiled `mnt_*.c` fonts are gone from the firmware (app ~3.14 MB → ~2.16 MB, flash 85.6% → 58.9%); they live on in `test/font_reference/` as the reference for `test/test_font_bin`, which checks every glyph, kerning pair and code point of the `.bin` files against them.
 
-**The work:** `src/ui/fonts/fonts.c` has a custom streaming loader (`streaming_font_init` + a ported `lv_binfont_loader` + per-glyph cache) that reads `S:/fonts/mnt_*.bin` on demand. It was ported for **LVGL 9.3** and is broken on **9.5** — it compiles but uses the 9.3 glyph API (`get_glyph_bitmap(lv_font_glyph_dsc_t*, lv_draw_buf_t*)`, `g_dsc->gid.index`, `g_dsc->resolved_font`) whose semantics changed in 9.4–9.5. Re-port `streaming_font_get_glyph_dsc` / `streaming_font_get_glyph_bitmap` + the ported static helpers against current `lv_binfont_loader.c` / `lv_font_fmt_txt.c` + the 9.5 glyph-cache API. Structure is intact — field/callback work, not a rewrite. **Public API (`lv_binfont_create`) is NOT an option: no PSRAM (~512KB SRAM), and it loads whole fonts into RAM (335KB for the 72px face).** LVGL is pinned to exactly `9.5.0` (WS-D) precisely because this binds to internals — re-verify on any bump.
+Fallback: LVGL's built-in Montserrat 14 (`LV_FONT_DEFAULT`, ASCII + LVGL symbols, already compiled in). A font whose file is missing or invalid is replaced by it, and each streamed font falls back to it per glyph, so the device still shows text (at 14 px, without icons).
 
-**Then:** once streaming renders correctly on hardware, drop the bulk compiled `.c` (reclaims ~1MB app flash; currently 86.4%). **Fallback is a separate deferred decision** — see the `font-fallback-strategy` memory: likely keep a standard base font compiled in and use LVGL's `lv_font_t.fallback` chain so user-uploaded filesystem fonts extend it for MDI/special glyphs. Fonts also become uploadable via the web IDE at that point.
-
-**Verify (on device):** `S:/fonts/mnt_*.bin` load succeeds (no "Loading built-in" warnings), text + MDI icons render at every size, RAM bounded (`streaming_font_init` mem logs), app0 drops ~1MB after the `.c` are removed.
-
----
+Measured on btn_a00002: ~490 B LVGL pool per font; the first 100 glyphs cost 170 file reads / 83 ms (shared 1 KB block cache, at most two open font files, kerning classes cached per glyph).
 
 ## 2. On-device verification checklist (can't be done headless)
 

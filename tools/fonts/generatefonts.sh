@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 #
-# DEV-ONLY font regenerator. The compiled LVGL fonts (src/ui/fonts/mnt_*.c)
-# are committed to the repo and are the live render path, so a normal build
-# does NOT run this script. Run it only when the font set, symbols, or icon
-# selection change, then copy the regenerated mnt_*.c into src/ui/fonts/.
+# DEV-ONLY font regenerator. The device draws the .bin fonts, streamed from
+# LittleFS (data/fonts/ -> /fonts/, src/ui/fonts/fonts.c); the only compiled
+# font is LVGL's built-in Montserrat 14, the fallback. Both outputs are
+# committed, so a normal build does NOT run this script. Run it only when the
+# font set, symbols, or icon selection change, then copy:
+#   mnt_*.bin -> data/fonts/            (what the device uses)
+#   mnt_*.c   -> test/font_reference/   (reference for test/test_font_bin;
+#                                         not built into the firmware)
 #
 # Offline by default: the Material Design Icon glyph codepoints are read from
 # the committed cache file `mdi_glyphs.txt`. No network access is performed

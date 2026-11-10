@@ -18,14 +18,11 @@
 
 #include "font_bin.h"
 
-LV_FONT_DECLARE(mnt_semibold_14);
-LV_FONT_DECLARE(mnt_semibold_18);
-
-LV_FONT_DECLARE(mnt_medium_14);
-LV_FONT_DECLARE(mnt_medium_24);
-LV_FONT_DECLARE(mnt_medium_32);
-LV_FONT_DECLARE(mnt_medium_48);
-LV_FONT_DECLARE(mnt_medium_72);
+/* The one compiled font: LVGL's own Montserrat 14 (LV_FONT_DEFAULT, ASCII
+ * plus LVGL's symbols). Every UI font falls back to it when its file is
+ * missing or unreadable, so the device still shows text, at 14 px and without
+ * the extra symbols and icons. */
+#define BUILTIN_FONT LV_FONT_DEFAULT
 
 lv_font_t *fnt_semibold_14;
 lv_font_t *fnt_semibold_18;
@@ -262,8 +259,8 @@ static stream_font_t *stream_font_create(const char *path, const lv_font_t *fall
      * thickness over it); Montserrat's is size / 10 below the baseline. */
     font->underline_position = (int8_t)(-(int32_t)(sf->bin.font_size + 5) / 10);
     font->underline_thickness = (int8_t)sf->bin.underline_thickness;
-    /* If a glyph read fails later on (file gone), LVGL falls back to the
-     * compiled copy of the same font. */
+    /* If a glyph read fails later on (file gone), LVGL draws it with the
+     * built-in font instead. */
     font->fallback = fallback;
 
     LV_LOG_INFO("font %s: %u glyphs, index RAM %u bytes", path, (unsigned)sf->bin.glyph_count,
@@ -275,19 +272,18 @@ static stream_font_t *stream_font_create(const char *path, const lv_font_t *fall
 
 typedef struct {
     const char *path;
-    const lv_font_t *builtin;
     lv_font_t **slot;
     stream_font_t *stream;
 } font_slot_t;
 
 static font_slot_t font_slots[] = {
-    {"S:/fonts/mnt_semibold_14.bin", &mnt_semibold_14, &fnt_semibold_14, NULL},
-    {"S:/fonts/mnt_semibold_18.bin", &mnt_semibold_18, &fnt_semibold_18, NULL},
-    {"S:/fonts/mnt_medium_14.bin", &mnt_medium_14, &fnt_medium_14, NULL},
-    {"S:/fonts/mnt_medium_24.bin", &mnt_medium_24, &fnt_medium_24, NULL},
-    {"S:/fonts/mnt_medium_32.bin", &mnt_medium_32, &fnt_medium_32, NULL},
-    {"S:/fonts/mnt_medium_48.bin", &mnt_medium_48, &fnt_medium_48, NULL},
-    {"S:/fonts/mnt_medium_72.bin", &mnt_medium_72, &fnt_medium_72, NULL},
+    {"S:/fonts/mnt_semibold_14.bin", &fnt_semibold_14, NULL},
+    {"S:/fonts/mnt_semibold_18.bin", &fnt_semibold_18, NULL},
+    {"S:/fonts/mnt_medium_14.bin", &fnt_medium_14, NULL},
+    {"S:/fonts/mnt_medium_24.bin", &fnt_medium_24, NULL},
+    {"S:/fonts/mnt_medium_32.bin", &fnt_medium_32, NULL},
+    {"S:/fonts/mnt_medium_48.bin", &fnt_medium_48, NULL},
+    {"S:/fonts/mnt_medium_72.bin", &fnt_medium_72, NULL},
 };
 
 #define FONT_SLOT_COUNT (sizeof(font_slots) / sizeof(font_slots[0]))
@@ -295,12 +291,12 @@ static font_slot_t font_slots[] = {
 void init_fonts(void) {
     for (size_t i = 0; i < FONT_SLOT_COUNT; i++) {
         font_slot_t *s = &font_slots[i];
-        s->stream = stream_font_create(s->path, s->builtin);
+        s->stream = stream_font_create(s->path, BUILTIN_FONT);
         if (s->stream) {
             *s->slot = &s->stream->font;
         } else {
-            LV_LOG_WARN("font %s not loaded, using built-in", s->path);
-            *s->slot = (lv_font_t *)s->builtin;
+            LV_LOG_WARN("font %s not loaded, using the built-in 14 px font", s->path);
+            *s->slot = (lv_font_t *)BUILTIN_FONT;
         }
     }
 }
@@ -308,7 +304,7 @@ void init_fonts(void) {
 void destroy_fonts(void) {
     for (size_t i = 0; i < FONT_SLOT_COUNT; i++) {
         font_slot_t *s = &font_slots[i];
-        *s->slot = (lv_font_t *)s->builtin;
+        *s->slot = (lv_font_t *)BUILTIN_FONT;
         stream_font_destroy(s->stream);
         s->stream = NULL;
     }

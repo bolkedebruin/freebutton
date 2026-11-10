@@ -1,7 +1,7 @@
 //
 // Minimal host stand-in for lvgl.h, for native tests only (test/mocks is on
 // the native include path). It declares just the fmt_txt font types and macros
-// that the generated src/ui/fonts/mnt_*.c files use, so a test can #include
+// that the generated test/font_reference/mnt_*.c files use, so a test can #include
 // those files as plain data. Field order matches the generated designated
 // initializers (C++ requires declaration order); widths are generous.
 //

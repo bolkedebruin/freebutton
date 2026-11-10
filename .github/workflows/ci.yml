@@ -52,7 +52,7 @@ jobs:
       - name: Install PlatformIO Core
         run: uv pip install --upgrade platformio setuptools
 
-      # Fonts are committed (src/ui/fonts/mnt_*.c) and the mquickjs wasm assets
+      # Fonts are committed (data/fonts/*.bin, test/font_reference/*.c) and the mquickjs wasm assets
       # in web/public/assets are committed real files, so CI does NOT install
       # lv_font_conv, run generatefonts.sh, or run emcc.
 

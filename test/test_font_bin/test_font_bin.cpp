@@ -1,7 +1,7 @@
 //
 // Native tests for the streaming .bin font reader (src/ui/fonts/font_bin.c).
 //
-// data/fonts/*.bin and src/ui/fonts/mnt_*.c come from the same lv_font_conv
+// data/fonts/*.bin and test/font_reference/mnt_*.c come from the same lv_font_conv
 // run (tools/fonts/generatefonts.sh), so every glyph must match exactly:
 // cmap, metrics, the compressed bitmap bytes, the decoded pixels and kerning.
 // The compiled fonts are #included as plain data (test/mocks/lvgl.h supplies
@@ -23,25 +23,25 @@
 
 // Each generated file uses the same static names, so give each a namespace.
 namespace c_medium_14 {
-#include "../../src/ui/fonts/mnt_medium_14.c"
+#include "../font_reference/mnt_medium_14.c"
 }
 namespace c_medium_24 {
-#include "../../src/ui/fonts/mnt_medium_24.c"
+#include "../font_reference/mnt_medium_24.c"
 }
 namespace c_medium_32 {
-#include "../../src/ui/fonts/mnt_medium_32.c"
+#include "../font_reference/mnt_medium_32.c"
 }
 namespace c_medium_48 {
-#include "../../src/ui/fonts/mnt_medium_48.c"
+#include "../font_reference/mnt_medium_48.c"
 }
 namespace c_medium_72 {
-#include "../../src/ui/fonts/mnt_medium_72.c"
+#include "../font_reference/mnt_medium_72.c"
 }
 namespace c_semibold_14 {
-#include "../../src/ui/fonts/mnt_semibold_14.c"
+#include "../font_reference/mnt_semibold_14.c"
 }
 namespace c_semibold_18 {
-#include "../../src/ui/fonts/mnt_semibold_18.c"
+#include "../font_reference/mnt_semibold_18.c"
 }
 
 void setUp() {}
