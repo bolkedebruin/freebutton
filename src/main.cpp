@@ -83,13 +83,14 @@ void setup() {
         return;
     }
 
-    // Map js_user before anything else memory-maps flash (the fonts in the
-    // media partition, in initializeLvgl): bytecode is relocated for that
-    // virtual address, which depends on the mapping order.
-    BytecodeRegistry::instance();
-
     auto &displayManager = getDisplayManager();
     initBusAwareFileSystem(displayManager.getMainDisplay(), true, "", 10, "data");
+
+    // Map js_user before anything else memory-maps flash (the fonts in the
+    // media partition, in initializeLvgl): bytecode is relocated for that
+    // virtual address, which depends on the mapping order. After the
+    // filesystem: instance() also loads the registry index from LittleFS.
+    BytecodeRegistry::instance();
 
     // Initialize LVGL display
     if (initializeLvgl(displayManager)) {

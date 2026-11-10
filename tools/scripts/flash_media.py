@@ -18,6 +18,10 @@ import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BUCKETS = ("fonts", "images", "render")
+# File types a bucket holds (the S3 API refuses other keys, so they could not
+# be deleted again); anything else in media/<bucket>/ (README, licenses) is
+# skipped. None = any file.
+BUCKET_SUFFIXES = {"fonts": (".ttf", ".otf"), "images": None, "render": None}
 DEFAULT_OFFSET = 0x660000
 DEFAULT_SIZE = 0x500000
 PIO = os.path.expanduser("~/.platformio")
@@ -71,6 +75,9 @@ def collect(media_dir):
             dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
             for name in sorted(filenames):
                 if name.startswith("."):
+                    continue
+                suffixes = BUCKET_SUFFIXES.get(bucket)
+                if suffixes and not name.endswith(suffixes):
                     continue
                 path = os.path.join(dirpath, name)
                 key = os.path.relpath(path, bdir).replace(os.sep, "/")
