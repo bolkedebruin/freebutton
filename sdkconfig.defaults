@@ -75,3 +75,12 @@ CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=2
 # esp-mqtt event queue: other tasks wake the MQTT task with a custom event
 # (Broker subscription pump); with 1 slot that post could deadlock.
 CONFIG_MQTT_EVENT_QUEUE_SIZE=4
+# Core dump to the `coredump` partition (button_v2.csv), ELF + CRC32: task
+# stacks and registers only (no CAPTURE_DRAM), read it with esp-coredump
+# (docs/MIGRATION-PARTITIONS-V2.md). Its log strings live in DRAM (~5 KB per
+# the Kconfig help): off; the dump itself is unaffected.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_CHECK_BOOT=y
+CONFIG_ESP_COREDUMP_LOGS=n

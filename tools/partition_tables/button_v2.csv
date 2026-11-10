@@ -1,0 +1,16 @@
+# FreeButton partition table v2 (16 MB flash). Layout and rationale:
+# docs/MEDIA-STORE.md; moving a device from v1: docs/MIGRATION-PARTITIONS-V2.md.
+# gen_esp32part.py rejects comments after a row (read as flags): keep them on
+# their own lines.
+# No phy_init: CONFIG_ESP_PHY_INIT_DATA_IN_PARTITION is off (PHY data is in the app).
+#   nvs 20 KB | app0/app1 3 MB each | coredump 64 KB | js_user 256 KB compiled
+#   scripts | media 5 MB media store (fonts, bucket "fonts") | data 4.6 MB LittleFS
+# Name,    Type, SubType,  Offset,    Size,      Flags
+nvs,       data, nvs,      0x9000,    0x5000,
+otadata,   data, ota,      0xE000,    0x2000,
+app0,      app,  ota_0,    0x10000,   0x300000,
+app1,      app,  ota_1,    0x310000,  0x300000,
+coredump,  data, coredump, 0x610000,  0x10000,
+js_user,   data, 0x41,     0x620000,  0x40000,
+media,     data, 0x42,     0x660000,  0x500000,
+data,      data, spiffs,   0xB60000,  0x4A0000,
