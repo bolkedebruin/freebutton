@@ -55,3 +55,6 @@ web/.env.production.local
 
 # clangd index cache
 .cache/
+
+# Device backups (tools/scripts/ota_fs.py, media_sync.py pull): user data, may hold secrets
+devices/*/backup/

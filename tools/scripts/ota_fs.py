@@ -1,33 +1,48 @@
 #!/usr/bin/env python3
 """Over-the-air update of a device's LittleFS image, keeping the user's files.
 
-The filesystem holds both the web IDE bundle (www/), the fonts, the examples
+The LittleFS `data` partition holds the web IDE bundle (www/), the examples
 and the user's files (config.json, scripts/, the bytecode registry index
 js_bytecode_meta.json, ...). A plain `uploadfs` or filesystem upload writes a
 whole new image and so wipes the user's files. This tool:
 
   1. downloads every object of the device's S3 bucket `app` (the user's
-     files: the LittleFS root without www/, fonts/ and scripts/examples/,
-     which are the read-only buckets web, fonts and examples and come from
-     the build) with GET /app?list-type=2, GET /app/<key> into
-     devices/<deviceName>/backup/fs-<timestamp>/ (git-ignored). An `app` key
-     is the LittleFS path without the leading slash;
+     files: the LittleFS root without the directories of the read-only
+     buckets web and examples, which come from the build) with
+     GET /app?list-type=2, GET /app/<key> into
+     devices/<deviceName>/backup/fs-<timestamp>/app/ (git-ignored). An `app`
+     key is the LittleFS path without the leading slash. It also backs up
+     the bucket `fonts` into .../fs-<timestamp>/fonts/: that bucket lives in
+     the raw `media` partition (docs/MEDIA-STORE.md), not in LittleFS, so it
+     is never put into the image and this tool never changes it (restore it
+     with tools/scripts/media_sync.py push --dir .../fonts);
   2. assembles the image staging dir like the build does
      (tools/scripts/assemble_littlefs.py: data/ + web/dist/ gzipped), then
      puts the device's files on top (they win, except config.json when
      --config is given),
   3. builds the LittleFS image with PlatformIO's mklittlefs (same block /
-     page / partition size as `pio run -t buildfs`),
+     page / partition size as `pio run -t buildfs`, size from
+     tools/partition_tables/button_v2.csv),
   4. uploads it to POST /upload (updateType=filesystem) and applies it with
      POST /ota_update (reboot), then checks that the files are back.
 
 The js_user partition (the bytecode itself) is not touched, so the registry
 index restored from the device stays consistent with it.
 
+--restore DIR takes the user files from DIR (an earlier backup's app/
+directory) instead of from the device, e.g. after the full erase of a
+partition-table migration (docs/MIGRATION-PARTITIONS-V2.md). The erase also
+emptied js_user, so the backup's js_bytecode_meta.json would point at
+bytecode that is gone: it is left out (the device starts with an empty
+registry; deploy scripts/main.js again from the IDE). --keep-bytecode-index
+keeps it, for a device whose js_user was not erased. The device's current
+user files are still backed up first.
+
 usage:
   python3 tools/scripts/ota_fs.py http://192.168.1.50
   python3 tools/scripts/ota_fs.py http://192.168.1.50 --config devices/btn_a00001/config.json
-  python3 tools/scripts/ota_fs.py http://192.168.1.50 --dry-run      # build only
+  python3 tools/scripts/ota_fs.py http://192.168.1.50 --dry-run      # back up + build only
+  python3 tools/scripts/ota_fs.py http://192.168.1.50 --restore devices/btn_a00001/backup/fs-20261110-120000/app
 Build the web IDE first (cd web && npm run build).
 """
 import argparse
@@ -47,10 +62,12 @@ import xml.etree.ElementTree as ET
 
 PROJECT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 STAGING = os.path.join(PROJECT, ".pio", "staging_data")
-PARTITIONS = os.path.join(PROJECT, "tools", "partition_tables", "button_v1.csv")
+PARTITIONS = os.path.join(PROJECT, "tools", "partition_tables", "button_v2.csv")
 MKLITTLEFS = os.path.expanduser("~/.platformio/packages/tool-mklittlefs/mklittlefs")
 S3NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 BUCKET = "app"  # the user's files; key = LittleFS path without the leading "/"
+MEDIA_BUCKETS = ("fonts",)  # media partition: backed up, never put into the image
+BYTECODE_INDEX = "js_bytecode_meta.json"
 
 
 # Device access credentials (shown on the device display). Without them,
@@ -100,19 +117,47 @@ def http(method, url, data=None, headers=None, timeout=60):
         return r.status, r.read()
 
 
-def list_user_keys(base):
+def list_user_keys(base, bucket=BUCKET):
     keys, token = [], None
     while True:
         q = {"list-type": "2"}
         if token:
             q["continuation-token"] = token
-        _, body = http("GET", f"{base}/{BUCKET}?{urllib.parse.urlencode(q)}")
+        _, body = http("GET", f"{base}/{bucket}?{urllib.parse.urlencode(q)}")
         root = ET.fromstring(body)
         for c in root.iter(f"{S3NS}Contents"):
             keys.append(c.find(f"{S3NS}Key").text)
         if root.findtext(f"{S3NS}IsTruncated") != "true":
             return keys
         token = root.findtext(f"{S3NS}NextContinuationToken")
+        if not token:
+            return keys
+
+
+def download_bucket(base, bucket, keys, dst_dir):
+    """GET every key of bucket into dst_dir/<key>; returns the keys saved."""
+    saved = []
+    for key in keys:
+        parts = key.split("/")
+        if not key or any(p in ("", ".", "..") for p in parts):
+            print(f"[ota_fs] skipping unsafe key {key!r} in bucket {bucket}", file=sys.stderr)
+            continue
+        _, body = http("GET", f"{base}/{bucket}/" + "/".join(urllib.parse.quote(p, safe="") for p in parts))
+        dst = os.path.join(dst_dir, *parts)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "wb") as f:
+            f.write(body)
+        saved.append(key)
+    return saved
+
+
+def local_keys(directory):
+    """Keys (relative paths, '/'-separated) of every file below directory."""
+    keys = []
+    for root, _dirs, names in os.walk(directory):
+        for name in names:
+            keys.append(os.path.relpath(os.path.join(root, name), directory).replace(os.sep, "/"))
+    return sorted(keys)
 
 
 def data_partition_size():
@@ -151,6 +196,11 @@ def main():
     ap.add_argument("device", help="device base URL, e.g. http://192.168.1.50")
     ap.add_argument("--config", help="use this config.json instead of the device's")
     ap.add_argument("--dry-run", action="store_true", help="back up and build the image, do not upload")
+    ap.add_argument("--restore", metavar="DIR",
+                    help="take the user files from DIR (a backup's app/ dir) instead of from the device; "
+                         f"leaves out {BYTECODE_INDEX} (see above)")
+    ap.add_argument("--keep-bytecode-index", action="store_true",
+                    help=f"with --restore: keep {BYTECODE_INDEX} (only if js_user was not erased)")
     ap.add_argument("--access-key", default=os.environ.get("FB_ACCESS_KEY_ID"),
                     help="device access key id (default $FB_ACCESS_KEY_ID; shown on the device display)")
     ap.add_argument("--secret-key", default=os.environ.get("FB_SECRET_ACCESS_KEY"),
@@ -172,14 +222,34 @@ def main():
                      "FB_ACCESS_KEY_ID/FB_SECRET_ACCESS_KEY (hold the factory button 6 s to show them)")
         sys.exit(f"the device has no S3 bucket '{BUCKET}' ({e.code}); update its firmware first")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = os.path.join(PROJECT, "devices", name, "backup", f"fs-{stamp}")
-    for key in keys:
-        _, body = http("GET", f"{base}/{BUCKET}/" + "/".join(urllib.parse.quote(s) for s in key.split("/")))
-        dst = os.path.join(backup, key)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(dst, "wb") as f:
-            f.write(body)
+    backup_root = os.path.join(PROJECT, "devices", name, "backup", f"fs-{stamp}")
+    backup = os.path.join(backup_root, BUCKET)
+    keys = download_bucket(base, BUCKET, keys, backup)
     print(f"[ota_fs] {name}: backed up {len(keys)} user files to {os.path.relpath(backup, PROJECT)}")
+    # Media buckets (raw media partition): backed up only, never imaged.
+    for bucket in MEDIA_BUCKETS:
+        try:
+            mkeys = list_user_keys(base, bucket)
+        except urllib.error.HTTPError as e:
+            print(f"[ota_fs] bucket '{bucket}' not backed up ({e.code})", file=sys.stderr)
+            continue
+        download_bucket(base, bucket, mkeys, os.path.join(backup_root, bucket))
+        print(f"[ota_fs] {name}: backed up {len(mkeys)} objects of bucket {bucket} to "
+              f"{os.path.relpath(os.path.join(backup_root, bucket), PROJECT)} (not part of the image)")
+
+    # The files that go into the image: the device's, or --restore DIR.
+    source = backup
+    if args.restore:
+        source = os.path.abspath(args.restore)
+        if not os.path.isdir(source):
+            sys.exit(f"--restore: no directory {source}")
+        if os.path.isdir(os.path.join(source, BUCKET)) and not os.path.exists(os.path.join(source, "config.json")):
+            sys.exit(f"--restore: {source} looks like a backup root; pass its {BUCKET}/ directory")
+        keys = local_keys(source)
+        if BYTECODE_INDEX in keys and not args.keep_bytecode_index:
+            keys.remove(BYTECODE_INDEX)
+            print(f"[ota_fs] --restore: leaving out {BYTECODE_INDEX} (its bytecode is not in the backup)")
+        print(f"[ota_fs] --restore: {len(keys)} user files from {source}")
 
     # 2. Staging dir: build contents, then the device's files on top.
     env = dict(os.environ)
@@ -194,7 +264,7 @@ def main():
             continue
         dst = os.path.join(STAGING, key)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(os.path.join(backup, key), dst)
+        shutil.copy2(os.path.join(source, *key.split("/")), dst)
 
     # 3. Image (same parameters as `pio run -t buildfs`).
     size = data_partition_size()
@@ -204,7 +274,7 @@ def main():
     payload = open(image, "rb").read()
     if payload[8:16] != b"littlefs" or len(payload) != size:
         sys.exit("built image is not a LittleFS image of the partition size")
-    print(f"[ota_fs] image {os.path.relpath(image, PROJECT)}: {len(payload)} bytes")
+    print(f"[ota_fs] image {os.path.relpath(image, PROJECT)}: {len(payload)} bytes (data partition 0x{size:X})")
     if args.dry_run:
         return
 
@@ -221,7 +291,7 @@ def main():
         pass  # the device reboots before or while answering
     time.sleep(5)
     if not wait_for(base):
-        sys.exit("device did not come back; the backup is in " + backup)
+        sys.exit("device did not come back; the backup is in " + backup_root)
     time.sleep(3)
     after = set(list_user_keys(base))
     missing = [k for k in keys if k not in after and not (k == "config.json" and args.config)]
