@@ -101,7 +101,7 @@ Custom partition layout in `tools/partition_tables/button_v1.csv` allocates spac
 
 ### Dependencies
 Key library dependencies managed via PlatformIO:
-- LVGL 9.4.0 for UI framework
+- LVGL 9.6.0 for UI framework
 - ArduinoJson 7.4.2 for JSON handling
 - FastLED 3.7.7 for NeoPixel control
 - Adafruit sensor libraries (BME280, MCP23008)

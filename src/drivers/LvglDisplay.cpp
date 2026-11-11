@@ -61,6 +61,109 @@ static void captureArea(lv_display_t* disp, const lv_area_t* area, const uint8_t
 // Reference to display manager for flush callback
 static DisplayManager* g_display_mgr = nullptr;
 
+// ---------------------------------------------------------------------------
+// Panel DMA flush, main and mini panels (LVGL task, LVGL lock held).
+//
+// flush_cb() / flush_small_cb() start a band by DMA and return; LVGL is told
+// the band is done (lv_display_flush_ready) only once the DMA has finished:
+// in that display's flush_wait_cb (before LVGL reuses the buffer for the next
+// band) or when the bus is released. Between bands of the same display, its
+// CS stays selected and its SPI transaction stays open: every CS change costs
+// one I2C write per MCP, more than sending a band.
+//
+// LVGL does not wait for the last band of a refresh, so a panel can still
+// hold the bus when lv_timer_handler() moves on. Everything else that uses
+// SPI2, the chip selects or the shared mini draw buffer must therefore first
+// call releasePanelBus() (bus, CS) or completePanelDma() (buffer only):
+//   - flush_cb / flush_small_cb for another display:           release
+//   - LV_EVENT_RENDER_START on any mini (shared buffer):        complete
+//   - heal, clearAllSmallDisplays, end of a screenshot refresh: release
+//   - LvglDisplay::unlock():                                    release
+// Releasing in unlock() means the bus is never held while the LVGL lock is
+// free, and is always released by the task that took it. The Arduino SPI bus
+// lock that LovyanGFX takes in startWrite() is a non-recursive mutex: taking
+// it again from this task while a panel holds it would deadlock. That is
+// also why the panels must keep bus_shared = false: with it, BusAwareFile
+// (font reads while rendering) would take the same lock.
+// ---------------------------------------------------------------------------
+struct PanelBusHold {
+    lv_display_t* disp = nullptr;          // display whose CS + SPI transaction are held
+    lgfx::LGFX_Device* gfx = nullptr;
+    bool dmaPending = false;               // a band may still be going out by DMA
+    lv_area_t area{};                      // that band (for the screenshot capture)
+    const uint8_t* px = nullptr;
+};
+static PanelBusHold s_panelHold;
+
+// Waits for the pending band's DMA, then completes it for LVGL.
+static void completePanelDma() {
+    if (!s_panelHold.dmaPending) return;
+    s_panelHold.gfx->waitDMA();
+    s_panelHold.dmaPending = false;
+    captureArea(s_panelHold.disp, &s_panelHold.area, s_panelHold.px);
+    lv_display_flush_ready(s_panelHold.disp);
+}
+
+// Completes any pending band, ends the held transaction and deselects the CS.
+static void releasePanelBus() {
+    if (!s_panelHold.disp) return;
+    completePanelDma();
+    s_panelHold.gfx->endWrite();
+    g_display_mgr->deselectAllDisplays();
+    s_panelHold = PanelBusHold{};
+}
+
+// Makes `disp` the bus holder: releases another holder, selects the panel
+// (select() returns false on a CS write failure) and opens its transaction.
+// If `disp` already holds the bus, completes its previous band instead
+// (normally LVGL already did, through flush_wait_hold_cb). Returns false if
+// nothing may be sent; the caller then calls lv_display_flush_ready().
+template <typename Select>
+static bool holdPanelBus(lv_display_t* disp, lgfx::LGFX_Device* gfx, Select&& select) {
+    if (s_panelHold.disp == disp) {
+        completePanelDma();
+        return true;
+    }
+    releasePanelBus();
+    if (!select()) {
+        // CS state unknown: send nothing, so pixels cannot land on another
+        // panel. The self-heal timer sees the failure count change and repaints.
+        g_display_mgr->deselectAllDisplays();
+        return false;
+    }
+    gfx->startWrite();
+    s_panelHold.disp = disp;
+    s_panelHold.gfx = gfx;
+    return true;
+}
+
+// Sends one band by DMA on the held bus; returns while it is going out.
+// The draw buffers are DMA-capable (MALLOC_CAP_DMA).
+static void startPanelDma(const lv_area_t* area, uint8_t* px_map) {
+    const uint32_t width = area->x2 - area->x1 + 1;
+    const uint32_t height = area->y2 - area->y1 + 1;
+    s_panelHold.gfx->setAddrWindow(area->x1, area->y1, width, height);
+    s_panelHold.gfx->writePixelsDMA(reinterpret_cast<uint16_t*>(px_map), width * height);
+    s_panelHold.dmaPending = true;
+    s_panelHold.area = *area;
+    s_panelHold.px = px_map;
+}
+
+// LVGL calls this (only while disp->flushing) before it reuses the buffer,
+// and clears disp->flushing itself afterwards. Keeps the bus held: the next
+// band normally goes to the same display.
+static void flush_wait_hold_cb(lv_display_t* disp) {
+    if (s_panelHold.disp == disp) {
+        completePanelDma();
+    }
+}
+
+// All minis render into one shared buffer: before any mini renders, a band
+// still going out from that buffer must be done.
+static void small_render_start_cb(lv_event_t*) {
+    completePanelDma();
+}
+
 LvglDisplay::LvglDisplay()
     : main_display_(nullptr)
       , buffer1_(nullptr)
@@ -134,6 +237,7 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
 
     // Set flush callback
     lv_display_set_flush_cb(main_display_, flush_cb);
+    lv_display_set_flush_wait_cb(main_display_, flush_wait_hold_cb);
 
     // Set display buffer (single buffer only)
     lv_display_set_buffers(main_display_, buffer1_, nullptr,
@@ -217,42 +321,12 @@ void LvglDisplay::flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* p
         return;
     }
 
-    // Select main display before operations. If a CS write failed, the CS
-    // state is unknown: send nothing, so pixels cannot land on another panel.
-    // The self-heal timer sees the failure count change and repaints.
-    if (!g_display_mgr->selectMainDisplay()) {
-        g_display_mgr->deselectAllDisplays();
+    // See PanelBusHold. lv_display_flush_ready() follows when the DMA is done.
+    if (!holdPanelBus(disp, main_gfx, [] { return g_display_mgr->selectMainDisplay(); })) {
         lv_display_flush_ready(disp);
         return;
     }
-
-    // Calculate area dimensions
-    const uint32_t width = area->x2 - area->x1 + 1;
-    const uint32_t height = area->y2 - area->y1 + 1;
-
-    // Start write operation
-    main_gfx->startWrite();
-    main_gfx->setAddrWindow(area->x1, area->y1, width, height);
-
-    // Push pixels to display
-    while (main_gfx->dmaBusy()) {
-        vTaskDelay(1);
-    }
-    main_gfx->pushImageDMA(area->x1, area->y1, width, height, reinterpret_cast<uint16_t *>(px_map));
-    if (disp == s_capDisp) {
-        main_gfx->waitDMA();  // the capture writes to LittleFS next: bus free
-    }
-
-    // End write operation
-    main_gfx->endWrite();
-
-    // Deselect all displays after operation
-    g_display_mgr->deselectAllDisplays();
-
-    captureArea(disp, area, px_map);
-
-    // Signal LVGL that flushing is complete
-    lv_display_flush_ready(disp);
+    startPanelDma(area, px_map);
 }
 
 
@@ -328,6 +402,7 @@ void LvglDisplay::captureScreens() {
         s_capDisp = disp;
         lv_obj_invalidate(scr);
         lv_refr_now(disp);
+        releasePanelBus();  // the last band is captured on completion
         s_capDisp = nullptr;
         s_capFile.close();
         s_capFile = BusAwareFile();
@@ -348,6 +423,10 @@ void LvglDisplay::lock() const {
 }
 
 void LvglDisplay::unlock() const {
+    // Never leave a panel holding SPI2 / its CS once the lock is free (see
+    // PanelBusHold). Flushes only run under this lock, so the task that
+    // unlocks is the task that took the bus.
+    releasePanelBus();
     if (lvgl_mutex_) {
         xSemaphoreGive(lvgl_mutex_);
     }
@@ -410,6 +489,8 @@ void LvglDisplay::initializeSmallDisplays(DisplayManager& displayManager) {
 
         lv_display_set_color_format(small_disp, LV_COLOR_FORMAT_RGB565_SWAPPED);  // see main display
         lv_display_set_flush_cb(small_disp, flush_small_cb);
+        lv_display_set_flush_wait_cb(small_disp, flush_wait_hold_cb);
+        lv_display_add_event_cb(small_disp, small_render_start_cb, LV_EVENT_RENDER_START, nullptr);
         small_displays_.push_back(small_disp);
 
         // Set user data to the index for easy lookup in flush callback
@@ -446,30 +527,12 @@ void LvglDisplay::flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint
         return;
     }
 
-    // Select the specific small display using DisplayManager's method. On a
-    // CS write failure send nothing (see flush_cb); the self-heal repaints.
-    if (!g_display_mgr->selectSmallDisplay(connector, position)) {
-        g_display_mgr->deselectAllDisplays();
+    // See PanelBusHold. lv_display_flush_ready() follows when the DMA is done.
+    if (!holdPanelBus(disp, small_gfx, [&] { return g_display_mgr->selectSmallDisplay(connector, position); })) {
         lv_display_flush_ready(disp);
         return;
     }
-
-    // Calculate area dimensions
-    const uint32_t width = area->x2 - area->x1 + 1;
-    const uint32_t height = area->y2 - area->y1 + 1;
-
-    small_gfx->startWrite();
-    small_gfx->setAddrWindow(area->x1, area->y1, width, height);
-
-    // Push pixels to display - NO DMA for small displays for now
-    small_gfx->writePixels(reinterpret_cast<uint16_t*>(px_map), width * height);
-    small_gfx->endWrite();
-
-    g_display_mgr->deselectAllDisplays();
-
-    captureArea(disp, area, px_map);
-
-    lv_display_flush_ready(disp);
+    startPanelDma(area, px_map);
 }
 
 // Runs inside lv_timer_handler() in the LVGL task, which already holds
@@ -539,6 +602,8 @@ bool LvglDisplay::healSmallDisplay(const size_t index) {
     if (!small_gfx || !g_display_mgr->getSmallDisplayInfo(dmIndex, connector, position)) {
         return false;
     }
+
+    releasePanelBus();  // a flush may still hold SPI2 and its CS
 
     if (!g_display_mgr->selectSmallDisplay(connector, position)) {
         // The failure count went up; healStep() schedules another sweep.
@@ -627,6 +692,8 @@ void LvglDisplay::clearAllSmallDisplays() const {
     }
 
     ESP_LOGI(TAG, "Clearing all small displays to black");
+
+    releasePanelBus();  // a flush may still hold SPI2 and its CS
 
     for (size_t i = 0; i < small_displays_.size(); ++i) {
         auto* small_gfx = g_display_mgr->getSmallDisplay(static_cast<int>(i));
