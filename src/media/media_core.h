@@ -19,7 +19,7 @@ extern "C" {
 #define MEDIA_FILE_MAX (MEDIA_MAX_FILE_PAGES * MEDIA_PAGE_SIZE) /* 4 MB */
 #define MEDIA_DIR_PAGES 2u        /* pages 0 and 1: the two directory halves */
 #define MEDIA_MAX_PAGES 256u      /* page numbers are one byte */
-#define MEDIA_MAX_OPEN 16         /* distinct open files (same key = one entry) */
+#define MEDIA_MAX_OPEN 32         /* distinct open files (same key = one entry): fonts + image rasters */
 #define MEDIA_MAX_WRITERS 2       /* uploads in progress */
 #define MEDIA_MAX_ENTRIES 1000u   /* live entries (the directory bytes limit usually hits first) */
 

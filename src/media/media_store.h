@@ -57,6 +57,11 @@ typedef struct {
     uint32_t reclaimable; /* dead but still open (freed on close) */
     uint32_t derived;     /* used by MEDIA_BUCKET_RENDER (evictable) */
     uint32_t free;        /* total - used - reclaimable */
+    /* Wear since mount (RAM only, lost on reboot): erases counted in 4 KB
+     * sectors (a 64 KB page erase counts 16). */
+    uint32_t erase_sectors;    /* data area and directory */
+    uint32_t erase_page_max;   /* most sector erases on one page (16 = one page erase) */
+    uint32_t dir_generation;   /* directory snapshots since the store was formatted */
 } media_usage_t;
 
 typedef struct media_writer media_writer_t;
@@ -67,8 +72,9 @@ media_err_t media_init(void);
 
 /* Map a file and take a reference. Opening a key that is already open
  * shares its mapping and reference count (the same handle comes back). A
- * 0-byte file opens with data == NULL. Up to 16 distinct files can be open
- * (MEDIA_ERR_BUSY beyond that). */
+ * 0-byte file opens with data == NULL. Up to 32 distinct files (fonts and
+ * image rasters together, MEDIA_MAX_OPEN) can be open (MEDIA_ERR_BUSY beyond
+ * that). */
 media_err_t media_open(media_bucket_t bucket, const char *key, media_file_t *out);
 /* Drop the reference; unmaps, and frees the pages of a deleted/replaced file
  * once nothing uses it. Call once per successful media_open(). Zeroes

@@ -26,6 +26,7 @@ struct RamFlash {
     unsigned violations = 0;     // bytes programmed over non-erased flash
     unsigned map_violations = 0; // flash of a multi-page mapping changed while mapped
     unsigned writes = 0, erases = 0, header_writes = 0, maps_live = 0;
+    std::vector<unsigned> sector_erases; // wear: erases per 4 KB sector (a page erase counts all 16)
 
     struct Map {
         std::vector<uint8_t> pages;
@@ -33,7 +34,8 @@ struct RamFlash {
         bool exclusive = false;    // more than one page: a large file, nobody may touch it
     };
 
-    explicit RamFlash(uint32_t pages) : mem(pages * MEDIA_PAGE_SIZE, 0xFF) {
+    explicit RamFlash(uint32_t pages)
+        : mem(pages * MEDIA_PAGE_SIZE, 0xFF), sector_erases(pages * (MEDIA_PAGE_SIZE / MEDIA_SECTOR_SIZE), 0) {
         flash.ctx = this;
         flash.size = pages * MEDIA_PAGE_SIZE;
         flash.read = [](void *c, uint32_t off, void *dst, uint32_t len) {
@@ -136,6 +138,7 @@ struct RamFlash {
         if (power_off || off % MEDIA_SECTOR_SIZE || len % MEDIA_SECTOR_SIZE || off + len > mem.size()) return -1;
         if (touches_exclusive(off, len)) map_violations++;
         erases++;
+        for (uint32_t s = off / MEDIA_SECTOR_SIZE; s < (off + len) / MEDIA_SECTOR_SIZE; s++) sector_erases[s]++;
         if (ops_left == 0) {
             const uint32_t sectors = len / MEDIA_SECTOR_SIZE;
             const uint32_t done = rng() % sectors;
