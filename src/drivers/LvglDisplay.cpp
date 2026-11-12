@@ -243,7 +243,9 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     lv_display_set_buffers(main_display_, buffer1_, nullptr,
                           buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-    // Set default theme
+    // Default theme, with the compiled font (LV_FONT_DEFAULT): firmware
+    // text without a style of its own (modals) is a bitmap font, drawn at
+    // once. The UI elements use config.json "style" (ui_style.c).
     lv_theme_t* theme = lv_theme_default_init(main_display_,
                                              lv_palette_main(LV_PALETTE_BLUE),
                                              lv_palette_main(LV_PALETTE_RED),

@@ -23,12 +23,6 @@ typedef struct {
 void ui_button_styles(void);
 
 /**
- * @brief Set default title color for all buttons
- * @param color Hexadecimal color value (e.g., 0xFF0000 for red)
- */
-void ui_button_set_default_title_color(long color);
-
-/**
  * @brief Create a new button widget
  * @param parent Parent object to attach the button to
  * @return Pointer to the created button object, or NULL on failure
@@ -50,12 +44,29 @@ void ui_button_set_title(lv_obj_t *button, const char *title);
 void ui_button_set_text(lv_obj_t *button, const char *text);
 
 /**
- * @brief Set the icon of a button
+ * @brief Fonts of the bottom label and the top label (LVGL lock held)
  * @param button Button object created with ui_button_create()
- * @param icon Icon string or symbol to display
- * @note Currently not implemented
+ * @param text_font Bottom label font (a local style), or NULL for the
+ *        shared key.label style (ui_style.h)
+ * @param title_font Top label font, or NULL for the shared key.toplabel
+ *        style
  */
-void ui_button_set_icon(lv_obj_t *button, const char *icon);
+void ui_button_set_fonts(lv_obj_t *button, const lv_font_t *text_font, const lv_font_t *title_font);
+
+/**
+ * @brief Show a raster icon in the button's bottom area, instead of the
+ *        bottom label (ui/MediaImage.h; LVGL lock held)
+ * @param button Button object created with ui_button_create()
+ * @param dsc Raster to show at its own size, or NULL to hide the icon and
+ *        show the label again. An A8 raster is tinted in the label colour.
+ */
+void ui_button_set_icon(lv_obj_t *button, const lv_image_dsc_t *dsc);
+
+/**
+ * @brief Delete a button made by ui_button_create(), with its descriptor
+ *        (user data in the LVGL pool, which lv_obj_delete() alone leaks)
+ */
+void ui_button_delete(lv_obj_t *button);
 
 #ifdef __cplusplus
 }

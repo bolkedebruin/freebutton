@@ -158,7 +158,7 @@ describe('JSON validation', () => {
         { items: ['a'] },
         { name: 's', items: 'a\nb' },
         { name: 't', items: ['ok', 3, 'two\nlines'] },
-        { name: 'u', rows: 0, fontsize: 6, x: 101, width: '50', page: 1.5, selected: -1 },
+        { name: 'u', rows: 0, fontsize: 73, x: 101, width: '50', page: 1.5, selected: -1 },
         { name: 'v', color: '#808080', focuscolor: 'fff', focustextcolor: 0 },
       ],
     })).toEqual([
@@ -171,7 +171,7 @@ describe('JSON validation', () => {
       'lists[4].x must be a number 0..100',
       'lists[4].width must be a number 0..100',
       'lists[4].rows must be an integer 1..7',
-      'lists[4].fontsize must be an integer 1..5',
+      'lists[4].fontsize must be an integer 1..72',
       'lists[4].selected must be an integer >= 0',
       'lists[5].color must be 6 hex digits without "#" (e.g. "ffd45f")',
       'lists[5].focuscolor must be 6 hex digits without "#" (e.g. "ffd45f")',
@@ -220,5 +220,26 @@ describe('validateBody', () => {
     expect(validateBody('a.txt', 'x'.repeat(MAX_BODY_BYTES))).toBeNull();
     expect(validateBody('a.txt', 'x'.repeat(MAX_BODY_BYTES + 1))).toMatch(/too large/);
     expect(validateBody('a.txt', 'é'.repeat(MAX_BODY_BYTES / 2 + 1))).toMatch(/too large/);
+  });
+});
+
+describe('validateConfigShape: fonts', () => {
+  it('includes the font table and item font checks; save refuses them', () => {
+    const cfg = { style: { fonts: [{ name: 'a', src: 'a.ttf', fallback: 'a' }] }, buttons: [{ position: 1, font: 'zz' }] };
+    expect(validateConfigShape(cfg)).toEqual([
+      'style.fonts: fallback cycle a -> a',
+      expect.stringContaining('buttons[0].font "zz" is not a font'),
+    ]);
+    expect(validateBody('config.json', JSON.stringify(cfg))).toContain('fallback cycle');
+    expect(validateConfigShape({ style: { fonts: [{ name: 'a', src: 'a.ttf' }] }, displayitems: [{ font: 'a', fontsize: 40 }] })).toEqual([]);
+  });
+
+  it('includes the style errors; save refuses them', () => {
+    const cfg = { style: { title: { text_color: 'gold' }, key: { lable: {} } } };
+    expect(validateConfigShape(cfg)).toEqual([
+      'style.title.text_color must be a colour "#rrggbb"',
+      expect.stringContaining('style.key.lable is not an element of "key"'),
+    ]);
+    expect(validateBody('config.json', JSON.stringify(cfg))).toContain('text_color');
   });
 });

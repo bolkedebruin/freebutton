@@ -65,6 +65,36 @@ static void test_committed_fonts_pass() {
     }
 }
 
+// The defaults are the upstream files, byte for byte (media/fonts/README.md)
+static void test_committed_fonts_are_upstream() {
+    TEST_ASSERT_TRUE(load("media/fonts/medium.ttf") == load("tools/fonts/Montserrat-Medium.ttf"));
+    TEST_ASSERT_TRUE(load("media/fonts/semibold.ttf") == load("tools/fonts/Montserrat-SemiBold.ttf"));
+    TEST_ASSERT_TRUE(load("media/fonts/icons.ttf") == load("tools/fonts/materialdesignicons-webfont.ttf"));
+}
+
+// stb_truetype uses the LAST Unicode cmap record (platform 0, or 3 with
+// encoding 1/10). MDI's codepoints are U+F0001+, so in icons.ttf that record
+// must be (3,10) format 12; a format 4 table would lose every icon.
+static void test_icons_last_unicode_cmap_is_format12() {
+    std::vector<uint8_t> v = load("media/fonts/icons.ttf");
+    size_t cmap = be32(v, record(v, "cmap") + 8);
+    size_t last = 0;
+    uint16_t pid = 0, eid = 0;
+    for (uint16_t i = 0; i < be16(v, cmap + 2); i++) {
+        size_t r = cmap + 4 + 8u * i;
+        uint16_t p = be16(v, r), e = be16(v, r + 2);
+        if (p == 0 || (p == 3 && (e == 1 || e == 10))) {
+            last = cmap + be32(v, r + 4);
+            pid = p;
+            eid = e;
+        }
+    }
+    TEST_ASSERT_NOT_EQUAL(0, last);
+    TEST_ASSERT_EQUAL(3, pid);
+    TEST_ASSERT_EQUAL(10, eid);
+    TEST_ASSERT_EQUAL(12, be16(v, last));
+}
+
 // unmodified upstream fonts (what a user might upload) pass too
 static void test_source_fonts_pass() {
     for (const char* f : {"tools/fonts/Montserrat-Medium.ttf", "tools/fonts/Montserrat-SemiBold.ttf",
@@ -169,6 +199,8 @@ int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_committed_fonts_pass);
     RUN_TEST(test_source_fonts_pass);
+    RUN_TEST(test_committed_fonts_are_upstream);
+    RUN_TEST(test_icons_last_unicode_cmap_is_format12);
     RUN_TEST(test_short_and_garbage);
     RUN_TEST(test_truncated);
     RUN_TEST(test_table_outside_file);

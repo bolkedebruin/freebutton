@@ -10,8 +10,15 @@
  *   - `examples` /scripts/examples ("button.js"). Read-only.
  *   - `web`      /www, the IDE bundle ("index.html.gz"). Read-only.
  *   - `fonts`    the TrueType fonts the device renders with (media store,
- *                flat keys "medium.ttf"). Writable by signed S3 clients
- *                (.ttf/.otf, <= 2 MiB); the IDE only lists it.
+ *                flat keys "medium.ttf"). Readable by anyone, writable by
+ *                signed S3 clients (.ttf/.otf, <= 2 MiB); a PUT / DELETE
+ *                makes the device reload its fonts. The IDE uploads and
+ *                deletes fonts (Assets) and reads them for the previews
+ *                (font-loader.ts, getObjectBytes: a plain fetch of
+ *                /fonts/x.ttf would hit the IDE's own static files).
+ *   - `images`   the raster images the device draws (media store, flat keys
+ *                "ico-rain-48x48.bin", LVGL 9 .bin). The IDE writes the
+ *                `ico-*` rasters of the config's icons (icon-sync.ts).
  * Every function takes the bucket as an option and defaults to `app`. The
  * rest of the IDE talks to this module only, never to the SDK directly.
  *
@@ -44,12 +51,19 @@ import { addAuthRequiredMiddleware, credentialsProvider, deviceS3Signer, signedF
 /** The user's files (read/write). */
 export const APP_BUCKET = 'app';
 /**
- * Buckets the IDE only lists (on request): device examples, the IDE bundle,
- * the device fonts. (`fonts` is writable on the device, but not from the IDE.)
+ * Buckets the Assets panel lists on request (never downloaded there): device
+ * examples, the IDE bundle, the device fonts. (`fonts` is also writable:
+ * FONTS_BUCKET.)
  */
 export const READ_ONLY_BUCKETS = ['examples', 'web', 'fonts'] as const;
 export type ReadOnlyBucket = typeof READ_ONLY_BUCKETS[number];
-export type Bucket = typeof APP_BUCKET | ReadOnlyBucket;
+/** Media-store bucket of raster images (icons); the IDE owns its `ico-*` keys. */
+export const IMAGES_BUCKET = 'images';
+/** Media-store bucket of the TrueType fonts (uploaded / deleted from Assets). */
+export const FONTS_BUCKET = 'fonts';
+export type Bucket = typeof APP_BUCKET | typeof IMAGES_BUCKET | ReadOnlyBucket;
+/** Buckets the IDE writes. */
+export type WritableBucket = typeof APP_BUCKET | typeof IMAGES_BUCKET | typeof FONTS_BUCKET;
 
 export interface FsObject {
   key: string;
@@ -279,6 +293,28 @@ export async function getObject(
   }
 }
 
+/**
+ * Fetch an object's bytes (fonts, rasters: getObject would decode them as
+ * text). Returns null when it does not exist.
+ */
+export async function getObjectBytes(
+  baseUrl: string,
+  key: string,
+  bucket: Bucket = APP_BUCKET,
+): Promise<{ bytes: Uint8Array; etag?: string } | null> {
+  try {
+    const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as {
+      Body?: { transformToByteArray(): Promise<Uint8Array> };
+      ETag?: string;
+    };
+    const bytes = out.Body ? await out.Body.transformToByteArray() : new Uint8Array(0);
+    return { bytes, ...(out.ETag ? { etag: out.ETag } : {}) };
+  } catch (err) {
+    if (statusOf(err as SdkErrorLike) === 404) return null; // NoSuchKey
+    throw mapError(err);
+  }
+}
+
 /** Whether an object exists (HEAD). */
 export async function headObject(baseUrl: string, key: string, bucket: Bucket = APP_BUCKET): Promise<boolean> {
   try {
@@ -295,17 +331,29 @@ export function contentTypeFor(key: string): string {
   const ext = key.slice(key.lastIndexOf('.') + 1).toLowerCase();
   if (ext === 'json') return 'application/json';
   if (ext === 'js') return 'application/javascript';
+  if (ext === 'svg') return 'image/svg+xml';
+  if (ext === 'bin') return 'application/octet-stream';
+  if (ext === 'ttf') return 'font/ttf';
+  if (ext === 'otf') return 'font/otf';
   return 'text/plain; charset=utf-8';
 }
 
 /**
- * Store `body` at `key` in bucket `app` (the only writable one). config.json responses carry
- * `x-freebutton-reboot-required: true` (config is applied at boot).
+ * Store `body` at `key` (bucket `app` by default; `images` for rasters,
+ * `fonts` for TrueType fonts).
+ * config.json responses carry `x-freebutton-reboot-required: true` (config
+ * is applied at boot). A Uint8Array body is sent as is, with its length
+ * known up front (media buckets require Content-Length).
  */
-export async function putObject(baseUrl: string, key: string, body: string): Promise<PutResult> {
+export async function putObject(
+  baseUrl: string,
+  key: string,
+  body: string | Uint8Array,
+  bucket: WritableBucket = APP_BUCKET,
+): Promise<PutResult> {
   try {
     const out = await clientFor(baseUrl).send(new PutObjectCommand({
-      Bucket: APP_BUCKET,
+      Bucket: bucket,
       Key: key,
       Body: body,
       ContentType: contentTypeFor(key),
@@ -319,9 +367,9 @@ export async function putObject(baseUrl: string, key: string, body: string): Pro
   }
 }
 
-export async function deleteObject(baseUrl: string, key: string): Promise<void> {
+export async function deleteObject(baseUrl: string, key: string, bucket: WritableBucket = APP_BUCKET): Promise<void> {
   try {
-    await clientFor(baseUrl).send(new DeleteObjectCommand({ Bucket: APP_BUCKET, Key: key }));
+    await clientFor(baseUrl).send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
   } catch (err) {
     throw mapError(err);
   }

@@ -1,3 +1,0 @@
-# build_fonts.py / check_fonts.py. Pinned: the subset bytes depend on the
-# fontTools version (media/fonts/README.md lists the output hashes).
-fonttools==4.68.0

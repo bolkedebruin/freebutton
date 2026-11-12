@@ -20,7 +20,8 @@ import '../fb-file-drawer.js';
 import type { WorkspaceSnapshot } from '../../js/app-state.js';
 import { LOCAL_MESSAGE } from '../../js/workspace.js';
 import { loadDefaultConfig, setPreviewConfig } from '../../js/device-config.js';
-import { configToModel, mapList } from '../../js/config-model.js';
+import { configToModel, mapImage, mapList } from '../../js/config-model.js';
+import { setIconSources, _clearIconSources } from '../../js/icon-sync.js';
 
 function createElement<T extends HTMLElement>(tag: string): T {
   const el = document.createElement(tag) as T;
@@ -281,16 +282,36 @@ describe('fb-file-drawer', () => {
       },
     }));
     const system = el.querySelector('[data-testid="system-files"]')!;
-    expect(system.textContent).toContain('2 files');
+    expect(system.textContent).toContain('1 files');
     expect(system.textContent).not.toContain('index.html.gz');
     expect(el.querySelector('[data-testid="examples-files"]')!.textContent).toContain('1 files');
+    expect(el.querySelector('[data-testid="fonts-files"]')!.textContent).toContain('1 files');
 
     (el.querySelector('[data-testid="system-toggle"]') as HTMLButtonElement).click();
     await nextFrame();
-    expect(system.textContent).toContain('web/index.html.gz');
-    expect(system.textContent).toContain('fonts/mnt_medium_14.bin');
+    expect(system.textContent).toContain('index.html.gz');
     // Read-only entries are not openable files.
     expect(system.querySelector('[data-key]')).toBeNull();
+    expect(system.querySelector('[data-testid="delete-font"]')).toBeNull();
+  });
+
+  it('fonts group: upload button, entries with a delete button when expanded', async () => {
+    const el = await drawerWith(snapshot({
+      readOnly: { fonts: [{ key: 'medium.ttf', size: 198000 }, { key: 'roboto.ttf', size: 160000 }] },
+    }));
+    const fonts = el.querySelector('[data-testid="fonts-files"]')!;
+    expect(fonts.querySelector('[data-testid="upload-font"]')).not.toBeNull();
+    expect(fonts.querySelector('[data-testid="font-upload-input"]')!.getAttribute('accept')).toContain('.ttf');
+    expect(fonts.textContent).not.toContain('roboto.ttf');
+    (el.querySelector('[data-testid="fonts-toggle"]') as HTMLButtonElement).click();
+    await nextFrame();
+    const rows = Array.from(fonts.querySelectorAll('[data-font-key]')).map(n => n.getAttribute('data-font-key'));
+    expect(rows).toEqual(['medium.ttf', 'roboto.ttf']);
+    const del = Array.from(fonts.querySelectorAll('[data-testid="delete-font"]')) as HTMLButtonElement[];
+    expect(del).toHaveLength(2);
+    // medium.ttf is a system font: its delete button is disabled.
+    expect(del.map(b => b.disabled)).toEqual([true, false]);
+    expect(del[0]!.title).toContain('system font');
   });
 
   it('hides the read-only groups without a device', async () => {
@@ -647,6 +668,130 @@ describe('fb-tft-display', () => {
   });
 });
 
+describe('fb-tft-display fonts', () => {
+  const scale = 283 / 320;
+  const fontPx = (el: Element | null) => parseFloat((el as HTMLElement).style.fontSize);
+
+  it('draws value and caption at the configured sizes, markup as spans', async () => {
+    setPreviewConfig(configToModel({
+      style: { fonts: [{ name: 'roboto', src: 'roboto.ttf' }] },
+      displayitems: [{ name: 'temp', font: 'roboto', fontsize: 40, label: 'Temp', unit: '\\s{20}°C' }],
+    }));
+    const el = createElement('fb-tft-display') as any;
+    const item = configToModel({
+      style: { fonts: [{ name: 'roboto', src: 'roboto.ttf' }] },
+      displayitems: [{ name: 'temp', font: 'roboto', fontsize: 40, label: 'Temp', unit: '\\s{20}°C' }],
+    }).pages[0]!.displayItems[0]!;
+    el.displayItems = [{ ...item, value: '21\\cff0000!' }];
+    await nextFrame();
+    const box = el.querySelector('[data-display-item="temp"]')!;
+    expect(fontPx(box.querySelector('[data-caption] span'))).toBeCloseTo(14 * scale, 1);
+    const spans = Array.from(box.querySelectorAll('[data-value] [data-rich] span')) as HTMLElement[];
+    expect(spans.map(s => s.textContent)).toEqual(['21', '!', '°C']);
+    expect(fontPx(spans[0]!)).toBeCloseTo(40 * scale, 1);
+    expect(spans[1]!.style.color).toMatch(/ff0000|255, 0, 0/);
+    expect(fontPx(spans[2]!)).toBeCloseTo(20 * scale, 1);
+    // Without the device fonts loaded: the CSS fallback.
+    expect(spans[0]!.style.fontFamily).toContain('sans-serif');
+    loadDefaultConfig();
+  });
+
+  it('uses the legacy size of fontsize without a font (fontsize no longer ignored)', async () => {
+    const el = createElement('fb-tft-display') as any;
+    el.displayItems = [{ x: 0, y: 0, width: 50, height: 0, type: 'text', label: 'L', value: 'v', fontSize: 4 }];
+    await nextFrame();
+    expect(fontPx(el.querySelector('[data-value] span'))).toBeCloseTo(48 * scale, 1);
+  });
+
+  it('a list at a px fontsize', async () => {
+    const el = createElement('fb-tft-display') as any;
+    el.lists = [mapList({ name: 'l', fontsize: 20, items: ['a'] })];
+    await nextFrame();
+    expect(fontPx(el.querySelector('[data-list="l"]'))).toBeCloseTo(20 * scale, 1);
+  });
+});
+
+describe('previews follow config.json "style"', () => {
+  const scale = 283 / 320;
+  const fontPx = (el: Element | null) => parseFloat((el as HTMLElement).style.fontSize);
+  const rgb = (el: Element | null) => (el as HTMLElement).style.color;
+
+  it('defaults: gold #ffd700 captions and top labels, white values, grey units', async () => {
+    loadDefaultConfig();
+    const model = configToModel({
+      buttons: [{ position: 1, label: 'A', toplabel: 'T' }],
+      displayitems: [{ name: 'd', label: 'Temp', unit: '°C' }],
+    });
+    const grid = createElement('fb-button-grid') as any;
+    grid.buttons = model.pages[0]!.buttons;
+    const tft = createElement('fb-tft-display') as any;
+    tft.displayItems = model.pages[0]!.displayItems.map(i => ({ ...i, value: '21' }));
+    await nextFrame();
+    expect(rgb(grid.querySelector('[data-top-label]'))).toMatch(/#ffd700|255, 215, 0/);
+    expect(rgb(grid.querySelector('[data-label]'))).toMatch(/#ffffff|255, 255, 255/);
+    expect(rgb(tft.querySelector('[data-caption]'))).toMatch(/#ffd700|255, 215, 0/);
+    expect(rgb(tft.querySelector('[data-unit]'))).toMatch(/#999999|153, 153, 153/);
+    expect(tft.innerHTML).not.toContain('255,211,95');
+  });
+
+  it('a style changes fonts, sizes and colours of items without their own fields', async () => {
+    const cfg = {
+      style: {
+        title: { text_color: '#00ff00' },
+        key: { label: { text_size: 40, text_color: '#ff0000' } },
+        display: { value: { text_size: 30 }, unit: { text_size: 12, text_color: '#0000ff' } },
+        list: { text_color: '#112233', selected: { bg_color: '#445566', text_color: '#ffffff', text_size: 20 } },
+      },
+      buttons: [{ position: 1, label: 'A', toplabel: 'T' }, { position: 2, label: 'B', fontsize: 24 }],
+      displayitems: [{ name: 'd', label: 'Temp', unit: '°C' }],
+      lists: [{ name: 'l', items: ['a', 'b'], selected: 0 }],
+    };
+    const model = configToModel(cfg);
+    setPreviewConfig(model);
+    const grid = createElement('fb-button-grid') as any;
+    grid.buttons = model.pages[0]!.buttons;
+    const tft = createElement('fb-tft-display') as any;
+    tft.displayItems = model.pages[0]!.displayItems.map(i => ({ ...i, value: '21' }));
+    tft.lists = model.pages[0]!.lists;
+    await nextFrame();
+    const mini = Math.min(113 / 160, 42 / 80);
+    expect(fontPx(grid.querySelector('[data-position="1"] [data-label]'))).toBeCloseTo(40 * mini, 1);
+    expect(fontPx(grid.querySelector('[data-position="2"] [data-label]'))).toBeCloseTo(24 * mini, 1); // local wins
+    expect(rgb(grid.querySelector('[data-position="1"] [data-label]'))).toMatch(/#ff0000|255, 0, 0/);
+    expect(rgb(grid.querySelector('[data-top-label]'))).toMatch(/#00ff00|0, 255, 0/);
+    expect(rgb(tft.querySelector('[data-caption]'))).toMatch(/#00ff00|0, 255, 0/);
+    expect(fontPx(tft.querySelector('[data-value] span'))).toBeCloseTo(30 * scale, 1);
+    expect(fontPx(tft.querySelector('[data-unit] span'))).toBeCloseTo(12 * scale, 1);
+    expect(rgb(tft.querySelector('[data-unit]'))).toMatch(/#0000ff|0, 0, 255/);
+    const focus = tft.querySelector('[data-list-focus]') as HTMLElement;
+    expect(focus.style.background).toMatch(/445566|68, 85, 102/);
+    const [a, b] = Array.from(tft.querySelectorAll('[data-list-item]')) as HTMLElement[];
+    expect(a!.style.color).toMatch(/#ffffff|255, 255, 255/);
+    expect(fontPx(a!)).toBeCloseTo(20 * scale, 1);
+    expect(b!.style.color).toMatch(/#112233|17, 34, 51/);
+    loadDefaultConfig();
+  });
+});
+
+describe('fb-button-grid fonts', () => {
+  it('label medium 32 / top semibold 18 by default, scaled; configured fonts otherwise', async () => {
+    const scale = Math.min(113 / 160, 42 / 80);
+    const model = configToModel({ buttons: [
+      { position: 1, label: 'A', toplabel: 'T' },
+      { position: 2, label: 'B', toplabel: 'U', fontsize: 24, topfontsize: 12 },
+    ] });
+    const el = createElement('fb-button-grid') as any;
+    el.buttons = model.pages[0]!.buttons;
+    await nextFrame();
+    const px = (sel: string, pos: number) => parseFloat((el.querySelector(`[data-position="${pos}"] ${sel}`) as HTMLElement).style.fontSize);
+    expect(px('[data-label]', 1)).toBeCloseTo(32 * scale, 1);
+    expect(px('[data-top-label]', 1)).toBeCloseTo(18 * scale, 1);
+    expect(px('[data-label]', 2)).toBeCloseTo(24 * scale, 1);
+    expect(px('[data-top-label]', 2)).toBeCloseTo(12 * scale, 1);
+    expect((el.querySelector('[data-position="1"] [data-top-label]') as HTMLElement).style.fontWeight).toBe('600');
+  });
+});
+
 describe('fb-tft-display lists', () => {
   const list = (over: Record<string, unknown> = {}) => mapList({
     name: 'scenes', x: 4, y: 18, width: 92, rows: 3, fontsize: 3,
@@ -687,6 +832,35 @@ describe('fb-tft-display lists', () => {
     const strip = el.querySelector('[data-list-item]').parentElement as HTMLElement;
     const shift = parseFloat(/translateY\((-?[\d.]+)px\)/.exec(strip.style.transform)![1]);
     expect(shift).toBeCloseTo(2 * rowH, 1);
+  });
+});
+
+describe('fb-tft-display images', () => {
+  const scale = 283 / 320;
+
+  it('places an image at device pixels: placeholder until the SVG is known, then the icon', async () => {
+    _clearIconSources();
+    const el = createElement('fb-tft-display') as any;
+    el.images = [mapImage({ name: 'radar', x: 160, y: 120, width: 64, height: 32, icon: 'rain' })];
+    await nextFrame();
+    const box = el.querySelector('[data-image="radar"]') as HTMLElement;
+    expect(parseFloat(box.style.left)).toBeCloseTo(160 * scale, 1);
+    expect(parseFloat(box.style.top)).toBeCloseTo(120 * scale, 1);
+    expect(parseFloat(box.style.width)).toBeCloseTo(64 * scale, 1);
+    expect(box.querySelector('[data-icon-missing]')).not.toBeNull();
+
+    setIconSources([['rain', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>']]);
+    await nextFrame();
+    const img = el.querySelector('[data-image="radar"] img') as HTMLImageElement;
+    expect(img.getAttribute('src')).toMatch(/^data:image\/svg\+xml/);
+    _clearIconSources();
+  });
+
+  it('shows a src image as a labelled box', async () => {
+    const el = createElement('fb-tft-display') as any;
+    el.images = [mapImage({ name: 'pic', width: 10, height: 10, src: 'photo.bin' })];
+    await nextFrame();
+    expect(el.querySelector('[data-image="pic"]')?.textContent?.trim()).toBe('photo.bin');
   });
 });
 

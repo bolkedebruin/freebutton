@@ -39,6 +39,8 @@ import { emit, on } from './app-state';
 import { getConfigNames } from './device-config';
 import { examples as examplesList, exampleMap } from './examples';
 import { validateJson, validateConfigShape, type FileKind } from './fs-rules';
+import { fontWarnings } from './font-config';
+import { fontBucketKeys } from './font-loader';
 
 let editorView: EditorView | null = null;
 // Language-specific extensions (syntax, linter, autocomplete), swapped per file.
@@ -65,8 +67,8 @@ const mquickjsLinter = linter((view) => {
         errorCount: result.errors.length
     });
 
-    // Convert validation errors to CodeMirror diagnostics
-    for (const error of result.errors) {
+    // Convert validation errors (and warnings) to CodeMirror diagnostics
+    for (const error of [...result.errors, ...result.warnings]) {
         if (!error.line) continue;
 
         try {
@@ -116,7 +118,7 @@ const mquickjsLinter = linter((view) => {
             diagnostics.push({
                 from,
                 to,
-                severity: 'error',
+                severity: error.severity === 'warning' ? 'warning' : 'error',
                 message: error.message
             });
         } catch (e) {
@@ -140,14 +142,20 @@ const jsonLinter = linter((view) => {
         const from = Math.min(err.offset ?? 0, code.length);
         diagnostics.push({ from, to: Math.min(from + 1, code.length), severity: 'error', message: err.message });
     } else if (currentIsConfig) {
-        for (const message of validateConfigShape(JSON.parse(code))) {
+        const cfg = JSON.parse(code);
+        for (const message of validateConfigShape(cfg)) {
             diagnostics.push({ from: 0, to: Math.min(1, code.length), severity: 'error', message });
         }
+        // Fonts missing from the device's fonts bucket (when it was listed), too many instances.
+        for (const message of fontWarnings(cfg, fontBucketKeys())) {
+            diagnostics.push({ from: 0, to: Math.min(1, code.length), severity: 'warning', message });
+        }
     }
+    const errors = diagnostics.filter(d => d.severity === 'error');
     emit('validation-result', {
-        valid: diagnostics.length === 0,
-        errors: diagnostics.map(d => d.message),
-        errorCount: diagnostics.length
+        valid: errors.length === 0,
+        errors: errors.map(d => d.message),
+        errorCount: errors.length
     });
     return diagnostics;
 });

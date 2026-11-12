@@ -12,6 +12,8 @@
  */
 import { emit, type PageConfig, type DisplayItem, type ButtonConfig, type ConnectorConfig, type PreviewState } from './app-state';
 import { mapConnectors, type ConfigNames, type DeviceModel } from './config-model';
+import { fontTable, type FontTable } from './font-config';
+import { DEFAULT_STYLES, type ResolvedStyles } from './style-config';
 
 const defaultConfig: PageConfig[] = [
   {
@@ -47,6 +49,11 @@ let draft: DeviceModel | null = null;
 let previewState: PreviewState | null = null;
 // Names from the stored config.json; null = no config.json loaded (sample data).
 let configNames: ConfigNames | null = null;
+// Font table of the stored config.json (the system fonts only without one).
+const SYSTEM_FONT_TABLE = fontTable({});
+let storedFonts: FontTable = SYSTEM_FONT_TABLE;
+// Resolved "style" of the stored config.json (the defaults without one).
+let storedStyles: ResolvedStyles = DEFAULT_STYLES;
 
 function effectiveConnectors(): ConnectorConfig[] {
   if (hardwareConnectors.length > 0) return hardwareConnectors;
@@ -82,11 +89,35 @@ export function getConfigNames(): ConfigNames | null {
   return configNames;
 }
 
+/**
+ * Font table of what the preview shows (the draft's, else the stored
+ * config's): the item fonts of getConfig() index into it.
+ */
+export function getFontTable(): FontTable {
+  return draft ? draft.fonts : storedFonts;
+}
+
+/**
+ * Resolved config.json "style" (style-config.ts) of what the preview shows:
+ * the fonts, sizes and colours of items that do not set their own.
+ */
+export function getStyles(): ResolvedStyles {
+  return draft ? draft.styles : storedStyles;
+}
+
 /** Stored config (config.json as saved/loaded). A draft preview stays on top until cleared. */
-export function setConfig(config: PageConfig[], connectors: ConnectorConfig[] = [], names: ConfigNames | null = null): void {
+export function setConfig(
+  config: PageConfig[],
+  connectors: ConnectorConfig[] = [],
+  names: ConfigNames | null = null,
+  fonts: FontTable = SYSTEM_FONT_TABLE,
+  styles: ResolvedStyles = DEFAULT_STYLES,
+): void {
   currentConfig = config;
   configConnectors = connectors;
   configNames = names;
+  storedFonts = fonts;
+  storedStyles = styles;
   isSample = false;
   currentConnectors = effectiveConnectors();
   publish();

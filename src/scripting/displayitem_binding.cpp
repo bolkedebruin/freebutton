@@ -164,6 +164,46 @@ bool displayitem_set_unit(unsigned long id, const char* unit)
     return true;
 }
 
+int displayitem_set_icon(unsigned long id, const char* name, size_t len)
+{
+    freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
+    if (!item) {
+        ESP_LOGW(TAG, "DisplayItem %lu not found", id);
+        return 0;
+    }
+    switch (item->setIconName(std::string_view(name ? name : "", name ? len : 0))) {
+        case freebutton::DisplayItem::SetIconResult::Ok:
+            return 1;
+        case freebutton::DisplayItem::SetIconResult::Invalid:
+            return -1;
+        case freebutton::DisplayItem::SetIconResult::NoMemory:
+            break;
+    }
+    return -2;
+}
+
+bool displayitem_set_font(unsigned long id, int face, int size)
+{
+    freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
+    if (!item) {
+        ESP_LOGW(TAG, "DisplayItem %lu not found", id);
+        return false;
+    }
+    item->setFont(face, size);
+    return true;
+}
+
+bool displayitem_restore_font(unsigned long id)
+{
+    freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
+    if (!item) {
+        ESP_LOGW(TAG, "DisplayItem %lu not found", id);
+        return false;
+    }
+    item->restoreFont();
+    return true;
+}
+
 bool displayitem_set_position(unsigned long id, int x, int y)
 {
     freebutton::DisplayItem* item = configManager.findDisplayItemById(id);

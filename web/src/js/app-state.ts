@@ -17,6 +17,18 @@ export interface FileEntry {
   type: 'js' | 'json' | 'svg' | 'png' | 'bin' | 'other';
 }
 
+/**
+ * The font a text starts with (font-config.ts slotFont): a face of the
+ * font table (index; 0, 1 = the system fonts montserrat, montserrat_semibold)
+ * at px device pixels. configured = the item names a config font (else the
+ * style's font of the element).
+ */
+export interface ItemFont {
+  face: number;
+  px: number;
+  configured: boolean;
+}
+
 export interface DisplayItem {
   x: number;
   y: number;
@@ -34,6 +46,16 @@ export interface DisplayItem {
   name?: string;
   /** lv_align_t from config.json. */
   align?: number;
+  /** Icon name (config.json "icon", a key of "icons"), shown before the value. */
+  icon?: string;
+  /** Square icon size in px (config.json "iconsize", default 32). */
+  iconSize?: number;
+  /** "#rrggbb" tint of a single-colour icon (config.json "iconcolor"). */
+  iconColor?: string;
+  /** Value font (config.json "font"/"fontsize"; the unit's too unless the style gives it its own); absent = the style's display.value at fontSize. */
+  valueFont?: ItemFont;
+  /** Caption font (config.json "labelfont"/"labelfontsize"); absent = the style's display.caption. */
+  labelFont?: ItemFont;
 }
 
 /** A physical connector slot (config.json info.connectors). Keys: id*2+1, id*2+2. */
@@ -51,6 +73,41 @@ export interface ButtonConfig {
   page: number;
   /** Script name from config.json "name" (fb.key("name")). */
   name?: string;
+  /** Icon name (config.json "icon"); shown instead of the bottom label. */
+  icon?: string;
+  /** Square icon size in px (config.json "iconsize", default 48). */
+  iconSize?: number;
+  /** Bottom label font (config.json "font"/"fontsize"); absent = the style's key.label. */
+  labelFont?: ItemFont;
+  /** Top label font (config.json "topfont"/"topfontsize"); absent = the style's key.toplabel. */
+  topFont?: ItemFont;
+}
+
+/**
+ * An image on the main display (config.json "images"): an icon raster
+ * (width x height) or any key of the device's `images` bucket ("src").
+ */
+export interface ImageConfig {
+  name: string;
+  /** 1-based; 0 = every page. */
+  page: number;
+  /**
+   * Pixels on the 320x240 main display: the raster's top-left corner (unlike
+   * display items and lists, which use percent).
+   */
+  x: number;
+  y: number;
+  /**
+   * Pixels (the raster size): pick the icon raster; absent when not given
+   * (an icon then shows nothing; a src raster has its own size).
+   */
+  width?: number;
+  height?: number;
+  /** Icon name; wins over src when both are given (as on the device). */
+  icon?: string;
+  src?: string;
+  /** "#rrggbb" tint of a single-colour raster. */
+  color?: string;
 }
 
 /**
@@ -68,8 +125,10 @@ export interface ListConfig {
   width: number;
   /** Visible rows (1..7); the selected item sits in the middle one. */
   rows: number;
-  /** 1..5 (14, 24, 32, 48, 72 px). */
+  /** 1..5 (14, 24, 32, 48, 72 px), 6..72 = px. */
   fontSize: number;
+  /** config.json "font"/"fontsize"; absent = the style's list font at fontSize. */
+  font?: ItemFont;
   items: string[];
   /** Selected index from config.json (clamped to the items; -1 = no items). */
   selected: number;
@@ -88,6 +147,8 @@ export interface PageConfig {
   buttons: ButtonConfig[];
   /** Lists shown on this page (config.json "lists"); missing = none. */
   lists?: ListConfig[];
+  /** Images shown on this page (config.json "images"); missing = none. */
+  images?: ImageConfig[];
 }
 
 /**
@@ -152,6 +213,8 @@ export interface WorkspaceSnapshot {
    * (Workspace.loadReadOnly); its objects are never downloaded.
    */
   readOnly?: Partial<Record<'examples' | 'web' | 'fonts', WorkspaceFile[]>>;
+  /** An icon sync (config.json icons -> bucket images) is running. */
+  iconSyncing?: boolean;
 }
 
 // Typed custom event map
@@ -196,6 +259,11 @@ declare global {
     'save-request': CustomEvent<void>;
     // Shown after config.json was saved: config is applied at boot.
     'reboot-suggested': CustomEvent<{ key: string }>;
+    // The SVG sources of config.json "icons" read from the device changed
+    // (icon-sync.ts iconSources; the virtual device preview shows them).
+    'icon-sources-change': CustomEvent<void>;
+    // A device font got registered for the previews (font-loader.ts).
+    'preview-fonts-change': CustomEvent<void>;
 
     // File events
     'files-change': CustomEvent<{ files: FileEntry[]; used: number; total: number }>;

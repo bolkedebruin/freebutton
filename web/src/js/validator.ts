@@ -12,24 +12,33 @@
  *
  * Validates against actual MQuickJS and FreeButton stdlib from generated sources.
  * With a config.json loaded, a string literal passed to fb.key() or as the
- * first argument of fb.main.display.setValue() etc. must be a name in it.
+ * first argument of fb.main.display.setValue() etc. must be a name in it, a
+ * font given to setFont / setTopFont must be a font of it (built-ins
+ * included), and a \f{font} escape in a string passed to
+ * fb.main.display.setValue / setLabel / setUnit should name one (warning).
  */
 
 import * as acorn from 'acorn';
 import type { Node } from 'acorn';
 import stdlib from './stdlib.json';
-import { DISPLAY_NAME_METHODS, LIST_NAME_METHODS, type ConfigNames } from './config-model';
+import { DISPLAY_NAME_METHODS, IMAGE_NAME_METHODS, LIST_NAME_METHODS, type ConfigNames } from './config-model';
 import { getConfigNames } from './device-config';
+import { SYSTEM_FONTS, FONTSIZE_MAX } from './font-config';
+import { parseTextSpans, TEXT_FONT_UNKNOWN } from './text-spans';
 
 export interface ValidationError {
     message: string;
     line?: number;
     column?: number;
+    /** 'warning': reported in `warnings`, does not make the code invalid. */
+    severity?: 'warning';
 }
 
 export interface ValidationResult {
     valid: boolean;
     errors: ValidationError[];
+    /** Problems that do not stop the script (e.g. an unknown \f{font} in a string). */
+    warnings: ValidationError[];
 }
 
 // Load known globals from stdlib.json
@@ -187,9 +196,12 @@ export function validateCode(code: string, names: ConfigNames | null = getConfig
         });
     }
 
+    const warnings = errors.filter(e => e.severity === 'warning');
+    const hard = errors.filter(e => e.severity !== 'warning');
     return {
-        valid: errors.length === 0,
-        errors
+        valid: hard.length === 0,
+        errors: hard,
+        warnings
     };
 }
 
@@ -593,15 +605,130 @@ function isMainMethod(callee: any, object: string, methods: string[]): boolean {
         && isMember(callee.object, null, object) && isMember(callee.object.object, 'fb', 'main');
 }
 
+/** A string literal argument that is not in `known` -> "unknown <what>" error. */
+function checkNameArg(arg: any, what: string, known: string[], errors: ValidationError[]): void {
+    if (arg?.type !== 'Literal' || typeof arg.value !== 'string' || known.includes(arg.value)) return;
+    errors.push({
+        message: `unknown ${what} "${arg.value}" in config.json`,
+        line: arg.loc?.start?.line,
+        column: arg.loc ? arg.loc.start.column + 1 : undefined
+    });
+}
+
+/**
+ * Icon names: fb.main.display.setIcon(item, "icon"), fb.main.image.setIcon(image,
+ * "icon") and <side>.display.setIcon("icon") (a key's display). "" hides the
+ * icon. Only checked when config.json has an "icons" table.
+ */
+function checkIconName(node: any, names: ConfigNames, errors: ValidationError[]): void {
+    const callee = node.callee;
+    if (!names.icons || callee?.type !== 'MemberExpression' || callee.computed
+        || callee.property?.type !== 'Identifier' || callee.property.name !== 'setIcon') return;
+    let arg: any;
+    if (isMainMethod(callee, 'display', ['setIcon']) || isMainMethod(callee, 'image', ['setIcon'])) {
+        arg = node.arguments?.[1];
+    } else if (isMember(callee.object, null, 'display') && node.arguments?.length === 1) {
+        arg = node.arguments[0];
+    } else {
+        return;
+    }
+    if (arg?.type === 'Literal' && arg.value === '') return;
+    checkNameArg(arg, 'icon', names.icons, errors);
+}
+
+const SYSTEM_FONT_NAMES: string[] = SYSTEM_FONTS.map(f => f.name);
+/** fb.main.display methods whose second argument is display text (\f{} escapes). */
+const DISPLAY_TEXT_METHODS = ['setValue', 'setLabel', 'setUnit'];
+
+/** A numeric literal (also -n); null for anything else. */
+function literalNumber(node: any): number | null {
+    if (node?.type === 'Literal' && typeof node.value === 'number') return node.value;
+    if (node?.type === 'UnaryExpression' && node.operator === '-' && node.argument?.type === 'Literal'
+        && typeof node.argument.value === 'number') return -node.argument.value;
+    return null;
+}
+
+function locOf(node: any): { line?: number; column?: number } {
+    return { line: node?.loc?.start?.line, column: node?.loc ? node.loc.start.column + 1 : undefined };
+}
+
+/**
+ * Fonts: fb.main.display.setFont(item, font, size), fb.main.list.setFont(list,
+ * font, size) and <side>.display.setFont / setTopFont(font, size) (a key's
+ * display): a literal font name or id must be a font of config.json ("" =
+ * restore the configured font and size)
+ * (the system fonts montserrat / montserrat_semibold always are, and every
+ * "style.fonts" entry); the device throws ReferenceError
+ * otherwise. \f{font} in a string literal given to fb.main.display.setValue /
+ * setLabel / setUnit: a warning when it names no font (the device keeps the
+ * item's font).
+ */
+function checkFontArgs(node: any, names: ConfigNames, errors: ValidationError[]): void {
+    const callee = node.callee;
+    if (callee?.type !== 'MemberExpression' || callee.computed || callee.property?.type !== 'Identifier') return;
+    const fonts = names.fonts ?? SYSTEM_FONT_NAMES;
+    const ids = names.fontIds ?? [];
+    const method = callee.property.name;
+
+    if (isMainMethod(callee, 'display', DISPLAY_TEXT_METHODS)) {
+        const arg = node.arguments?.[1];
+        if (arg?.type !== 'Literal' || typeof arg.value !== 'string' || !arg.value.includes('\\f')) return;
+        const unknown = new Set<string>();
+        parseTextSpans(arg.value, (name, isId, id) => {
+            if (isId ? ids.includes(id) : fonts.includes(name)) return 0;
+            unknown.add(name);
+            return TEXT_FONT_UNKNOWN;
+        });
+        for (const name of unknown) {
+            errors.push({
+                message: `unknown font "${name}" in \\f{${name}} (not a system font or a config.json "style.fonts" entry; the item's font is used)`,
+                ...locOf(arg),
+                severity: 'warning'
+            });
+        }
+        return;
+    }
+
+    let arg: any;
+    let sizeArg: any;
+    if (method === 'setFont' && (isMainMethod(callee, 'display', ['setFont']) || isMainMethod(callee, 'list', ['setFont']))) {
+        arg = node.arguments?.[1];
+        sizeArg = node.arguments?.[2];
+    } else if ((method === 'setFont' || method === 'setTopFont') && isMember(callee.object, null, 'display')
+        && !isMember(callee.object.object, 'fb', 'main')) {
+        arg = node.arguments?.[0];
+        sizeArg = node.arguments?.[1];
+    } else {
+        return;
+    }
+    // "" = back to the configured font and size (the size is not used then).
+    if (arg?.type === 'Literal' && arg.value === '') return;
+    // A literal size must be an integer 1..72 (1-5: the legacy steps); the device throws TypeError.
+    const size = literalNumber(sizeArg);
+    if (size !== null && !(Number.isInteger(size) && size >= 1 && size <= FONTSIZE_MAX)) {
+        errors.push({ message: `font size ${size} must be an integer 1..${FONTSIZE_MAX} (1-5: the sizes 14/24/32/48/72 px, else px)`, ...locOf(sizeArg) });
+    }
+    if (arg?.type !== 'Literal') return;
+    if (typeof arg.value === 'string' && !fonts.includes(arg.value)) {
+        errors.push({ message: `unknown font "${arg.value}" in config.json`, ...locOf(arg) });
+    } else if (typeof arg.value === 'number' && !ids.includes(arg.value)) {
+        errors.push({ message: `unknown font id ${arg.value} in config.json`, ...locOf(arg) });
+    }
+}
+
 /**
  * fb.key("x") / fb.main.display.<DISPLAY_NAME_METHODS>("x", ...) /
- * fb.main.list.<LIST_NAME_METHODS>("x", ...): a string literal name must be
- * in config.json. Other arguments (and numeric indexes) are not checked.
+ * fb.main.list.<LIST_NAME_METHODS>("x", ...) / fb.main.image.<IMAGE_NAME_METHODS>("x", ...):
+ * a string literal name must be in config.json, and so must an icon name
+ * given to setIcon (checkIconName). Other arguments (and numeric indexes)
+ * are not checked.
  */
 function checkConfigName(node: any, names: ConfigNames, errors: ValidationError[]): void {
     const callee = node.callee;
     let what: string;
     let known: string[];
+    checkIconName(node, names, errors);
+    checkFontArgs(node, names, errors);
     if (isMember(callee, 'fb', 'key')) {
         what = 'key';
         known = names.keys;
@@ -611,16 +738,13 @@ function checkConfigName(node: any, names: ConfigNames, errors: ValidationError[
     } else if (isMainMethod(callee, 'list', LIST_NAME_METHODS)) {
         what = 'list';
         known = names.lists ?? [];
+    } else if (isMainMethod(callee, 'image', IMAGE_NAME_METHODS)) {
+        what = 'image';
+        known = names.images ?? [];
     } else {
         return;
     }
-    const arg = node.arguments?.[0];
-    if (arg?.type !== 'Literal' || typeof arg.value !== 'string' || known.includes(arg.value)) return;
-    errors.push({
-        message: `unknown ${what} "${arg.value}" in config.json`,
-        line: arg.loc?.start?.line,
-        column: arg.loc ? arg.loc.start.column + 1 : undefined
-    });
+    checkNameArg(node.arguments?.[0], what, known, errors);
 }
 
 /**

@@ -14,8 +14,8 @@
 // so 6 + len bytes per name, nothing for unnamed elements.
 //
 // One namespace per Kind: display item names are unique among display items,
-// key names among keys, list names among lists; different kinds may share a
-// name.
+// key names among keys, list names among lists, image names among images;
+// different kinds may share a name.
 //
 // Written only while config.json loads at boot, before the script runs;
 // read-only afterwards, so lookups need no lock. A display item a script
@@ -37,7 +37,7 @@ namespace freebutton {
 
 class NameTable {
 public:
-    enum class Kind : uint8_t { DisplayItem = 0, Key = 1, List = 2 };
+    enum class Kind : uint8_t { DisplayItem = 0, Key = 1, List = 2, Image = 3 };
     enum class AddResult : uint8_t { Added, Invalid, Duplicate };
 
     // Longest name; also what the JS binding's lookup accepts.

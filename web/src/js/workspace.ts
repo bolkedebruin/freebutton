@@ -14,6 +14,22 @@
  * fetched on start, on refresh, after save/create/delete, and when the REPL
  * connects to a different device -- never on a timer.
  *
+ * Icons: SVG files can be uploaded from disk into `app` (uploadSvg, as
+ * icons/<name>.svg); addIconToConfig then adds (after asking) the matching
+ * entry to config.json "icons". After config.json is saved on a device -- and on
+ * request (syncIcons) -- the icons it uses are rasterized and synced to
+ * bucket `images` (icon-sync.ts). The sync only runs when the new or the
+ * previous config uses icons, so configs without icons never touch the
+ * bucket (older firmware has none).
+ *
+ * Fonts: .ttf/.otf files are uploaded from disk into bucket `fonts`
+ * (uploadFont: checked first, ttf-check.ts; the device reloads its fonts on
+ * every change of the bucket) and deleted from it (deleteFont; the system
+ * fonts medium.ttf / semibold.ttf are refused); addFontToConfig /
+ * removeFontFromConfig then offer the matching config.json "style.fonts"
+ * entry. The previews draw with the device's fonts (font-loader.ts,
+ * told about the device and every fonts listing here).
+ *
  * State changes are published as `workspace-change` snapshots on the
  * app-state bus; progress/errors also go to the console pane.
  */
@@ -21,14 +37,21 @@ import { emit, on, type WorkspaceFile, type WorkspaceMode, type WorkspaceSnapsho
 import {
   CONFIG_KEY, MAIN_SCRIPT_KEY, MAIN_SCRIPT_TEMPLATE,
   canDeleteKey, fileKind, initialContentFor, isEditableKey, normalizeKey,
-  resolveNewFileKey, utf8Length, validateBody, validateKey, type FileKind,
+  iconNameForKey, resolveNewFileKey, svgUploadKey, utf8Length, validateBody, validateKey, MAX_SVG_BYTES, type FileKind,
+  fontNameForKey, fontUploadKey,
 } from './fs-rules';
 import {
   S3Error, StorageUnavailableError, deleteObject, getObject, headObject, listObjects, putObject, rebootDevice,
-  type ListResult, type ReadOnlyBucket,
+  FONTS_BUCKET, IMAGES_BUCKET, type ListResult, type ReadOnlyBucket,
 } from './device-storage';
+import { checkTtf, MAX_FONT_BYTES } from './ttf-check';
+import { fontWarnings, hasFontTable, isSystemFontSrc, SYSTEM_FONTS, validFontSrc } from './font-config';
+import { fontLoader, wireFontLoader } from './font-loader';
+import { iconSizeSlots, iconTable } from './icon-raster';
+import { readIconSources, setIconSources, syncIcons, type IconSyncDeps, type IconSyncResult } from './icon-sync';
+import { prepareSvg, rasterizeSvg, SvgError } from './icon-render';
 import { virtualFS } from './virtual-fs';
-import { parseConfigText } from './config-model';
+import { configToModel } from './config-model';
 import { setConfig } from './device-config';
 import { ConfigPreview } from './config-preview';
 import { httpBaseFromWs } from './device-info';
@@ -46,6 +69,26 @@ export interface WorkspaceDeps {
   confirm?: (message: string) => boolean;
   /** Used for POST /api/reboot only (storage goes through the S3 client). */
   fetchImpl?: typeof fetch;
+  /** SVG -> RGBA (tests inject one; default: the browser canvas). */
+  rasterize?: IconSyncDeps['rasterize'];
+}
+
+/** An SVG picked from disk (a File, or anything with a name and text()). */
+export interface SvgUpload {
+  name: string;
+  text(): Promise<string>;
+}
+
+/** A font picked from disk (a File, or anything with a name, size and bytes). */
+export interface FontUpload {
+  name: string;
+  size: number;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+/** Whether a parsed config uses icons at all (an icons table plus a size slot). */
+function usesIcons(cfg: unknown): boolean {
+  return iconTable(cfg).size > 0 && iconSizeSlots(cfg).length > 0;
 }
 
 interface Backend {
@@ -81,6 +124,10 @@ function displayPath(key: string): string {
   return '/' + key;
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 export class Workspace {
   private mode: WorkspaceMode = 'probing';
   private message = '';
@@ -90,6 +137,12 @@ export class Workspace {
   private dirty = false;
   private isNew = false;
   private readOnly: Partial<Record<ReadOnlyBucket, WorkspaceFile[]>> = {};
+  // Icon sync state: the running sync, whether another one was asked for
+  // meanwhile (with the newest config text), and whether the stored config
+  // uses icons (then a save without icons still cleans the bucket).
+  private iconSync: Promise<IconSyncResult | null> | null = null;
+  private iconSyncNext: string | null | undefined = undefined;
+  private storedUsesIcons = false;
 
   private base = '';
   private deps: WorkspaceDeps | null = null;
@@ -116,7 +169,13 @@ export class Workspace {
       dirty: this.dirty,
       isNew: this.isNew,
       readOnly: this.readOnly,
+      iconSyncing: this.iconSync !== null,
     };
+  }
+
+  /** The icon sync in flight (or null): tests and callers can await it. */
+  get pendingIconSync(): Promise<IconSyncResult | null> | null {
+    return this.iconSync;
   }
 
   get deviceBase(): string {
@@ -171,6 +230,9 @@ export class Workspace {
     this.readOnly = {};
     this.base = '';
     this.revision = 0;
+    this.iconSync = null;
+    this.iconSyncNext = undefined;
+    this.storedUsesIcons = false;
   }
 
   /** Re-list files (Assets "refresh"), and the read-only buckets already loaded. */
@@ -262,7 +324,7 @@ export class Workspace {
       await this.listQuietly();
 
       if (key === CONFIG_KEY) {
-        this.applyConfig(text);
+        this.configStored(text);
         // Saved: the stored config is the preview now (unless typing went on).
         if (!this.dirty) this.preview.reset();
         // The firmware reads config.json only at boot (the device also flags
@@ -333,6 +395,331 @@ export class Workspace {
     return removed;
   }
 
+  /**
+   * Upload an SVG from disk to icons/<name>.svg (overwrites). Returns the
+   * key, or null when refused. The SVG must parse; it is stored unchanged.
+   */
+  async uploadSvg(file: SvgUpload): Promise<string | null> {
+    const key = svgUploadKey(file.name);
+    if (!key) {
+      this.note(`${file.name} is not an .svg file`, 'error');
+      return null;
+    }
+    const problem = validateKey(key);
+    if (problem) {
+      this.note(`Cannot upload ${file.name}: ${problem}`, 'error');
+      return null;
+    }
+    let text: string;
+    try {
+      text = await file.text();
+    } catch (err) {
+      this.note(`Cannot read ${file.name}: ${describeError(err)}`, 'error');
+      return null;
+    }
+    const bytes = utf8Length(text);
+    if (bytes > MAX_SVG_BYTES) {
+      this.note(`Cannot upload ${file.name}: ${bytes} bytes > ${MAX_SVG_BYTES}`, 'error');
+      return null;
+    }
+    try {
+      prepareSvg(text, 1, 1);
+    } catch (err) {
+      const why = err instanceof SvgError ? err.message : describeError(err);
+      this.note(`Cannot upload ${file.name}: ${why}`, 'error');
+      return null;
+    }
+    return this.withBusy(async () => {
+      try {
+        await this.backend().write(key, text);
+      } catch (err) {
+        this.note(`Upload of ${displayPath(key)} failed: ${describeError(err)}`, 'error');
+        return null;
+      }
+      this.note(`Uploaded ${displayPath(key)} (${bytes} bytes). Use it in config.json: "icons": {"<name>": "${displayPath(key)}"}`, 'result');
+      await this.listQuietly();
+      return key;
+    });
+  }
+
+  /**
+   * Add or update the config.json "icons" entry for an uploaded SVG key
+   * (name = the file stem, iconNameForKey), after asking. The file is
+   * rewritten as JSON with its own indentation (key order kept; config.json
+   * has no comments). Skipped while config.json has unsaved edits. Returns
+   * true when config.json now has the entry.
+   */
+  async addIconToConfig(svgKey: string): Promise<boolean> {
+    const name = iconNameForKey(svgKey);
+    const path = displayPath(svgKey);
+    const snippet = `"icons": {"${name}": "${path}"}`;
+    if (this.currentKey === CONFIG_KEY && this.dirty) {
+      this.note(`config.json has unsaved changes: add ${snippet} yourself`, 'warn');
+      return false;
+    }
+    let text: string | null;
+    try {
+      text = await this.backend().read(CONFIG_KEY);
+    } catch (err) {
+      this.note(`Could not read config.json: ${describeError(err)}`, 'warn');
+      return false;
+    }
+    let cfg: unknown;
+    try {
+      cfg = JSON.parse(text ?? '{}');
+    } catch {
+      this.note(`config.json is not valid JSON: add ${snippet} yourself`, 'warn');
+      return false;
+    }
+    if (typeof cfg !== 'object' || cfg === null || Array.isArray(cfg)) return false;
+    const o = cfg as Record<string, unknown>;
+    if ('icons' in o && (typeof o.icons !== 'object' || o.icons === null || Array.isArray(o.icons))) {
+      this.note(`config.json "icons" is not an object: add ${snippet} yourself`, 'warn');
+      return false;
+    }
+    const icons = (o.icons ?? {}) as Record<string, unknown>;
+    if (icons[name] === path) return true;
+    const question = name in icons
+      ? `Change icon "${name}" in config.json from ${JSON.stringify(icons[name])} to ${path}?`
+      : `Add icon "${name}" (${path}) to config.json "icons"?`;
+    if (!this.ask(question)) return false;
+
+    o.icons = { ...icons, [name]: path };
+    const indent = /\n([ \t]+)"/.exec(text ?? '')?.[1] ?? '  ';
+    const next = JSON.stringify(o, null, indent) + '\n';
+    const problem = validateBody(CONFIG_KEY, next);
+    if (problem) {
+      this.note(`Not added to config.json: ${problem}`, 'error');
+      return false;
+    }
+    return this.withBusy(async () => {
+      try {
+        await this.backend().write(CONFIG_KEY, next);
+      } catch (err) {
+        this.note(`Save of /config.json failed: ${describeError(err)}`, 'error');
+        return false;
+      }
+      this.note(`config.json: icon "${name}" = ${path}`, 'result');
+      await this.listQuietly();
+      if (this.currentKey === CONFIG_KEY && !this.dirty) this.load(CONFIG_KEY, next, false);
+      // The firmware does not use the "icons" table itself (only the
+      // rasters), so no reboot is needed for it.
+      this.configStored(next);
+      return true;
+    });
+  }
+
+  /**
+   * Upload a .ttf/.otf from disk to bucket `fonts` (overwrites; the device
+   * reloads its fonts). Device mode only. The file is checked first
+   * (ttf-check.ts: refused with the reason, warnings go to the console).
+   * Returns the key, or null when refused.
+   */
+  async uploadFont(file: FontUpload): Promise<string | null> {
+    const key = fontUploadKey(file.name);
+    if (!key) {
+      this.note(`${file.name} is not a .ttf or .otf font`, 'error');
+      return null;
+    }
+    if (this.mode !== 'device') {
+      this.note(`Cannot upload ${file.name}: fonts are stored on a device only (no device storage)`, 'error');
+      return null;
+    }
+    if (file.size > MAX_FONT_BYTES) {
+      this.note(`Cannot upload ${file.name}: ${file.size} bytes > ${MAX_FONT_BYTES} (2 MiB)`, 'error');
+      return null;
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch (err) {
+      this.note(`Cannot read ${file.name}: ${describeError(err)}`, 'error');
+      return null;
+    }
+    const check = checkTtf(bytes);
+    if (!check.ok) {
+      this.note(`Cannot upload ${file.name}: ${check.error}`, 'error');
+      return null;
+    }
+    return this.withBusy(async () => {
+      try {
+        await putObject(this.base, key, bytes, FONTS_BUCKET);
+      } catch (err) {
+        this.note(`Upload of fonts/${key} failed: ${describeError(err)}`, 'error');
+        return null;
+      }
+      this.note(`Uploaded fonts/${key} (${bytes.length} bytes); the device reloads its fonts`, 'result');
+      for (const w of check.warnings) this.note(`fonts/${key}: ${w}`, 'warn');
+      await this.listReadOnly(FONTS_BUCKET);
+      return key;
+    });
+  }
+
+  /** Delete a font from bucket `fonts` (after confirmation). Device mode only. */
+  async deleteFont(key: string, opts: { skipConfirm?: boolean } = {}): Promise<boolean> {
+    if (this.mode !== 'device' || !validFontSrc(key)) return false;
+    if (isSystemFontSrc(key)) {
+      const name = SYSTEM_FONTS.find(f => f.src === key)!.name;
+      this.note(`fonts/${key} is the system font "${name}": it cannot be deleted (upload a new version to replace it)`, 'warn');
+      return false;
+    }
+    if (!opts.skipConfirm && !this.ask(`Delete fonts/${key} from the device?`)) return false;
+    return this.withBusy(async () => {
+      try {
+        await deleteObject(this.base, key, FONTS_BUCKET);
+      } catch (err) {
+        this.note(`Delete of fonts/${key} failed: ${describeError(err)}`, 'error');
+        return false;
+      }
+      this.note(`Deleted fonts/${key}`, 'info');
+      await this.listReadOnly(FONTS_BUCKET);
+      return true;
+    });
+  }
+
+  /**
+   * Add a config.json "style.fonts" entry for an uploaded font key (name =
+   * the file stem, fontNameForKey), after asking. An entry with that src
+   * already, or a system font file, = nothing to do. Same rules as
+   * addIconToConfig (skipped while config.json has unsaved edits). The
+   * firmware reads "style" at boot, so a reboot is offered.
+   */
+  async addFontToConfig(key: string): Promise<boolean> {
+    if (isSystemFontSrc(key)) return true;
+    const name = fontNameForKey(key);
+    const snippet = `"style": {"fonts": [{"name": "${name}", "src": "${key}"}]}`;
+    const edited = await this.editConfig(snippet, (o) => {
+      if ('style' in o && !isRecord(o.style)) return { skip: `config.json "style" is not an object: add ${snippet} yourself` };
+      const style = (o.style ?? {}) as Record<string, unknown>;
+      if ('fonts' in style && !Array.isArray(style.fonts)) {
+        return { skip: `config.json "style.fonts" is not an array: add ${snippet} yourself` };
+      }
+      const fonts = (style.fonts ?? []) as unknown[];
+      if (fonts.some(e => isRecord(e) && e.src === key)) return { done: true };
+      const same = fonts.find(e => isRecord(e) && e.name === name) as Record<string, unknown> | undefined;
+      if (same) {
+        if (!this.ask(`Change font "${name}" in config.json from ${JSON.stringify(same.src)} to ${key}?`)) return { done: false };
+        o.style = { ...style, fonts: fonts.map(e => (e === same ? { ...same, src: key } : e)) };
+      } else {
+        if (!this.ask(`Add font "${name}" (${key}) to config.json "style.fonts"?`)) return { done: false };
+        const next = [...fonts, { name, src: key }];
+        // A new "fonts" goes first in "style"; an existing one keeps its place.
+        o.style = 'fonts' in style ? { ...style, fonts: next } : { fonts: next, ...style };
+      }
+      return { changed: `config.json: font "${name}" = ${key}` };
+    });
+    return edited;
+  }
+
+  /**
+   * Remove the config.json "style.fonts" entries whose src is `key` (a
+   * deleted font), after asking.
+   */
+  async removeFontFromConfig(key: string): Promise<boolean> {
+    return this.editConfig(`the "style.fonts" entry with "src": "${key}"`, (o) => {
+      const style = isRecord(o.style) ? o.style : null;
+      if (!style || !Array.isArray(style.fonts)) return { done: true };
+      const fonts = style.fonts as unknown[];
+      const keep = fonts.filter(e => !(isRecord(e) && e.src === key));
+      if (keep.length === fonts.length) return { done: true };
+      const names = fonts.filter(e => !keep.includes(e)).map(e => `"${(e as Record<string, unknown>).name}"`).join(', ');
+      if (!this.ask(`Remove font ${names} (${key}) from config.json "style.fonts"?`)) return { done: false };
+      style.fonts = keep;
+      return { changed: `config.json: font ${names} removed` };
+    });
+  }
+
+  /**
+   * Read config.json, let `change` edit the parsed object, validate and
+   * store it (with its own indentation) and show it. `what` names the edit
+   * in "do it yourself" messages.
+   */
+  private async editConfig(
+    what: string,
+    change: (o: Record<string, unknown>) => { done: boolean } | { skip: string } | { changed: string },
+  ): Promise<boolean> {
+    if (this.currentKey === CONFIG_KEY && this.dirty) {
+      this.note(`config.json has unsaved changes: edit ${what} yourself`, 'warn');
+      return false;
+    }
+    let text: string | null;
+    try {
+      text = await this.backend().read(CONFIG_KEY);
+    } catch (err) {
+      this.note(`Could not read config.json: ${describeError(err)}`, 'warn');
+      return false;
+    }
+    let cfg: unknown;
+    try {
+      cfg = JSON.parse(text ?? '{}');
+    } catch {
+      this.note(`config.json is not valid JSON: edit ${what} yourself`, 'warn');
+      return false;
+    }
+    if (typeof cfg !== 'object' || cfg === null || Array.isArray(cfg)) return false;
+    const o = cfg as Record<string, unknown>;
+    const r = change(o);
+    if ('skip' in r) {
+      this.note(r.skip, 'warn');
+      return false;
+    }
+    if ('done' in r) return r.done;
+    const indent = /\n([ \t]+)"/.exec(text ?? '')?.[1] ?? '  ';
+    const next = JSON.stringify(o, null, indent) + '\n';
+    const problem = validateBody(CONFIG_KEY, next);
+    if (problem) {
+      this.note(`config.json not changed: ${problem}`, 'error');
+      return false;
+    }
+    return this.withBusy(async () => {
+      try {
+        await this.backend().write(CONFIG_KEY, next);
+      } catch (err) {
+        this.note(`Save of /config.json failed: ${describeError(err)}`, 'error');
+        return false;
+      }
+      this.note(r.changed, 'result');
+      await this.listQuietly();
+      if (this.currentKey === CONFIG_KEY && !this.dirty) this.load(CONFIG_KEY, next, false);
+      this.configStored(next);
+      // The firmware reads config.json (and its "style") at boot.
+      if (this.mode === 'device') emit('reboot-suggested', { key: CONFIG_KEY });
+      return true;
+    });
+  }
+
+  /**
+   * Rasterize the icons of config.json (`cfgText`, else the stored one) and
+   * sync them to bucket `images`. Runs one at a time: a request while one
+   * runs is queued (the newest text wins). Device mode only.
+   */
+  syncIcons(cfgText?: string): Promise<IconSyncResult | null> {
+    if (this.iconSync) {
+      this.iconSyncNext = cfgText ?? null;
+      return this.iconSync;
+    }
+    const run = async (text: string | undefined): Promise<IconSyncResult | null> => {
+      let result: IconSyncResult | null = null;
+      try {
+        result = await this.runIconSync(text);
+      } catch (err) {
+        this.note(`Icon sync failed: ${describeError(err)}`, 'error');
+      }
+      if (this.iconSyncNext !== undefined) {
+        const next = this.iconSyncNext;
+        this.iconSyncNext = undefined;
+        return run(next ?? undefined);
+      }
+      return result;
+    };
+    this.iconSync = run(cfgText).finally(() => {
+      this.iconSync = null;
+      this.publish();
+    });
+    this.publish();
+    return this.iconSync;
+  }
+
   /** POST /api/reboot (device mode only). */
   async reboot(): Promise<boolean> {
     if (this.mode !== 'device') return false;
@@ -348,16 +735,87 @@ export class Workspace {
 
   // ---- internals ---------------------------------------------------------
 
+  /** config.json `text` was stored: show it, and sync icons when it (or the previous one) uses them. */
+  private configStored(text: string): void {
+    const cfg = this.applyConfig(text);
+    const wantsSync = usesIcons(cfg) || this.storedUsesIcons;
+    this.storedUsesIcons = usesIcons(cfg);
+    if (this.mode === 'device' && wantsSync) void this.syncIcons(text);
+    void this.checkFonts(cfg);
+  }
+
+  /**
+   * Font and style warnings of a stored config (console, font-config
+   * fontWarnings): files missing from bucket `fonts` (listed once when the
+   * config has a "style.fonts" table), too many font instances, no "style".
+   */
+  private async checkFonts(cfg: unknown): Promise<void> {
+    if (cfg === null) return;
+    const hasFonts = hasFontTable(cfg);
+    if (hasFonts && this.mode === 'device' && !this.readOnly.fonts) await this.listReadOnly(FONTS_BUCKET);
+    const listed = this.readOnly.fonts;
+    const keys = hasFonts && this.mode === 'device' && listed ? new Set(listed.map(f => f.key)) : null;
+    for (const w of fontWarnings(cfg, keys)) emit('console-line', { text: `config.json: ${w}`, type: 'warn' });
+  }
+
+  private async runIconSync(cfgText: string | undefined): Promise<IconSyncResult | null> {
+    if (this.mode !== 'device') {
+      this.note('Icons are synced to a device only (no device storage)', 'warn');
+      return null;
+    }
+    const text = cfgText ?? await this.backend().read(CONFIG_KEY);
+    if (text === null) {
+      this.note('Icons not synced: no config.json on the device', 'warn');
+      return null;
+    }
+    let cfg: unknown;
+    try {
+      cfg = JSON.parse(text);
+    } catch {
+      this.note('Icons not synced: config.json is not valid JSON', 'error');
+      return null;
+    }
+    const base = this.base;
+    const log = (t: string, type: 'info' | 'warn' | 'error' | 'result' | 'log' | 'input') => {
+      emit('console-line', { text: t, type });
+    };
+    const result = await syncIcons(cfg, {
+      readSvg: async (key) => (await getObject(base, key))?.text ?? null,
+      listImages: async () => (await listObjects(base, { bucket: IMAGES_BUCKET })).objects,
+      putImage: async (key, bytes) => { await putObject(base, key, bytes, IMAGES_BUCKET); },
+      deleteImage: (key) => deleteObject(base, key, IMAGES_BUCKET),
+      rasterize: this.deps?.rasterize ?? rasterizeSvg,
+      log,
+    });
+    if (!result.ok) {
+      this.message = result.noBucket
+        ? 'Icons not synced: this firmware has no "images" storage bucket (update the device firmware)'
+        : 'Icon sync had errors (see console)';
+      this.publish();
+    }
+    return result;
+  }
+
   private async reload(): Promise<void> {
+    let cfg: unknown = null;
     await this.withBusy(async () => {
       await this.probe();
+      // Previews draw with the device's fonts (when the browser can).
+      wireFontLoader();
+      void fontLoader.setDevice(this.mode === 'device' ? this.base : null);
       if (this.files.some(f => f.key === CONFIG_KEY)) {
         try {
           const text = await this.backend().read(CONFIG_KEY);
-          if (text !== null) this.applyConfig(text);
+          if (text !== null) cfg = this.applyConfig(text);
         } catch (err) {
           this.note(`Could not read config.json: ${describeError(err)}`, 'warn');
         }
+      }
+      this.storedUsesIcons = usesIcons(cfg);
+      // The SVGs for the virtual device preview (a few small reads).
+      if (this.mode === 'device' && iconTable(cfg).size > 0) {
+        const backend = this.backend();
+        setIconSources(await readIconSources(cfg, (key) => backend.read(key)));
       }
     });
     // Keep unsaved edits; otherwise show what this storage has.
@@ -409,8 +867,10 @@ export class Workspace {
 
   private async listReadOnly(bucket: ReadOnlyBucket): Promise<void> {
     try {
-      const files = toFiles(await listObjects(this.base, { bucket }));
+      const result = await listObjects(this.base, { bucket });
+      const files = toFiles(result);
       this.readOnly = { ...this.readOnly, [bucket]: files };
+      if (bucket === FONTS_BUCKET) void fontLoader.setListing(result.objects);
     } catch (err) {
       this.note(`Listing bucket ${bucket} failed: ${describeError(err)}`, 'warn');
     }
@@ -456,9 +916,17 @@ export class Workspace {
     this.preview.reset();
   }
 
-  private applyConfig(text: string): void {
-    const model = parseConfigText(text);
-    if (model) setConfig(model.pages, model.connectors, model.names);
+  /** Show a config.json text on the virtual device; returns it parsed (null if invalid). */
+  private applyConfig(text: string): unknown {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    const model = configToModel(parsed);
+    setConfig(model.pages, model.connectors, model.names, model.fonts, model.styles);
+    return parsed;
   }
 
   private confirmDiscard(): boolean {

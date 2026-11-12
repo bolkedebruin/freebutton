@@ -77,7 +77,7 @@
 #define LV_FONT_MONTSERRAT_8  0
 #define LV_FONT_MONTSERRAT_10 0
 #define LV_FONT_MONTSERRAT_12 1
-#define LV_FONT_MONTSERRAT_14 1
+#define LV_FONT_MONTSERRAT_14 0
 #define LV_FONT_MONTSERRAT_16 0
 #define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_20 0
@@ -103,7 +103,10 @@
 #define LV_FONT_UNSCII_8  0
 #define LV_FONT_UNSCII_16 0
 
-#define LV_FONT_DEFAULT &lv_font_montserrat_14
+/* The one compiled font: firmware screens (modals, progress bar, theme)
+ * and the end of every TTF fallback chain (fonts.c). Everything else is
+ * TrueType (config.json "style", docs/STYLE.md). */
+#define LV_FONT_DEFAULT &lv_font_montserrat_12
 #define LV_FONT_FMT_TXT_LARGE 0
 #define LV_USE_FONT_COMPRESSED 1
 #define LV_USE_FONT_SUBPX 1
@@ -174,9 +177,11 @@
  * below only applies to lv_tiny_ttf_create_data(). */
 #define LV_USE_TINY_TTF 1
 #define LV_TINY_TTF_FILE_SUPPORT 0
-/* stb_truetype asserts (abort, reboot) when a rasterizer allocation from
- * the LVGL pool fails; without the assert it skips that edge or glyph.
- * fonts.c also renders only when the pool has room (guarded_get_bitmap). */
+/* stb_truetype asserts (abort, reboot) when a rasterizer allocation
+ * fails; without the assert it skips that edge or glyph. Its scratch comes
+ * from the system heap (tools/scripts/tiny_ttf_scratch.py, fonts.c
+ * fb_tiny_ttf_malloc), and fonts.c renders only when the heap has room
+ * (guarded_get_bitmap). */
 #define STBTT_assert(x) ((void)0)
 #define LV_TINY_TTF_CACHE_GLYPH_CNT 0
 #define LV_TINY_TTF_CACHE_KERNING_CNT 0

@@ -7,8 +7,9 @@ import { autocompletion, snippetCompletion, CompletionContext, CompletionResult 
 import { syntaxTree } from '@codemirror/language';
 import type { FreebuttonAPIDefinition } from './types';
 import { freebuttonAPI, globalCompletions } from './autocomplete-data';
-import { DISPLAY_NAME_METHODS, LIST_NAME_METHODS, type ConfigNames } from './config-model';
+import { DISPLAY_NAME_METHODS, IMAGE_NAME_METHODS, LIST_NAME_METHODS, type ConfigNames } from './config-model';
 import { getConfigNames } from './device-config';
+import { SYSTEM_FONTS } from './font-config';
 
 /**
  * FreeButton API definitions and global functions
@@ -137,10 +138,32 @@ const LIST_NAME_ARG = new RegExp(
     `\\bfb\\s*\\.\\s*main\\s*\\.\\s*list\\s*\\.\\s*(?:${LIST_NAME_METHODS.join('|')})\\s*\\(\\s*["']([A-Za-z0-9_]*)$`
 );
 
-const NAME_ARGS: [RegExp, keyof ConfigNames, string][] = [
+const IMAGE_NAME_ARG = new RegExp(
+    `\\bfb\\s*\\.\\s*main\\s*\\.\\s*image\\s*\\.\\s*(?:${IMAGE_NAME_METHODS.join('|')})\\s*\\(\\s*["']([A-Za-z0-9_]*)$`
+);
+
+// Icon name: second argument of fb.main.display.setIcon / fb.main.image.setIcon
+// (first argument a simple literal or identifier), or the only argument of a
+// key display's setIcon (fb.main.left.display.setIcon("...).
+const ICON_NAME_ARG = new RegExp(
+    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*(?:display|image)\\s*\\.\\s*setIcon\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
+    + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*setIcon\\s*\\()\\s*["']([A-Za-z0-9_-]*)$`
+);
+
+// Font name: second argument of fb.main.display.setFont / fb.main.list.setFont,
+// or the first of a key display's setFont / setTopFont.
+const FONT_NAME_ARG = new RegExp(
+    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*(?:display|list)\\s*\\.\\s*setFont\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
+    + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*set(?:Top)?Font\\s*\\()\\s*["']([A-Za-z0-9_]*)$`
+);
+
+const NAME_ARGS: [RegExp, Exclude<keyof ConfigNames, 'fontIds'>, string][] = [
+    [FONT_NAME_ARG, 'fonts', 'font (config.json)'],
+    [ICON_NAME_ARG, 'icons', 'icon (config.json)'],
     [KEY_NAME_ARG, 'keys', 'key (config.json)'],
     [DISPLAY_NAME_ARG, 'displayItems', 'display item (config.json)'],
     [LIST_NAME_ARG, 'lists', 'list (config.json)'],
+    [IMAGE_NAME_ARG, 'images', 'image (config.json)'],
 ];
 
 /**
@@ -159,8 +182,10 @@ export function configNameCompletions(
         if (!match) continue;
         return {
             from: context.pos - match[1]!.length,
-            options: (names?.[kind] ?? []).map(name => ({ label: name, type: 'constant', detail })),
-            validFor: /^[A-Za-z0-9_]*$/
+            // Fonts: the system fonts exist without a "style.fonts" table.
+            options: (names?.[kind] ?? (kind === 'fonts' && names ? SYSTEM_FONTS.map(f => f.name) : []))
+                .map(name => ({ label: name, type: 'constant', detail })),
+            validFor: /^[A-Za-z0-9_-]*$/
         };
     }
     return null;

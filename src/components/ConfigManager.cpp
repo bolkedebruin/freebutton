@@ -11,6 +11,13 @@
 #include "drivers/BusAwareFileSystem.h"
 #include "mqtt/HomeAssistantDiscovery.h"
 #include "Clock.h"
+#include "drivers/LvglDisplay.h"
+#include "ui/ui_style.h"
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <new>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -23,6 +30,164 @@ SemaphoreHandle_t displayItemsMutex() {
     static StaticSemaphore_t buffer;
     static SemaphoreHandle_t handle = xSemaphoreCreateRecursiveMutexStatic(&buffer);
     return handle;
+}
+
+// One entry of config.json "style.fonts" -> def. false (logged) when it cannot be
+// one: not an object, no usable name or src, an id that is not an integer.
+// The registry checks the rest (name rules, duplicates, chains).
+bool parseFontDef(const JsonVariantConst entry, font_def_t& def) {
+    static constexpr auto TAG = "ConfigManager";
+    std::memset(&def, 0, sizeof(def));
+    if (!entry.is<JsonObjectConst>()) {
+        ESP_LOGW(TAG, "fonts: an entry is not an object, skipped");
+        return false;
+    }
+    const char* name = entry["name"] | "";
+    if (name[0] == '\0' || std::strlen(name) > FONT_NAME_MAX) {
+        ESP_LOGW(TAG, "fonts: entry \"%.32s\" needs a name of 1..%d characters, skipped", name, FONT_NAME_MAX);
+        return false;
+    }
+    std::strcpy(def.name, name);
+
+    const auto id = entry["id"];
+    if (!id.isNull()) {
+        if (!id.is<int32_t>()) {
+            ESP_LOGW(TAG, "fonts: \"%s\": the id is not an integer, skipped", name);
+            return false;
+        }
+        def.id = id.as<int32_t>();
+    }
+
+    const char* src = entry["src"] | "";
+    if (std::strlen(src) > FONT_SRC_MAX) {
+        ESP_LOGW(TAG, "fonts: \"%s\": src longer than %d bytes, skipped", name, FONT_SRC_MAX);
+        return false;
+    }
+    std::strcpy(def.src, src);
+
+    const auto fallback = entry["fallback"];
+    if (fallback.isNull()) {
+        def.fallback_kind = FONT_FALLBACK_DEFAULT;
+    } else if (fallback.is<const char*>()) {
+        const char* f = fallback.as<const char*>();
+        if (f == nullptr || f[0] == '\0') {
+            def.fallback_kind = FONT_FALLBACK_NONE;
+        } else {
+            def.fallback_kind = FONT_FALLBACK_NAME;
+            if (std::strlen(f) <= FONT_NAME_MAX) {
+                std::strcpy(def.fallback_name, f);
+            }  // else "": no such font, the registry cuts the chain (warned)
+        }
+    } else if (fallback.is<int32_t>()) {
+        def.fallback_kind = FONT_FALLBACK_ID;
+        def.fallback_id = fallback.as<int32_t>();
+    } else {
+        ESP_LOGW(TAG, "fonts: \"%s\": fallback is neither a name nor an id, ignored (no fallback)", name);
+        def.fallback_kind = FONT_FALLBACK_DEFAULT;
+    }
+
+    const auto lineheight = entry["lineheight"];
+    if (!lineheight.isNull()) {
+        const float em = lineheight.as<float>();
+        const long x100 = std::lround(em * 100.0f);
+        if (!lineheight.is<float>() || x100 < 80 || x100 > 200) {
+            ESP_LOGW(TAG, "fonts: \"%s\": lineheight must be 0.8..2.0 (em), ignored", name);
+        } else {
+            def.lineheight_x100 = static_cast<uint16_t>(x100);
+        }
+    }
+    return true;
+}
+
+// style_logic text_font resolver: the registry (configured first).
+int resolveStyleFont(const char* name, const size_t len, const bool is_id, const int32_t id, void*) {
+    return is_id ? fonts_find_id(id) : fonts_find(name, len);
+}
+
+// One style block ({"text_font": ..., ...}) into p. `skip`: a key that is
+// not a property here (list's "selected"), or nullptr.
+void parseStyleProps(const JsonObjectConst block, style_props_t& p, const bool allow_bg, const char* where,
+                     const char* skip) {
+    static constexpr auto TAG = "ConfigManager";
+    for (const auto kv : block) {
+        const char* prop = kv.key().c_str();
+        if (skip != nullptr && std::strcmp(prop, skip) == 0) {
+            continue;
+        }
+        const auto v = kv.value();
+        style_prop_status_t st;
+        if (v.is<const char*>()) {
+            st = style_logic_set_string(&p, prop, v.as<const char*>(), allow_bg, resolveStyleFont, nullptr);
+        } else if (v.is<int32_t>()) {
+            st = style_logic_set_number(&p, prop, v.as<int32_t>(), allow_bg, resolveStyleFont, nullptr);
+        } else {
+            st = STYLE_PROP_BAD_VALUE;
+        }
+        switch (st) {
+            case STYLE_PROP_OK:
+                break;
+            case STYLE_PROP_UNKNOWN:
+                ESP_LOGW(TAG, "style.%s: unknown property \"%.32s\", ignored", where, prop);
+                break;
+            case STYLE_PROP_UNKNOWN_FONT:
+                ESP_LOGW(TAG, "style.%s.%s: unknown font, ignored", where, prop);
+                break;
+            default:
+                ESP_LOGW(TAG, "style.%s.%s: bad value, ignored", where, prop);
+                break;
+        }
+    }
+}
+
+// config.json "style" minus "fonts" -> sheet (layers 2 and 3).
+void parseStyleSheet(const JsonObjectConst style, style_sheet_t& sheet) {
+    static constexpr auto TAG = "ConfigManager";
+    for (const auto kv : style) {
+        const char* key = kv.key().c_str();
+        if (std::strcmp(key, "fonts") == 0) {
+            continue;
+        }
+        const auto block = kv.value();
+        if (!block.is<JsonObjectConst>()) {
+            ESP_LOGW(TAG, "style.%.32s is not an object, ignored", key);
+            continue;
+        }
+        const auto obj = block.as<JsonObjectConst>();
+        if (const int role = style_logic_role(key); role >= 0) {
+            parseStyleProps(obj, sheet.role[role], false, key, nullptr);
+            continue;
+        }
+        if (std::strcmp(key, "list") == 0) {
+            parseStyleProps(obj, sheet.element[STYLE_EL_LIST], false, "list", "selected");
+            const auto selected = obj["selected"];
+            if (selected.is<JsonObjectConst>()) {
+                parseStyleProps(selected.as<JsonObjectConst>(), sheet.element[STYLE_EL_LIST_SELECTED], true,
+                                "list.selected", nullptr);
+            } else if (!selected.isNull()) {
+                ESP_LOGW(TAG, "style.list.selected is not an object, ignored");
+            }
+            continue;
+        }
+        if (std::strcmp(key, "key") != 0 && std::strcmp(key, "display") != 0) {
+            ESP_LOGW(TAG, "style: unknown key \"%.32s\", ignored", key);
+            continue;
+        }
+        for (const auto el : obj) {
+            const char* name = el.key().c_str();
+            const int e = style_logic_element(key, name);
+            if (e < 0) {
+                ESP_LOGW(TAG, "style.%s: unknown element \"%.32s\", ignored", key, name);
+                continue;
+            }
+            if (!el.value().is<JsonObjectConst>()) {
+                ESP_LOGW(TAG, "style.%s.%.32s is not an object, ignored", key, name);
+                continue;
+            }
+            char where[48];
+            std::snprintf(where, sizeof(where), "%s.%s", key, name);
+            parseStyleProps(el.value().as<JsonObjectConst>(), sheet.element[e], false, where, nullptr);
+        }
+    }
 }
 
 } // namespace
@@ -40,6 +205,10 @@ void ConfigManager::loadFromFile(const std::string& filename) {
 
     // Clear existing components
     clear();
+
+    // Style first: items resolve their "font" names and build on the
+    // element styles.
+    loadStyle(filename);
 
     // Use FilteredReaderHandler for memory-efficient streaming processing
     json::FilteredReaderHandler handler;
@@ -87,6 +256,13 @@ void ConfigManager::loadFromFile(const std::string& filename) {
             processListsFilter(path, json);
         });
 
+    // "icons" (name -> SVG path) is for the web IDE only: not filtered, so
+    // the parser skips it without building anything.
+    handler.addFilter({"images"},
+        [this](const std::vector<std::string>& path, const std::string& json) {
+            processImagesFilter(path, json);
+        });
+
     // Process the file once
     FreeButton::BusAwareFile file = FreeButton::getBusAwareFileSystem().open(filename.c_str(), "r");
     if (!file) {
@@ -110,6 +286,91 @@ void ConfigManager::loadFromFile(const std::string& filename) {
              getDisplayItemCount(), buttons.size(), clocks.size());
 }
 
+void ConfigManager::loadStyle(const std::string& filename) {
+    // "style" is small: one transient document of it (the rest of the file
+    // is only scanned).
+    JsonDocument doc;
+    bool found = false;
+    json::FilteredReaderHandler handler;
+    handler.addFilter({"style"},
+        [&](const std::vector<std::string>& path, const std::string& json) {
+            if (const auto error = deserializeJson(doc, json)) {
+                ESP_LOGE(TAG, "Failed to parse style JSON: %s", error.c_str());
+                doc.clear();
+                return;
+            }
+            found = true;
+        });
+
+    FreeButton::BusAwareFile file = FreeButton::getBusAwareFileSystem().open(filename.c_str(), "r");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file: %s", filename.c_str());
+    } else {
+        const bool success = handler.parse(file);
+        file.close();
+        if (!success) {
+            ESP_LOGE(TAG, "Failed to parse JSON file for style: %s", filename.c_str());
+        }
+    }
+    if (found && !doc.is<JsonObject>()) {
+        ESP_LOGW(TAG, "\"style\" is not an object, ignored");
+        found = false;
+    }
+    const auto style = doc.as<JsonObjectConst>();
+
+    // style.fonts. Heap only while loading (FONTS_MAX_FACES x ~165 B); the
+    // registry copies what it keeps.
+    font_def_t* defs = nullptr;
+    size_t count = 0;
+    if (found) {
+        const auto fonts = style["fonts"];
+        if (!fonts.isNull() && !fonts.is<JsonArrayConst>()) {
+            ESP_LOGW(TAG, "style.fonts is not an array, ignored");
+        } else if (fonts.size() > 0) {
+            // malloc, not new(std::nothrow): that aborts with -fno-exceptions
+            defs = static_cast<font_def_t*>(std::malloc(sizeof(font_def_t) * FONTS_MAX_FACES));
+            if (defs == nullptr) {
+                ESP_LOGE(TAG, "fonts: no memory to load them, the system fonts are used");
+            } else {
+                for (const auto entry : fonts.as<JsonArrayConst>()) {
+                    if (count == FONTS_MAX_FACES) {
+                        ESP_LOGW(TAG, "fonts: more than %d entries, the rest is left out", FONTS_MAX_FACES);
+                        break;
+                    }
+                    if (parseFontDef(entry, defs[count])) {
+                        count++;
+                    }
+                }
+            }
+        }
+    }
+
+    // Always configured, also without entries: the registry then resolves
+    // the system faces' fallbacks.
+    auto& display = FreeButton::getLvglDisplay();
+    display.lock();
+    const size_t accepted = fonts_configure(defs, count);
+    display.unlock();
+    std::free(defs);
+    if (count > 0) {
+        ESP_LOGI(TAG, "Loaded %u of %u fonts", static_cast<unsigned>(accepted), static_cast<unsigned>(count));
+    }
+
+    // The roles and elements: their text_font names resolve against the
+    // registry configured above.
+    style_sheet_t sheet;
+    std::memset(&sheet, 0, sizeof(sheet));
+    if (found) {
+        parseStyleSheet(style, sheet);
+    }
+    doc.clear();
+    style_props_t resolved[STYLE_EL_COUNT];
+    style_logic_resolve(&sheet, resolved);
+    display.lock();
+    ui_style_apply(resolved);
+    display.unlock();
+}
+
 void ConfigManager::clear() {
     ESP_LOGI(TAG, "Clearing all components");
 
@@ -124,6 +385,7 @@ void ConfigManager::clear() {
     buttons.clear();
     clocks.clear();
     lists.clear();
+    images.clear();
     names_.clear();
 
     // Shrink capacity to free memory (displayItems: swapped with an empty one)
@@ -293,6 +555,7 @@ void ConfigManager::addName(const NameTable::Kind kind, const unsigned long id, 
     }
     const char* what = kind == NameTable::Kind::Key    ? "Key at position"
                      : kind == NameTable::Kind::List   ? "List"
+                     : kind == NameTable::Kind::Image  ? "Image"
                                                        : "Display item";
     const char* name = value.as<const char*>();
     if (name == nullptr) {
@@ -589,6 +852,50 @@ void ConfigManager::processListsFilter(const std::vector<std::string>& path, con
     }
     if (doc.is<JsonArray>()) {
         loadLists(doc.as<JsonArray>());
+    }
+}
+
+} // namespace freebutton
+
+namespace freebutton {
+
+// "images": main-display rasters (ImageItem.h). Units: x / y are PIXELS of
+// the 320x240 main display (top-left of the raster), the same unit as width /
+// height (which pick the icon raster) - unlike display items and lists, whose
+// x / y / width are % of the screen. "color" is "#rrggbb" or "rrggbb".
+//
+// The top-level "icons" table (icon name -> SVG path) is web IDE data and is
+// not kept on the device: the IDE reads and writes config.json in the app
+// bucket, and GET /config (regenerated from RAM) leaves "icons" out.
+void ConfigManager::loadImages(const JsonArray& imagesArray) {
+    images.reserve(images.size() + imagesArray.size());
+    for (const auto& element : imagesArray) {
+        if (!element.is<JsonObject>()) {
+            ESP_LOGW(TAG, "Image element is not a JSON object, skipping");
+            continue;
+        }
+        const auto config = element.as<ArduinoJson::JsonObject>();
+        auto image = ImageItem::fromJson(config);
+        const size_t index = images.size();
+        addName(NameTable::Kind::Image, index, config);
+        if (names_.nameOf(NameTable::Kind::Image, static_cast<uint32_t>(index)).empty()) {
+            ESP_LOGW(TAG, "Image %u has no valid name: scripts can only use its index", static_cast<unsigned>(index));
+        }
+        image->attach();
+        ESP_LOGI(TAG, "Image %u on page %d", static_cast<unsigned>(index), image->getPage());
+        images.emplace_back(std::move(image));
+    }
+}
+
+void ConfigManager::processImagesFilter(const std::vector<std::string>& path, const std::string& json) {
+    JsonDocument doc;
+    const auto error = deserializeJson(doc, json);
+    if (error) {
+        ESP_LOGE(TAG, "Failed to parse images JSON: %s", error.c_str());
+        return;
+    }
+    if (doc.is<JsonArray>()) {
+        loadImages(doc.as<JsonArray>());
     }
 }
 

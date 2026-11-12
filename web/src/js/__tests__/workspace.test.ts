@@ -193,7 +193,7 @@ describe('workspace on a device', () => {
     await ws.open('config.json');
     type(ed, JSON.stringify({ buttons: [{ position: 8, name: 'up' }], mqttdisplays: [{ displayitemid: '1', name: 'up' }] }));
     expect(await ws.save()).toBe(true);
-    expect(getConfigNames()).toEqual({ keys: ['up'], displayItems: ['up'], lists: [] });
+    expect(getConfigNames()).toEqual({ keys: ['up'], displayItems: ['up'], lists: [], images: [], icons: [] });
 
     type(ed, JSON.stringify({ buttons: [{ position: 7, name: 'up' }, { position: 8, name: 'up' }] }));
     expect(await ws.save()).toBe(false);

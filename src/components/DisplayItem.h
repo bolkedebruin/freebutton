@@ -7,8 +7,12 @@
 
 #include "mqtt/Component.h"
 #include "TopicHandler.h"
+#include "IconRef.h"
+#include "FontRef.h"
 #include "ui/PendingRender.h"
 #include "utils/TextSlot.h"
+#include <cstdio>
+#include <atomic>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -35,13 +39,20 @@ public:
     int fontSize;
     int alignment;
 
+    // Config "font" / "fontsize" (value + unit) and "labelfont" /
+    // "labelfontsize" (caption): the local layer over the display.* styles
+    // (ui/ui_style.h). FONT_FACE_NONE and size 0 = the style's.
+    int fontFace = FONT_FACE_NONE;
+    int labelFontFace = FONT_FACE_NONE;
+    int labelFontSize = 0;
+
     std::string label;
     std::string unit;
     int round;
 
     int page = 1;
 
-    DisplayItem() : DisplayItem(0, 0, 100, 0, 14, 0, "", "", 0, 1, {}) {}
+    DisplayItem() : DisplayItem(0, 0, 100, 0, 0, 0, "", "", 0, 1, {}) {}
 
 private:
     // The UI box; exists only while the item's page is shown (built and
@@ -54,8 +65,8 @@ private:
     // applyPending(). Sizes are whole footprints (see TextSlot.h):
     //  * value, 64 B (58 text bytes): one full 320 px line of the smallest
     //    font (~45 glyphs at ~7 px) plus a \cRRGGBB colour code and an MDI
-    //    icon. Longer text would not fit on screen anyway and would cost
-    //    ~76 B of LVGL pool per byte to render.
+    //    icon. Longer text would not fit on screen anyway (rendering
+    //    takes one label per span plus a transient copy of the text).
     //  * caption and unit, 32 B (26 text bytes) each. Plain members, so
     //    nothing is ever allocated (or freed) on the message path.
     // The configured label / unit strings above stay the defaults that
@@ -66,6 +77,24 @@ private:
     TextSlot<kValueSlotBytes> valueSlot_;
     TextSlot<kCaptionSlotBytes> captionSlot_;
     TextSlot<kUnitSlotBytes> unitSlot_;
+
+    // Icon left of the value (config "icon" / "iconsize" / "iconcolor",
+    // MQTT DISPLAY_ICON, JS setIcon). Allocated only for items that have
+    // one; its image object only while the box exists and an icon is shown.
+    IconHolder icon_;
+    int configuredIconSize_ = icon::kDisplayDefaultSize;
+    uint32_t configuredIconColor_ = icon::kNoColor;
+    IconState* ensureIcon() { return icon_.ensure(configuredIconSize_, configuredIconColor_); }
+
+    // Value + unit font now (fontref::pack): the configured one until a
+    // script calls setFont() (any task); fontDirty_ has the LVGL task redraw.
+    std::atomic<uint32_t> font_{fontref::pack(FONT_FACE_NONE, 0)};
+    std::atomic<bool> fontDirty_{false};
+    // "icon" / "iconsize" / "iconcolor", and the state for a DISPLAY_ICON
+    // topic (DisplayItem.cpp). After the topics were parsed.
+    void configureIcon(const JsonObject& data);
+    // LVGL lock held, box exists: shows dsc as the value's icon.
+    bool showIcon(IconState& s, const lv_image_dsc_t* dsc);
 
     // Unlinks and deletes the box (destructor). Takes the LVGL lock.
     void detach();
@@ -127,12 +156,35 @@ public:
         obj.Add("y", y);
         obj.Add("page", page);
         obj.Add("boxtype", boxType);
-        obj.Add("fontsize", fontSize);
+        if (fontSize != 0) {
+            obj.Add("fontsize", fontSize);
+        }
+        if (fontFace != FONT_FACE_NONE) {
+            obj.Add("font", fonts_face_name(fontFace));
+        }
+        if (labelFontFace != FONT_FACE_NONE) {
+            obj.Add("labelfont", fonts_face_name(labelFontFace));
+        }
+        if (labelFontSize != 0) {
+            obj.Add("labelfontsize", labelFontSize);
+        }
         obj.Add("align", alignment);
         obj.Add("width", width);
         obj.Add("label", label);
         obj.Add("unit", unit);
         obj.Add("round", round);
+        if (const IconState* s = icon_.get()) {
+            char name[TextSlot<IconState::kSlotBytes>::kBufferSize];
+            if (s->name.read(name) && name[0] != '\0') {
+                obj.Add("icon", static_cast<const char*>(name));
+            }
+            obj.Add("iconsize", static_cast<int>(s->size));
+            if (s->color != icon::kNoColor) {
+                char hex[8];
+                snprintf(hex, sizeof(hex), "#%06lx", static_cast<unsigned long>(s->color));
+                obj.Add("iconcolor", static_cast<const char*>(hex));
+            }
+        }
 
         // Serialize topics array
         {
@@ -157,6 +209,10 @@ private:
 
         boxType = data["boxtype"].isNull() ? boxType : data["boxtype"].as<int>();
         fontSize = data["fontsize"].isNull() ? fontSize : data["fontsize"].as<int>();
+        fontFace = fontref::parse(data["font"], TAG, "font");
+        labelFontFace = fontref::parse(data["labelfont"], TAG, "labelfont");
+        labelFontSize = data["labelfontsize"].isNull() ? labelFontSize : data["labelfontsize"].as<int>();
+        font_.store(fontref::pack(fontFace, fontSize), std::memory_order_release);
 
         alignment = data["align"].isNull() ? alignment : data["align"].as<int>();
         width = data["width"].isNull() ? width : data["width"].as<int>();
@@ -173,6 +229,8 @@ private:
             // Normal for items whose value a script sets.
             ESP_LOGD(TAG, "DisplayItem %lu has no topics", id);
         }
+
+        configureIcon(data);
     }
 public:
     // CRTP interface for TopicHandler
@@ -192,6 +250,17 @@ public:
     void setDisplayLabel(std::string_view text);
     void setDisplayValue(std::string_view text);
     void setDisplayUnit(std::string_view text);
+
+    // Icon name ("" hides it). Any task, like the text setters.
+    enum class SetIconResult : uint8_t { Ok, Invalid, NoMemory };
+    SetIconResult setIconName(std::string_view name);
+
+    // Font of value and unit (a fonts.h face, FONT_FACE_NONE = the style's;
+    // size 1..5 = step, else px, 0 = the style's). Any task: the LVGL task
+    // redraws.
+    void setFont(int face, int size);
+    // Back to the configured "font" / "fontsize" (any task).
+    void restoreFont() { setFont(fontFace, fontSize); }
 
     // Page (config "page"; 0 = every page). Any task: the LVGL task hides or
     // shows the box on its next tick (see ui/MainPage.h).

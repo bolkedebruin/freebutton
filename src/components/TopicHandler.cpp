@@ -55,7 +55,7 @@ bool TopicParser::isValidTopic(const Topic& topic) {
     }
 
     // EventType validation - ensure it's within reasonable bounds
-    if (topic.eventType > LED_BRIGHTNESS_SET) {
+    if (topic.eventType > kLastEventType) {
         ESP_LOGW(TAG, "Topic has invalid event type: %d", static_cast<int>(topic.eventType));
         return false;
     }

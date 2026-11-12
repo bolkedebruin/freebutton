@@ -1,5 +1,10 @@
 #include "ui.h"
 #include "ui_text.h"
+#include "ui_style.h"
+#include "style_logic.h"
+#include "fonts/fonts.h"
+
+#include <stdlib.h>
 
 typedef struct {
     /* The main container */
@@ -7,24 +12,19 @@ typedef struct {
 	lv_obj_t* title;
 	lv_obj_t* text;
 	lv_obj_t* hint;
+	/* The value's icon; NULL while the item has none (created on demand) */
+	lv_obj_t* icon;
 
-    /* The base font size for text */
-    uint8_t base_font_size;
+    /* The fonts of value + unit and of the caption (ui_box_fonts_t) */
+    ui_box_fonts_t fonts;
 } box_dsc_t;
 
 
 static lv_style_t style_box;
-static lv_style_t style_title;
-static lv_style_t style_text;
-static lv_style_t style_hint;
 static lv_style_t style_underline;
 
-extern lv_font_t* fnt_semibold_14;
-extern lv_font_t* fnt_medium_14;
-extern lv_font_t* fnt_medium_32;
-extern lv_font_t* fnt_medium_48;
-extern lv_font_t* fnt_medium_72;
-
+/* LVGL lock held. The text styles of caption, value and unit are
+ * ui_style.h's (display.caption, display.value, display.unit). */
 void ui_box_create_styles(void)
 {
 	lv_style_init(&style_box);
@@ -49,22 +49,6 @@ void ui_box_create_styles(void)
 	lv_style_set_pad_bottom(&style_box, 0);
     lv_style_set_pad_all(&style_box, 0); /* between label and text */
 
-	lv_style_init(&style_title);
-    lv_style_set_text_font(&style_title, fnt_semibold_14);
-	lv_style_set_text_color(&style_title, lv_color_hex(0xffd700));
-	//lv_style_set_text_color(&style_title, lv_color_hex(0xffffff));
-
-	lv_style_init(&style_text);
-	lv_style_set_text_color(&style_text, lv_color_hex(0xffffff));
-
-	lv_style_init(&style_hint);
-	lv_style_set_text_color(&style_hint, lv_color_hex3(0x999));
-	lv_style_set_text_font(&style_hint, fnt_medium_14);
-}
-
-void ui_box_set_default_title_color(const long color)
-{
-	lv_style_set_text_color(&style_title, lv_color_hex(color));
 }
 
 lv_obj_t* ui_create_text_container(lv_obj_t *parent)
@@ -101,25 +85,29 @@ lv_obj_t* ui_box_create(lv_obj_t* parent)
 		return NULL;
 	}
 
-    /* Set the base font size so that the text can be scaled later relatively */
-    b->base_font_size = 1;
+    /* The fonts before ui_box_set_fonts(): the style's */
+    b->fonts.face = FONT_FACE_NONE;
+    b->fonts.fontsize = 0;
+    b->fonts.caption_face = FONT_FACE_NONE;
+    b->fonts.caption_fontsize = 0;
 	lv_obj_set_user_data(box, b);
 
 	b->main = box;
+	b->icon = NULL;
 
     /* create the title */
 	b->title = ui_create_text_container(box);
-    lv_obj_add_style(b->title, &style_title, 0);
+    lv_obj_add_style(b->title, ui_style_get(STYLE_EL_DISPLAY_CAPTION), 0);
 
     /* create the text container */
     b->text = ui_create_text_container(box);
     lv_obj_set_flex_in_new_track(b->text, true);
     lv_obj_set_flex_grow(b->text, 1);
-	lv_obj_add_style(b->text, &style_text, 0);
+	lv_obj_add_style(b->text, ui_style_get(STYLE_EL_DISPLAY_VALUE), 0);
 
     /* create the hint container */
 	b->hint = ui_create_text_container(box);
-	lv_obj_add_style(b->hint, &style_hint, 0);
+	lv_obj_add_style(b->hint, ui_style_get(STYLE_EL_DISPLAY_UNIT), 0);
 
 	return box;
 }
@@ -139,16 +127,19 @@ void ui_box_delete(lv_obj_t* box)
 	lv_free(b);
 }
 
-void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit, int x, int y, int font, int width, int align, int boxtype) {
+void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit, int x, int y,
+                   const ui_box_fonts_t* fonts, int width, int align, int boxtype) {
 	if (boxtype == 0)
 		lv_obj_add_style(box, &style_underline, 0);
 	if (boxtype == 1)
 		lv_obj_remove_style(box, &style_underline, 0);
 
+	/* Fonts first: the unit drawn here used the previous (initially the
+	 * style's) size, unlike every later render of it. */
+	ui_box_set_fonts(box, fonts, boxtype);
 	ui_box_set_caption(box, caption);
 	ui_box_set_text(box, text);
 	ui_box_set_hint(box, unit);
-	ui_box_set_font_size(box, font, boxtype);
 	lv_obj_set_align(box, align == 0 ? LV_ALIGN_TOP_LEFT : align);
 
 	lv_obj_set_pos(box, x * 320 / 100, y * 240 / 100);
@@ -156,11 +147,26 @@ void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const c
 }
 
 
+/* The base font (face, px) of an element: the item's (local layer) where it
+ * sets one, else the resolved style's. fontsize 0 = none. */
+static int base_face(const int item_face, const style_props_t* r)
+{
+	return item_face != FONT_FACE_NONE ? item_face : r->face;
+}
+
+static int base_px(const int item_fontsize, const bool title, const style_props_t* r)
+{
+	return style_logic_item_px(item_fontsize, title, r->px);
+}
+
 void ui_box_set_caption(lv_obj_t* box, const char* caption)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
-	/* Caption always uses fixed size 1 (fnt_semibold_14), not base_font_size */
-    ui_render_text(b->title, caption, &style_title, 1, true);
+	/* Its own font: "labelfont" / "labelfontsize", else display.caption
+	 * (by default system bold 14; legacy step 2 = 18 px) */
+	const style_props_t* r = ui_style_resolved(STYLE_EL_DISPLAY_CAPTION);
+	ui_render_text(b->title, caption, ui_style_get(STYLE_EL_DISPLAY_CAPTION), base_face(b->fonts.caption_face, r),
+	               base_px(b->fonts.caption_fontsize, true, r), true);
     /* An empty caption takes no room: hidden flex children get no column
      * gap either (the theme's ~8 px per gap pushed text past the box). */
     lv_obj_set_hidden(b->title, caption == NULL || caption[0] == '\0');
@@ -169,25 +175,61 @@ void ui_box_set_caption(lv_obj_t* box, const char* caption)
 void ui_box_set_text(lv_obj_t* box, const char* text)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
-
-    ui_render_text(b->text, text, &style_text, b->base_font_size, false);
+	const style_props_t* r = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
+	ui_render_text(b->text, text, ui_style_get(STYLE_EL_DISPLAY_VALUE), base_face(b->fonts.face, r),
+	               base_px(b->fonts.fontsize, false, r), false);
 }
 
 void ui_box_set_hint(lv_obj_t* box, const char* hint)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
-    ui_render_text(b->hint, hint, &style_hint, b->base_font_size, false);
+	/* The item's "font" / "fontsize" are the value's and the unit's; without
+	 * them the unit has display.unit's font / size where "style" sets them,
+	 * else the value's. */
+	const style_props_t* v = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
+	const style_props_t* u = ui_style_resolved(STYLE_EL_DISPLAY_UNIT);
+	const int face = b->fonts.face != FONT_FACE_NONE ? b->fonts.face
+	                 : (u->has & STYLE_HAS_FONT)      ? u->face
+	                                                  : v->face;
+	const int px = style_logic_item_px(b->fonts.fontsize, false, (u->has & STYLE_HAS_SIZE) ? u->px : v->px);
+	ui_render_text(b->hint, hint, ui_style_get(STYLE_EL_DISPLAY_UNIT), face, px, false);
     /* An empty unit takes no room (see ui_box_set_caption). */
     lv_obj_set_hidden(b->hint, hint == NULL || hint[0] == '\0');
 }
 
-void ui_box_set_font_size(lv_obj_t* box, uint8_t size, int boxtype)
+/* The legacy step whose padding the value gets: the item's step as it is;
+ * else the value's px (the item's, or the style's without one) as the
+ * nearest step's px (14/24/32/48/72), but 14 px and less none (as the old
+ * default fontsize 14 and the old invalid steps 6..9 always had). */
+static int padding_step(const int fontsize)
+{
+	static const uint8_t step_px[5] = {14, 24, 32, 48, 72};
+	if (fontsize >= 1 && fontsize <= 5) {
+		return fontsize;
+	}
+	const int px = style_logic_item_px(fontsize, false, ui_style_resolved(STYLE_EL_DISPLAY_VALUE)->px);
+	if (px <= 14 || px > FONT_PX_MAX) {
+		return 0;
+	}
+	int best = 0;
+	for (int i = 1; i < 5; i++) {
+		if (abs(px - step_px[i]) < abs(px - step_px[best])) {
+			best = i;
+		}
+	}
+	return best + 1;
+}
+
+void ui_box_set_fonts(lv_obj_t* box, const ui_box_fonts_t* fonts, int boxtype)
 {
 	box_dsc_t * b = lv_obj_get_user_data(box);
+	if (b == NULL || fonts == NULL) {
+		return;
+	}
 
-    b->base_font_size = size;
+    b->fonts = *fonts;
 
-	switch (size) {
+	switch (padding_step(fonts->fontsize)) {
 	case 1:
 		lv_obj_set_style_pad_bottom(b->title, 2, 0);
 		lv_obj_set_style_pad_bottom(b->main, 1, 0);
@@ -202,15 +244,72 @@ void ui_box_set_font_size(lv_obj_t* box, uint8_t size, int boxtype)
 		break;
 	case 4:
 		lv_obj_set_style_pad_bottom(b->title, boxtype ? 6 : 10, 0);
-		//lv_obj_set_style_text_font(b->text, fnt_medium_48, 0);
-		//lv_label_set_long_mode(b->text, LV_LABEL_LONG_CLIP);
 		lv_obj_set_style_pad_bottom(b->main, 8, 0);
 		break;
 	case 5:
 		lv_obj_set_style_pad_bottom(b->title, boxtype ? 6 : 14, 0);
-		//lv_obj_set_style_text_font(b->text, fnt_medium_72, 0);
-		//lv_label_set_long_mode(b->text, LV_LABEL_LONG_CLIP);
 		lv_obj_set_style_pad_bottom(b->main, 12, 0);
 		break;
+	default:
+		/* none (as before); a font set at runtime may have left one */
+		lv_obj_remove_local_style_prop(b->title, LV_STYLE_PAD_BOTTOM, 0);
+		lv_obj_remove_local_style_prop(b->main, LV_STYLE_PAD_BOTTOM, 0);
+		break;
 	}
+}
+
+void ui_image_set_raster(lv_obj_t* img, const lv_image_dsc_t* dsc, lv_color_t tint)
+{
+	if (dsc != NULL && dsc->header.cf == LV_COLOR_FORMAT_A8) {
+		/* A8 is coverage only: LVGL draws it in the recolour colour */
+		lv_obj_set_style_image_recolor(img, tint, 0);
+		lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+	} else {
+		lv_obj_remove_local_style_prop(img, LV_STYLE_IMAGE_RECOLOR_OPA, 0);
+		lv_obj_remove_local_style_prop(img, LV_STYLE_IMAGE_RECOLOR, 0);
+	}
+	/* NULL: LVGL resets the image (nothing drawn, size 0) */
+	lv_image_set_src(img, dsc);
+}
+
+bool ui_box_has_icon(lv_obj_t* box)
+{
+	const box_dsc_t* b = lv_obj_get_user_data(box);
+	return b != NULL && b->icon != NULL;
+}
+
+lv_color_t ui_box_text_color(lv_obj_t* box)
+{
+	const box_dsc_t* b = lv_obj_get_user_data(box);
+	return lv_obj_get_style_text_color(b->text, 0);
+}
+
+bool ui_box_set_icon(lv_obj_t* box, const lv_image_dsc_t* dsc, lv_color_t tint)
+{
+	box_dsc_t* b = lv_obj_get_user_data(box);
+	if (b == NULL) {
+		return false;
+	}
+	if (dsc == NULL) {
+		if (b->icon != NULL) {
+			lv_obj_delete(b->icon);
+			b->icon = NULL;
+			/* the value starts the second row again */
+			lv_obj_set_flex_in_new_track(b->text, true);
+		}
+		return true;
+	}
+	if (b->icon == NULL) {
+		lv_obj_t* icon = lv_image_create(box);
+		if (icon == NULL) {
+			return false;
+		}
+		/* After the caption, starting the value's row: [icon][value][unit] */
+		lv_obj_move_to_index(icon, 1);
+		lv_obj_set_flex_in_new_track(icon, true);
+		lv_obj_set_flex_in_new_track(b->text, false);
+		b->icon = icon;
+	}
+	ui_image_set_raster(b->icon, dsc, tint);
+	return true;
 }

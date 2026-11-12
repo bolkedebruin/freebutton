@@ -604,6 +604,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.display.getShownPage()"
       },
       {
+        "label": "fb.main.display.setIcon",
+        "type": "method",
+        "detail": "(idOrName: number | string, icon: string) → boolean",
+        "info": "Show an icon from config.json \"icons\" before the value (\"\" hides it; item by id or config.json name); false when there is no such item",
+        "apply": "fb.main.display.setIcon(${1:idOrName}, ${2:icon})"
+      },
+      {
+        "label": "fb.main.display.setFont",
+        "type": "method",
+        "detail": "(idOrName: number | string, font: string | number, size: number) → boolean",
+        "info": "Set the font of the value and unit (item by id or config.json name; the caption keeps its own; font \"\" restores config.json); false when there is no such item",
+        "apply": "fb.main.display.setFont(${1:idOrName}, ${2:font}, ${3:size})"
+      },
+      {
         "label": "fb.main.left.button.onClick",
         "type": "method",
         "detail": "(callback: () => boolean | void) → void",
@@ -651,6 +665,27 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "() → string",
         "info": "Top label currently shown (last setTopLabel / MQTT text, else the config label)",
         "apply": "fb.main.left.display.getTopLabel()"
+      },
+      {
+        "label": "fb.main.left.display.setIcon",
+        "type": "method",
+        "detail": "(icon: string) → void",
+        "info": "Show an icon from config.json \"icons\" instead of the bottom label (\"\" shows the label again)",
+        "apply": "fb.main.left.display.setIcon(${1:icon})"
+      },
+      {
+        "label": "fb.main.left.display.setFont",
+        "type": "method",
+        "detail": "(font: string | number, size: number) → void",
+        "info": "Set the font of the bottom label (default: the style's key label font, config.json \"style.key.label\"; font \"\" restores config.json)",
+        "apply": "fb.main.left.display.setFont(${1:font}, ${2:size})"
+      },
+      {
+        "label": "fb.main.left.display.setTopFont",
+        "type": "method",
+        "detail": "(font: string | number, size: number) → void",
+        "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
+        "apply": "fb.main.left.display.setTopFont(${1:font}, ${2:size})"
       },
       {
         "label": "fb.main.right.button.onClick",
@@ -702,6 +737,27 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.right.display.getTopLabel()"
       },
       {
+        "label": "fb.main.right.display.setIcon",
+        "type": "method",
+        "detail": "(icon: string) → void",
+        "info": "Show an icon from config.json \"icons\" instead of the bottom label (\"\" shows the label again)",
+        "apply": "fb.main.right.display.setIcon(${1:icon})"
+      },
+      {
+        "label": "fb.main.right.display.setFont",
+        "type": "method",
+        "detail": "(font: string | number, size: number) → void",
+        "info": "Set the font of the bottom label (default: the style's key label font, config.json \"style.key.label\"; font \"\" restores config.json)",
+        "apply": "fb.main.right.display.setFont(${1:font}, ${2:size})"
+      },
+      {
+        "label": "fb.main.right.display.setTopFont",
+        "type": "method",
+        "detail": "(font: string | number, size: number) → void",
+        "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
+        "apply": "fb.main.right.display.setTopFont(${1:font}, ${2:size})"
+      },
+      {
         "label": "fb.main.list.next",
         "type": "method",
         "detail": "(nameOrIndex: string | number) → number",
@@ -742,6 +798,27 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(nameOrIndex: string | number, items: string[]) → boolean",
         "info": "Replace the items (no newlines in an item); the selection is clamped to the new items",
         "apply": "fb.main.list.setItems(${1:nameOrIndex}, ${2:items})"
+      },
+      {
+        "label": "fb.main.list.setFont",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number, font: string | number, size: number) → void",
+        "info": "Set the font of the items (default: the style's list font, config.json \"style.list\", at the list's \"fontsize\"; font \"\" restores config.json)",
+        "apply": "fb.main.list.setFont(${1:nameOrIndex}, ${2:font}, ${3:size})"
+      },
+      {
+        "label": "fb.main.image.setIcon",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number, icon: string) → void",
+        "info": "Show an icon from config.json \"icons\" at the image's width x height (\"\" clears the image)",
+        "apply": "fb.main.image.setIcon(${1:nameOrIndex}, ${2:icon})"
+      },
+      {
+        "label": "fb.main.image.setSrc",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number, key: string) → void",
+        "info": "Show any key of the device's images bucket (an LVGL .bin raster, e.g. \"radar.bin\"; \"\" clears the image)",
+        "apply": "fb.main.image.setSrc(${1:nameOrIndex}, ${2:key})"
       },
       {
         "label": "fb.bars[n].left.led.setColor",
@@ -835,6 +912,27 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.bars[n].left.display.getTopLabel()"
       },
       {
+        "label": "fb.bars[n].left.display.setIcon",
+        "type": "method",
+        "detail": "(icon: string) → void",
+        "info": "Show an icon from config.json \"icons\" instead of the bottom label (\"\" shows the label again)",
+        "apply": "fb.bars[n].left.display.setIcon(${1:icon})"
+      },
+      {
+        "label": "fb.bars[n].left.display.setFont",
+        "type": "method",
+        "detail": "(font: string | number, size: number) → void",
+        "info": "Set the font of the bottom label (default: the style's key label font, config.json \"style.key.label\"; font \"\" restores config.json)",
+        "apply": "fb.bars[n].left.display.setFont(${1:font}, ${2:size})"
+      },
+      {
+        "label": "fb.bars[n].left.display.setTopFont",
+        "type": "method",
+        "detail": "(font: string | number, size: number) → void",
+        "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
+        "apply": "fb.bars[n].left.display.setTopFont(${1:font}, ${2:size})"
+      },
+      {
         "label": "fb.bars[n].right.led.setColor",
         "type": "method",
         "detail": "(r: number, g: number, b: number) → void",
@@ -924,6 +1022,27 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "() → string",
         "info": "Top label currently shown (last setTopLabel / MQTT text, else the config label)",
         "apply": "fb.bars[n].right.display.getTopLabel()"
+      },
+      {
+        "label": "fb.bars[n].right.display.setIcon",
+        "type": "method",
+        "detail": "(icon: string) → void",
+        "info": "Show an icon from config.json \"icons\" instead of the bottom label (\"\" shows the label again)",
+        "apply": "fb.bars[n].right.display.setIcon(${1:icon})"
+      },
+      {
+        "label": "fb.bars[n].right.display.setFont",
+        "type": "method",
+        "detail": "(font: string | number, size: number) → void",
+        "info": "Set the font of the bottom label (default: the style's key label font, config.json \"style.key.label\"; font \"\" restores config.json)",
+        "apply": "fb.bars[n].right.display.setFont(${1:font}, ${2:size})"
+      },
+      {
+        "label": "fb.bars[n].right.display.setTopFont",
+        "type": "method",
+        "detail": "(font: string | number, size: number) → void",
+        "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
+        "apply": "fb.bars[n].right.display.setTopFont(${1:font}, ${2:size})"
       }
     ]
   }

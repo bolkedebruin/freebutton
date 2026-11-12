@@ -126,7 +126,7 @@ python3 tools/scripts/media_sync.py ls   http://192.168.1.50   # sizes, ETags, s
 
 `push` skips objects whose ETag equals the local file's MD5, so it can be run
 again. Custom fonts: `push --dir <directory>`. Until the fonts are there, the
-UI uses LVGL's built-in Montserrat 14 (no icons).
+UI uses LVGL's built-in Montserrat 12 (no icons).
 
 ## 6. Compiled scripts
 

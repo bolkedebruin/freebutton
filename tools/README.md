@@ -6,12 +6,8 @@ This directory contains build automation tools and scripts for the FreeButton pr
 
 ```
 tools/
-├── fonts/               # UI font build (dev only; outputs committed in media/fonts/)
-│   ├── build_fonts.py   # Montserrat + MDI sources -> media/fonts/*.ttf
-│   ├── check_fonts.py   # coverage + kerning check, as the device reads them
-│   ├── requirements.txt # fontTools (pinned)
-│   ├── mdi_glyphs.txt   # curated icon list (--curated build, coverage check)
-│   └── *.ttf            # source fonts (Montserrat + Material Design Icons)
+├── fonts/               # upstream source fonts (Montserrat + Material Design Icons);
+│   └── *.ttf            #   media/fonts/ holds unmodified copies, Montserrat-Regular is a test font
 ├── scripts/            # Build and utility scripts
 │   ├── sync_version.py      # Version management (VERSION -> config.h + web/package.json)
 │   ├── build_info.py        # Build metadata generation
@@ -26,22 +22,12 @@ tools/
 ## Fonts
 
 The device renders TrueType fonts with LVGL tiny_ttf from the media store
-(bucket `fonts`). The defaults are committed in `media/fonts/` (see its
-README for sources, licenses and what the build changes), so a normal build
-does not touch fonts. Rebuild them only when the sources, coverage or symbol
-mapping change:
-
-```bash
-python3 -m venv /tmp/fbfonts
-/tmp/fbfonts/bin/pip install -r tools/fonts/requirements.txt
-/tmp/fbfonts/bin/python tools/fonts/build_fonts.py   # writes media/fonts/*.ttf
-/tmp/fbfonts/bin/python tools/fonts/check_fonts.py   # must pass before committing
-```
-
-Both scripts work offline. `check_fonts.py` also scans the repo (configs,
-device scripts, web IDE, firmware, tests) for MDI codepoints and fails when
-`icons.ttf` lacks one. Sizes are chosen at runtime (`src/ui/fonts/fonts.c`),
-not in the font files.
+(bucket `fonts`). The defaults in `media/fonts/` are the upstream files
+from `tools/fonts/`, unmodified (see its README for sources, checksums and
+licenses); there is no font build step. Sizes are chosen at runtime
+(`src/ui/fonts/fonts.c`), not in the font files. To change a default, copy
+the new upstream TTF over the file in `media/fonts/`, update its README and
+run `pio test -e native -f test_ttf_check`.
 
 ## Version Management
 

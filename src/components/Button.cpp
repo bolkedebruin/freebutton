@@ -10,6 +10,7 @@
 #include "drivers/LvglDisplay.h"
 #include "drivers/DisplayManager.h"
 #include "types.h"
+#include "ui/ui_style.h"
 #include <esp_log.h>
 
 #include <algorithm>
@@ -51,6 +52,7 @@ void Button::registerTopics() {
         switch (topic.eventType) {
             case LABEL:
             case TOP_LABEL:
+            case ICON:
             case LED_RGB:
             case LED_FRONT_RGB:
             case LED_WALL_RGB:
@@ -105,6 +107,13 @@ void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_vie
                     storeText(topLabelSlot_, data, id, "top label");
                     break;
 
+                case ICON:
+                    // The state exists: configureIcon() made it for this topic.
+                    if (IconState* s = icon_.get()) {
+                        storeText(s->name, data, id, "icon");
+                    }
+                    break;
+
                 case LED_RGB:
                 case LED_FRONT_RGB:
                 case LED_WALL_RGB:
@@ -143,11 +152,20 @@ bool Button::applyPending() {
     if (!button) {
         return false;  // createButton() requests a render once the button exists
     }
+    if (fontDirty_.exchange(false, std::memory_order_acq_rel)) {
+        applyFonts();
+    }
     bool again = false;
     again |= labelSlot_.apply([this](const char* text) { ui_button_set_text(button, text); })
              == TextSlotApply::Busy;
     again |= topLabelSlot_.apply([this](const char* text) { ui_button_set_title(button, text); })
              == TextSlotApply::Busy;
+    if (IconState* s = icon_.get()) {
+        again |= s->apply([this](const lv_image_dsc_t* dsc) {
+            ui_button_set_icon(button, dsc);  // nullptr: the label shows again
+            return true;
+        });
+    }
     return again;
 }
 
@@ -156,7 +174,48 @@ bool Button::applyPending() {
 void Button::invalidatePending() {
     labelSlot_.invalidate();
     topLabelSlot_.invalidate();
+    if (IconState* s = icon_.get()) {
+        s->name.invalidate();
+    }
     linkPending();
+    ui::requestPendingRender();
+}
+
+namespace {
+
+// A label's font (the item layer): nullptr without one (face FONT_FACE_NONE
+// and no size: the shared style), else the face (the style's when none) at
+// the size (the style's when none; a legacy step on the top label: 2 = 18
+// px). LVGL lock held.
+const lv_font_t* labelFont(const uint32_t packed, const style_element_t el) {
+    const int face = fontref::face(packed);
+    const int size = fontref::size(packed);
+    if (face == FONT_FACE_NONE && size == 0) {
+        return nullptr;
+    }
+    const style_props_t* r = ui_style_resolved(el);
+    return fonts_get(face == FONT_FACE_NONE ? r->face : face,
+                     style_logic_item_px(size, el == STYLE_EL_KEY_TOPLABEL, r->px));
+}
+
+} // namespace
+
+// LVGL lock held, button exists.
+void Button::applyFonts() {
+    ui_button_set_fonts(button,
+                        labelFont(labelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_LABEL),
+                        labelFont(topLabelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_TOPLABEL));
+}
+
+void Button::setLabelFont(const int face, const int size) {
+    labelFont_.store(fontref::pack(face, size), std::memory_order_release);
+    fontDirty_.store(true, std::memory_order_release);
+    ui::requestPendingRender();
+}
+
+void Button::setTopLabelFont(const int face, const int size) {
+    topLabelFont_.store(fontref::pack(face, size), std::memory_order_release);
+    fontDirty_.store(true, std::memory_order_release);
     ui::requestPendingRender();
 }
 
@@ -168,6 +227,54 @@ void Button::setLabelText(const std::string_view text) {
 
 void Button::setTopLabelText(const std::string_view text) {
     storeText(topLabelSlot_, text, id, "top label");
+}
+
+IconState* Button::ensureIcon() {
+    return icon_.ensure(configuredIconSize_, icon::kNoColor);
+}
+
+// Boot (config load), before the button is created and subscribed.
+void Button::configureIcon(const JsonObject& data) {
+    configuredIconSize_ = icon::clampSize(data["iconsize"] | 0, icon::kButtonDefaultSize);
+    const char* name = data["icon"] | "";
+    bool wanted = name[0] != '\0';
+    for (const auto& t : topics) {
+        wanted = wanted || t.eventType == ICON;
+    }
+    if (!wanted) {
+        return;  // no icon state: a key without icon costs one pointer
+    }
+    if (name[0] != '\0' && !icon::validName(name)) {
+        ESP_LOGW(TAG, "Button at position %u: icon \"%s\" is not a valid icon name, ignored", position_, name);
+        name = "";
+    }
+    IconState* s = ensureIcon();
+    if (s == nullptr) {
+        ESP_LOGE(TAG, "Button at position %u: no memory for its icon", position_);
+        return;
+    }
+    if (name[0] != '\0') {
+        s->name.write(name);
+    }
+}
+
+// Script code (JS task). Like the label setters, only stores the name.
+Button::SetIconResult Button::setIconName(const std::string_view name) {
+    if (!name.empty() && !icon::validName(name)) {
+        return SetIconResult::Invalid;
+    }
+    IconState* s = icon_.get();
+    if (s == nullptr) {
+        if (name.empty()) {
+            return SetIconResult::Ok;  // no icon to hide
+        }
+        s = ensureIcon();
+        if (s == nullptr) {
+            return SetIconResult::NoMemory;
+        }
+    }
+    storeText(s->name, name, id, "icon");
+    return SetIconResult::Ok;
 }
 
 const std::string Button::getComponentType() const {
@@ -319,6 +426,8 @@ void Button::createButton() {
     // If button already exists, just redraw it with new configuration
     if (button != nullptr) {
         ESP_LOGI(TAG, "Redrawing existing button for Button %lu", id);
+        fontDirty_.store(false, std::memory_order_release);
+        applyFonts();
         ui_button_set_title(button, topLabel.c_str());
         ui_button_set_text(button, label.c_str());
         invalidatePending();
@@ -342,6 +451,8 @@ void Button::createButton() {
     }
 
     // Apply the initial configuration
+    fontDirty_.store(false, std::memory_order_release);
+    applyFonts();
     ui_button_set_title(button, topLabel.c_str());
     ui_button_set_text(button, label.c_str());
     invalidatePending();
@@ -366,8 +477,11 @@ void Button::destroyButton() {
 
     // Off the LVGL task's list before the button (and later this object) goes.
     unlinkPending();
-    lv_obj_del(button);
+    ui_button_delete(button);  // with its descriptor (lv_obj_del() leaked it)
     button = nullptr;
+    if (IconState* s = icon_.get()) {
+        s->raster.release();  // the image object went with the button
+    }
     ESP_LOGI(TAG, "Destroyed UI button for Button %lu", id);
 
     lvglDisplay.unlock();

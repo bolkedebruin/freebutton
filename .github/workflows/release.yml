@@ -58,8 +58,8 @@ jobs:
       - name: Install PlatformIO Core
         run: uv pip install --upgrade platformio setuptools
 
-      # Fonts (media/fonts/*.ttf) and the mquickjs wasm assets are committed
-      # real files, so release does NOT install fontTools, rebuild the fonts,
+      # Fonts (media/fonts/*.ttf, unmodified upstream files) and the mquickjs
+      # wasm assets are committed real files, so release does NOT build fonts
       # or run emcc.
 
       - name: Extract version

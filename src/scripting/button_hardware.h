@@ -28,6 +28,18 @@ int button_hw_set_label(int position, const char* label);
 // Returns 0 on success, -1 on error
 int button_hw_set_top_label(int position, const char* topLabel);
 
+// Icon (config "icons" name, len bytes) instead of the bottom label; empty
+// hides it. Returns 0 on success, -1 when there is no such button, -2 for an
+// invalid icon name ([A-Za-z0-9_-], max 31), -3 when out of memory.
+int button_hw_set_icon(int position, const char* name, size_t len);
+
+// Font of the bottom label (top = false) or the top label (top = true): a
+// fonts.h face (resolved by the caller) and a fontsize (1..5 = step, else
+// px). Returns 0 on success, -1 when there is no such button.
+int button_hw_set_font(int position, int face, int size, bool top);
+// Back to the configured font and size of that label (JS setFont("")).
+int button_hw_restore_font(int position, bool top);
+
 // What the button at position shows as label / top label (last runtime text,
 // else the configured one), NUL-terminated into out. Returns 0, or -1 when
 // there is no such button (out is then "").

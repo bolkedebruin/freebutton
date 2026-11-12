@@ -654,4 +654,77 @@ describe('MQuickJS Validator', () => {
             expect(validateCode('fb.key("anything");').valid).toBe(true);
         });
     });
+
+    describe('config.json fonts', () => {
+        const names = { keys: [], displayItems: ['temp'], lists: ['scenes'], fonts: ['montserrat', 'montserrat_semibold', 'mdi', 'roboto'], fontIds: [2] };
+
+        it('accepts known font names and ids in setFont / setTopFont', () => {
+            const result = validateCode([
+                'fb.main.display.setFont("temp", "roboto", 40);',
+                'fb.main.display.setFont("temp", 2, 40);',
+                'fb.main.list.setFont("scenes", "mdi", 3);',
+                'fb.key(1).display.setFont("montserrat", 28);',
+                'fb.key(1).display.setTopFont(2, 16);',
+                'var f = "x"; fb.key(1).display.setFont(f, 1);',
+                'fb.main.display.setFont("temp", "", 0);',
+                'fb.key(1).display.setFont("");',
+                'fb.key(1).display.setTopFont("");',
+                'fb.main.list.setFont("scenes", "");',
+            ].join('\n'), names);
+            expect(result.errors).toEqual([]);
+            expect(result.warnings).toEqual([]);
+        });
+
+        it('reports unknown fonts as errors (the device throws ReferenceError)', () => {
+            const result = validateCode([
+                'fb.main.display.setFont("temp", "robot", 40);',
+                'fb.main.list.setFont(0, 7, 3);',
+                'fb.key(1).display.setTopFont("mono", 16);',
+            ].join('\n'), names);
+            expect(result.errors.map(e => [e.message, e.line])).toEqual([
+                ['unknown font "robot" in config.json', 1],
+                ['unknown font id 7 in config.json', 2],
+                ['unknown font "mono" in config.json', 3],
+            ]);
+        });
+
+        it('reports a literal size outside 1..72 or not an integer (TypeError on the device)', () => {
+            const result = validateCode([
+                'fb.main.display.setFont("temp", "roboto", 0);',
+                'fb.main.list.setFont("scenes", "mdi", 73);',
+                'fb.key(1).display.setFont("montserrat", 2.5);',
+                'fb.key(1).display.setTopFont("montserrat", -4);',
+                'var s = 99; fb.key(1).display.setFont("montserrat", s);',
+                'fb.key(1).display.setFont("montserrat", 72); fb.key(1).display.setTopFont(2, 1);',
+                'fb.key(1).display.setFont("", 0);',
+            ].join('\n'), names);
+            expect(result.errors.map(e => [e.message.replace(/ must.*/, ''), e.line])).toEqual([
+                ['font size 0', 1], ['font size 73', 2], ['font size 2.5', 3], ['font size -4', 4],
+            ]);
+        });
+
+        it('knows the system fonts without a "style.fonts" table', () => {
+            const plain = { keys: [], displayItems: ['temp'], lists: [] };
+            expect(validateCode('fb.key(1).display.setFont("montserrat_semibold", 18);', plain).errors).toEqual([]);
+            expect(validateCode('fb.key(1).display.setFont("montserrat", 18);', plain).errors).toEqual([]);
+            expect(validateCode('fb.key(1).display.setFont("semibold", 18);', plain).errors).toHaveLength(1);
+            expect(validateCode('fb.key(1).display.setFont("icons", 18);', plain).errors).toHaveLength(1);
+            expect(validateCode('fb.key(1).display.setFont("roboto", 18);', plain).errors).toHaveLength(1);
+        });
+
+        it('warns about an unknown \\f{font} in display text (still valid)', () => {
+            const result = validateCode([
+                'fb.main.display.setValue("temp", "\\\\f{roboto}21\\\\s{20}C");',
+                'fb.main.display.setLabel("temp", "\\\\f{2}a \\\\f{mono}b \\\\f{9}c \\\\f{}d");',
+                'fb.main.display.setUnit("temp", "\\\\f{nope}x");',
+            ].join('\n'), names);
+            expect(result.valid).toBe(true);
+            expect(result.errors).toEqual([]);
+            expect(result.warnings.map(w => [w.message, w.line])).toEqual([
+                [expect.stringContaining('unknown font "mono" in \\f{mono}'), 2],
+                [expect.stringContaining('unknown font "9" in \\f{9}'), 2],
+                [expect.stringContaining('unknown font "nope"'), 3],
+            ]);
+        });
+    });
 });

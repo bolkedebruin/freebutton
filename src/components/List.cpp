@@ -7,18 +7,12 @@
 #include "drivers/LvglDisplay.h"
 #include "ui/LvglRoom.h"
 #include "ui/MainPage.h"
+#include "ui/ui_style.h"
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-extern "C" {
-extern lv_font_t* fnt_medium_14;
-extern lv_font_t* fnt_medium_24;
-extern lv_font_t* fnt_medium_32;
-extern lv_font_t* fnt_medium_48;
-extern lv_font_t* fnt_medium_72;
-}
 
 namespace freebutton {
 
@@ -40,15 +34,43 @@ public:
     ItemsLock& operator=(const ItemsLock&) = delete;
 };
 
-// Same mapping as display items (ui_text.c).
-lv_font_t* fontFor(const int size) {
-    switch (size) {
-        case 1: return fnt_medium_14;
-        case 2: return fnt_medium_24;
-        case 4: return fnt_medium_48;
-        case 5: return fnt_medium_72;
-        default: return fnt_medium_32;
+// Font and line spacing of a roller (LVGL lock held). The item layer: a
+// config / script font or size is a local font (the face, else the list
+// style's, at fontsize 1..5 = step (14/24/32/48/72), FONT_PX_MIN..MAX = px,
+// else the style's px); without one the list style's font applies. The
+// line space is a quarter of the line height, as before "style", unless the
+// list style sets text_line_space.
+void applyFont(lv_obj_t* roller, const uint32_t packed) {
+    const int face = fontref::face(packed);
+    const int size = fontref::size(packed);
+    const style_props_t* r = ui_style_resolved(STYLE_EL_LIST);
+    if (face == FONT_FACE_NONE && size == 0) {
+        lv_obj_remove_local_style_prop(roller, LV_STYLE_TEXT_FONT, LV_PART_MAIN);
+    } else {
+        lv_obj_set_style_text_font(roller, fonts_get(face == FONT_FACE_NONE ? r->face : face,
+                                                     style_logic_item_px(size, false, r->px)),
+                                   LV_PART_MAIN);
     }
+    if (r->has & STYLE_HAS_LINE_SPACE) {
+        lv_obj_remove_local_style_prop(roller, LV_STYLE_TEXT_LINE_SPACE, LV_PART_MAIN);
+    } else {
+        const lv_font_t* font = lv_obj_get_style_text_font(roller, LV_PART_MAIN);
+        lv_obj_set_style_text_line_space(roller, font->line_height / 4, LV_PART_MAIN);
+    }
+}
+
+// Config "color" / "focuscolor" / "focustextcolor": kNoColor when absent;
+// malformed is warned and ignored (the style's colour applies).
+unsigned long configColor(const ArduinoJson::JsonObject& data, const char* field) {
+    const char* hex = data[field] | "";
+    if (hex[0] == '\0') {
+        return List::kNoColor;
+    }
+    const unsigned long c = list::parseColor(hex, List::kNoColor);
+    if (c == List::kNoColor) {
+        ESP_LOGW("List", "List: \"%s\": \"%.16s\" is not a colour (\"#rrggbb\"), the style's is used", field, hex);
+    }
+    return c;
 }
 
 constexpr int kScreenWidth = 320;
@@ -84,10 +106,12 @@ void List::configure(const ArduinoJson::JsonObject& data) {
     width_ = data["width"] | width_;
     rows_ = list::clampRows(data["rows"] | rows_);
     fontSize_ = data["fontsize"] | fontSize_;
+    fontFace_ = fontref::parse(data["font"], TAG, "font");
+    font_.store(fontref::pack(fontFace_, fontSize_), std::memory_order_release);
     page_ = data["page"] | page_;
-    color_ = list::parseColor(data["color"] | "", color_);
-    focusColor_ = list::parseColor(data["focuscolor"] | "", focusColor_);
-    focusTextColor_ = list::parseColor(data["focustextcolor"] | "", focusTextColor_);
+    color_ = configColor(data, "color");
+    focusColor_ = configColor(data, "focuscolor");
+    focusTextColor_ = configColor(data, "focustextcolor");
 
     std::string options;
     int count = 0;
@@ -157,6 +181,12 @@ void List::setItems(std::string options, const int count) {
     requestRender();
 }
 
+void List::setFont(const int face, const int size) {
+    font_.store(fontref::pack(face, size), std::memory_order_release);
+    fontDirty_.store(true, std::memory_order_release);
+    requestRender();
+}
+
 std::string List::optionsCopy() const {
     const ItemsLock lock;
     return options_;
@@ -176,6 +206,12 @@ bool List::applyPending() {
         if (roller_ == nullptr) {
             return false;
         }
+    }
+    if (!created && fontDirty_.exchange(false, std::memory_order_acq_rel)) {
+        // The row height follows the font: the roller lays out again with
+        // the visible row count it has.
+        applyFont(roller_, font_.load(std::memory_order_acquire));
+        lv_roller_set_visible_row_count(roller_, static_cast<uint32_t>(rows_));
     }
     if (created || itemsDirty_.exchange(false, std::memory_order_acq_rel)) {
         {
@@ -217,18 +253,25 @@ void List::createRoller() {
         ESP_LOGE(TAG, "List: no LVGL memory for the roller");
         return;
     }
-    // Only our styles: no theme background, border, shadow or padding.
+    // Only our styles: no theme background, border, shadow or padding. The
+    // text styles: list and list.selected (ui/ui_style.h); the item's
+    // colours are local styles on top.
     lv_obj_remove_style_all(r);
-    lv_font_t* font = fontFor(fontSize_);
-    lv_obj_set_style_text_font(r, font, LV_PART_MAIN);
-    lv_obj_set_style_text_color(r, lv_color_hex(color_), LV_PART_MAIN);
-    lv_obj_set_style_text_align(r, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_set_style_text_line_space(r, font->line_height / 4, LV_PART_MAIN);
+    lv_obj_add_style(r, ui_style_get(STYLE_EL_LIST), LV_PART_MAIN);
+    lv_obj_add_style(r, ui_style_get(STYLE_EL_LIST_SELECTED), LV_PART_SELECTED);
+    fontDirty_.store(false, std::memory_order_release);
+    applyFont(r, font_.load(std::memory_order_acquire));
+    if (color_ != kNoColor) {
+        lv_obj_set_style_text_color(r, lv_color_hex(color_), LV_PART_MAIN);
+    }
     lv_obj_set_style_pad_hor(r, kTextPadding, LV_PART_MAIN);
     lv_obj_set_style_anim_duration(r, kAnimMs, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_PART_SELECTED);
-    lv_obj_set_style_bg_color(r, lv_color_hex(focusColor_), LV_PART_SELECTED);
-    lv_obj_set_style_text_color(r, lv_color_hex(focusTextColor_), LV_PART_SELECTED);
+    if (focusColor_ != kNoColor) {
+        lv_obj_set_style_bg_color(r, lv_color_hex(focusColor_), LV_PART_SELECTED);
+    }
+    if (focusTextColor_ != kNoColor) {
+        lv_obj_set_style_text_color(r, lv_color_hex(focusTextColor_), LV_PART_SELECTED);
+    }
     lv_obj_set_style_radius(r, kFocusRadius, LV_PART_SELECTED);
     lv_obj_set_pos(r, x_ * kScreenWidth / 100, y_ * kScreenHeight / 100);
     lv_obj_set_width(r, width_ * kScreenWidth / 100);

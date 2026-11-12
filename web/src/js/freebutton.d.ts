@@ -411,6 +411,8 @@ export interface FbMain {
     readonly right: FbMainSide;
     /** Lists (rollers) on the main display, from config.json "lists" */
     readonly list: FbMainList;
+    /** Images on the main display, from config.json "images" (present only when config.json has images) */
+    readonly image: FbMainImage;
 }
 
 export interface FbMainDisplay {
@@ -438,6 +440,10 @@ export interface FbMainDisplay {
     showPage(page: number): void;
     /** Page of the main display shown now */
     getShownPage(): number;
+    /** Show an icon from config.json "icons" before the value ("" hides it; item by id or config.json name); false when there is no such item */
+    setIcon(idOrName: number | string, icon: string): boolean;
+    /** Set the font of the value and unit (item by id or config.json name; the caption keeps its own; font "" restores config.json); false when there is no such item */
+    setFont(idOrName: number | string, font: string | number, size: number): boolean;
 }
 
 export interface FbMainSide {
@@ -467,6 +473,12 @@ export interface FbSmallDisplay {
     getLabel(): string;
     /** Top label currently shown (last setTopLabel / MQTT text, else the config label) */
     getTopLabel(): string;
+    /** Show an icon from config.json "icons" instead of the bottom label ("" shows the label again) */
+    setIcon(icon: string): void;
+    /** Set the font of the bottom label (default: the style's key label font, config.json "style.key.label"; font "" restores config.json) */
+    setFont(font: string | number, size: number): void;
+    /** Set the font of the top label (default: the style's key top label font, config.json "style.key.toplabel"; font "" restores config.json) */
+    setTopFont(font: string | number, size: number): void;
 }
 
 export interface FbMainList {
@@ -482,6 +494,15 @@ export interface FbMainList {
     count(nameOrIndex: string | number): number;
     /** Replace the items (no newlines in an item); the selection is clamped to the new items */
     setItems(nameOrIndex: string | number, items: string[]): boolean;
+    /** Set the font of the items (default: the style's list font, config.json "style.list", at the list's "fontsize"; font "" restores config.json) */
+    setFont(nameOrIndex: string | number, font: string | number, size: number): void;
+}
+
+export interface FbMainImage {
+    /** Show an icon from config.json "icons" at the image's width x height ("" clears the image) */
+    setIcon(nameOrIndex: string | number, icon: string): void;
+    /** Show any key of the device's images bucket (an LVGL .bin raster, e.g. "radar.bin"; "" clears the image) */
+    setSrc(nameOrIndex: string | number, key: string): void;
 }
 
 export interface FbRoot {

@@ -34,7 +34,7 @@ static const char* owner(const char* b, const char* k) {
 // --- buckets ----------------------------------------------------------------
 
 void test_bucket_table() {
-    TEST_ASSERT_EQUAL(4, s3::kBucketCount);
+    TEST_ASSERT_EQUAL(5, s3::kBucketCount);
     TEST_ASSERT_EQUAL_STRING("", bucket("app").dir);
     TEST_ASSERT_TRUE(bucket("app").writable);
     TEST_ASSERT_EQUAL_STRING("www", bucket("web").dir);
@@ -51,6 +51,12 @@ void test_bucket_table() {
     TEST_ASSERT_FALSE(bucket("examples").writable);
     TEST_ASSERT_TRUE(bucket("fonts").writable);
     TEST_ASSERT_TRUE(bucket("fonts").sharesStaticPath);
+    TEST_ASSERT_EQUAL_STRING("", bucket("images").dir);  // media store, not LittleFS
+    TEST_ASSERT_TRUE(bucket("images").isMedia());
+    TEST_ASSERT_EQUAL(MEDIA_BUCKET_IMAGES, bucket("images").mediaBucket());
+    TEST_ASSERT_TRUE(bucket("images").writable);
+    TEST_ASSERT_TRUE(bucket("images").publicRead);
+    TEST_ASSERT_FALSE(bucket("images").sharesStaticPath);  // the IDE serves no /images/
     TEST_ASSERT_FALSE(bucket("app").sharesStaticPath);
     TEST_ASSERT_NULL(s3::findBucket("fs", 2));
     TEST_ASSERT_NULL(s3::findBucket("ap", 2));
@@ -109,6 +115,8 @@ void test_key_owner() {
     // fonts is in the media store: a LittleFS fonts/ directory is app's.
     TEST_ASSERT_EQUAL_STRING("", owner("app", "fonts/mnt_medium_14.bin"));
     TEST_ASSERT_EQUAL_STRING("", owner("app", "fonts/"));
+    TEST_ASSERT_EQUAL_STRING("", owner("app", "images/ico-rain-48x48.bin"));  // images too
+    TEST_ASSERT_EQUAL_STRING("", owner("images", "www/a.bin"));
     TEST_ASSERT_EQUAL_STRING("examples", owner("app", "scripts/examples/button.js"));
     TEST_ASSERT_EQUAL_STRING("examples", owner("app", "scripts/examples/"));
     TEST_ASSERT_EQUAL_STRING("", owner("app", "scripts/"));
@@ -159,6 +167,9 @@ void test_write_rules_per_bucket() {
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("examples"), "button.js", 9) == s3::KeyCheck::ReadOnly);
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "x.txt", 5) == s3::KeyCheck::Invalid);
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "x.ttf", 5) == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "x.bin", 5) == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("images"), "x.bin", 5) == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("images"), "x.ttf", 5) == s3::KeyCheck::Invalid);
     // Read-only even for keys that would be invalid anyway.
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("web"), "../x", 4) == s3::KeyCheck::ReadOnly);
     // config.json / the bytecode index are special in app only.
@@ -166,6 +177,18 @@ void test_write_rules_per_bucket() {
     TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("examples"), "config.json", 11));
     TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("app"), "scripts/config.json", 19));
     TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("fonts"), "config.json", 11));
+    TEST_ASSERT_FALSE(s3::keyIsConfig(bucket("images"), "config.json", 11));
+    // The system font files: DELETE refused, PUT allowed; other fonts deletable.
+    TEST_ASSERT_TRUE(s3::mediaKeyDeleteProtected(bucket("fonts"), "medium.ttf", 10));
+    TEST_ASSERT_TRUE(s3::mediaKeyDeleteProtected(bucket("fonts"), "semibold.ttf", 12));
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "medium.ttf", 10) == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "semibold.ttf", 12) == s3::KeyCheck::Ok);
+    TEST_ASSERT_FALSE(s3::mediaKeyDeleteProtected(bucket("fonts"), "icons.ttf", 9));
+    TEST_ASSERT_FALSE(s3::mediaKeyDeleteProtected(bucket("fonts"), "medium.ttf2", 11));
+    TEST_ASSERT_FALSE(s3::mediaKeyDeleteProtected(bucket("fonts"), "medium.ttf", 9));  // "medium.tt"
+    TEST_ASSERT_FALSE(s3::mediaKeyDeleteProtected(bucket("fonts"), "xmedium.ttf", 11));
+    TEST_ASSERT_FALSE(s3::mediaKeyDeleteProtected(bucket("images"), "medium.ttf", 10));
+    TEST_ASSERT_FALSE(s3::mediaKeyDeleteProtected(bucket("app"), "medium.ttf", 10));
 }
 
 // --- keys -------------------------------------------------------------------
@@ -174,6 +197,9 @@ void test_write_key_accepts_plain_paths() {
     TEST_ASSERT_TRUE(wk("config.json") == s3::KeyCheck::Ok);
     TEST_ASSERT_TRUE(wk("scripts/main.js") == s3::KeyCheck::Ok);
     TEST_ASSERT_TRUE(wk("notes/a-b_c.txt") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(wk("icons/rain.svg") == s3::KeyCheck::Ok);  // icon sources
+    TEST_ASSERT_TRUE(wk("icons/rain.SVG") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(wk("icons/rain.svgz") == s3::KeyCheck::Invalid);
     TEST_ASSERT_TRUE(wk("scripts/examplesx.js") == s3::KeyCheck::Ok);
 }
 
@@ -241,6 +267,7 @@ void test_content_types() {
     TEST_ASSERT_EQUAL_STRING("application/json", s3::contentTypeFor("config.json", 11));
     TEST_ASSERT_EQUAL_STRING("application/javascript", s3::contentTypeFor("a/main.js", 9));
     TEST_ASSERT_EQUAL_STRING("text/plain", s3::contentTypeFor("x.txt", 5));
+    TEST_ASSERT_EQUAL_STRING("image/svg+xml", s3::contentTypeFor("icons/rain.svg", 14));
     TEST_ASSERT_EQUAL_STRING("application/octet-stream", s3::contentTypeFor("fonts/a.bin", 11));
     TEST_ASSERT_EQUAL_STRING("font/ttf", s3::contentTypeFor("medium.ttf", 10));
     TEST_ASSERT_EQUAL_STRING("font/otf", s3::contentTypeFor("medium.otf", 10));
@@ -601,6 +628,31 @@ void test_media_write_keys() {
     TEST_ASSERT_TRUE(fk(k97.c_str()) == s3::KeyCheck::Invalid);
 }
 
+static s3::KeyCheck ik(const char* k) { return s3::checkWriteKey(bucket("images"), k, strlen(k)); }
+
+void test_images_write_keys() {
+    TEST_ASSERT_TRUE(ik("ico-rain-48x48.bin") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(ik("ico-weather_sun-32x32.bin") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(ik("logo.bin") == s3::KeyCheck::Ok);  // a user file, any name
+    TEST_ASSERT_TRUE(ik("a.bin") == s3::KeyCheck::Ok);
+    // Extension: .bin only, lower case.
+    TEST_ASSERT_TRUE(ik("logo.BIN") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(ik("logo.png") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(ik("logo.svg") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(ik("medium.ttf") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(ik("logo.bin.tmp") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(ik(".bin") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(ik("bin") == s3::KeyCheck::Invalid);
+    // Flat, same characters as fonts.
+    TEST_ASSERT_TRUE(ik("icons/rain.bin") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(ik("a..b.bin") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(ik("my icon.bin") == s3::KeyCheck::Invalid);
+    const std::string k96 = std::string(92, 'a') + ".bin";
+    TEST_ASSERT_TRUE(ik(k96.c_str()) == s3::KeyCheck::Ok);
+    const std::string k97 = std::string(93, 'a') + ".bin";
+    TEST_ASSERT_TRUE(ik(k97.c_str()) == s3::KeyCheck::Invalid);
+}
+
 void test_media_write_refusals() {
     const s3::Bucket& f = bucket("fonts");
     TEST_ASSERT_EQUAL(0, s3::writeRefusal(f, "medium.ttf", 10).status);
@@ -608,6 +660,18 @@ void test_media_write_refusals() {
     TEST_ASSERT_EQUAL(400, e.status);
     TEST_ASSERT_EQUAL_STRING("InvalidArgument", e.code);
     TEST_ASSERT_TRUE(strstr(e.msg, ".ttf") != nullptr);
+    TEST_ASSERT_TRUE(strstr(e.msg, ".bin") == nullptr);
+    // images: the message names its own extension.
+    const s3::Bucket& im = bucket("images");
+    TEST_ASSERT_EQUAL(0, s3::writeRefusal(im, "ico-rain-48x48.bin", 18).status);
+    e = s3::writeRefusal(im, "rain.svg", 8);
+    TEST_ASSERT_EQUAL(400, e.status);
+    TEST_ASSERT_EQUAL_STRING("InvalidArgument", e.code);
+    TEST_ASSERT_TRUE(strstr(e.msg, ".bin") != nullptr);
+    TEST_ASSERT_TRUE(strstr(e.msg, ".ttf") == nullptr);
+    const std::string i97 = std::string(93, 'a') + ".bin";
+    e = s3::writeRefusal(im, i97.c_str(), i97.size());
+    TEST_ASSERT_EQUAL_STRING("KeyTooLongError", e.code);
     e = s3::writeRefusal(f, "a/b.ttf", 7);
     TEST_ASSERT_EQUAL(400, e.status);
     TEST_ASSERT_EQUAL_STRING("InvalidArgument", e.code);
@@ -652,6 +716,7 @@ void test_media_read_keys() {
 void test_media_size_limits() {
     TEST_ASSERT_EQUAL(64u * 1024, s3::objectSizeLimit(bucket("app")));
     TEST_ASSERT_EQUAL(2u * 1024 * 1024, s3::objectSizeLimit(bucket("fonts")));
+    TEST_ASSERT_EQUAL(2u * 1024 * 1024, s3::objectSizeLimit(bucket("images")));
     TEST_ASSERT_EQUAL_STRING("object larger than 64 KiB", s3::tooLargeMessage(bucket("app")));
     TEST_ASSERT_EQUAL_STRING("object larger than 2 MiB", s3::tooLargeMessage(bucket("fonts")));
 }
@@ -761,6 +826,9 @@ void test_media_usage_headers() {
     TEST_ASSERT_EQUAL_STRING("x-fb-media-used", s3::kMediaUsedHeader);
     TEST_ASSERT_EQUAL_STRING("x-fb-media-free", s3::kMediaFreeHeader);
     TEST_ASSERT_EQUAL_STRING("x-fb-media-reclaimable", s3::kMediaReclaimableHeader);
+    TEST_ASSERT_EQUAL_STRING("x-fb-media-erase-sectors", s3::kMediaEraseSectorsHeader);
+    TEST_ASSERT_EQUAL_STRING("x-fb-media-erase-page-max", s3::kMediaErasePageMaxHeader);
+    TEST_ASSERT_EQUAL_STRING("x-fb-media-dir-generation", s3::kMediaDirGenerationHeader);
 }
 
 // Which S3 requests need no signature.
@@ -769,7 +837,7 @@ static void test_anonymous_access() {
     TEST_ASSERT_FALSE(s3::anonymousAllowed(nullptr, false));
     TEST_ASSERT_FALSE(s3::anonymousAllowed(&bucket("app"), true));   // config.json holds secrets
     TEST_ASSERT_FALSE(s3::anonymousAllowed(&bucket("app"), false));
-    for (const char* b : {"web", "examples", "fonts"}) {
+    for (const char* b : {"web", "examples", "fonts", "images"}) {
         TEST_ASSERT_TRUE(s3::anonymousAllowed(&bucket(b), true));
         TEST_ASSERT_FALSE(s3::anonymousAllowed(&bucket(b), false));
     }
@@ -812,6 +880,7 @@ int main() {
     RUN_TEST(test_chunked_signatures);
     RUN_TEST(test_anonymous_access);
     RUN_TEST(test_media_write_keys);
+    RUN_TEST(test_images_write_keys);
     RUN_TEST(test_media_write_refusals);
     RUN_TEST(test_media_read_keys);
     RUN_TEST(test_media_size_limits);

@@ -1,6 +1,15 @@
 import { LitElement, html, svg } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import type { ButtonConfig } from '../js/app-state.js';
+import type { ButtonConfig, ItemFont } from '../js/app-state.js';
+import { on } from '../js/app-state.js';
+import { getStyles } from '../js/device-config.js';
+import { styleFont } from '../js/font-config.js';
+import { StyleElement, type ResolvedStyles } from '../js/style-config.js';
+import { iconView } from './icon-view.js';
+import { fontStyle, textStyleCss } from './font-view.js';
+
+// The 160 x 80 mini display drawn as the 113 x 42 label area.
+const MINI_SCALE = Math.min(113 / 160, 42 / 80);
 
 @customElement('fb-button-grid')
 export class FbButtonGrid extends LitElement {
@@ -14,6 +23,20 @@ export class FbButtonGrid extends LitElement {
    * buttons of the current page only (legacy layout).
    */
   @property({ attribute: false }) positions: number[] | null = null;
+  private _offIcons?: () => void;
+  private _offFonts?: () => void;
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._offIcons = on('icon-sources-change', () => this.requestUpdate());
+    this._offFonts = on('preview-fonts-change', () => this.requestUpdate());
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._offIcons?.();
+    this._offFonts?.();
+  }
 
   /** Odd positions are the left key of a connector (position = id*2+1). */
   private _isLeftSide(position: number): boolean {
@@ -31,8 +54,11 @@ export class FbButtonGrid extends LitElement {
     `;
   }
 
-  private _renderButton(btn: ButtonConfig) {
+  private _renderButton(btn: ButtonConfig, styles: ResolvedStyles) {
     const leftSide = this._isLeftSide(btn.position);
+    // Fields the key does not set: the style's key.label / key.toplabel.
+    const labelFont: ItemFont = btn.labelFont ?? styleFont(styles, StyleElement.KeyLabel);
+    const topFont: ItemFont = btn.topFont ?? styleFont(styles, StyleElement.KeyTopLabel);
 
     return html`
       <div data-position=${btn.position} class="bg-[rgb(20,20,20)] h-[57.1px] flex items-center justify-center relative font-fira text-white
@@ -58,11 +84,15 @@ export class FbButtonGrid extends LitElement {
           px-1.5 py-px w-[113px] h-[42px] font-fira text-[16.8px] font-normal text-center leading-[25.2px]
           transition-colors duration-200 hover:bg-[rgba(255,255,255,0.1)]">
           ${btn.topLabel ? html`
-            <div class="text-[13.44px] font-normal font-fira text-[rgb(255,211,95)] text-center leading-[20.16px]">
+            <div class="text-center leading-[1.3] whitespace-nowrap" data-top-label
+              style="${fontStyle(topFont, MINI_SCALE)} ${textStyleCss(styles[StyleElement.KeyTopLabel], MINI_SCALE)}">
               ${btn.topLabel}
             </div>
           ` : ''}
-          <div class="text-[16.8px] font-normal text-white">${btn.label}</div>
+          ${btn.icon
+            ? iconView(btn.icon, btn.iconSize ?? 48, btn.iconSize ?? 48, undefined, MINI_SCALE)
+            : html`<div class="leading-[1.3] whitespace-nowrap" data-label
+                style="${fontStyle(labelFont, MINI_SCALE)} ${textStyleCss(styles[StyleElement.KeyLabel], MINI_SCALE)}">${btn.label}</div>`}
         </button>
 
         <!-- Spacer -->
@@ -72,6 +102,7 @@ export class FbButtonGrid extends LitElement {
   }
 
   render() {
+    const styles = getStyles();
     const onPage = this.buttons.filter(b => b.page === this.currentPage);
     const pageButtons = this.positions
       ? this.positions.map(position => onPage.find(b => b.position === position)
@@ -80,7 +111,7 @@ export class FbButtonGrid extends LitElement {
 
     return html`
       <div class="grid grid-cols-2 gap-[6.72px] w-[342px] mt-[6.72px] font-fira">
-        ${pageButtons.map(btn => this._renderButton(btn))}
+        ${pageButtons.map(btn => this._renderButton(btn, styles))}
       </div>
     `;
   }
