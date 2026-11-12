@@ -63,6 +63,7 @@
 #include <string.h>
 
 #include "../../media/media_store.h"
+#include "esp_cpu.h"
 #include "esp_heap_caps.h"
 #include "src/draw/lv_draw_buf_private.h" /* lv_draw_buf_handlers_t fields */
 #include "ttf_check.h"
@@ -137,7 +138,7 @@ static bool started; /* init_fonts done, files open */
 
 /* stb_truetype rasterizes a glyph with temporary allocations (up to ~12 KB
  * at 72 px, all freed before the glyph is returned). They come from the
- * system heap, not the LVGL pool: tools/scripts/tiny_ttf_scratch.py compiles
+ * system heap, not the LVGL pool: tools/scripts/render_build.py compiles
  * lv_tiny_ttf.c (and only that file) with lv_malloc / lv_free renamed to
  * fb_tiny_ttf_malloc / fb_tiny_ttf_free. While guarded_get_bitmap rasterizes
  * (`rasterizing`, LVGL task with the lock held) they use the heap; at any
@@ -183,6 +184,12 @@ void fb_tiny_ttf_free(void *p) {
 }
 
 static const void *(*tiny_get_bitmap)(lv_font_glyph_dsc_t *, lv_draw_buf_t *);
+
+/* fonts_stats(): glyphs rasterized and their CPU cycles (LVGL task only). */
+static uint32_t stat_glyphs;
+static uint64_t stat_cycles;
+
+
 static uint32_t skipped_glyphs;
 
 static const void *guarded_get_bitmap(lv_font_glyph_dsc_t *g, lv_draw_buf_t *buf) {
@@ -198,7 +205,10 @@ static const void *guarded_get_bitmap(lv_font_glyph_dsc_t *g, lv_draw_buf_t *buf
         return NULL;
     }
     rasterizing = true;
+    const uint32_t c0 = esp_cpu_get_cycle_count();
     const void *bitmap = tiny_get_bitmap(g, buf);
+    stat_cycles += esp_cpu_get_cycle_count() - c0;
+    stat_glyphs++;
     rasterizing = false;
     if (scratch_live != 0) { /* cannot happen: stb frees what it allocates */
         LV_LOG_ERROR("fonts: %ld stb scratch blocks not freed", (long)scratch_live);
@@ -208,9 +218,47 @@ static const void *guarded_get_bitmap(lv_font_glyph_dsc_t *g, lv_draw_buf_t *buf
 }
 
 /* A wrapper of a tiny_ttf font renders through the guard. */
+/* Glyph lookups (metrics, kerning) timed for fonts_stats(); a lookup that
+ * falls back to another font is counted once (`dsc_depth`). */
+static bool (*tiny_get_dsc)(const lv_font_t *, lv_font_glyph_dsc_t *, uint32_t, uint32_t);
+static uint32_t stat_dsc;
+static uint64_t stat_dsc_cycles;
+static int dsc_depth;
+
+static bool timed_get_dsc(const lv_font_t *f, lv_font_glyph_dsc_t *g, uint32_t letter, uint32_t next) {
+    if (dsc_depth++) {
+        const bool r = tiny_get_dsc(f, g, letter, next);
+        dsc_depth--;
+        return r;
+    }
+    const uint32_t c0 = esp_cpu_get_cycle_count();
+    const bool r = tiny_get_dsc(f, g, letter, next);
+    stat_dsc_cycles += esp_cpu_get_cycle_count() - c0;
+    stat_dsc++;
+    dsc_depth--;
+    return r;
+}
+
+void fonts_stats(fonts_stats_t *out, bool reset) {
+    if (out) {
+        out->glyphs = stat_glyphs;
+        out->glyph_cycles = stat_cycles;
+        out->lookups = stat_dsc;
+        out->lookup_cycles = stat_dsc_cycles;
+    }
+    if (reset) {
+        stat_glyphs = 0;
+        stat_cycles = 0;
+        stat_dsc = 0;
+        stat_dsc_cycles = 0;
+    }
+}
+
 static void guard(lv_font_t *w) {
     tiny_get_bitmap = w->get_glyph_bitmap; /* the same tiny_ttf callback for every font */
     w->get_glyph_bitmap = guarded_get_bitmap;
+    tiny_get_dsc = w->get_glyph_dsc;
+    w->get_glyph_dsc = timed_get_dsc;
 }
 
 /* (Re)fill a wrapper from its instance's ttf (NULL: the built-in font),

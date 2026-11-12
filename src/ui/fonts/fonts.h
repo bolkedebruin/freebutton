@@ -83,6 +83,17 @@ int fonts_px(int fontsize, int fallback_px);
  * LV_FONT_DEFAULT (warned once). LVGL lock held. */
 lv_font_t *fonts_get(int face, int px);
 
+/* Render statistics (POST /api/bench) since the last reset: glyphs
+ * rasterized and glyph lookups (metrics + kerning), with their CPU cycles.
+ * LVGL lock held. */
+typedef struct {
+    uint32_t glyphs;
+    uint64_t glyph_cycles;
+    uint32_t lookups;
+    uint64_t lookup_cycles;
+} fonts_stats_t;
+void fonts_stats(fonts_stats_t *out, bool reset);
+
 #ifdef __cplusplus
 }
 #endif

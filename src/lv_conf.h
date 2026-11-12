@@ -179,10 +179,21 @@
 #define LV_TINY_TTF_FILE_SUPPORT 0
 /* stb_truetype asserts (abort, reboot) when a rasterizer allocation
  * fails; without the assert it skips that edge or glyph. Its scratch comes
- * from the system heap (tools/scripts/tiny_ttf_scratch.py, fonts.c
+ * from the system heap (tools/scripts/render_build.py, fonts.c
  * fb_tiny_ttf_malloc), and fonts.c renders only when the heap has room
  * (guarded_get_bitmap). */
 #define STBTT_assert(x) ((void)0)
+/* stb_truetype's math in single precision: its defaults (floor, ceil,
+ * sqrt, fabs on double) run in software on the ESP32-S3, whose FPU is
+ * single precision only. Builtins: no <math.h> needed here. */
+#define STBTT_ifloor(x) ((int)__builtin_floorf(x))
+#define STBTT_iceil(x) ((int)__builtin_ceilf(x))
+#define STBTT_sqrt(x) __builtin_sqrtf(x)
+#define STBTT_pow(x, y) __builtin_powf((x), (y))
+#define STBTT_fmod(x, y) __builtin_fmodf((x), (y))
+#define STBTT_cos(x) __builtin_cosf(x)
+#define STBTT_acos(x) __builtin_acosf(x)
+#define STBTT_fabs(x) __builtin_fabsf(x)
 #define LV_TINY_TTF_CACHE_GLYPH_CNT 0
 #define LV_TINY_TTF_CACHE_KERNING_CNT 0
 #define LV_USE_BARCODE 0
