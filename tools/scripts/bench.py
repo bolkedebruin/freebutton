@@ -4,7 +4,8 @@
 POST /api/bench?n=N (signed) makes the LVGL task repaint each display N
 times; GET /api/bench returns, per display, the average and best repaint
 time (to the last band on the wire), the time spent waiting for DMA, the
-bands flushed and the glyphs rasterized with their CPU time.
+bands flushed and the glyphs rasterized with their CPU time. The device
+hands a result out once (later GETs return only its "seq").
 
 usage: bench.py http://192.168.1.51 [-n 5] [--json out.json] [--compare before.json]
 Credentials: FB_ACCESS_KEY_ID / FB_SECRET_ACCESS_KEY (or FB_CREDENTIALS), as

@@ -14,6 +14,12 @@ times. `GET /api/bench` returns, per display:
 - the bands flushed;
 - the glyphs rasterized and the glyph lookups (metrics and kerning), with
   their CPU time (`fonts_stats()`).
+- the pixels blended per kind and the masks generated, with their CPU time
+  (`render_stats_get()`).
+
+The result is allocated on the heap for the run and handed out once: the
+next GET returns only `{"seq":N}`. No RAM is held for the benchmark
+otherwise.
 
 `tools/scripts/bench.py http://<ip> -n 5 --json run.json --compare before.json`
 prints the table.

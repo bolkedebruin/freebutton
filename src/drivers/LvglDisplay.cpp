@@ -53,11 +53,14 @@ std::unique_ptr<LvglDisplay> g_lvglDisplay;
 // captureScreens(), on the LVGL task, around one lv_refr_now() of s_capDisp;
 // the flush callbacks (same task) append what they send.
 static std::atomic<bool> s_screenshotRequested{false};
-// Benchmark (requestBench / runBench): repaints per display, 0 = none; the
-// result is a JSON text read by benchResult() (any task, under s_benchMux).
+// Benchmark (requestBench / runBench): repaints per display, 0 = none. The
+// result is a heap-allocated JSON text, handed over once by
+// takeBenchResult() (any task, under s_benchMux): no RAM is held for it
+// outside a run.
 static std::atomic<int> s_benchRequested{0};
 static portMUX_TYPE s_benchMux = portMUX_INITIALIZER_UNLOCKED;
-static char s_benchJson[3072] = "{\"seq\":0}";
+static constexpr size_t kBenchJsonMax = 3072;
+static char* s_benchJson = nullptr;
 static uint32_t s_benchSeq = 0;
 static lv_display_t* s_capDisp = nullptr;
 static BusAwareFile s_capFile;
@@ -456,11 +459,13 @@ void LvglDisplay::requestBench(int repaints) {
     s_benchRequested.store(repaints < 1 ? 1 : (repaints > 50 ? 50 : repaints));
 }
 
-size_t LvglDisplay::benchResult(char* out, size_t size) {
+char* LvglDisplay::takeBenchResult(uint32_t* seq) {
     taskENTER_CRITICAL(&s_benchMux);
-    const size_t n = strlcpy(out, s_benchJson, size);
+    char* json = s_benchJson;
+    s_benchJson = nullptr;
+    if (seq) *seq = s_benchSeq;
     taskEXIT_CRITICAL(&s_benchMux);
-    return n;
+    return json;
 }
 
 // LVGL task, lock held. Each display (minis without an LVGL buffer are
@@ -469,12 +474,18 @@ size_t LvglDisplay::benchResult(char* out, size_t size) {
 // average and best time, the time waiting for DMA, bands, and glyphs
 // rasterized with their cycles (fonts_stats).
 void LvglDisplay::runBench(int n) {
-    // Built off the stack: the LVGL task's 8 KB stack is needed by the
-    // repaints themselves (a 3 KB local overflowed it).
-    static char json[sizeof s_benchJson];
+    // On the heap, not the stack: the LVGL task's 8 KB stack is needed by
+    // the repaints themselves (a 3 KB local overflowed it). Allocated per
+    // run and freed by the reader (takeBenchResult).
+    char* json = static_cast<char*>(malloc(kBenchJsonMax));
+    if (!json) {
+        ESP_LOGW(TAG, "bench: no memory for the result");
+        return;
+    }
+    const size_t cap = kBenchJsonMax;
     size_t len = 0;
     const uint32_t seq = s_benchSeq + 1;
-    len += snprintf(json + len, sizeof json - len, "{\"seq\":%lu,\"repaints\":%d,\"displays\":[",
+    len += snprintf(json + len, cap - len, "{\"seq\":%lu,\"repaints\":%d,\"displays\":[",
                     static_cast<unsigned long>(seq), n);
     const size_t count = 1 + small_displays_.size();
     bool first = true;
@@ -510,7 +521,7 @@ void LvglDisplay::runBench(int n) {
         } else {
             snprintf(name, sizeof name, "mini%u", static_cast<unsigned>(i - 1));
         }
-        len += snprintf(json + len, len < sizeof json ? sizeof json - len : 0,
+        len += snprintf(json + len, len < cap ? cap - len : 0,
                         "%s{\"display\":\"%s\",\"avg_us\":%lld,\"best_us\":%lld,\"dma_wait_us\":%lld,"
                         "\"bands\":%lu,\"glyphs\":%lu,\"glyph_us\":%llu,\"lookups\":%lu,\"lookup_us\":%llu,\"blend\":[",
                         first ? "" : ",", name, total / n, best, s_statDmaWaitUs / n,
@@ -521,20 +532,22 @@ void LvglDisplay::runBench(int n) {
         // per blend kind (render_stats.h order) and the mask: [calls, pixels, us]
         for (int k = 0; k <= RENDER_BLEND_KINDS; ++k) {
             const render_stat_t& st = k < RENDER_BLEND_KINDS ? rs.blend[k] : rs.mask;
-            len += snprintf(json + len, len < sizeof json ? sizeof json - len : 0, "%s[%lu,%lu,%llu]",
+            len += snprintf(json + len, len < cap ? cap - len : 0, "%s[%lu,%lu,%llu]",
                             k ? "," : "", static_cast<unsigned long>(st.calls / n),
                             static_cast<unsigned long>(st.pixels / n),
                             static_cast<unsigned long long>(st.cycles / n / (mhz ? mhz : 240)));
         }
-        len += snprintf(json + len, len < sizeof json ? sizeof json - len : 0, "]}");
+        len += snprintf(json + len, len < cap ? cap - len : 0, "]}");
         first = false;
     }
-    if (len < sizeof json) len += snprintf(json + len, sizeof json - len, "]}");
+    if (len < cap) len += snprintf(json + len, cap - len, "]}");
+    ESP_LOGI(TAG, "bench: %s", json);
     taskENTER_CRITICAL(&s_benchMux);
-    strlcpy(s_benchJson, json, sizeof s_benchJson);
+    char* unread = s_benchJson;  // an earlier result nobody fetched
+    s_benchJson = json;
     s_benchSeq = seq;
     taskEXIT_CRITICAL(&s_benchMux);
-    ESP_LOGI(TAG, "bench: %s", json);
+    free(unread);
 }
 
 void LvglDisplay::getLvglMemory(size_t& freeBytes, size_t& totalBytes) const {

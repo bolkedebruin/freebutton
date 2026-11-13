@@ -82,10 +82,12 @@ public:
 
     // Benchmark (debug, POST /api/bench?n=N): from any task. The LVGL task
     // then repaints every display N times and records per display the
-    // average/best time, DMA wait, bands and glyphs rasterized; benchResult()
-    // copies the last result (JSON with a "seq" that grows per run).
+    // average/best time, DMA wait, bands and glyphs rasterized.
+    // takeBenchResult() hands the newest unread result over once (JSON with a
+    // "seq" that grows per run; the caller free()s it), else nullptr; *seq is
+    // the newest run's number either way.
     static void requestBench(int repaints);
-    static size_t benchResult(char* out, size_t size);
+    static char* takeBenchResult(uint32_t* seq);
 
     // Last LVGL pool snapshot (free/total bytes). Safe from any task: it
     // never touches the pool, unlike lv_mem_monitor().
