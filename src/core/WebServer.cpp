@@ -554,9 +554,13 @@ void webserver_start() {
         request->send(202, "application/json", "{\"status\":\"requested\"}");
     });
     server.on("/api/bench", HTTP_GET, [](AsyncWebServerRequest *request){
-        char json[1200];
-        FreeButton::LvglDisplay::benchResult(json, sizeof json);
-        request->send(200, "application/json", json);
+        std::unique_ptr<char[]> json(new (std::nothrow) char[3072]);
+        if (!json) {
+            request->send(503, "application/json", "{\"error\":\"no memory\"}");
+            return;
+        }
+        FreeButton::LvglDisplay::benchResult(json.get(), 3072);
+        request->send(200, "application/json", json.get());
     });
     server.on("/api/screenshot", HTTP_POST, [](AsyncWebServerRequest *request){
         FreeButton::LvglDisplay::requestScreenshot();

@@ -65,6 +65,20 @@ def table(result, before=None):
         print(line)
 
 
+BLEND_KINDS = ["fill", "fill+opa", "fill+mask", "image", "image+mask", "mask gen"]
+
+
+def pixel_table(result):
+    """Where the pixel work goes (POST /api/bench "blend"): calls, pixels, ms
+    and CPU cycles per pixel, per display and kind."""
+    print(f"\n{'display':8} {'kind':11} {'calls':>6} {'pixels':>8} {'ms':>7} {'cyc/px':>7}")
+    for d in result["displays"]:
+        for kind, (calls, px, us) in zip(BLEND_KINDS, d.get("blend", [])):
+            if calls:
+                cyc = us * 240 / px if px else 0
+                print(f"{d['display']:8} {kind:11} {calls:6} {px:8} {us / 1000:7.2f} {cyc:7.2f}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("device")
@@ -77,6 +91,8 @@ def main():
     result = run(base, args.n, args.timeout)
     before = json.load(open(args.compare)) if args.compare else None
     table(result, before)
+    if any("blend" in d for d in result["displays"]):
+        pixel_table(result)
     if args.json:
         with open(args.json, "w") as f:
             json.dump(result, f, indent=1)

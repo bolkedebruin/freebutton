@@ -14,6 +14,7 @@
 #include <freertos/task.h>
 
 #include "ui/fonts/fonts.h"
+#include "ui/render_stats.h"
 
 #define MAIN_DISPLAY_WIDTH 320
 #define MAIN_DISPLAY_HEIGHT 240
@@ -56,7 +57,7 @@ static std::atomic<bool> s_screenshotRequested{false};
 // result is a JSON text read by benchResult() (any task, under s_benchMux).
 static std::atomic<int> s_benchRequested{0};
 static portMUX_TYPE s_benchMux = portMUX_INITIALIZER_UNLOCKED;
-static char s_benchJson[1200] = "{\"seq\":0}";
+static char s_benchJson[3072] = "{\"seq\":0}";
 static uint32_t s_benchSeq = 0;
 static lv_display_t* s_capDisp = nullptr;
 static BusAwareFile s_capFile;
@@ -468,7 +469,9 @@ size_t LvglDisplay::benchResult(char* out, size_t size) {
 // average and best time, the time waiting for DMA, bands, and glyphs
 // rasterized with their cycles (fonts_stats).
 void LvglDisplay::runBench(int n) {
-    char json[sizeof s_benchJson];
+    // Built off the stack: the LVGL task's 8 KB stack is needed by the
+    // repaints themselves (a 3 KB local overflowed it).
+    static char json[sizeof s_benchJson];
     size_t len = 0;
     const uint32_t seq = s_benchSeq + 1;
     len += snprintf(json + len, sizeof json - len, "{\"seq\":%lu,\"repaints\":%d,\"displays\":[",
@@ -485,6 +488,7 @@ void LvglDisplay::runBench(int n) {
         s_statFlushes = 0;
         s_statDmaWaitUs = 0;
         fonts_stats(nullptr, true);
+        render_stats_get(nullptr, true);
         for (int r = 0; r < n; ++r) {
             const int64_t t0 = esp_timer_get_time();
             lv_obj_invalidate(scr);
@@ -497,6 +501,8 @@ void LvglDisplay::runBench(int n) {
         }
         fonts_stats_t fs{};
         fonts_stats(&fs, true);
+        render_stats_t rs{};
+        render_stats_get(&rs, true);
         const uint32_t mhz = static_cast<uint32_t>(esp_clk_cpu_freq() / 1000000);
         char name[8];
         if (i == 0) {
@@ -506,12 +512,21 @@ void LvglDisplay::runBench(int n) {
         }
         len += snprintf(json + len, len < sizeof json ? sizeof json - len : 0,
                         "%s{\"display\":\"%s\",\"avg_us\":%lld,\"best_us\":%lld,\"dma_wait_us\":%lld,"
-                        "\"bands\":%lu,\"glyphs\":%lu,\"glyph_us\":%llu,\"lookups\":%lu,\"lookup_us\":%llu}",
+                        "\"bands\":%lu,\"glyphs\":%lu,\"glyph_us\":%llu,\"lookups\":%lu,\"lookup_us\":%llu,\"blend\":[",
                         first ? "" : ",", name, total / n, best, s_statDmaWaitUs / n,
                         static_cast<unsigned long>(s_statFlushes / n), static_cast<unsigned long>(fs.glyphs / n),
                         static_cast<unsigned long long>(fs.glyph_cycles / n / (mhz ? mhz : 240)),
                         static_cast<unsigned long>(fs.lookups / n),
                         static_cast<unsigned long long>(fs.lookup_cycles / n / (mhz ? mhz : 240)));
+        // per blend kind (render_stats.h order) and the mask: [calls, pixels, us]
+        for (int k = 0; k <= RENDER_BLEND_KINDS; ++k) {
+            const render_stat_t& st = k < RENDER_BLEND_KINDS ? rs.blend[k] : rs.mask;
+            len += snprintf(json + len, len < sizeof json ? sizeof json - len : 0, "%s[%lu,%lu,%llu]",
+                            k ? "," : "", static_cast<unsigned long>(st.calls / n),
+                            static_cast<unsigned long>(st.pixels / n),
+                            static_cast<unsigned long long>(st.cycles / n / (mhz ? mhz : 240)));
+        }
+        len += snprintf(json + len, len < sizeof json ? sizeof json - len : 0, "]}");
         first = false;
     }
     if (len < sizeof json) len += snprintf(json + len, sizeof json - len, "]}");

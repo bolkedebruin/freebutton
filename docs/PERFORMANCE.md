@@ -56,11 +56,32 @@ Final state on .81, with QIO, `-Os`, float math and D:
 
 ## Not done
 
-**ESP32-S3 SIMD (PIE).**
-- GCC does not generate PIE instructions; they need hand-written assembly.
-- Espressif's esp_lvgl_port assembly targets LVGL 9.1 and only unmasked RGB565
-  fill and copy.
-- Our hot paths are masked blends to RGB565_SWAPPED.
+**ESP32-S3 SIMD (PIE).** Measured, not worth it.
+
+- `src/ui/render_stats.c` wraps LVGL's `lv_draw_sw_blend` and
+  `lv_draw_sw_mask_apply` at link time and reports their time per pixel
+  kind in `/api/bench`. Results on .81 (QIO, D):
+
+  | Display | Opaque fills | Colour through a mask (glyphs, A8 icons, AA edges) | Mask generation (clock lines, arcs) | Of a repaint |
+  |---|---|---|---|---|
+  | main | 1.0 ms | 7.9 ms | 5.2 ms | ~14 of 131 ms (11%) |
+  | key displays | 0.2 ms | 0.5-0.9 ms | – | ~0.7 of 22-28 ms (3%) |
+
+- **Upper bound.** Even a 5x faster SIMD blend would save ~8 ms on main and
+  under 1 ms on a key display.
+- **Opaque fills** already run at 0.4 cycles/pixel. The masked blends cost
+  13-50 cycles/pixel because they cover small areas (per-call overhead),
+  which SIMD does not remove.
+- **The rest of a repaint** is LVGL's control code: object tree, draw
+  tasks, clipping. The main display spends ~72 ms there; the key displays
+  ~12 ms. Glyph rasterizing (float math) and lookups make up 15-25%.
+- **Why the instructions do not reach the hot paths:**
+  - PIE has integer vectors only, so stb_truetype's float rasterizer cannot
+    use it.
+  - GCC does not generate PIE instructions; they need hand-written assembly.
+  - Espressif's esp_lvgl_port assembly targets LVGL 9.1 and covers only
+    unmasked RGB565 fill and copy. Our hot paths are masked blends to
+    RGB565_SWAPPED.
 
 **PPA and 2D-DMA.** These are ESP32-P4 only.
 
