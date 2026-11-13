@@ -91,6 +91,9 @@ private:
     // script calls setFont() (any task); fontDirty_ has the LVGL task redraw.
     std::atomic<uint32_t> font_{fontref::pack(FONT_FACE_NONE, 0)};
     std::atomic<bool> fontDirty_{false};
+    // The configured label / unit were not drawn (no LVGL pool then): draw
+    // the box again at the next render. LVGL task only.
+    bool redraw_ = false;
     // "icon" / "iconsize" / "iconcolor", and the state for a DISPLAY_ICON
     // topic (DisplayItem.cpp). After the topics were parsed.
     void configureIcon(const JsonObject& data);

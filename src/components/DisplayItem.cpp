@@ -116,16 +116,30 @@ bool DisplayItem::applyPending() {
         if (!buildBox()) {
             return false;  // no LVGL memory now; the next render request retries
         }
-    } else if (fontChanged) {
+    } else if (fontChanged || redraw_) {
         drawConfigured();  // the new font; the slots below render over it
     }
+    // A text that could not be drawn (the LVGL pool was too low just then,
+    // e.g. while a page is built) is not lost: its slot is marked not applied
+    // and the widgets are walked again shortly. Dropped for good, it stayed
+    // empty until the next MQTT value.
     bool again = false;
-    again |= valueSlot_.apply([this](const char* text) { ui_box_set_text(box, text); })
+    bool skipped = redraw_;
+    bool drawn = true;
+    again |= valueSlot_.apply([&](const char* text) { drawn = ui_box_set_text(box, text); })
              == TextSlotApply::Busy;
-    again |= captionSlot_.apply([this](const char* text) { ui_box_set_caption(box, text); })
+    if (!drawn) { valueSlot_.invalidate(); skipped = true; }
+    drawn = true;
+    again |= captionSlot_.apply([&](const char* text) { drawn = ui_box_set_caption(box, text); })
              == TextSlotApply::Busy;
-    again |= unitSlot_.apply([this](const char* text) { ui_box_set_hint(box, text); })
+    if (!drawn) { captionSlot_.invalidate(); skipped = true; }
+    drawn = true;
+    again |= unitSlot_.apply([&](const char* text) { drawn = ui_box_set_hint(box, text); })
              == TextSlotApply::Busy;
+    if (!drawn) { unitSlot_.invalidate(); skipped = true; }
+    if (skipped) {
+        ui::requestPendingRenderLater();
+    }
     if (IconState* s = icon_.get()) {
         again |= s->apply([this, s](const lv_image_dsc_t* dsc) { return showIcon(*s, dsc); });
     }
@@ -158,7 +172,7 @@ void DisplayItem::drawConfigured() {
         .caption_face = static_cast<int16_t>(labelFontFace),
         .caption_fontsize = clampSize(labelFontSize),
     };
-    draw_box(box, label.c_str(), "", unit.c_str(), x, y, &fonts, adjustedWidth, alignment, boxType);
+    redraw_ = !draw_box(box, label.c_str(), "", unit.c_str(), x, y, &fonts, adjustedWidth, alignment, boxType);
     valueSlot_.invalidate();
     captionSlot_.invalidate();
     unitSlot_.invalidate();

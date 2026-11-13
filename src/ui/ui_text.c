@@ -87,7 +87,17 @@ static lv_align_t to_lv_valign(const uint8_t v) {
     }
 }
 
-void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_style, const int base_face,
+/* Since boot: texts drawn in one format for lack of pool, and texts not
+ * drawn at all (the caller draws those again later). */
+static uint32_t g_collapsed;
+static uint32_t g_skipped;
+
+void ui_text_stats(uint32_t *collapsed, uint32_t *skipped) {
+    *collapsed = g_collapsed;
+    *skipped = g_skipped;
+}
+
+bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_style, const int base_face,
                     const int base_px, const bool title) {
     /* clear out any existing references */
     lv_obj_clean(obj);
@@ -96,7 +106,8 @@ void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
     char *buf = (char *)lv_malloc(len + 1);
     if (buf == NULL) {
         LV_LOG_WARN("text: no LVGL memory to render %u bytes", (unsigned)len);
-        return;
+        g_skipped++;
+        return false;
     }
     text_span_t spans[UI_TEXT_MAX_SPANS];
     text_parse_result_t parsed =
@@ -104,10 +115,9 @@ void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
 
     /* + 1: the row container */
     if (parsed.span_count > 1 && !pool_room_for(parsed.span_count + 1)) {
-        static uint32_t collapsed;
-        if ((collapsed++ & 63u) == 0) {
+        if ((g_collapsed++ & 63u) == 0) {
             LV_LOG_WARN("text: LVGL pool low, %u spans drawn as one (%lu so far)", (unsigned)parsed.span_count,
-                        (unsigned long)collapsed);
+                        (unsigned long)g_collapsed);
         }
         const text_span_t first = spans[0];
         memset(&spans[0], 0, sizeof(spans[0]));
@@ -120,19 +130,19 @@ void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
         parsed.span_count = 1;
     }
     if (parsed.span_count > 0 && !pool_room_for(2)) {
-        static uint32_t dropped;
-        if ((dropped++ & 63u) == 0) {
-            LV_LOG_WARN("text: LVGL pool low, value not drawn (%lu so far)", (unsigned long)dropped);
+        if ((g_skipped++ & 63u) == 0) {
+            LV_LOG_WARN("text: LVGL pool low, value not drawn (%lu so far)", (unsigned long)g_skipped);
         }
         lv_free(buf);
-        return;
+        return false;
     }
 
     /* A row container for the spans */
     lv_obj_t *container = lv_obj_create(obj);
     if (container == NULL) {
         lv_free(buf);
-        return;
+        g_skipped++;
+        return false;
     }
     lv_obj_set_scrollable(container, false); /* no scrollbar when wider than the parent */
     lv_obj_set_size(container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -198,4 +208,5 @@ void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
     }
 
     lv_free(buf);
+    return true;
 }

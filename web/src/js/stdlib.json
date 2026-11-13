@@ -606,6 +606,68 @@
     },
     "Boolean": {},
     "Date": {
+      "prototype": [
+        {
+          "description": "",
+          "name": "valueOf",
+          "params": [],
+          "returns": "any"
+        },
+        {
+          "description": "Returns the numeric value corresponding to the time",
+          "name": "getTime",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Returns the year of the specified date",
+          "name": "getFullYear",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Returns the month in the specified date",
+          "name": "getMonth",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Returns the day of the month",
+          "name": "getDate",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Returns the day of the week",
+          "name": "getDay",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Returns the hour",
+          "name": "getHours",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Returns the minutes",
+          "name": "getMinutes",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Returns the seconds",
+          "name": "getSeconds",
+          "params": [],
+          "returns": "number"
+        },
+        {
+          "description": "Returns the milliseconds",
+          "name": "getMilliseconds",
+          "params": [],
+          "returns": "number"
+        }
+      ],
       "static": [
         {
           "description": "Returns the number of milliseconds elapsed since January 1, 1970",

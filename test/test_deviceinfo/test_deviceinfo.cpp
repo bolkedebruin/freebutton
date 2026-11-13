@@ -94,6 +94,7 @@ void test_exact_key_set() {
              "\"deviceName\"", "\"ipv4\"", "\"ipv6\"", "\"ssid\"", "\"rssi\"",
              "\"mac\"", "\"firmware\"", "\"uptime\"", "\"heapFree\"", "\"heapTotal\"",
              "\"heapMinFree\"", "\"lvglFree\"", "\"lvglTotal\"",
+             "\"textSkipped\"", "\"textCollapsed\"",
              "\"jsHeapUsed\"", "\"jsHeapFree\"", "\"jsHeapSize\"",
              "\"mainConnector\"", "\"connectors\"", "\"commit\"", "\"dirty\"", "\"model\"" }) {
         TEST_ASSERT_TRUE_MESSAGE(contains(json, key), key);
