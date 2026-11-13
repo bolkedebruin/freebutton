@@ -446,8 +446,8 @@ void webserver_start() {
     // required: POST /api/reboot, /upload, /ota_update, /updatefirmware,
     // /resetWifi, /api/bytecode/upload; GET /config; the /ws/repl upgrade.
     // Anonymous: /api/version, /api/device, /api/bytecode/list,
-    // /api/bytecode/next_address, the /upgrade and /bytecode pages (their
-    // unsigned form posts now get 403), static www, captive portal, OPTIONS.
+    // /api/bytecode/next_address, the /upgrade page (its unsigned form
+    // post now gets 403), static www, captive portal, OPTIONS.
     fbauth::init();
     fbauth::installGate(server);
 
@@ -534,11 +534,8 @@ void webserver_start() {
     server.on("/ota_update", HTTP_POST, handleOtaUpdate);
     server.on("/updatefirmware", HTTP_POST, handleRemoteFirmwareUpdate);
 
-    // Bytecode upload endpoints. /bytecode is a dev upload page (anonymous);
-    // its unsigned upload is refused now, upload from the IDE instead.
-    server.on("/bytecode", HTTP_GET, [](AsyncWebServerRequest *request){
-        request->send(LittleFS, "/bytecode_upload.html", "text/html");
-    });
+    // Bytecode upload endpoints (the former /bytecode dev page was removed:
+    // its unsigned upload was refused; upload from the IDE).
 
     server.on("/api/bytecode/upload", HTTP_POST, handleBytecodeUpload, onBytecodeUpload);
     server.on("/api/bytecode/list", HTTP_GET, handleBytecodeList);

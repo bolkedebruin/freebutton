@@ -50,14 +50,13 @@ private:
     lv_obj_t* button = nullptr;  // UI button element; written only with the LVGL lock held
 
     // Label / top label set from other tasks (MQTT, JS), rendered by the LVGL
-    // task in applyPending(). 32 B footprint each (26 text bytes, see
-    // TextSlot.h): the mini panel is 160 px wide; the label (32 px font,
-    // wraps) shows ~9 glyphs per line and the top label (18 px) ~16, so 26
-    // bytes covers two lines of ASCII label or a full top label (an MDI icon
-    // is 4 bytes). lv_label_set_text() does not parse colour escapes, so
-    // there is no escape overhead here.
-    static constexpr size_t kLabelSlotBytes = 32;
-    static constexpr size_t kTopLabelSlotBytes = 32;
+    // task in applyPending(). 96 B footprint each (90 text bytes, see
+    // TextSlot.h). The mini panel is 160 px wide: the label (32 px font,
+    // wraps) shows ~9 glyphs per line and the top label (18 px) ~16, so the
+    // text itself is ~26 bytes; the rest is room for text markup
+    // (ui_button.h: a colour is 8 bytes, "\cRRGGBB", an MDI icon 4).
+    static constexpr size_t kLabelSlotBytes = 96;
+    static constexpr size_t kTopLabelSlotBytes = 96;
     TextSlot<kLabelSlotBytes> labelSlot_;
     TextSlot<kTopLabelSlotBytes> topLabelSlot_;
 

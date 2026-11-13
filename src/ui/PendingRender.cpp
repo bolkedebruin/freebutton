@@ -53,8 +53,17 @@ void applyPendingRenders() {
         return;
     }
     bool again = false;
+    // Release first, then build (PendingRender::shownNow). Both passes keep
+    // the list (config) order.
     for (PendingRender* r = g_head; r; r = r->nextPending_) {
-        again |= r->applyPending();
+        if (!r->shownNow()) {
+            again |= r->applyPending();
+        }
+    }
+    for (PendingRender* r = g_head; r; r = r->nextPending_) {
+        if (r->shownNow()) {
+            again |= r->applyPending();
+        }
     }
     if (again) {
         g_requested.store(true, std::memory_order_release);

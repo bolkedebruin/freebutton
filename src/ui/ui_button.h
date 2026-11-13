@@ -14,6 +14,17 @@ typedef struct {
     lv_obj_t *title;  /**< Title label object */
     lv_obj_t *text;   /**< Text label object */
     lv_obj_t *icon;   /**< Icon object */
+    /* Text markup (text_spans.h). A text of one format is drawn by the label
+     * above, with that format as local styles. A text of several formats is
+     * drawn as a row of labels in these (NULL until one is needed; the label
+     * is then hidden). */
+    lv_obj_t *rich_title;
+    lv_obj_t *rich_text;
+    const lv_font_t *title_font; /**< ui_button_set_fonts(); NULL = the shared style */
+    const lv_font_t *text_font;
+    int16_t title_face, title_px; /**< base font of the top label's spans (ui_button_set_base_fonts) */
+    int16_t text_face, text_px;
+    bool icon_shown;              /**< the icon replaces the bottom text */
 } button_dsc_t;
 
 /**
@@ -32,16 +43,27 @@ lv_obj_t *ui_button_create(lv_obj_t *parent);
 /**
  * @brief Set the title text of a button
  * @param button Button object created with ui_button_create()
- * @param title Title string to display (empty string hides title)
+ * @param title Title string to display (empty string hides title). Text
+ *        markup applies (text_spans.h: \\cRRGGBB, \\s{px}, \\f{font}, ...).
  */
 void ui_button_set_title(lv_obj_t *button, const char *title);
 
 /**
  * @brief Set the main text content of a button
  * @param button Button object created with ui_button_create()
- * @param text Text string to display
+ * @param text Text string to display; text markup applies as for the title
  */
 void ui_button_set_text(lv_obj_t *button, const char *text);
+
+/** Longest label text drawn, markup included (bytes; a longer one is cut). */
+#define UI_BUTTON_TEXT_MAX 127
+
+/**
+ * @brief The face (fonts.h) and px of the bottom and the top label: what a
+ *        span of a text with markup starts from (\s and \f change it).
+ *        Call it before the texts are set (LVGL lock held).
+ */
+void ui_button_set_base_fonts(lv_obj_t *button, int text_face, int text_px, int title_face, int title_px);
 
 /**
  * @brief Fonts of the bottom label and the top label (LVGL lock held)

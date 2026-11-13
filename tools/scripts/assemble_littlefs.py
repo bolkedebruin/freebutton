@@ -6,7 +6,7 @@ The firmware serves the web IDE from LittleFS ``/www/`` (gzip-only; see
 fallback serves ``/www/index.html.gz`` explicitly). This script stages, with
 zero external dependencies at runtime:
 
-  * config + data files at the image root (config.json, virt*.json, ...);
+  * config.json at the image root;
     FREEBUTTON_CONFIG=<path> takes config.json from another file
     (e.g. devices/<id>/config.json)
   * example scripts from ``data/scripts/examples/``
@@ -35,11 +35,6 @@ import sys
 # Files copied verbatim from data/ to the image root.
 ROOT_FILES = [
     "config.json",
-    "config.json.home",
-    "config.json.old_style",
-    "virt.json",
-    "virt2.json",
-    "bytecode_upload.html",
 ]
 
 STAGING_SUBDIR = os.path.join(".pio", "staging_data")

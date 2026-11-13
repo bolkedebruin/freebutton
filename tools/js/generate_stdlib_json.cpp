@@ -566,9 +566,9 @@ public:
              {"params", json::array({{{"name", "callback"}, {"type", "() => boolean | void"}, {"description", "Function to call on release. Return false to suppress this press's MQTT publishing (configured topics and the Home Assistant event)."}}})}}
         });
         json fbSmallDisplay = json::array({
-            {{"name", "setLabel"}, {"description", "Set button display label"}, {"returns", "void"},
+            {{"name", "setLabel"}, {"description", "Set button display label. Text markup applies: \\\\cRRGGBB colour, \\\\s{px} size, \\\\f{font} font, \\\\al \\\\ac \\\\ar alignment (write the backslash twice in a JS string); at most 90 bytes"}, {"returns", "void"},
              {"params", json::array({{{"name", "text"}, {"type", "string"}, {"description", "Label text"}}})}},
-            {{"name", "setTopLabel"}, {"description", "Set button display top label"}, {"returns", "void"},
+            {{"name", "setTopLabel"}, {"description", "Set button display top label. Text markup applies as for setLabel; at most 90 bytes"}, {"returns", "void"},
              {"params", json::array({{{"name", "text"}, {"type", "string"}, {"description", "Top label text"}}})}},
             {{"name", "getLabel"}, {"description", "Label currently shown (last setLabel / MQTT text, else the config label)"}, {"returns", "string"},
              {"params", json::array()}},

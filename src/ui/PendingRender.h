@@ -25,6 +25,14 @@ public:
     // the next tick has to look again.
     virtual bool applyPending() = 0;
 
+    // LVGL lock held. False for a widget of a page that is not shown: its
+    // applyPending() then only releases its LVGL objects. Those run first
+    // (applyPendingRenders), so on a page change the page that goes gives
+    // its memory back before the page that comes builds; in list order
+    // alone, a page listed earlier in the config was built while the later
+    // one still held the pool, and values were left undrawn for lack of it.
+    virtual bool shownNow() const { return true; }
+
 protected:
     PendingRender() = default;
     ~PendingRender() = default;

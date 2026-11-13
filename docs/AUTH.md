@@ -118,9 +118,10 @@ its own checksum, a filesystem image its LittleFS magic).
 Anonymous: `GET /api/version`, `GET /api/device`, `GET /api/bytecode/list`,
 `GET /api/bytecode/next_address`, the `/upgrade` page (its own unsigned form
 post to `/upload` now gets 403: use the IDE or `tools/scripts/ota_fs.py` with
-signing), the `/bytecode` dev page (same: its upload is refused), static
+signing), static
 files (`/www`), the captive portal (`/`, `/scan`, `/connect` in AP mode),
-and CORS preflights (`OPTIONS`). The former `/ws-test` page was removed: it
+and CORS preflights (`OPTIONS`). The former `/bytecode` dev page (its upload was refused) and its file
+`bytecode_upload.html` were removed. The former `/ws-test` page was removed: it
 could not sign the WebSocket upgrade.
 
 The S3 API (`S3Server`) verifies with the same API (see below). Anonymous

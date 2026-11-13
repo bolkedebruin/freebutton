@@ -9,6 +9,7 @@
 #include "TopicHandler.h"
 #include "IconRef.h"
 #include "FontRef.h"
+#include "ui/MainPage.h"
 #include "ui/PendingRender.h"
 #include "utils/TextSlot.h"
 #include <cstdio>
@@ -268,6 +269,7 @@ public:
 
     // PendingRender (LVGL task, LVGL lock held)
     bool applyPending() override;
+    bool shownNow() const override { return ui::visibleOnPage(page, ui::shownPage()); }
 
 };
 

@@ -4,6 +4,8 @@
 #include "ui.h"
 #include "lvgl.h"
 #include "ui_style.h"
+#include "ui_text.h"
+#include "text_spans.h"
 
 
 static lv_style_t style_container;
@@ -71,6 +73,15 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
 
     lv_obj_set_user_data(cont, b);
     b->main = cont;
+    b->rich_title = NULL;
+    b->rich_text = NULL;
+    b->title_font = NULL;
+    b->text_font = NULL;
+    b->title_face = (int16_t)ui_style_resolved(STYLE_EL_KEY_TOPLABEL)->face;
+    b->title_px = (int16_t)ui_style_resolved(STYLE_EL_KEY_TOPLABEL)->px;
+    b->text_face = (int16_t)ui_style_resolved(STYLE_EL_KEY_LABEL)->face;
+    b->text_px = (int16_t)ui_style_resolved(STYLE_EL_KEY_LABEL)->px;
+    b->icon_shown = false;
 
 	lv_obj_set_size(cont, 160, 80);
 	lv_obj_center(cont);
@@ -118,32 +129,6 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
 }
 
 
-void ui_button_set_title(lv_obj_t * button, const char * title)
-{
-	const button_dsc_t * b = (const button_dsc_t *)lv_obj_get_user_data(button);
-	if (b == NULL) {
-		printf("ui_button_set_title: button_dsc_t is NULL\n");
-		return;
-	}
-
-	lv_label_set_text(b->title, title);
-	//If no title provided, set height to 0, this will center remaining text
-	if (strlen(title) == 0)
-		lv_obj_set_size(b->title, lv_pct(100), 0);
-    else
-		lv_obj_set_size(b->title, lv_pct(100), LV_SIZE_CONTENT);
-}
-
-void ui_button_set_text(lv_obj_t * button, const char * text)
-{
-	const button_dsc_t * b = (const button_dsc_t *)lv_obj_get_user_data(button);
-	if (b == NULL) {
-		printf("ui_button_set_text: button_dsc_t is NULL\n");
-		return;
-	}
-	lv_label_set_text(b->text, text);
-}
-
 static void set_label_font(lv_obj_t* label, const lv_font_t* font)
 {
     if (font != NULL) {
@@ -153,26 +138,147 @@ static void set_label_font(lv_obj_t* label, const lv_font_t* font)
     }
 }
 
-void ui_button_set_fonts(lv_obj_t* button, const lv_font_t* text_font, const lv_font_t* title_font)
+/*
+ * Draw a label text with its markup (text_spans.h). One format (the usual
+ * case, also "\cRRGGBB" before the whole text): the label draws the text, as
+ * before (it wraps and centres), with the span's colour, font and alignment
+ * as local styles. Several formats: a row of labels (ui_render_text) in a
+ * container beside the label, which is hidden; such a text does not wrap.
+ * Returns the length of the text without its markup.
+ */
+static size_t set_markup(button_dsc_t * b, const bool title, const char * raw)
 {
-    const button_dsc_t* b = (const button_dsc_t*)lv_obj_get_user_data(button);
+    lv_obj_t * label = title ? b->title : b->text;
+    lv_obj_t ** rich = title ? &b->rich_title : &b->rich_text;
+    const style_element_t el = title ? STYLE_EL_KEY_TOPLABEL : STYLE_EL_KEY_LABEL;
+    const int face = title ? b->title_face : b->text_face;
+    const int px = title ? b->title_px : b->text_px;
+    const bool hidden = !title && b->icon_shown;
+
+    char in[UI_BUTTON_TEXT_MAX + 1];
+    char out[UI_BUTTON_TEXT_MAX + 1];
+    size_t len = raw != NULL ? strlen(raw) : 0;
+    if (len > UI_BUTTON_TEXT_MAX) {
+        len = UI_BUTTON_TEXT_MAX;
+    }
+    memcpy(in, raw != NULL ? raw : "", len);
+    in[len] = '\0';
+    text_span_t spans[UI_TEXT_MAX_SPANS];
+    const text_parse_result_t parsed = text_parse(in, len, out, spans, UI_TEXT_MAX_SPANS, ui_text_resolve_font, NULL);
+
+    if (parsed.span_count > 1) {
+        if (*rich == NULL) {
+            lv_obj_t * r = lv_obj_create(lv_obj_get_parent(label));
+            if (r != NULL) {
+                lv_obj_set_scrollable(r, false);
+                lv_obj_set_size(r, lv_pct(100), LV_SIZE_CONTENT);
+                lv_obj_set_style_bg_opa(r, 0, 0);
+                lv_obj_set_style_border_width(r, 0, 0);
+                lv_obj_set_style_pad_all(r, 0, 0);
+                lv_obj_add_style(r, ui_style_get(el), 0); /* the base colour of the spans */
+                *rich = r;
+            }
+        }
+        if (*rich != NULL) {
+            ui_render_text(*rich, in, ui_style_get(el), face, px, title);
+            lv_obj_set_hidden(*rich, hidden);
+            lv_obj_set_hidden(label, true);
+            return parsed.text_len;
+        }
+        /* No memory for the row: fall through, the text in the first format. */
+    }
+
+    if (*rich != NULL) {
+        lv_obj_delete(*rich);
+        *rich = NULL;
+    }
+    lv_obj_set_hidden(label, hidden);
+    lv_label_set_text(label, out);
+
+    const text_span_t * s = parsed.span_count > 0 ? &spans[0] : NULL;
+    if (s != NULL && s->has_color) {
+        lv_obj_set_style_text_color(label, lv_color_hex(s->color), 0);
+    } else {
+        lv_obj_remove_local_style_prop(label, LV_STYLE_TEXT_COLOR, 0);
+    }
+    if (s != NULL && (s->font >= 0 || s->size_kind != TEXT_SIZE_BASE)) {
+        lv_obj_set_style_text_font(label, ui_text_span_font(s, face, px, title), 0);
+    } else {
+        set_label_font(label, title ? b->title_font : b->text_font);
+    }
+    if (s != NULL && s->align != TEXT_ALIGN_KEEP) {
+        lv_obj_set_style_text_align(label,
+                                    s->align == TEXT_ALIGN_LEFT ? LV_TEXT_ALIGN_LEFT
+                                    : s->align == TEXT_ALIGN_RIGHT ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_CENTER, 0);
+    } else {
+        lv_obj_remove_local_style_prop(label, LV_STYLE_TEXT_ALIGN, 0);
+    }
+    return parsed.text_len;
+}
+
+void ui_button_set_title(lv_obj_t * button, const char * title)
+{
+	button_dsc_t * b = (button_dsc_t *)lv_obj_get_user_data(button);
+	if (b == NULL) {
+		printf("ui_button_set_title: button_dsc_t is NULL\n");
+		return;
+	}
+
+	const size_t shown = set_markup(b, true, title);
+	//If no title provided, set height to 0, this will center remaining text
+	if (shown == 0)
+		lv_obj_set_size(b->title, lv_pct(100), 0);
+    else
+		lv_obj_set_size(b->title, lv_pct(100), LV_SIZE_CONTENT);
+}
+
+void ui_button_set_text(lv_obj_t * button, const char * text)
+{
+	button_dsc_t * b = (button_dsc_t *)lv_obj_get_user_data(button);
+	if (b == NULL) {
+		printf("ui_button_set_text: button_dsc_t is NULL\n");
+		return;
+	}
+	set_markup(b, false, text);
+}
+
+void ui_button_set_base_fonts(lv_obj_t* button, const int text_face, const int text_px, const int title_face,
+                              const int title_px)
+{
+    button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
     if (b == NULL) {
         return;
     }
+    b->text_face = (int16_t)text_face;
+    b->text_px = (int16_t)text_px;
+    b->title_face = (int16_t)title_face;
+    b->title_px = (int16_t)title_px;
+}
+
+void ui_button_set_fonts(lv_obj_t* button, const lv_font_t* text_font, const lv_font_t* title_font)
+{
+    button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
+    if (b == NULL) {
+        return;
+    }
+    b->text_font = text_font;
+    b->title_font = title_font;
     set_label_font(b->text, text_font);
     set_label_font(b->title, title_font);
 }
 
 void ui_button_set_icon(lv_obj_t* button, const lv_image_dsc_t* dsc)
 {
-    const button_dsc_t* b = (const button_dsc_t*)lv_obj_get_user_data(button);
+    button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
     if (!b || !b->icon) {
         printf("ui_button_set_icon: invalid button or icon object\n");
         return;
     }
     ui_image_set_raster(b->icon, dsc, lv_obj_get_style_text_color(b->text, 0));
+    b->icon_shown = dsc != NULL;
     lv_obj_set_hidden(b->icon, dsc == NULL);
-    lv_obj_set_hidden(b->text, dsc != NULL);
+    /* The bottom text is its label, or the row of a text with several formats. */
+    lv_obj_set_hidden(b->rich_text != NULL ? b->rich_text : b->text, dsc != NULL);
 }
 
 void ui_button_delete(lv_obj_t* button)
