@@ -154,14 +154,14 @@ analog_clock_t* clock_create(lv_obj_t* parent, const lv_coord_t x, const lv_coor
     // Create date label
     clock->date_label = lv_label_create(clock->container);
     lv_obj_set_style_text_color(clock->date_label, COLOR_WHITE, 0);
-    lv_obj_set_style_text_font(clock->date_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(clock->date_label, LV_FONT_DEFAULT, 0);
     lv_obj_align(clock->date_label, LV_ALIGN_TOP_RIGHT, -10, 50);
     lv_label_set_text(clock->date_label, "");
 
     // Create AM/PM label
     clock->am_pm_label = lv_label_create(clock->container);
     lv_obj_set_style_text_color(clock->am_pm_label, COLOR_PINK, 0);
-    lv_obj_set_style_text_font(clock->am_pm_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(clock->am_pm_label, LV_FONT_DEFAULT, 0);
     lv_obj_align(clock->am_pm_label, LV_ALIGN_TOP_RIGHT, -10, 70);
     lv_label_set_text(clock->am_pm_label, "");
     */

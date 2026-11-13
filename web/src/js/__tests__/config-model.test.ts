@@ -3,6 +3,7 @@ import {
   configToModel, parseConfigText, positionsForConnector, mapButton, mapDisplayItem,
   configNames, validateConfigNames, NAME_PATTERN, mapList,
 } from '../config-model';
+import { StyleElement } from '../style-config';
 
 describe('config.json -> button model', () => {
   it('maps label and toplabel per position/page', () => {
@@ -142,18 +143,18 @@ describe('key and display item names', () => {
       mqttdisplays: [{ displayitemid: '1', name: 'volume' }, { displayitemid: '2', name: 'x'.repeat(25) }],
       displayitems: [{ displayitemid: '3', name: 'clock' }],
     });
-    expect(names).toEqual({ keys: ['sceneUp', 'volume'], displayItems: ['volume', 'clock'], lists: [] });
+    expect(names).toEqual({ keys: ['sceneUp', 'volume'], displayItems: ['volume', 'clock'], lists: [], images: [], icons: [] });
   });
 
   it('reads legacy mqttbuttons and is empty for a config without names', () => {
     expect(configNames({ mqttbuttons: [{ position: 1, name: 'old' }] }).keys).toEqual(['old']);
-    expect(configNames({})).toEqual({ keys: [], displayItems: [], lists: [] });
-    expect(configNames(null)).toEqual({ keys: [], displayItems: [], lists: [] });
+    expect(configNames({})).toEqual({ keys: [], displayItems: [], lists: [], images: [], icons: [] });
+    expect(configNames(null)).toEqual({ keys: [], displayItems: [], lists: [], images: [], icons: [] });
   });
 
   it('configToModel carries the names', () => {
     const model = configToModel({ buttons: [{ position: 1, name: 'a' }], mqttdisplays: [{ name: 'b' }] });
-    expect(model.names).toEqual({ keys: ['a'], displayItems: ['b'], lists: [] });
+    expect(model.names).toEqual({ keys: ['a'], displayItems: ['b'], lists: [], images: [], icons: [] });
   });
 
   it('NAME_PATTERN: letters, digits and _, not starting with a digit, 1..24 chars', () => {
@@ -242,7 +243,7 @@ describe('lists', () => {
     expect(configNames({
       buttons: [{ position: 1, name: 'scenes' }],
       lists: [{ name: 'scenes' }, { name: 'rooms' }, { name: 'scenes' }, { name: '-' }, {}],
-    })).toEqual({ keys: ['scenes'], displayItems: [], lists: ['scenes', 'rooms'] });
+    })).toEqual({ keys: ['scenes'], displayItems: [], lists: ['scenes', 'rooms'], images: [], icons: [] });
   });
 
   it('validateConfigNames: invalid and duplicate list names', () => {
@@ -253,5 +254,73 @@ describe('lists', () => {
       'lists[1].name "x" is already used by lists[0] (list names must be unique)',
       'lists[2].name "a b" is not a valid name (1-24 letters, digits or _, not starting with a digit)',
     ]);
+  });
+});
+
+describe('fonts', () => {
+  const cfg = {
+    style: { fonts: [{ id: 1, name: 'roboto', src: 'roboto.ttf' }] },
+    displayitems: [{ name: 'temp', font: 'roboto', fontsize: 40, labelfontsize: 2 }, { name: 'plain', fontsize: 3 }],
+    buttons: [{ position: 1, label: 'a', font: 1, topfontsize: 20 }, { position: 2, label: 'b' }],
+    lists: [{ name: 'l', font: 'roboto', fontsize: 2 }],
+  };
+
+  it('maps item fonts against the font table', () => {
+    const model = configToModel(cfg);
+    expect(model.fonts.faces.map(f => f.name)).toEqual(['montserrat', 'montserrat_semibold', 'roboto']);
+    const [temp, plain] = model.pages[0]!.displayItems;
+    expect(temp!.valueFont).toEqual({ face: 2, px: 40, configured: true });
+    expect(temp!.labelFont).toEqual({ face: 1, px: 18, configured: false });
+    expect(plain!.valueFont).toEqual({ face: 0, px: 32, configured: false });
+    const [k1, k2] = model.pages[0]!.buttons;
+    expect(k1!.labelFont).toEqual({ face: 2, px: 32, configured: true });
+    expect(k1!.topFont).toEqual({ face: 1, px: 20, configured: false });
+    // A key without font fields draws in the style's fonts (no font fields).
+    expect(k2!.labelFont).toBeUndefined();
+    expect(model.pages[0]!.lists![0]!.font).toEqual({ face: 2, px: 24, configured: true });
+  });
+
+  it('names: fonts and ids only with a "style.fonts" table', () => {
+    expect(configNames(cfg)).toMatchObject({ fonts: ['montserrat', 'montserrat_semibold', 'roboto'], fontIds: [1] });
+    expect(configNames({}).fonts).toBeUndefined();
+    expect(configNames({ fonts: [{ name: 'r', src: 'r.ttf' }] }).fonts).toBeUndefined();
+  });
+
+  it('list fontsize keeps px sizes', () => {
+    expect(mapList({ name: 'a', fontsize: 40 })!.fontSize).toBe(40);
+    expect(mapList({ name: 'a', fontsize: 99 })!.fontSize).toBe(72);
+  });
+});
+
+describe('style', () => {
+  it('the model carries the resolved styles; items without fields take them', () => {
+    const model = configToModel({
+      style: {
+        fonts: [{ name: 'roboto', src: 'roboto.ttf' }],
+        text: { text_font: 'roboto' },
+        title: { text_color: '#00ff00' },
+        key: { label: { text_size: 40 } },
+        list: { text_color: '#112233', selected: { bg_color: '#445566', text_color: '#ffffff' } },
+      },
+      displayitems: [{ name: 'd', fontsize: 2, labelfontsize: 2 }],
+      buttons: [{ position: 1, label: 'a', fontsize: 20 }],
+      lists: [{ name: 'l', items: ['x'] }, { name: 'm', color: 'aabbcc', focuscolor: '000000' }],
+    });
+    expect(model.styles[StyleElement.KeyTopLabel]!.color).toBe(0x00ff00);
+    const [d] = model.pages[0]!.displayItems;
+    expect(d!.valueFont).toEqual({ face: 2, px: 24, configured: false });
+    expect(d!.labelFont).toEqual({ face: 1, px: 18, configured: false });
+    expect(model.pages[0]!.buttons[0]!.labelFont).toEqual({ face: 2, px: 20, configured: false });
+    const [l, m] = model.pages[0]!.lists!;
+    expect([l!.color, l!.focusColor, l!.focusTextColor]).toEqual(['#112233', '#445566', '#ffffff']);
+    expect(l!.font).toEqual({ face: 2, px: 32, configured: false });
+    // Item colours are local: they win over the style.
+    expect([m!.color, m!.focusColor, m!.focusTextColor]).toEqual(['#aabbcc', '#000000', '#ffffff']);
+  });
+
+  it('without a style: the defaults (gold #ffd700)', () => {
+    const model = configToModel({});
+    expect(model.styles[StyleElement.DisplayCaption]!.color).toBe(0xffd700);
+    expect(model.styles[StyleElement.ListSelected]!.bgColor).toBe(0xffd700);
   });
 });

@@ -57,6 +57,24 @@ bool list_hw_select(const int index, const int item) {
     return l != nullptr && l->select(item);
 }
 
+bool list_hw_set_font(const int index, const int face, const int size) {
+    auto* l = listAt(index);
+    if (l == nullptr) {
+        return false;
+    }
+    l->setFont(face, size);
+    return true;
+}
+
+bool list_hw_restore_font(const int index) {
+    auto* l = listAt(index);
+    if (l == nullptr) {
+        return false;
+    }
+    l->restoreFont();
+    return true;
+}
+
 void* list_hw_items_new(void) {
     return new (std::nothrow) ItemsBuilder();
 }

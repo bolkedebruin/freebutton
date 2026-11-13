@@ -223,15 +223,18 @@ void WebSocketREPL::processPending() {
     if (!pendingReady_.load(std::memory_order_acquire)) {
         return;
     }
-    const std::string_view id(pending_.id, pending_.idLength);
-    {
-        // execute() takes the engine lock.
-        const auto result = ScriptEngine::getInstance().execute(pending_.code, "<repl>");
-        sendResult(nullptr, pending_.clientId, id, result.success,
-                   result.success ? result.output : result.error);
-    }
+    // execute() takes the engine lock.
+    const auto result = ScriptEngine::getInstance().execute(pending_.code, "<repl>");
+    // Free the slot BEFORE answering: a client may send its next eval as soon
+    // as it has the result, and must not get "REPL busy" for it.
+    char id[sizeof(pending_.id)];
+    const size_t idLength = pending_.idLength;
+    const uint32_t clientId = pending_.clientId;
+    std::memcpy(id, pending_.id, idLength);
     std::string().swap(pending_.code);  // free the code now, not at the next eval
     pendingReady_.store(false, std::memory_order_release);
+    sendResult(nullptr, clientId, std::string_view(id, idLength), result.success,
+               result.success ? result.output : result.error);
 }
 
 void WebSocketREPL::sendResult(AsyncWebSocketClient* client, const uint32_t clientId, std::string_view id,

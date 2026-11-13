@@ -52,9 +52,9 @@ jobs:
       - name: Install PlatformIO Core
         run: uv pip install --upgrade platformio setuptools
 
-      # Fonts are committed (media/fonts/*.ttf, built by tools/fonts/build_fonts.py) and the mquickjs
-      # wasm assets in web/public/assets are committed real files, so CI does NOT install
-      # fontTools, rebuild the fonts, or run emcc.
+      # Fonts are committed (media/fonts/*.ttf, unmodified upstream files) and the mquickjs
+      # wasm assets in web/public/assets are committed real files, so CI does NOT build
+      # fonts or run emcc.
 
       - name: Check web IDE wasm compiler matches the firmware stdlib
         # Bytecode refers to stdlib ROM atoms by offset: a stale committed

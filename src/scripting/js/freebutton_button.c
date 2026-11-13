@@ -7,6 +7,7 @@
  * JavaScript API:
  *   button.setLabel(position, text)           - Update button label
  *   button.setTopLabel(position, text)        - Update button top label
+ *   button.setIcon(position, name)            - Icon instead of the label ("" hides it)
  *   button.onClick(position, callback)        - Register click event handler
  *   button.onLongPress(position, callback)    - Register long press event handler
  *   button.onRelease(position, callback)      - Register release event handler
@@ -27,6 +28,7 @@
 static inline int button_hw_get_count(void) { return 0; }
 static inline int button_hw_set_label(int pos, const char* label) { return 0; }
 static inline int button_hw_set_top_label(int pos, const char* label) { return 0; }
+static inline int button_hw_set_icon(int pos, const char* name, size_t len) { return 0; }
 static inline void button_hw_register_click_callback(int pos, bool (*cb)(int)) {}
 static inline void button_hw_register_long_press_callback(int pos, bool (*cb)(int)) {}
 static inline void button_hw_register_release_callback(int pos, bool (*cb)(int)) {}
@@ -216,6 +218,42 @@ JSValue js_freebutton_button_setTopLabel(JSContext *ctx, JSValue *this_val, int 
     }
 
     return JS_UNDEFINED;
+}
+
+/**
+ * @jsapi button.setIcon
+ * @description Show an icon (a name from config.json "icons") in the button's
+ *        bottom area instead of the label; "" hides it and shows the label again.
+ *        The web IDE renders the raster at the button's "iconsize" (default 48)
+ *        when the config is saved; an icon without a raster shows the label.
+ * @param {number} position - Button position (1-based)
+ * @param {string} name - Icon name ([A-Za-z0-9_-], max 31), or "" to hide
+ * @returns {void}
+ */
+JSValue js_freebutton_button_setIcon(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    int position = 0;
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, "button.setIcon() requires position and icon name arguments");
+    if (JS_ToInt32(ctx, &position, argv[0]))
+        return JS_EXCEPTION;
+
+    JSCStringBuf buf;
+    size_t len;
+    const char *name = JS_ToCStringLen(ctx, &len, argv[1], &buf);
+    if (!name)
+        return JS_EXCEPTION;
+
+    switch (button_hw_set_icon(position, name, len)) {
+    case 0:
+        return JS_UNDEFINED;
+    case -2:
+        return JS_ThrowTypeError(ctx, "invalid icon name \"%.32s\"", name);
+    case -3:
+        return JS_ThrowOutOfMemory(ctx);
+    default:
+        return JS_ThrowInternalError(ctx, "failed to set icon for button %d", position);
+    }
 }
 
 /**

@@ -15,6 +15,8 @@
  *   display.setLabel(id, label)  - Set display item label
  *   display.setValue(id, value)  - Set display item value
  *   display.setUnit(id, unit)    - Set display item unit
+ *   display.setIcon(id, name)    - Set display item icon ("" hides it)
+ *   display.setFont(id, font, size) - Set the font of value and unit
  *   display.setPosition(id, x, y) - Set display item position
  *   display.setPage(id, page)    - Set display item page
  *   display.showPage(page)       - Show a page of the main display
@@ -24,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "mquickjs.h"
+#include "font_arg.h"
 
 /* ESP32-specific includes */
 #ifdef ESP_PLATFORM
@@ -51,6 +54,9 @@ static inline const DisplayItemInfo* displayitem_get_info(unsigned long id) { re
 static inline bool displayitem_set_label(unsigned long id, const char* l) { return false; }
 static inline bool displayitem_set_value(unsigned long id, const char* v) { return false; }
 static inline bool displayitem_set_unit(unsigned long id, const char* u) { return false; }
+static inline int displayitem_set_icon(unsigned long id, const char* n, size_t len) { return 0; }
+static inline bool displayitem_set_font(unsigned long id, int face, int size) { return false; }
+static inline bool displayitem_restore_font(unsigned long id) { return false; }
 static inline bool displayitem_set_position(unsigned long id, int x, int y) { return false; }
 static inline bool displayitem_set_page(unsigned long id, int p) { return false; }
 static inline bool displayitem_show_page(int p) { return p >= 1; }
@@ -317,6 +323,71 @@ JSValue js_freebutton_display_setUnit(JSContext *ctx, JSValue *this_val, int arg
 
     bool success = displayitem_set_unit((unsigned long)id, unit);
     return JS_NewBool(success);
+}
+
+/**
+ * @jsapi display.setIcon
+ * @description Show an icon (a name from config.json "icons") left of the
+ *        display item's value; "" hides it. The web IDE renders the raster at
+ *        the item's "iconsize" (default 32) when the config is saved; an icon
+ *        without a raster is not shown.
+ * @param {number|string} id - Display item ID, or its config name
+ * @param {string} name - Icon name ([A-Za-z0-9_-], max 31), or "" to hide
+ * @returns {boolean} True if successful, false if the item does not exist
+ */
+JSValue js_freebutton_display_setIcon(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    int id = 0;
+    JSCStringBuf buf;
+
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "display.setIcon() requires id and icon name arguments");
+    }
+
+    if (displayitem_arg_id(ctx, &id, argv[0]))
+        return JS_EXCEPTION;
+
+    size_t len;
+    const char *name = JS_ToCStringLen(ctx, &len, argv[1], &buf);
+    if (!name)
+        return JS_EXCEPTION;
+
+    const int result = displayitem_set_icon((unsigned long)id, name, len);
+    if (result == -1)
+        return JS_ThrowTypeError(ctx, "invalid icon name \"%.32s\"", name);
+    if (result < 0)
+        return JS_ThrowOutOfMemory(ctx);
+    return JS_NewBool(result == 1);
+}
+
+/**
+ * @jsapi display.setFont
+ * @description Set the font of the display item's value and unit (config
+ *        "font" / "fontsize"); the caption keeps its own. Font and size
+ *        escapes in the text still apply on top of it.
+ * @param {number|string} id - Display item ID, or its config name
+ * @param {string|number} font - A config.json "style.fonts" name or id, or a system font (montserrat, montserrat_semibold); "" = back to the font and size of config.json (or the style's)
+ * @param {number} size - 1..5 = the legacy steps (14/24/32/48/72 px), 6..72 = px (ignored for "")
+ * @returns {boolean} True if successful, false if the item does not exist
+ */
+JSValue js_freebutton_display_setFont(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    int id = 0;
+    int face = 0;
+    int size = 0;
+
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "display.setFont() requires id, font and size arguments");
+    }
+
+    if (displayitem_arg_id(ctx, &id, argv[0]))
+        return JS_EXCEPTION;
+    const int r = fb_font_args(ctx, argc - 1, argv + 1, "display.setFont", &face, &size);
+    if (r < 0)
+        return JS_EXCEPTION;
+    if (r == FB_FONT_RESTORE)
+        return JS_NewBool(displayitem_restore_font((unsigned long)id));
+    return JS_NewBool(displayitem_set_font((unsigned long)id, face, size));
 }
 
 /**

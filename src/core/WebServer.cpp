@@ -545,6 +545,26 @@ void webserver_start() {
     server.on("/api/reboot", HTTP_POST, handleReboot);
     // Debug: repaint every display once and save what is flushed to LittleFS
     // /screenshot-*.rgb565 (bucket app; tools/scripts/screenshot.py).
+    // Debug: repaint every display ?n= times (default 5) and time it; GET
+    // returns the newest result once, then only its "seq"
+    // (tools/scripts/bench.py).
+    server.on("/api/bench", HTTP_POST, [](AsyncWebServerRequest *request){
+        int n = 5;
+        if (request->hasParam("n")) n = request->getParam("n")->value().toInt();
+        FreeButton::LvglDisplay::requestBench(n);
+        request->send(202, "application/json", "{\"status\":\"requested\"}");
+    });
+    server.on("/api/bench", HTTP_GET, [](AsyncWebServerRequest *request){
+        uint32_t seq = 0;
+        std::unique_ptr<char, decltype(&free)> json(FreeButton::LvglDisplay::takeBenchResult(&seq), &free);
+        if (json) {
+            request->send(200, "application/json", json.get());
+            return;
+        }
+        char none[32];
+        snprintf(none, sizeof none, "{\"seq\":%lu}", static_cast<unsigned long>(seq));
+        request->send(200, "application/json", none);
+    });
     server.on("/api/screenshot", HTTP_POST, [](AsyncWebServerRequest *request){
         FreeButton::LvglDisplay::requestScreenshot();
         request->send(202, "application/json", "{\"status\":\"requested\"}");

@@ -902,6 +902,160 @@ void test_powercut_compaction() {
     sweep(8, setup, [] { maintain_all(); }, false);
 }
 
+// ------------------------------------------------------------------ wear
+//
+// A device-sized store (78 pages, 5 MB) holding 1.5 MB of fonts that never
+// change, and a workload that rewrites files over and over. Wear is counted
+// per 4 KB sector by the flash; the ideal is every erase spread evenly over
+// the sectors the static files do not hold.
+
+static const uint32_t kWearPages = 78;
+static const unsigned kWearStaticSectors = 24 * (PAGE / SECTOR);
+
+struct WearStats {
+    unsigned cycles = 0, total = 0, max = 0;
+    double ideal = 0, ratio = 0;
+};
+
+static WearStats wear_stats(const RamFlash &f, unsigned cycles) {
+    const size_t first = MEDIA_DIR_PAGES * (PAGE / SECTOR);
+    WearStats w;
+    w.cycles = cycles;
+    for (size_t s = first; s < f.sector_erases.size(); s++) {
+        w.total += f.sector_erases[s];
+        w.max = std::max(w.max, f.sector_erases[s]);
+    }
+    const size_t pool = f.sector_erases.size() - first - kWearStaticSectors;
+    w.ideal = (double)w.total / (double)pool;
+    w.ratio = w.ideal > 0 ? (double)w.max / w.ideal : 0;
+    return w;
+}
+
+static void wear_report(const char *name, const WearStats &w) {
+    printf("wear %-8s %5u cycles: %7u sector erases, max %5u per sector, ideal %7.1f, max/ideal %5.2f\n", name,
+           w.cycles, w.total, w.max, w.ideal, w.ratio);
+}
+
+static const std::vector<uint8_t> &wear_blob(int which) {
+    static const std::vector<uint8_t> frames = pattern(7, 690 * 1024); // decoded frameset, 11 pages
+    static const std::vector<uint8_t> raw = pattern(8, 95 * 1024);     // download, 2 pages
+    static const std::vector<uint8_t> jpeg = pattern(9, 14 * 1024);    // history frame, 4 sectors
+    return which == 0 ? frames : which == 1 ? raw : jpeg;
+}
+
+// Download, decode into a new frameset (replaces the old one), drop the download.
+static void wear_cycle_frames(int i) {
+    TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_RENDER, "raw/radar", wear_blob(1), 1000 + (uint32_t)i, 4096));
+    TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_RENDER, "fs/radar", wear_blob(0), 1000 + (uint32_t)i, 4096));
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_RENDER, "raw/radar"));
+}
+
+// A rolling history of six small frames: add the newest, drop the oldest.
+static void wear_cycle_history(int i) {
+    TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_RENDER, "h/" + std::to_string(i), wear_blob(2), 1000 + (uint32_t)i, 4096));
+    if (i >= 6) TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_RENDER, ("h/" + std::to_string(i - 6)).c_str()));
+}
+
+static void wear_cycle_mixed(int i) {
+    wear_cycle_history(i);
+    if (i % 4 == 0) wear_cycle_frames(i / 4);
+}
+
+static WearStats run_wear(const char *name, void (*cycle)(int), int cycles) {
+    RamFlash &f = new_flash(kWearPages);
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_FONTS, "icons.ttf", pattern(1, 17 * PAGE - 1000), 1, 65536));
+    TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_FONTS, "text.ttf", pattern(2, 7 * PAGE - 500), 1, 65536));
+    maintain_all();
+    std::fill(f.sector_erases.begin(), f.sector_erases.end(), 0u);
+    for (int i = 0; i < cycles; i++) {
+        cycle(i);
+        maintain_all(); // the device runs media_maintain() from loop()
+        if (i % 1000 == 999) reboot(f);
+    }
+    TEST_ASSERT_EQUAL_UINT(0, f.violations);
+    TEST_ASSERT_EQUAL_UINT(0, f.map_violations);
+    check_no_leak(capture());
+    const WearStats w = wear_stats(f, (unsigned)cycles);
+    wear_report(name, w);
+    return w;
+}
+
+// Before next-fit allocation (best-fit, lowest page first) these were 4.0,
+// 29.7 and 3.7 times the ideal: the same pages took every rewrite.
+static const double kWearMaxRatio = 1.5;
+
+void test_wear_frames() { TEST_ASSERT_TRUE(run_wear("frames", wear_cycle_frames, 2000).ratio <= kWearMaxRatio); }
+void test_wear_history() { TEST_ASSERT_TRUE(run_wear("history", wear_cycle_history, 6000).ratio <= kWearMaxRatio); }
+void test_wear_mixed() { TEST_ASSERT_TRUE(run_wear("mixed", wear_cycle_mixed, 4000).ratio <= kWearMaxRatio); }
+
+// The page a fresh 1-page file landed on (the flash holds its pattern).
+static int landing_page(const RamFlash &f, const std::vector<uint8_t> &data) {
+    for (uint32_t p = MEDIA_DIR_PAGES; p < f.mem.size() / PAGE; p++)
+        if (!memcmp(f.mem.data() + p * PAGE, data.data(), 64)) return (int)p;
+    return -1;
+}
+
+// The sweep starts somewhere else after a reboot, and allocation still works.
+void test_cursor_seed_varies() {
+    RamFlash &f = new_flash(40);
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    std::vector<int> pages;
+    for (int boot = 0; boot < 8; boot++) {
+        const std::vector<uint8_t> data = pattern(500 + boot, PAGE);
+        TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_RENDER, "probe", data, 1, 4096));
+        pages.push_back(landing_page(f, data));
+        TEST_ASSERT_TRUE(read_file(MEDIA_BUCKET_RENDER, "probe") == data);
+        TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_RENDER, "probe"));
+        maintain_all();
+        reboot(f);
+    }
+    std::sort(pages.begin(), pages.end());
+    TEST_ASSERT_TRUE(std::unique(pages.begin(), pages.end()) - pages.begin() >= 4);
+    TEST_ASSERT_EQUAL_UINT(0, f.violations);
+}
+
+// Large files take whatever pages the sweep finds: scattered, and across the
+// wrap from the last page to the first. They read back and survive a reboot.
+void test_scattered_large_files() {
+    RamFlash &f = new_flash(14); // 12 data pages
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    for (int i = 0; i < 12; i++) TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_IMAGES, "p" + std::to_string(i), pattern(i, PAGE), 1, 4096));
+    for (int i = 0; i < 12; i += 2) TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_IMAGES, ("p" + std::to_string(i)).c_str()));
+    maintain_all();
+    for (int round = 0; round < 4; round++) {
+        const std::vector<uint8_t> data = pattern(100 + round, 5 * PAGE + 123);
+        TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_RENDER, "big", data, 1, 4096));
+        TEST_ASSERT_TRUE(read_file(MEDIA_BUCKET_RENDER, "big") == data);
+        reboot(f);
+        TEST_ASSERT_TRUE(read_file(MEDIA_BUCKET_RENDER, "big") == data);
+        maintain_all();
+    }
+    check_no_leak(capture());
+    TEST_ASSERT_EQUAL_UINT(0, f.violations);
+    TEST_ASSERT_EQUAL_UINT(0, f.map_violations);
+}
+
+void test_wear_telemetry() {
+    RamFlash &f = new_flash(12);
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    media_usage_t u;
+    media_usage(&u);
+    TEST_ASSERT_TRUE(u.dir_generation >= 1);
+    const uint32_t e0 = u.erase_sectors;
+    TEST_ASSERT_EQUAL(MEDIA_OK, put(MEDIA_BUCKET_IMAGES, "a", pattern(1, 2 * PAGE), 1, 4096));
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_IMAGES, "a"));
+    maintain_all();
+    media_usage(&u);
+    // written twice over fresh flash: the upload erased its 2 pages (fresh
+    // flash is blank but not known to be) and maintenance erased them again
+    TEST_ASSERT_TRUE(u.erase_sectors >= e0 + 2 * (PAGE / SECTOR));
+    TEST_ASSERT_TRUE(u.erase_page_max >= PAGE / SECTOR);
+    unsigned flash_total = 0;
+    for (unsigned n : f.sector_erases) flash_total += n;
+    TEST_ASSERT_EQUAL_UINT32(flash_total, u.erase_sectors); // counted from this mount, as the flash did
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_format_and_header);
@@ -927,5 +1081,11 @@ int main(int, char **) {
     RUN_TEST(test_powercut_eviction);
     RUN_TEST(test_powercut_snapshot_rollover);
     RUN_TEST(test_powercut_compaction);
+    RUN_TEST(test_wear_frames);
+    RUN_TEST(test_wear_history);
+    RUN_TEST(test_wear_mixed);
+    RUN_TEST(test_cursor_seed_varies);
+    RUN_TEST(test_scattered_large_files);
+    RUN_TEST(test_wear_telemetry);
     return UNITY_END();
 }

@@ -68,7 +68,7 @@ void show_credentials_modal(lv_obj_t* screen, const char* access_key_id, const c
     lv_label_set_text(label, text);
     memset(text, 0, sizeof text);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, 148, 0);
 
     hint_label = lv_label_create(modal);
@@ -76,7 +76,7 @@ void show_credentials_modal(lv_obj_t* screen, const char* access_key_id, const c
     lv_obj_set_width(hint_label, 264);
     lv_label_set_text(hint_label, hint ? hint : "");
     lv_obj_set_style_text_color(hint_label, lv_color_hex(0x888888), 0);
-    lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(hint_label, LV_FONT_DEFAULT, 0);
     lv_obj_align(hint_label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     ESP_LOGI(TAG, "credentials shown");
 }

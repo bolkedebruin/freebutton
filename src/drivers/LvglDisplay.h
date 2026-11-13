@@ -25,6 +25,7 @@ private:
     uint8_t* buffer2_;
     std::vector<lv_display_t*> small_displays_;
     uint8_t* shared_small_buffer_;
+    uint8_t* shared_small_buffer2_ = nullptr;
     SemaphoreHandle_t lvgl_mutex_;
     SemaphoreHandle_t small_buffer_mutex_;
     bool initialized_;
@@ -79,12 +80,22 @@ public:
     // row (tools/scripts/screenshot.py turns them into PNGs).
     static void requestScreenshot();
 
+    // Benchmark (debug, POST /api/bench?n=N): from any task. The LVGL task
+    // then repaints every display N times and records per display the
+    // average/best time, DMA wait, bands and glyphs rasterized.
+    // takeBenchResult() hands the newest unread result over once (JSON with a
+    // "seq" that grows per run; the caller free()s it), else nullptr; *seq is
+    // the newest run's number either way.
+    static void requestBench(int repaints);
+    static char* takeBenchResult(uint32_t* seq);
+
     // Last LVGL pool snapshot (free/total bytes). Safe from any task: it
     // never touches the pool, unlike lv_mem_monitor().
     void getLvglMemory(size_t& freeBytes, size_t& totalBytes) const;
 
 private:
     void captureScreens();
+    void runBench(int n);
     static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
     static void flush_small_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map);
     void initializeSmallDisplays(DisplayManager& displayManager);

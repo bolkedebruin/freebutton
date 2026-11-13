@@ -1,17 +1,20 @@
-import { LitElement, html, svg } from 'lit';
+import { LitElement, html, nothing, svg } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { XIcon, PlusIcon, ChevronDownIcon } from '../icons/index.js';
 import { on, type WorkspaceFile, type WorkspaceSnapshot } from '../js/app-state.js';
 import { formatFileSize } from '../js/virtual-fs.js';
 import { workspace, LOCAL_MESSAGE } from '../js/workspace.js';
+import { isSystemFontSrc } from '../js/font-config.js';
 import { canDeleteKey, isEditableKey, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
 import type { ReadOnlyBucket } from '../js/device-storage.js';
 
 interface ReadOnlyGroup {
-  id: 'examples' | 'system';
+  id: 'examples' | 'system' | 'fonts';
   title: string;
   tooltip: string;
   buckets: readonly ReadOnlyBucket[];
+  /** Fonts: files can be uploaded (.ttf/.otf) and deleted. */
+  manage?: boolean;
 }
 
 const READ_ONLY_GROUPS: readonly ReadOnlyGroup[] = [
@@ -22,10 +25,19 @@ const READ_ONLY_GROUPS: readonly ReadOnlyGroup[] = [
     buckets: ['examples'],
   },
   {
+    id: 'fonts',
+    title: 'Fonts',
+    tooltip: 'Device bucket "fonts": the TrueType fonts the display draws with (the system fonts medium.ttf and '
+      + 'semibold.ttf, which cannot be deleted, icons.ttf and yours). Upload .ttf/.otf (<= 2 MiB), then use it in config.json '
+      + '"style.fonts". The device reloads fonts on every change.',
+    buckets: ['fonts'],
+    manage: true,
+  },
+  {
     id: 'system',
     title: 'System',
-    tooltip: 'Device buckets "web" (the IDE bundle, read-only) and "fonts" (the display fonts; upload with an S3 client)',
-    buckets: ['web', 'fonts'],
+    tooltip: 'Device bucket "web" (the IDE bundle, read-only)',
+    buckets: ['web'],
   },
 ];
 
@@ -33,9 +45,14 @@ const READ_ONLY_GROUPS: readonly ReadOnlyGroup[] = [
  * Assets panel: the files really on the device (bucket `app` of the S3
  * storage API), or the in-browser fallback store when no device is
  * reachable. Every .js/.json/.txt file there can be opened, saved and deleted
- * (config.json cannot be deleted). The read-only buckets are two collapsed
- * groups, Examples (`examples`) and System (`web` + `fonts`); a group's
- * buckets are listed when it is first expanded, never downloaded.
+ * (config.json cannot be deleted). SVG icons are uploaded from disk (to
+ * icons/, then referenced from config.json "icons") and can be deleted; "Sync
+ * icons" rasterizes the icons config.json uses into the device's `images`
+ * bucket (this also happens on every save of config.json). The other buckets are collapsed
+ * groups, Examples (`examples`), Fonts (`fonts`: upload .ttf/.otf and delete,
+ * each offering the matching config.json "style.fonts" entry; the system fonts
+ * cannot be deleted) and System (`web`);
+ * a group's buckets are listed when it is first expanded, never downloaded.
  */
 @customElement('fb-file-drawer')
 export class FbFileDrawer extends LitElement {
@@ -69,6 +86,44 @@ export class FbFileDrawer extends LitElement {
     void workspace.remove(file.key);
   }
 
+  private _pickSvg() {
+    this.querySelector<HTMLInputElement>('[data-testid="svg-upload-input"]')?.click();
+  }
+
+  private async _onSvgPicked(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const files = [...(input.files ?? [])];
+    input.value = '';
+    for (const file of files) {
+      const key = await workspace.uploadSvg(file);
+      // Offer the matching config.json "icons" entry (asks first).
+      if (key) await workspace.addIconToConfig(key);
+    }
+  }
+
+  private _pickFont(e: Event) {
+    e.stopPropagation();
+    this.querySelector<HTMLInputElement>('[data-testid="font-upload-input"]')?.click();
+  }
+
+  private async _onFontPicked(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const files = [...(input.files ?? [])];
+    input.value = '';
+    // The group shows the result: open it.
+    if (!this._openGroups.fonts) this._openGroups = { ...this._openGroups, fonts: true };
+    for (const file of files) {
+      const key = await workspace.uploadFont(file);
+      // Offer the matching config.json "style.fonts" entry (asks first).
+      if (key) await workspace.addFontToConfig(key);
+    }
+  }
+
+  private async _deleteFont(e: Event, key: string) {
+    e.stopPropagation();
+    if (await workspace.deleteFont(key)) await workspace.removeFontFromConfig(key);
+  }
+
   private _startCreate() {
     this._creating = true;
     this._newName = '';
@@ -100,18 +155,27 @@ export class FbFileDrawer extends LitElement {
     </svg>`;
   }
 
+  private _imageIcon() {
+    return svg`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <polyline points="21 15 16 10 5 21" />
+    </svg>`;
+  }
+
   private _renderFile(file: WorkspaceFile) {
     const ws = this._ws;
     const active = file.key === ws.currentKey;
+    const editable = isEditableKey(file.key);
     const meta = [formatFileSize(file.size)];
     if (file.lastModified) meta.push(file.lastModified.toLocaleString());
     return html`
-      <div class="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors duration-200 group/item
-          ${active ? 'bg-white/10' : 'hover:bg-white/5'}"
+      <div class="flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors duration-200 group/item
+          ${editable ? 'cursor-pointer' : ''} ${active ? 'bg-white/10' : 'hover:bg-white/5'}"
         data-key=${file.key}
-        title="/${file.key}"
+        title=${editable ? `/${file.key}` : `/${file.key} (icon source: reference it in config.json "icons")`}
         @click=${() => this._open(file)}>
-        <span class="shrink-0 text-gray-200">${this._fileIcon()}</span>
+        <span class="shrink-0 text-gray-200">${editable ? this._fileIcon() : this._imageIcon()}</span>
         <div class="flex-1 min-w-0">
           <div class="text-xs text-text-default truncate">
             ${file.key}${active && ws.dirty ? html`<span class="text-status-orange ml-1" title="Unsaved changes">●</span>` : ''}
@@ -157,24 +221,45 @@ export class FbFileDrawer extends LitElement {
     const loaded = listed.every(l => l.files !== undefined);
     // Several buckets in one group: show each key with its bucket name.
     const entries = listed.flatMap(l => (l.files ?? []).map(f => ({
+      key: f.key,
       label: group.buckets.length > 1 ? `${l.bucket}/${f.key}` : f.key,
-      title: `${l.bucket}: ${f.key} (read-only)`,
+      title: group.manage ? `${l.bucket}: ${f.key}` : `${l.bucket}: ${f.key} (read-only)`,
       size: f.size,
     })));
     const total = entries.reduce((n, f) => n + f.size, 0);
     const open = !!this._openGroups[group.id];
     return html`
       <div class="flex flex-col gap-0.5" data-testid="${group.id}-files">
-        <button class="flex items-center gap-1 px-2 py-1 text-[10px] text-gray-200 hover:text-text-default uppercase tracking-wider"
-          title=${group.tooltip} data-testid="${group.id}-toggle"
-          @click=${() => this._toggleGroup(group)}>
-          <span class="w-3 h-3 flex items-center justify-center [&>svg]:w-3 [&>svg]:h-3 transition-transform ${open ? '' : '-rotate-90'}">${ChevronDownIcon()}</span>
-          ${group.title}${loaded ? ` · ${entries.length} files · ${formatFileSize(total)}` : ' · read-only'}
-        </button>
+        <div class="flex items-center">
+          <button class="flex-1 flex items-center gap-1 px-2 py-1 text-[10px] text-gray-200 hover:text-text-default uppercase tracking-wider text-left"
+            title=${group.tooltip} data-testid="${group.id}-toggle"
+            @click=${() => this._toggleGroup(group)}>
+            <span class="w-3 h-3 flex items-center justify-center [&>svg]:w-3 [&>svg]:h-3 transition-transform ${open ? '' : '-rotate-90'}">${ChevronDownIcon()}</span>
+            ${group.title}${loaded ? ` · ${entries.length} files · ${formatFileSize(total)}` : group.manage ? '' : ' · read-only'}
+          </button>
+          ${group.manage ? html`
+            <button class="w-5 h-5 flex items-center justify-center rounded text-gray-200 hover:text-text-default hover:bg-white/10 transition-colors duration-200 disabled:opacity-40"
+              title="Upload fonts (.ttf / .otf, <= 2 MiB) to the device's fonts bucket" data-testid="upload-font"
+              ?disabled=${ws.busy}
+              @click=${this._pickFont}>
+              <span class="w-3.5 h-3.5 flex items-center justify-center [&>svg]:w-3.5 [&>svg]:h-3.5">${PlusIcon()}</span>
+            </button>
+            <input type="file" accept=".ttf,.otf,font/ttf,font/otf" multiple class="hidden"
+              data-testid="font-upload-input" @change=${this._onFontPicked} />
+          ` : ''}
+        </div>
         ${open ? entries.map(f => html`
-          <div class="flex items-center gap-2 px-2 py-1 text-[10px] text-gray-200" title=${f.title}>
+          <div class="flex items-center gap-2 px-2 py-1 text-[10px] text-gray-200 group/item" title=${f.title} data-font-key=${group.manage ? f.key : nothing}>
             <span class="flex-1 min-w-0 truncate">${f.label}</span>
             <span class="shrink-0">${formatFileSize(f.size)}</span>
+            ${group.manage ? html`
+              <button class="shrink-0 w-4 h-4 flex items-center justify-center rounded text-gray-200 hover:text-status-red hover:bg-white/10 opacity-0 group-hover/item:opacity-100 transition-all duration-200 disabled:cursor-not-allowed disabled:hover:text-gray-200 disabled:hover:bg-transparent disabled:group-hover/item:opacity-40"
+                title=${isSystemFontSrc(f.key) ? 'A system font: it cannot be deleted' : 'Delete from the device'} data-testid="delete-font"
+                ?disabled=${isSystemFontSrc(f.key)}
+                @click=${(e: Event) => this._deleteFont(e, f.key)}>
+                <span class="w-3 h-3 flex items-center justify-center [&>svg]:w-3 [&>svg]:h-3">${XIcon()}</span>
+              </button>
+            ` : ''}
           </div>
         `) : ''}
       </div>
@@ -204,6 +289,14 @@ export class FbFileDrawer extends LitElement {
               @click=${this._startCreate}>
               <span class="w-4 h-4 flex items-center justify-center [&>svg]:w-4 [&>svg]:h-4">${PlusIcon()}</span>
             </button>
+            <button class="w-5 h-5 flex items-center justify-center rounded text-gray-200 hover:text-text-default hover:bg-white/10 transition-colors duration-200 disabled:opacity-40"
+              title="Upload SVG icons (stored as icons/<name>.svg)" data-testid="upload-svg"
+              ?disabled=${ws.busy}
+              @click=${this._pickSvg}>
+              <span class="w-3.5 h-3.5 flex items-center justify-center [&>svg]:w-3.5 [&>svg]:h-3.5">${this._imageIcon()}</span>
+            </button>
+            <input type="file" accept=".svg,image/svg+xml" multiple class="hidden"
+              data-testid="svg-upload-input" @change=${this._onSvgPicked} />
           </div>
         </div>
 
@@ -232,6 +325,16 @@ export class FbFileDrawer extends LitElement {
             ? html`<div class="text-[10px] text-gray-200 px-2">No files yet. ${MAIN_SCRIPT_KEY} is created on first save.</div>`
             : ''}
         </div>
+
+        ${ws.mode === 'device' ? html`
+          <button class="self-start text-[10px] text-gray-200 hover:text-text-default px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 disabled:opacity-40"
+            title="Rasterize the icons config.json uses and sync them to the device's images bucket (also done on every save of config.json)"
+            data-testid="sync-icons"
+            ?disabled=${ws.iconSyncing}
+            @click=${() => workspace.syncIcons()}>
+            ${ws.iconSyncing ? 'Syncing icons…' : 'Sync icons'}
+          </button>
+        ` : ''}
 
         ${READ_ONLY_GROUPS.map(g => this._renderGroup(g))}
 

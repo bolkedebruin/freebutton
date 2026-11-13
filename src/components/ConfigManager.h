@@ -14,6 +14,7 @@
 #include "Clock.h"
 #include "NameTable.h"
 #include "List.h"
+#include "ImageItem.h"
 #include "mqtt/Registry.h"
 #include "json/JsonWriter.h"
 #include "config.h"
@@ -203,6 +204,12 @@ public:
     List* findList(size_t index) const { return index < lists.size() ? lists[index].get() : nullptr; }
 
     /**
+     * Main-display image by its index in config.json "images" (nullptr when
+     * out of range). Created at boot and never removed.
+     */
+    ImageItem* findImage(size_t index) const { return index < images.size() ? images[index].get() : nullptr; }
+
+    /**
      * Add a new display item dynamically
      * @return Pointer to the created DisplayItem, or nullptr on failure
      */
@@ -282,6 +289,7 @@ private:
     std::vector<std::unique_ptr<Button>> buttons;
     std::vector<std::unique_ptr<Clock>> clocks;
     std::vector<std::unique_ptr<List>> lists;
+    std::vector<std::unique_ptr<ImageItem>> images;
     NameTable names_;
 
     // Adds config["name"] (if any) for kind / id; an invalid or duplicate
@@ -312,10 +320,27 @@ private:
     void loadClocks(const JsonArray& clocksArray);
 
     /**
+     * Config "style" (docs/STYLE.md): a pass over the file of its own,
+     * before the items are built (they resolve their font names at load and
+     * build on the element styles), whatever the key order. Configures the
+     * font registry with style.fonts (fonts_configure), then resolves the
+     * roles and elements into the shared element styles (ui_style_apply);
+     * LVGL lock taken here. Without "style": the system fonts and the
+     * firmware defaults.
+     */
+    void loadStyle(const std::string& filename);
+
+    /**
      * Load main-display lists from JSON array
      */
     void loadLists(const JsonArray& listsArray);
     void processListsFilter(const std::vector<std::string>& path, const std::string& json);
+
+    /**
+     * Load main-display images from JSON array
+     */
+    void loadImages(const JsonArray& imagesArray);
+    void processImagesFilter(const std::vector<std::string>& path, const std::string& json);
 
     /**
      * Filter callback for processing core configuration
@@ -344,6 +369,9 @@ private:
 };
 
 // Template method implementation must be in header
+// The regenerated config (GET /config) omits the IDE-level tables ("icons",
+// "style" with its fonts; items still name their fonts): it is not a
+// round-trip of config.json.
 template<typename OutputStream>
 void ConfigManager::write(OutputStream &stream) {
     rapidjson::Writer<OutputStream> writer(stream);
@@ -437,6 +465,20 @@ void ConfigManager::write(OutputStream &stream) {
                 jlist.Add("name", name);
             }
             lists[i]->toJson<OutputStream>(jlist);
+        }
+    }
+
+    // images array (main-display rasters). The config's "icons" table
+    // (SVG sources) is web IDE data the firmware does not keep.
+    {
+        auto arr = doc.Array("images");
+        for (size_t i = 0; i < images.size(); ++i) {
+            auto jimage = arr.Object();
+            const auto name = names_.nameOf(NameTable::Kind::Image, static_cast<uint32_t>(i));
+            if (!name.empty()) {
+                jimage.Add("name", name);
+            }
+            images[i]->toJson<OutputStream>(jimage);
         }
     }
 

@@ -39,6 +39,8 @@ import fb_sigv4  # noqa: E402
 PROJECT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 S3NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 USAGE_HEADERS = ("x-fb-media-total", "x-fb-media-used", "x-fb-media-free", "x-fb-media-reclaimable")
+# wear since the device booted: counts, not bytes (4 KB sectors; a page erase is 16)
+WEAR_HEADERS = ("x-fb-media-erase-sectors", "x-fb-media-erase-page-max", "x-fb-media-dir-generation")
 
 
 def _credentials():
@@ -122,7 +124,7 @@ def head_bucket(dev, bucket):
         _fail(e, f"HEAD {bucket}")
     except Exception as e:  # noqa: BLE001
         _fail(e, f"HEAD {bucket}")
-    return {h: headers.get(h) for h in USAGE_HEADERS if headers.get(h) is not None}
+    return {h: headers.get(h) for h in USAGE_HEADERS + WEAR_HEADERS if headers.get(h) is not None}
 
 
 def _human(n):
@@ -142,6 +144,9 @@ def _print_usage(usage):
             v = usage[h]
             parts.append(f"{h[len('x-fb-media-'):]} {_human(int(v)) if v.isdigit() else v}")
     print("  media store: " + ", ".join(parts))
+    wear = [f"{h[len('x-fb-media-'):]} {usage[h]}" for h in WEAR_HEADERS if h in usage]
+    if wear:
+        print("  wear since boot: " + ", ".join(wear))
 
 
 def local_files(directory):

@@ -80,6 +80,22 @@ bool displayitem_set_value(unsigned long id, const char* value);
 bool displayitem_set_unit(unsigned long id, const char* unit);
 
 /*
+ * Update display item icon (a config.json "icons" name, len bytes; empty
+ * hides it). Returns 1 on success, 0 if the item was not found, -1 for an
+ * invalid icon name ([A-Za-z0-9_-], max 31), -2 when out of memory.
+ */
+int displayitem_set_icon(unsigned long id, const char* name, size_t len);
+
+/*
+ * Font of the item's value and unit: a fonts.h face (resolved by the
+ * caller) and a fontsize (1..5 = step, else px). Returns false if the item
+ * was not found.
+ */
+bool displayitem_set_font(unsigned long id, int face, int size);
+/* Back to the font and size of config.json (JS setFont(id, "")). */
+bool displayitem_restore_font(unsigned long id);
+
+/*
  * Update display item position
  * Returns true if successful, false if item not found
  */

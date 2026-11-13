@@ -82,16 +82,24 @@ def main():
     if status != 202:
         sys.exit(f"POST /api/screenshot: {status} {body[:200]!r}")
 
-    # Wait until the set changed and then stayed the same for one poll.
+    # The device writes the files one display after another (the main display
+    # takes longest). Wait until every file of the previous run was rewritten,
+    # then until the set stayed the same for one poll. Without a previous run
+    # the number of displays is unknown: wait for the set to stay the same
+    # for three polls.
     deadline = time.time() + args.timeout
     last = None
+    stable = 0
     while time.time() < deadline:
         time.sleep(0.7)
         now = list_shots(base)
-        changed = any(before.get(k) != v for k, v in now.items())
-        if changed and now == last:
-            break
+        changed = {k for k, v in now.items() if before.get(k) != v}
+        stable = stable + 1 if now == last else 0
         last = now
+        if before and changed >= set(before) and stable >= 1:
+            break
+        if not before and changed and stable >= 3:
+            break
     else:
         sys.exit("timed out waiting for the screenshot files")
 

@@ -32,7 +32,7 @@ void show_device_info_modal(lv_obj_t* screen, const char* device_info) {
 
         lv_style_init(&text_style);
         lv_style_set_text_color(&text_style, lv_color_hex(0xffffff));
-        lv_style_set_text_font(&text_style, &lv_font_montserrat_12);
+        lv_style_set_text_font(&text_style, LV_FONT_DEFAULT);
 
         styles_initialized = true;
     }

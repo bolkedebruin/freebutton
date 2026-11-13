@@ -104,6 +104,16 @@ static struct {
     uint8_t dead[DIR_MAX_RECORDS / 8];
     uint16_t *used;   /* per page: sectors in use (live, open, reserved) */
     uint16_t *erased; /* per page: sectors known to be 0xFF */
+    /* Wear leveling (RAM only, see "Allocation" in docs/MEDIA-STORE.md):
+     * large files take the next free pages from `cursor` on (next-fit, like
+     * the littlefs block allocator), small files are appended to `fill`. */
+    uint16_t cursor;       /* page where the next large allocation starts looking */
+    uint16_t fill;         /* page small files are appended to, NO_PAGE: none yet */
+    uint8_t fill_sec;      /* next sector of `fill` */
+    bool hint_fresh;       /* the last alloc_small() took a fresh page */
+    bool compact_wanted;   /* a large reservation failed: compact even with free pages */
+    uint32_t erase_sectors; /* sectors erased since mount (a page erase counts 16) */
+    uint16_t *wear;         /* per page: sectors erased since mount (saturates) */
     open_t open[MEDIA_MAX_OPEN];
     map_t maps[MEDIA_MAX_OPEN];
     media_writer_t writers[MEDIA_MAX_WRITERS];
@@ -154,7 +164,16 @@ static void unlock(void) {
 
 static int fl_read(uint32_t off, void *dst, uint32_t len) { return g.f->read(g.f->ctx, off, dst, len); }
 static int fl_write(uint32_t off, const void *src, uint32_t len) { return g.f->write(g.f->ctx, off, src, len); }
-static int fl_erase(uint32_t off, uint32_t len) { return g.f->erase(g.f->ctx, off, len); }
+static int fl_erase(uint32_t off, uint32_t len) {
+    const int e = g.f->erase(g.f->ctx, off, len);
+    if (e == 0) {
+        for (uint32_t s = off / SECTOR; s < (off + len) / SECTOR; s++) {
+            g.erase_sectors++;
+            if (g.wear[s / SPP] != 0xFFFFu) g.wear[s / SPP]++;
+        }
+    }
+    return e;
+}
 
 static bool is_dead(uint16_t o) { return (g.dead[o >> 3] >> (o & 7)) & 1; }
 static void set_dead(uint16_t o) { g.dead[o >> 3] |= (uint8_t)(1u << (o & 7)); }
@@ -565,77 +584,88 @@ static void retire(const rec_t *r) {
 
 /* ---------------------------------------------------------- allocation */
 
-static bool alloc_small(loc_t *l) {
-    int best = -1, bestfirst = 0, bestscore = -1;
-    const unsigned n = l->nsec;
-    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) {
-        const uint16_t u = g.used[p];
-        if (u == 0xFFFFu) continue;
-        for (unsigned first = 0; first + n <= SPP; first++) {
-            const uint16_t m = run_mask(first, n);
-            if (u & m) continue;
-            /* pack into shared pages first, then prefer erased runs, then fuller pages */
-            const int score = ((u ? 4 : 0) + ((g.erased[p] & m) == m ? 2 : 0)) * 32 + (int)popcount16(u);
-            if (score > bestscore) {
-                bestscore = score;
-                best = (int)p;
-                bestfirst = (int)first;
-            }
-        }
-    }
-    if (best < 0) return false;
-    l->page = (uint8_t)best;
-    l->first = (uint8_t)bestfirst;
-    return true;
+/* Wear leveling. A freed page used to be the first one reused (lowest page,
+ * erased first), so a file replaced over and over wore out the same pages
+ * while the rest of the store stayed fresh. As in the littlefs block
+ * allocator, allocation is next-fit instead: a cursor sweeps the data pages
+ * and wraps, so every free page gets its turn. The cursor lives in RAM; it
+ * starts at a pseudo-random page on mount so reboots do not restart the
+ * sweep at the same place. Data at rest is never moved (no static leveling). */
+
+/* Compaction (moving small files out of sparse pages) only runs while fewer
+ * whole pages than this are free, or after a large reservation failed: it
+ * costs writes and erases, and next-fit leaves sparse pages behind on purpose. */
+#define COMPACT_BELOW 4u
+
+static unsigned next_page(unsigned p) { return p + 1u < g.npages ? p + 1u : MEDIA_DIR_PAGES; }
+
+static unsigned free_pages(void) {
+    unsigned n = 0;
+    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) n += g.used[p] == 0;
+    return n;
 }
 
+/* First run of n free sectors in page p starting at or after `from`, -1 none. */
+static int run_at(unsigned p, unsigned from, unsigned n) {
+    const uint16_t u = g.used[p];
+    for (unsigned first = from; first + n <= SPP; first++)
+        if (!(u & run_mask(first, n))) return (int)first;
+    return -1;
+}
+
+/* Small files are appended to a fill page; a full fill page is followed by
+ * the next fresh page from the cursor. Sectors freed in older pages are left
+ * alone: once all files of a page are gone the page is free again and the
+ * cursor reuses it in turn. Only while whole pages run low are the holes in
+ * shared pages filled first. Pure: reserve() calls it more than once. */
+static bool alloc_small(loc_t *l) {
+    const unsigned n = l->nsec;
+    if (g.fill != NO_PAGE) {
+        const int s = run_at(g.fill, g.fill_sec, n);
+        if (s >= 0) {
+            l->page = (uint8_t)g.fill;
+            l->first = (uint8_t)s;
+            g.hint_fresh = false;
+            return true;
+        }
+    }
+    const bool low = free_pages() < COMPACT_BELOW;
+    for (int pass = 0; pass < 2; pass++) {
+        const bool holes = (pass == 0) == low;
+        unsigned p = g.cursor;
+        for (unsigned k = MEDIA_DIR_PAGES; k < g.npages; k++, p = next_page(p)) {
+            const uint16_t u = g.used[p];
+            if (holes ? (u == 0 || u == 0xFFFFu) : u != 0) continue;
+            const int s = run_at(p, 0, n);
+            if (s < 0) continue;
+            l->page = (uint8_t)p;
+            l->first = (uint8_t)s;
+            g.hint_fresh = !holes;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The next n free pages from the cursor on, in sweep order. The pages need
+ * not be contiguous: a mapping takes any list of pages. Pure. */
 static bool alloc_large(loc_t *l) {
     const unsigned n = l->npages;
-    unsigned nfree = 0;
-    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) nfree += g.used[p] == 0;
-    if (nfree < n) return false;
-    /* A contiguous run maps as one block: prefer it (shortest fitting run,
-     * erased first). */
-    int best = -1;
-    unsigned bestlen = 0;
-    bool besterased = false;
-    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages;) {
-        if (g.used[p]) {
-            p++;
-            continue;
-        }
-        const unsigned start = p;
-        while (p < g.npages && g.used[p] == 0) p++;
-        const unsigned len = p - start;
-        if (len < n) continue;
-        bool erased = true;
-        for (unsigned i = start; i < start + n; i++) erased = erased && g.erased[i] == 0xFFFFu;
-        if (best < 0 || (erased && !besterased) || (erased == besterased && len < bestlen)) {
-            best = (int)start;
-            bestlen = len;
-            besterased = erased;
-        }
+    unsigned got = 0, p = g.cursor;
+    for (unsigned k = MEDIA_DIR_PAGES; k < g.npages && got < n; k++, p = next_page(p))
+        if (!g.used[p]) l->pages[got++] = (uint8_t)p;
+    return got == n;
+}
+
+/* A reservation is final: move the cursors past it. */
+static void note_alloc(const loc_t *l) {
+    if (l->kind == LOC_PAGES) {
+        g.cursor = (uint16_t)next_page(l->pages[l->npages - 1u]);
+    } else if (l->kind == LOC_SECTORS && (l->page == g.fill || g.hint_fresh)) {
+        if (l->page != g.fill) g.cursor = (uint16_t)next_page(l->page);
+        g.fill = l->page;
+        g.fill_sec = (uint8_t)(l->first + l->nsec);
     }
-    if (best >= 0) {
-        for (unsigned i = 0; i < n; i++) l->pages[i] = (uint8_t)(best + (int)i);
-        return true;
-    }
-    /* Scattered: erased pages first, listed in ascending order. */
-    uint8_t pick[MEDIA_MAX_PAGES / 8];
-    memset(pick, 0, sizeof pick);
-    unsigned got = 0;
-    for (int pass = 0; pass < 2 && got < n; pass++) {
-        for (unsigned p = MEDIA_DIR_PAGES; p < g.npages && got < n; p++) {
-            if (g.used[p] || (pick[p >> 3] & (1u << (p & 7)))) continue;
-            if (pass == 0 && g.erased[p] != 0xFFFFu) continue;
-            pick[p >> 3] |= (uint8_t)(1u << (p & 7));
-            got++;
-        }
-    }
-    got = 0;
-    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++)
-        if (pick[p >> 3] & (1u << (p & 7))) l->pages[got++] = (uint8_t)p;
-    return true;
 }
 
 static bool alloc_find(loc_t *l) {
@@ -680,6 +710,7 @@ static media_err_t reserve(loc_t *l) {
     if (l->kind == LOC_EMPTY) return MEDIA_OK;
     if (alloc_find(l)) {
         loc_mark(l, true);
+        note_alloc(l);
         return MEDIA_OK;
     }
     rec_t r;
@@ -702,6 +733,8 @@ static media_err_t reserve(loc_t *l) {
     }
     if (!fits) {
         evict_restore(upto);
+        /* whole pages may still be won back from sparse shared pages */
+        if (l->kind == LOC_PAGES) g.compact_wanted = true;
         return MEDIA_ERR_NO_SPACE;
     }
     /* Make the evictions real, oldest first. */
@@ -729,6 +762,7 @@ static media_err_t reserve(loc_t *l) {
     }
     if (!alloc_find(l)) return MEDIA_ERR_NO_SPACE;
     loc_mark(l, true);
+    note_alloc(l);
     return MEDIA_OK;
 }
 
@@ -803,15 +837,30 @@ media_err_t media_mount(const media_flash_t *flash) {
     memset(&g, 0, sizeof g);
     g.f = flash;
     g.npages = (uint16_t)(flash->size / PAGE);
-    g.used = (uint16_t *)calloc(2u * g.npages, sizeof(uint16_t));
+    g.used = (uint16_t *)calloc(3u * g.npages, sizeof(uint16_t));
     if (!g.used) {
         g.f = NULL;
         return MEDIA_ERR_UNAVAILABLE;
     }
     g.erased = g.used + g.npages;
+    g.wear = g.erased + g.npages;
+    g.fill = NO_PAGE;
+    g.cursor = MEDIA_DIR_PAGES;
     lock();
     const media_err_t e = mount_locked();
-    if (e == MEDIA_OK) g.mounted = true;
+    if (e == MEDIA_OK) {
+        /* Start the sweep somewhere else after every reboot (littlefs seeds
+         * its allocator from the CRCs it reads on mount): next_seq and gen
+         * change with every write, so this differs from boot to boot. */
+        uint32_t x = g.next_seq ^ (g.gen * 0x9E3779B9u);
+        x ^= x >> 16;
+        x *= 0x7FEB352Du;
+        x ^= x >> 15;
+        x *= 0x846CA68Bu;
+        x ^= x >> 16;
+        g.cursor = (uint16_t)(MEDIA_DIR_PAGES + x % (g.npages - MEDIA_DIR_PAGES));
+        g.mounted = true;
+    }
     unlock();
     if (e != MEDIA_OK) {
         free(g.used);
@@ -957,8 +1006,10 @@ media_err_t media_put_write(media_writer_t *w, const void *data, uint32_t len) {
         const uint32_t phys = writer_phys(w, w->written);
         const unsigned p = phys / PAGE, s = (phys % PAGE) / SECTOR;
         if (phys % SECTOR == 0) {
-            /* entering a sector: make sure it is erased, then it is no longer */
-            if (w->loc.kind == LOC_PAGES && phys % PAGE == 0 && g.erased[p] != 0xFFFFu) {
+            /* entering a sector: make sure it is erased, then it is no longer.
+             * A whole-page erase only when no sector of it is known erased:
+             * erasing an erased sector again is wear for nothing. */
+            if (w->loc.kind == LOC_PAGES && phys % PAGE == 0 && g.erased[p] == 0) {
                 if (fl_erase(p * PAGE, PAGE)) err = MEDIA_ERR_IO;
                 else g.erased[p] = 0xFFFFu;
             } else if (!((g.erased[p] >> s) & 1u)) {
@@ -1121,6 +1172,10 @@ void media_usage(media_usage_t *out) {
     if (!g.mounted) return;
     lock();
     out->total = (g.npages - MEDIA_DIR_PAGES) * PAGE;
+    out->erase_sectors = g.erase_sectors;
+    for (unsigned p = 0; p < g.npages; p++)
+        if (g.wear[p] > out->erase_page_max) out->erase_page_max = g.wear[p];
+    out->dir_generation = g.gen;
     for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) out->free += (SPP - popcount16(g.used[p])) * SECTOR;
     for (int i = 0; i < MEDIA_MAX_OPEN; i++) {
         const open_t *o = &g.open[i];
@@ -1153,7 +1208,8 @@ static int compact_step(void) {
         unsigned pc = SPP + 1;
         for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) {
             const unsigned c = popcount16(g.used[p]);
-            if (c == 0 || c > SPP / 2 || (tried[p >> 3] & (1u << (p & 7))) || page_mapped(p)) continue;
+            if (c == 0 || c > SPP / 2 || p == g.fill || (tried[p >> 3] & (1u << (p & 7))) || page_mapped(p))
+                continue; /* the fill page is sparse only because it is still filling */
             if (c < pc) {
                 pc = c;
                 src = (int)p;
@@ -1232,38 +1288,54 @@ static int compact_step(void) {
     }
 }
 
-/* Verify a free page (or free sectors of a shared page) blank, else erase
- * it. 1 did something, 0 nothing to do, -1 error. */
+/* Free sectors of the fill page that the next small files will take. */
+static uint16_t fill_todo(void) {
+    if (g.fill == NO_PAGE) return 0;
+    const uint16_t ahead = (uint16_t)(0xFFFFu << g.fill_sec);
+    return (uint16_t)(~(g.used[g.fill] | g.erased[g.fill]) & ahead);
+}
+
+static int preerase_sector(unsigned p, unsigned s) {
+    const int v = verify_blank(p * PAGE + s * SECTOR, SECTOR);
+    if (v < 0) return -1;
+    if (v == 0 && fl_erase(p * PAGE + s * SECTOR, SECTOR)) return -1;
+    g.erased[p] |= (uint16_t)(1u << s);
+    return 1;
+}
+
+/* Verify free space blank, else erase it, ahead of where the next
+ * allocations go: free pages in sweep order from the cursor, then the rest
+ * of the fill page. Holes in other shared pages are erased when they are
+ * used. A page with some sectors already erased is done sector by sector,
+ * so no sector is erased twice. 1 did something, 0 nothing to do, -1 error. */
 static int preerase_step(void) {
-    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) {
+    unsigned p = g.cursor;
+    for (unsigned k = MEDIA_DIR_PAGES; k < g.npages; k++, p = next_page(p)) {
         if (g.used[p] || g.erased[p] == 0xFFFFu) continue;
-        const int v = verify_blank(p * PAGE, PAGE);
-        if (v < 0) return -1;
-        if (v == 0 && fl_erase(p * PAGE, PAGE)) return -1;
-        g.erased[p] = 0xFFFFu;
-        return 1;
-    }
-    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) {
-        const uint16_t todo = (uint16_t)~(g.used[p] | g.erased[p]);
-        if (!todo) continue;
-        for (unsigned s = 0; s < SPP; s++) {
-            if (!((todo >> s) & 1u)) continue;
-            const int v = verify_blank(p * PAGE + s * SECTOR, SECTOR);
+        if (g.erased[p] == 0) {
+            const int v = verify_blank(p * PAGE, PAGE);
             if (v < 0) return -1;
-            if (v == 0 && fl_erase(p * PAGE + s * SECTOR, SECTOR)) return -1;
-            g.erased[p] |= (uint16_t)(1u << s);
+            if (v == 0 && fl_erase(p * PAGE, PAGE)) return -1;
+            g.erased[p] = 0xFFFFu;
             return 1;
         }
+        for (unsigned s = 0; s < SPP; s++)
+            if (!((g.erased[p] >> s) & 1u)) return preerase_sector(p, s);
     }
+    const uint16_t todo = fill_todo();
+    for (unsigned s = 0; s < SPP; s++)
+        if ((todo >> s) & 1u) return preerase_sector(g.fill, s);
     return 0;
 }
 
+static bool compact_needed(void) {
+    return g.compact_dirty && (g.compact_wanted || free_pages() < COMPACT_BELOW);
+}
+
 static bool work_pending(void) {
-    if (g.stale || g.compact_dirty) return true;
-    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) {
+    if (g.stale || compact_needed() || fill_todo()) return true;
+    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++)
         if (!g.used[p] && g.erased[p] != 0xFFFFu) return true;
-        if ((uint16_t)~(g.used[p] | g.erased[p])) return true;
-    }
     return false;
 }
 
@@ -1282,7 +1354,10 @@ bool media_maintain(void) {
             did = 1;
         }
     }
-    if (did == 0) did = compact_step();
+    if (did == 0 && compact_needed()) {
+        did = compact_step();
+        if (did == 0) g.compact_wanted = false; /* nothing left to win */
+    }
     if (did == 0) did = preerase_step();
     const bool pending = did >= 0 && work_pending();
     unlock();

@@ -46,7 +46,15 @@ enum EventType : uint8_t {  	// keep in sync with web app
     LED_ON = 38,
     LED_ON_SET = 42,
     LED_BRIGHTNESS_SET = 43,
+
+    // Payload = an icon name from the config's "icons" (the raster the web
+    // IDE made for the item's icon size); an empty payload hides the icon.
+    ICON = 44,          // button: icon instead of the bottom label
+    DISPLAY_ICON = 45,  // display item: icon left of the value
 };
+
+// Highest EventType a topic may carry (TopicHandler validation).
+constexpr uint8_t kLastEventType = DISPLAY_ICON;
 
 enum LedType : uint8_t {
     FRONT = 0,

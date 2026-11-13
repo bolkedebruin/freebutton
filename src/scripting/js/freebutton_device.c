@@ -13,6 +13,7 @@
 #include "mquickjs.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include "font_arg.h"
 
 // Import the hardware abstraction layer (ESP32 only)
 #ifdef ESP_PLATFORM
@@ -20,6 +21,7 @@
 #include "../led_hardware.h"
 #include "../button_hardware.h"
 #include "../list_binding.h"
+#include "../image_binding.h"
 #else
 // Host build stubs for generator
 static inline int device_hw_get_connector_type(int connector) { return 0; }
@@ -37,6 +39,14 @@ static inline void* list_hw_items_new(void) { return NULL; }
 static inline bool list_hw_items_add(void* b, const char* text, size_t len) { return false; }
 static inline bool list_hw_items_commit(int index, void* b) { return false; }
 static inline void list_hw_items_free(void* b) {}
+static inline int image_hw_find(const char* name, size_t len) { return -1; }
+static inline bool image_hw_exists(int index) { return false; }
+static inline int image_hw_set_icon(int index, const char* name, size_t len) { return -1; }
+static inline int image_hw_set_src(int index, const char* key, size_t len) { return -1; }
+static inline int button_hw_set_font(int position, int face, int size, bool top) { return -1; }
+static inline int button_hw_restore_font(int position, bool top) { return -1; }
+static inline bool list_hw_set_font(int index, int face, int size) { return false; }
+static inline bool list_hw_restore_font(int index) { return false; }
 #endif
 
 // Method IDs for the proxy dispatcher (encoded in params of JS_NewCFunctionParams)
@@ -73,6 +83,20 @@ enum {
     FB_METHOD_LIST_GET_SELECTED = 26,
     FB_METHOD_LIST_COUNT = 27,
     FB_METHOD_LIST_SET_ITEMS = 28,
+    // key display .setIcon(name) (_p = key position)
+    FB_METHOD_DISP_SET_ICON = 29,
+    // fb.main.display.setIcon(id, name)
+    FB_METHOD_DITEM_SET_ICON = 30,
+    // fb.main.image.*(nameOrIndex, value): main-display images (config "images")
+    FB_METHOD_IMAGE_SET_ICON = 31,
+    FB_METHOD_IMAGE_SET_SRC = 32,
+    // key display .setFont(font, size) / .setTopFont(font, size) (_p = key position)
+    FB_METHOD_DISP_SET_FONT = 33,
+    FB_METHOD_DISP_SET_TOP_FONT = 34,
+    // fb.main.display.setFont(id, font, size)
+    FB_METHOD_DITEM_SET_FONT = 35,
+    // fb.main.list.setFont(nameOrIndex, font, size)
+    FB_METHOD_LIST_SET_FONT = 36,
 };
 
 /*
@@ -167,6 +191,65 @@ static int fb_list_arg(JSContext *ctx, int argc, JSValue *argv, int *index)
         return -1;
     }
     return 0;
+}
+
+/*
+ * First argument of fb.main.image.*: an image's config name (looked up in
+ * the firmware's name table) or its index in config.json "images". Unknown
+ * name: ReferenceError; no image at the index: RangeError.
+ */
+static int fb_image_arg(JSContext *ctx, int argc, JSValue *argv, int *index)
+{
+    if (argc < 1) {
+        JS_ThrowTypeError(ctx, "fb.main.image: an image name is required");
+        return -1;
+    }
+    if (JS_IsString(ctx, argv[0])) {
+        JSCStringBuf buf;
+        size_t len;
+        const char *name = JS_ToCStringLen(ctx, &len, argv[0], &buf);
+        if (!name)
+            return -1;
+        *index = image_hw_find(name, len);
+        if (*index < 0) {
+            JS_ThrowReferenceError(ctx, "unknown image \"%.32s\"", name);
+            return -1;
+        }
+        return 0;
+    }
+    if (JS_ToInt32(ctx, index, argv[0]))
+        return -1;
+    if (!image_hw_exists(*index)) {
+        JS_ThrowRangeError(ctx, "no image %d", *index);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * fb.main.image.setIcon(image, icon) / setSrc(image, key). The string goes
+ * straight into the image's fixed slot (no heap); "" shows nothing.
+ */
+static JSValue fb_image_set(JSContext *ctx, int method, int argc, JSValue *argv)
+{
+    int index = 0;
+    if (fb_image_arg(ctx, argc, argv, &index))
+        return JS_EXCEPTION;
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, method == FB_METHOD_IMAGE_SET_ICON
+                                          ? "fb.main.image.setIcon() requires an icon name"
+                                          : "fb.main.image.setSrc() requires a key");
+    JSCStringBuf buf;
+    size_t len;
+    const char *value = JS_ToCStringLen(ctx, &len, argv[1], &buf);
+    if (!value)
+        return JS_EXCEPTION;
+    const int r = method == FB_METHOD_IMAGE_SET_ICON ? image_hw_set_icon(index, value, len)
+                                                     : image_hw_set_src(index, value, len);
+    if (r == -2)
+        return JS_ThrowTypeError(ctx, method == FB_METHOD_IMAGE_SET_ICON ? "invalid icon name \"%.32s\""
+                                                                         : "key \"%.32s...\" is too long", value);
+    return JS_UNDEFINED;
 }
 
 /*
@@ -284,6 +367,24 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         tmp[1] = argv[0];
         return js_freebutton_button_setTopLabel(ctx, this_val, 2, tmp);
     }
+    case FB_METHOD_DISP_SET_ICON: {
+        if (argc < 1) return JS_ThrowTypeError(ctx, "setIcon requires an icon name");
+        JSValue tmp[2];
+        tmp[0] = JS_NewInt32(ctx, pos);
+        tmp[1] = argv[0];
+        return js_freebutton_button_setIcon(ctx, this_val, 2, tmp);
+    }
+    case FB_METHOD_DISP_SET_FONT:
+    case FB_METHOD_DISP_SET_TOP_FONT: {
+        const int top = method == FB_METHOD_DISP_SET_TOP_FONT;
+        int face = 0, size = 0;
+        const int r = fb_font_args(ctx, argc, argv, top ? "setTopFont" : "setFont", &face, &size);
+        if (r < 0)
+            return JS_EXCEPTION;
+        if ((r == FB_FONT_RESTORE ? button_hw_restore_font(pos, top) : button_hw_set_font(pos, face, size, top)) != 0)
+            return JS_ThrowInternalError(ctx, "failed to set font for button %d", pos);
+        return JS_UNDEFINED;
+    }
     case FB_METHOD_DISP_GET_LABEL:
     case FB_METHOD_DISP_GET_TOP_LABEL: {
         char text[32];  /* >= a button label slot's text (26 B + NUL) */
@@ -314,6 +415,13 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         return js_freebutton_display_setPosition(ctx, this_val, argc, argv);
     case FB_METHOD_DITEM_SET_PAGE:
         return js_freebutton_display_setPage(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_SET_ICON:
+        return js_freebutton_display_setIcon(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_SET_FONT:
+        return js_freebutton_display_setFont(ctx, this_val, argc, argv);
+    case FB_METHOD_IMAGE_SET_ICON:
+    case FB_METHOD_IMAGE_SET_SRC:
+        return fb_image_set(ctx, method, argc, argv);
     case FB_METHOD_DITEM_SHOW_PAGE:
         return js_freebutton_display_showPage(ctx, this_val, argc, argv);
     case FB_METHOD_DITEM_GET_SHOWN_PAGE:
@@ -323,7 +431,8 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
     case FB_METHOD_LIST_SELECT:
     case FB_METHOD_LIST_GET_SELECTED:
     case FB_METHOD_LIST_COUNT:
-    case FB_METHOD_LIST_SET_ITEMS: {
+    case FB_METHOD_LIST_SET_ITEMS:
+    case FB_METHOD_LIST_SET_FONT: {
         int index = 0;
         if (fb_list_arg(ctx, argc, argv, &index))
             return JS_EXCEPTION;
@@ -342,6 +451,17 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
             return JS_NewInt32(ctx, list_hw_get_selected(index));
         case FB_METHOD_LIST_COUNT:
             return JS_NewInt32(ctx, list_hw_count(index));
+        case FB_METHOD_LIST_SET_FONT: {
+            int face = 0, size = 0;
+            const int r = fb_font_args(ctx, argc - 1, argv + 1, "fb.main.list.setFont", &face, &size);
+            if (r < 0)
+                return JS_EXCEPTION;
+            if (r == FB_FONT_RESTORE)
+                list_hw_restore_font(index);
+            else
+                list_hw_set_font(index, face, size);
+            return JS_UNDEFINED;
+        }
         default:
             return fb_list_set_items(ctx, index, argc, argv);
         }

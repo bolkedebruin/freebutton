@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "../media/media_store.h"
+#include "../ui/fonts/font_logic.h" /* FONT_SYSTEM_SRC, FONT_SYSTEM_BOLD_SRC (macros only) */
 
 namespace s3 {
 
@@ -34,7 +35,7 @@ constexpr size_t kReadKeyMax = 96;
 constexpr size_t kDirMax = 16;
 // Largest object a PutObject accepts (decoded size) = MAX_JS_SOURCE_SIZE.
 constexpr size_t kMaxObjectSize = 64 * 1024;
-// Largest object a media store bucket (fonts) accepts.
+// Largest object a media store bucket (fonts, images) accepts.
 constexpr size_t kMaxMediaObjectSize = 2 * 1024 * 1024;
 constexpr const char* kTmpSuffix = ".tmp";
 constexpr size_t kTmpSuffixLen = 4;
@@ -72,8 +73,9 @@ inline bool endsWith(const char* s, size_t len, const char* suffix) {
 // tree excludes the directories of the other buckets below it, so every
 // object is reachable through exactly one bucket: in `app` (the root) the
 // subtrees www/ and scripts/examples/ are not listed, not readable (404)
-// and not writable (400). A LittleFS fonts/ directory is an ordinary part
-// of `app`: the bucket `fonts` is in the media store.
+// and not writable (400). LittleFS fonts/ and images/ directories are
+// ordinary parts of `app`: the buckets `fonts` and `images` are in the
+// media store.
 
 constexpr size_t cLen(const char* s) {
     size_t n = 0;
@@ -111,6 +113,7 @@ inline constexpr Bucket kBuckets[] = {
     {"web", "www", false, false, true},                      // the IDE bundle (gzipped)
     {"examples", "scripts/examples", false, false, true},    // example scripts
     {"fonts", "", true, true, true, MEDIA_BUCKET_FONTS},     // TrueType fonts (media store); the IDE loads /fonts/*.woff2 itself
+    {"images", "", true, false, true, MEDIA_BUCKET_IMAGES},  // LVGL .bin rasters (media store): icons the IDE rasterizes (ui/MediaImage.h)
 };
 inline constexpr size_t kBucketCount = sizeof(kBuckets) / sizeof(kBuckets[0]);
 
@@ -141,6 +144,7 @@ inline constexpr char kListBucketsXml[] =
     "<Bucket><Name>web</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>"
     "<Bucket><Name>examples</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>"
     "<Bucket><Name>fonts</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>"
+    "<Bucket><Name>images</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>"
     "</Buckets></ListAllMyBucketsResult>";
 
 inline const Bucket* findBucket(const char* name, size_t len) {
@@ -257,7 +261,8 @@ inline bool keyCharOk(char c) {
 // Extensions a media bucket stores (lower case only, as in app).
 inline bool mediaKeyExtensionOk(const Bucket& b, const char* key, size_t len) {
     if (b.media == MEDIA_BUCKET_FONTS) return endsWith(key, len, ".ttf") || endsWith(key, len, ".otf");
-    return false;  // no other media bucket is exposed yet
+    if (b.media == MEDIA_BUCKET_IMAGES) return endsWith(key, len, ".bin");
+    return false;  // no other media bucket is exposed
 }
 
 // Media bucket keys: flat (no '/'), at most MEDIA_KEY_MAX of [A-Za-z0-9._-],
@@ -286,7 +291,9 @@ inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len) {
     size_t last = 0;
     while (last < len && key[len - 1 - last] != '/') ++last;
     if (last + kTmpSuffixLen > kNameMax) return KeyCheck::Invalid;
-    if (!endsWith(key, len, ".js") && !endsWith(key, len, ".json") && !endsWith(key, len, ".txt")) {
+    // .svg: icon sources the IDE rasterizes into the images bucket (MediaImage.h).
+    if (!endsWith(key, len, ".js") && !endsWith(key, len, ".json") && !endsWith(key, len, ".txt") &&
+        !endsWith(key, len, ".svg")) {
         return KeyCheck::Invalid;
     }
     return KeyCheck::Ok;
@@ -294,6 +301,16 @@ inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len) {
 
 inline bool keyIsConfig(const Bucket& b, const char* key, size_t len) {
     return !b.isMedia() && b.dirLen == 0 && len == 11 && memcmp(key, "config.json", 11) == 0;
+}
+
+// The files of the two system fonts (font_logic.h FONT_SYSTEM_SRC /
+// FONT_SYSTEM_BOLD_SRC) cannot be deleted: the UI and the firmware screens
+// draw with them whatever config.json says. A PUT (an update) is allowed.
+inline bool mediaKeyDeleteProtected(const Bucket& b, const char* key, size_t len) {
+    if (b.media != MEDIA_BUCKET_FONTS || !key) return false;
+    const size_t n = sizeof(FONT_SYSTEM_SRC) - 1, nb = sizeof(FONT_SYSTEM_BOLD_SRC) - 1;
+    return (len == n && memcmp(key, FONT_SYSTEM_SRC, n) == 0) ||
+           (len == nb && memcmp(key, FONT_SYSTEM_BOLD_SRC, nb) == 0);
 }
 
 // An HTTP error answer: status (0 = none), S3 error code, message.
@@ -320,11 +337,14 @@ inline HttpError writeRefusal(const Bucket& b, const char* key, size_t len) {
     }
     if (b.isMedia()) {
         if (len > MEDIA_KEY_MAX) return {400, "KeyTooLongError", "key longer than 96 characters"};
+        if (b.media == MEDIA_BUCKET_IMAGES) {
+            return {400, "InvalidArgument", "key must be a flat name of [A-Za-z0-9._-], no '..', ending in .bin"};
+        }
         return {400, "InvalidArgument", "key must be a flat name of [A-Za-z0-9._-], no '..', ending in .ttf or .otf"};
     }
     if (len > kWriteKeyMax) return {400, "KeyTooLongError", "key longer than 63 characters"};
     return {400, "InvalidArgument",
-            "key must be [A-Za-z0-9._-/], no '..' or empty segments, and end in .js, .json or .txt"};
+            "key must be [A-Za-z0-9._-/], no '..' or empty segments, and end in .js, .json, .txt or .svg"};
 }
 
 // GetObject / HeadObject key in a media bucket.
@@ -478,6 +498,10 @@ inline constexpr const char* kMediaTotalHeader = "x-fb-media-total";
 inline constexpr const char* kMediaUsedHeader = "x-fb-media-used";
 inline constexpr const char* kMediaFreeHeader = "x-fb-media-free";
 inline constexpr const char* kMediaReclaimableHeader = "x-fb-media-reclaimable";
+// Wear since boot (media_usage(); erases counted in 4 KB sectors).
+inline constexpr const char* kMediaEraseSectorsHeader = "x-fb-media-erase-sectors";
+inline constexpr const char* kMediaErasePageMaxHeader = "x-fb-media-erase-page-max";
+inline constexpr const char* kMediaDirGenerationHeader = "x-fb-media-dir-generation";
 
 // The mtime stored with an upload: now when the clock is set, else 0.
 inline uint32_t mediaMtime(bool clockValid, int64_t now) {
@@ -489,6 +513,7 @@ inline const char* contentTypeFor(const char* key, size_t len) {
     if (endsWith(key, len, ".json")) return "application/json";
     if (endsWith(key, len, ".js")) return "application/javascript";
     if (endsWith(key, len, ".txt")) return "text/plain";
+    if (endsWith(key, len, ".svg")) return "image/svg+xml";
     if (endsWith(key, len, ".html")) return "text/html";
     if (endsWith(key, len, ".gz")) return "application/gzip";
     if (endsWith(key, len, ".ttf")) return "font/ttf";

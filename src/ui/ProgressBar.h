@@ -23,7 +23,7 @@ public:
         std::uint32_t indicator_color = 0xffffff;
         std::uint32_t text_color = 0xffffff;
         std::int32_t radius = 2;
-        const lv_font_t* font = &lv_font_montserrat_14;
+        const lv_font_t* font = nullptr;  // nullptr: LV_FONT_DEFAULT (the compiled font)
         bool blur_background = false;
         std::uint32_t blur_color = 0x000000;
         std::uint8_t blur_opacity = 180;  // 0-255

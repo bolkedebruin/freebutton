@@ -47,7 +47,7 @@ void ProgressBar::create_ui() {
 
     lv_label_set_text(progress_label_, "");
     lv_obj_set_style_text_color(progress_label_, lv_color_hex(config_.text_color), 0);
-    lv_obj_set_style_text_font(progress_label_, config_.font, 0);
+    lv_obj_set_style_text_font(progress_label_, config_.font != nullptr ? config_.font : LV_FONT_DEFAULT, 0);
     lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, config_.label_offset_y);
 
     progress_bar_ = lv_bar_create(parent_);

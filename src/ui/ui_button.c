@@ -1,19 +1,17 @@
 #include <stdio.h>
 #include <string.h>
 #include "ui_button.h"
+#include "ui.h"
 #include "lvgl.h"
+#include "ui_style.h"
 
 
 static lv_style_t style_container;
 static lv_style_t style_mini;
-static lv_style_t style_mini_top;
-static lv_style_t style_mini_bottom;
 static lv_style_t style_icon;
 
-extern lv_font_t *fnt_semibold_18;
-extern lv_font_t *fnt_medium_24;
-extern lv_font_t *fnt_medium_32;
-
+/* LVGL lock held. The labels' text styles are ui_style.h's (key.label,
+ * key.toplabel). */
 void ui_button_styles(void)
 {
     // Initialize container style for clean layout
@@ -25,6 +23,10 @@ void ui_button_styles(void)
     lv_style_set_flex_flow(&style_container, LV_FLEX_FLOW_COLUMN);
     lv_style_set_flex_cross_place(&style_container, LV_FLEX_ALIGN_CENTER);
     lv_style_set_flex_main_place(&style_container, LV_FLEX_ALIGN_CENTER);
+    /* The column's single track centred too: cross_place only centres items
+     * within the track, which is as wide as its widest visible child. The
+     * labels are 100% wide; the bottom area's icon is not. */
+    lv_style_set_flex_track_place(&style_container, LV_FLEX_ALIGN_CENTER);
 
 	lv_style_init(&style_mini);
 	lv_style_set_bg_opa(&style_mini, 0);
@@ -34,20 +36,7 @@ void ui_button_styles(void)
 	lv_style_set_flex_main_place(&style_mini, LV_FLEX_ALIGN_CENTER);
 	lv_style_set_pad_row(&style_mini, 8);
 
-	lv_style_init(&style_mini_top);
-	lv_style_set_text_font(&style_mini_top, fnt_semibold_18);
-	lv_style_set_text_color(&style_mini_top, lv_color_hex(0xFFD700)); // Gold yellow
-
-	lv_style_init(&style_mini_bottom);
-	lv_style_set_text_font(&style_mini_bottom, fnt_medium_32);
-	lv_style_set_text_color(&style_mini_bottom, lv_color_hex(0xFFFFFF)); // White
-
 	lv_style_init(&style_icon);
-}
-
-void ui_button_set_default_title_color(long color)
-{
-	lv_style_set_text_color(&style_mini_top, lv_color_hex(color));
 }
  
 lv_obj_t *ui_button_create(lv_obj_t* parent) {
@@ -98,9 +87,8 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
 	// CONTENT => TOP => LABEL
 	lv_obj_t * toplabel = lv_label_create(topobj);
 	b->title = toplabel;
-	lv_obj_add_style(toplabel, &style_mini_top, 0);
+	lv_obj_add_style(toplabel, ui_style_get(STYLE_EL_KEY_TOPLABEL), 0); /* centred unless "style" aligns it */
 	lv_obj_set_width(toplabel, lv_pct(100));
-	lv_obj_set_style_text_align(toplabel, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_align(toplabel, LV_ALIGN_CENTER, 0, 0);
 
 	// CONTENT => BOTTOM
@@ -116,8 +104,7 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
     lv_label_set_long_mode(botlabel, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(botlabel, lv_pct(100));
     lv_label_set_text(botlabel, ""); //Remove default text
-	lv_obj_add_style(botlabel, &style_mini_bottom, 0);
-    lv_obj_set_style_text_align(botlabel, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_add_style(botlabel, ui_style_get(STYLE_EL_KEY_LABEL), 0);
     lv_obj_align(botlabel, LV_ALIGN_CENTER, 0, 0);
 
 
@@ -157,21 +144,44 @@ void ui_button_set_text(lv_obj_t * button, const char * text)
 	lv_label_set_text(b->text, text);
 }
 
-void ui_button_set_icon(lv_obj_t* button, const char* icon_name)
+static void set_label_font(lv_obj_t* label, const lv_font_t* font)
 {
-    button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
+    if (font != NULL) {
+        lv_obj_set_style_text_font(label, font, 0);
+    } else {
+        lv_obj_remove_local_style_prop(label, LV_STYLE_TEXT_FONT, 0);
+    }
+}
+
+void ui_button_set_fonts(lv_obj_t* button, const lv_font_t* text_font, const lv_font_t* title_font)
+{
+    const button_dsc_t* b = (const button_dsc_t*)lv_obj_get_user_data(button);
+    if (b == NULL) {
+        return;
+    }
+    set_label_font(b->text, text_font);
+    set_label_font(b->title, title_font);
+}
+
+void ui_button_set_icon(lv_obj_t* button, const lv_image_dsc_t* dsc)
+{
+    const button_dsc_t* b = (const button_dsc_t*)lv_obj_get_user_data(button);
     if (!b || !b->icon) {
         printf("ui_button_set_icon: invalid button or icon object\n");
         return;
     }
+    ui_image_set_raster(b->icon, dsc, lv_obj_get_style_text_color(b->text, 0));
+    lv_obj_set_hidden(b->icon, dsc == NULL);
+    lv_obj_set_hidden(b->text, dsc != NULL);
+}
 
-    // Empty or NULL icon_name hides the icon
-    if (!icon_name || icon_name[0] == '\0') {
-        lv_obj_set_hidden(b->icon, true);
+void ui_button_delete(lv_obj_t* button)
+{
+    if (button == NULL) {
         return;
     }
-
-    // Image loading not yet implemented
-    printf("ui_button_set_icon: image loading not implemented for '%s'\n", icon_name);
-    lv_obj_set_hidden(b->icon, true);
+    button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
+    lv_obj_set_user_data(button, NULL);
+    lv_obj_delete(button);
+    lv_free(b);
 }

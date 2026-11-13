@@ -9,6 +9,7 @@
 //   web       LittleFS /www (the IDE bundle, gzipped)     read-only
 //   examples  LittleFS /scripts/examples                  read-only
 //   fonts     media store MEDIA_BUCKET_FONTS (TrueType)   read/write
+//   images    media store MEDIA_BUCKET_IMAGES (LVGL .bin) read/write
 //
 // Object key = path relative to the bucket's directory ("config.json",
 // "scripts/main.js" in app; "index.html.gz" in web; "button.js" in examples).
@@ -26,8 +27,9 @@
 //   GET  /<b>[/]                ListObjects v1 (marker)
 //   GET  /<b>[/]?location       GetBucketLocation
 //   GET|HEAD /<b>/<key>         GetObject / HeadObject (Range ignored)
-//   PUT  /<b>/<key>             PutObject (plain or aws-chunked body; app and
-//                               fonts, read-only buckets answer 403 AccessDenied)
+//   PUT  /<b>/<key>             PutObject (plain or aws-chunked body; app, fonts
+//                               and images, read-only buckets answer 403
+//                               AccessDenied)
 //   DELETE /<b>/<key>           DeleteObject (as PUT)
 //   OPTIONS /<b>[/...]          CORS preflight
 //
@@ -36,12 +38,14 @@
 // a browser gets the IDE file. PUT/DELETE always reach the bucket. Unknown
 // buckets: 404 NoSuchBucket (S3 clients).
 //
-// Authentication (Auth.h): reads of web, examples and fonts are anonymous;
-// everything else, every write included, is SigV4-signed.
+// Authentication (Auth.h): reads of web, examples, fonts and images are
+// anonymous; everything else, every write included, is SigV4-signed.
 //
-// Bucket fonts (media store):
+// Buckets fonts and images (media store):
 //   keys      flat names of [A-Za-z0-9._-], at most MEDIA_KEY_MAX (96), ending
-//             in .ttf or .otf (else 400 InvalidArgument / KeyTooLongError).
+//             in .ttf or .otf (fonts) or .bin (images; else 400
+//             InvalidArgument / KeyTooLongError). The store does not check
+//             the content; the UI validates a raster when it maps it.
 //   PUT       at most 2 MiB (413 EntityTooLarge). The size must be known up
 //             front: Content-Length, or x-amz-decoded-content-length for
 //             aws-chunked bodies (else 411 MissingContentLength), because
@@ -55,13 +59,20 @@
 //             disconnects, aborts the upload: the old version stays.
 //   GET/HEAD  sent straight from the memory-mapped flash; ETag = the stored
 //             MD5 ("<32 hex>"), Last-Modified = upload time (1970 when the
-//             clock was not set), Content-Type font/ttf or font/otf.
+//             clock was not set), Content-Type font/ttf, font/otf or
+//             application/octet-stream.
 //   DELETE    204, also for a missing key.
+//   After a committed PUT or a DELETE: fonts reload (fonts_request_reload),
+//             items showing images re-resolve (mediaImageNotifyChanged).
 //   HeadBucket and listings also carry (decimal bytes, media_usage()):
 //             x-fb-media-total        data area of the media partition
 //             x-fb-media-used         allocated to live entries
 //             x-fb-media-free         free now
 //             x-fb-media-reclaimable  deleted/replaced, freed once closed
+//           and wear since boot (counted in 4 KB sectors; a page erase is 16):
+//             x-fb-media-erase-sectors   sectors erased
+//             x-fb-media-erase-page-max  most sector erases on one 64 KB page
+//             x-fb-media-dir-generation  directory snapshots since formatting
 //
 // Memory: per request one small fixed struct in request->_tempObject
 // (malloc'd; the server free()s it), nothing that grows with the number of
@@ -85,6 +96,7 @@
 #include "S3Logic.h"
 #include "json/JsonValidator.h"
 #include "json/WindowOutputStream.h"
+#include "ui/MediaImage.h"   // mediaImageNotifyChanged
 #include "ui/fonts/fonts.h"  // fonts_request_reload
 
 #include <ESPAsyncWebServer.h>
@@ -112,7 +124,8 @@ constexpr const char* kXmlDecl = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
 constexpr const char* kXmlNs = " xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"";
 constexpr const char* kExposeHeaders =
     "ETag, x-amz-checksum-crc32, x-freebutton-reboot-required, x-freebutton-auth, Date, x-amz-date, "
-    "x-fb-media-total, x-fb-media-used, x-fb-media-free, x-fb-media-reclaimable";
+    "x-fb-media-total, x-fb-media-used, x-fb-media-free, x-fb-media-reclaimable, "
+    "x-fb-media-erase-sectors, x-fb-media-erase-page-max, x-fb-media-dir-generation";
 constexpr size_t kMountMax = 15;   // ESP_VFS_PATH_MAX
 constexpr int kMaxDepth = 6;       // directory levels walked by a listing
 constexpr uint8_t kMaxGets = 2;    // concurrent GetObject file handles
@@ -371,6 +384,9 @@ void addMediaUsageHeaders(AsyncWebServerResponse* response) {
     add(s3::kMediaUsedHeader, u.used);
     add(s3::kMediaFreeHeader, u.free);
     add(s3::kMediaReclaimableHeader, u.reclaimable);
+    add(s3::kMediaEraseSectorsHeader, u.erase_sectors);
+    add(s3::kMediaErasePageMaxHeader, u.erase_page_max);
+    add(s3::kMediaDirGenerationHeader, u.dir_generation);
 }
 
 // MEDIA_OK / NOT_FOUND when the media bucket can be read (an empty bucket
@@ -1033,6 +1049,10 @@ bool writeKeyAllowed(AsyncWebServerRequest* request, const Target& t) {
 void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
     if (!writeKeyAllowed(request, t)) return;
     if (t.bucket->isMedia()) {
+        if (s3::mediaKeyDeleteProtected(*t.bucket, t.key, t.keyLen)) {
+            sendXmlError(request, 403, "AccessDenied", "system font cannot be deleted");
+            return;
+        }
         char key[MEDIA_KEY_MAX + 1];
         copyMediaKey(t, key);
         const media_err_t e = media_delete(t.bucket->mediaBucket(), key);
@@ -1043,6 +1063,9 @@ void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
         if (e == MEDIA_OK && t.bucket->media == MEDIA_BUCKET_FONTS) {
             ESP_LOGI(TAG, "DELETE %s", request->url().c_str());
             fonts_request_reload();  // the LVGL task reloads the fonts 1.5 s after the last change
+        } else if (e == MEDIA_OK && t.bucket->media == MEDIA_BUCKET_IMAGES) {
+            ESP_LOGI(TAG, "DELETE %s", request->url().c_str());
+            freebutton::ui::mediaImageNotifyChanged();  // items showing it re-resolve (and hide it)
         }
         AsyncWebServerResponse* response = request->beginResponse(204);
         addCommonHeaders(response);
@@ -1424,6 +1447,8 @@ void putFinish(AsyncWebServerRequest* request) {
         s3::formatMd5ETag(md5, etag);
         if (t.bucket->media == MEDIA_BUCKET_FONTS) {
             fonts_request_reload();  // the LVGL task reloads the fonts 1.5 s after the last change
+        } else if (t.bucket->media == MEDIA_BUCKET_IMAGES) {
+            freebutton::ui::mediaImageNotifyChanged();  // items showing this key re-acquire it
         }
     } else {
         struct stat fst{};

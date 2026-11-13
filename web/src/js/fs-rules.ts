@@ -10,15 +10,24 @@
  * mirror the device's write rules so the IDE rejects a bad save before it
  * costs a request (the device enforces the same rules and stays the
  * authority):
- *   - extensions .js .json .txt only
+ *   - extensions .js .json .txt (editable) and .svg (icon sources, uploaded
+ *     from disk, not edited here)
  *   - not under www/ or scripts/examples/ (those belong to the read-only
  *     buckets; the device answers 400 for such `app` keys)
  *   - key <= 63 chars, body <= 64 KiB
  *   - config.json must be valid JSON (and cannot be deleted), with valid,
- *     unique key / display item / list names and well-formed "lists"
+ *     unique key / display item / list / image names, well-formed "lists",
+ *     and consistent icons ("icons" table, "icon"/"iconsize"/"iconcolor",
+ *     "images"; validateIcons) and fonts and styles ("style": its "fonts"
+ *     table and text styles, item "font"/"fontsize" fields; font-config
+ *     validateFonts, style-config parseStyle)
  */
 
-import { FONT_PX, HEX_COLOR, LIST_MAX_ROWS, validateConfigNames } from './config-model';
+import { HEX_COLOR, HEX_COLOR_ANY, LIST_MAX_ROWS, validateConfigNames } from './config-model';
+import { validateFonts, FONTSIZE_MAX, FONT_NAME_PATTERN, FONT_SRC_MAX } from './font-config';
+import {
+  ICON_NAME_PATTERN, ICON_SIZE_MAX, ICON_SIZE_MIN, ITEM_ICON_SIZE_MAX, isIconSize, itemIconSize,
+} from './icon-raster';
 
 export const MAX_KEY_LENGTH = 63;
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -30,13 +39,17 @@ export const MAIN_BYTECODE_NAME = 'main.jsc';
 export const CONFIG_KEY = 'config.json';
 
 const EDITABLE_EXTENSIONS = ['js', 'json', 'txt'] as const;
+/** Stored in `app` but not opened in the editor: SVG icon sources (uploaded). */
+const UPLOAD_EXTENSIONS = ['svg'] as const;
+/** Largest SVG the IDE uploads (the device's app body limit applies too). */
+export const MAX_SVG_BYTES = MAX_BODY_BYTES;
 /** `app` key prefixes that are the directories of the read-only buckets. */
 const OTHER_BUCKET_PREFIXES: ReadonlyArray<readonly [prefix: string, bucket: string]> = [
   ['www/', 'web'],
   ['scripts/examples/', 'examples'],
 ];
 
-export type FileKind = 'js' | 'json' | 'text' | 'other';
+export type FileKind = 'js' | 'json' | 'text' | 'svg' | 'other';
 
 /** Strip surrounding whitespace and leading slashes: "/scripts/a.js" -> "scripts/a.js". */
 export function normalizeKey(input: string): string {
@@ -54,6 +67,7 @@ export function fileKind(key: string): FileKind {
   if (ext === 'js') return 'js';
   if (ext === 'json') return 'json';
   if (ext === 'txt') return 'text';
+  if (ext === 'svg') return 'svg';
   return 'other';
 }
 
@@ -77,9 +91,17 @@ export function isEditableKey(key: string): boolean {
   return !isSystemKey(k) && (EDITABLE_EXTENSIONS as readonly string[]).includes(extensionOf(k));
 }
 
+/** A user file the IDE can store: editable, or an uploaded SVG. */
+export function isStorableKey(key: string): boolean {
+  const k = normalizeKey(key);
+  const ext = extensionOf(k);
+  return !isSystemKey(k)
+    && ((EDITABLE_EXTENSIONS as readonly string[]).includes(ext) || (UPLOAD_EXTENSIONS as readonly string[]).includes(ext));
+}
+
 export function canDeleteKey(key: string): boolean {
   const k = normalizeKey(key);
-  return isEditableKey(k) && k !== CONFIG_KEY;
+  return isStorableKey(k) && k !== CONFIG_KEY;
 }
 
 /** Validate an object key for writing. Returns an error message, or null if OK. */
@@ -96,8 +118,47 @@ export function validateKey(key: string): string | null {
     const prefix = OTHER_BUCKET_PREFIXES.find(([, b]) => b === other)![0];
     return `${prefix} is read-only (device bucket "${other}")`;
   }
-  if (!isEditableKey(key)) return 'Only .js, .json and .txt files can be saved';
+  if (!isStorableKey(key)) return 'Only .js, .json, .txt and .svg files can be saved';
   return null;
+}
+
+/**
+ * Key for an SVG uploaded from disk: "icons/<file name>" with the name made
+ * safe for the device ([A-Za-z0-9._-]). Null when it is not an .svg file.
+ */
+export function svgUploadKey(fileName: string): string | null {
+  const base = fileName.split(/[\\/]/).pop() ?? '';
+  if (extensionOf(base) !== 'svg') return null;
+  const stem = base.slice(0, base.lastIndexOf('.')).replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'icon';
+  return `icons/${stem}.svg`;
+}
+
+/**
+ * Key in bucket `fonts` for a font uploaded from disk: the file name made
+ * safe for the media store ([A-Za-z0-9._-], no "..", lower-case .ttf/.otf,
+ * <= 96 characters). Null when it is not a .ttf / .otf file.
+ */
+export function fontUploadKey(fileName: string): string | null {
+  const base = fileName.split(/[\\/]/).pop() ?? '';
+  const ext = extensionOf(base);
+  if (ext !== 'ttf' && ext !== 'otf') return null;
+  const stem = base.slice(0, base.lastIndexOf('.'))
+    .replace(/[^A-Za-z0-9._-]+/g, '_').replace(/\.{2,}/g, '.').replace(/^[._]+|[._]+$/g, '') || 'font';
+  return `${stem.slice(0, FONT_SRC_MAX - 4).replace(/[.]+$/, '') || 'font'}.${ext}`;
+}
+
+/** Config font name for a fonts-bucket key ("Roboto-Bold.ttf" -> "Roboto_Bold"; NAMES.md rules). */
+export function fontNameForKey(key: string): string {
+  const stem = key.replace(/\.(ttf|otf)$/i, '').replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  const name = (/^[0-9]/.test(stem) ? `f_${stem}` : stem).slice(0, 24);
+  return FONT_NAME_PATTERN.test(name) ? name : 'font';
+}
+
+/** Icon name for an uploaded SVG key ("icons/weather-rain.svg" -> "weather-rain"). */
+export function iconNameForKey(key: string): string {
+  const base = key.slice(key.lastIndexOf('/') + 1);
+  const stem = base.replace(/\.svg$/i, '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 31);
+  return ICON_NAME_PATTERN.test(stem) ? stem : 'icon';
 }
 
 export function utf8Length(text: string): number {
@@ -229,10 +290,18 @@ const LIST_NUMBERS: NumberRule[] = [
   ['y', 0, 100, false],
   ['width', 0, 100, false],
   ['rows', 1, LIST_MAX_ROWS, true],
-  ['fontsize', 1, FONT_PX.length, true],
+  ['fontsize', 1, FONTSIZE_MAX, true],
   ['selected', 0, Infinity, true],
 ];
 const LIST_COLORS = ['color', 'focuscolor', 'focustextcolor'];
+/** Media store key rules (S3Logic.h: flat [A-Za-z0-9._-], MEDIA_KEY_MAX 96). */
+const IMAGE_SRC_KEY = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,91}\.bin$/;
+/** "images" x / y: pixels on the 320x240 main display (top-left of the raster). */
+const IMAGE_NUMBERS: NumberRule[] = [
+  ['page', 0, Infinity, true],
+  ['x', 0, 319, true],
+  ['y', 0, 239, true],
+];
 
 function rangeText(min: number, max: number): string {
   return max === Infinity ? `>= ${min}` : `${min}..${max}`;
@@ -275,6 +344,109 @@ function validateLists(lists: unknown[]): string[] {
   return problems;
 }
 
+type Obj = Record<string, unknown>;
+
+function isObj(v: unknown): v is Obj {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+const SIZE_TEXT = `an integer ${ICON_SIZE_MIN}..${ICON_SIZE_MAX}`;
+
+/** "icon" must name an entry of `icons` ("" = no icon). */
+function checkIconRef(at: string, v: unknown, icons: ReadonlySet<string> | null, problems: string[]): void {
+  if (typeof v !== 'string') {
+    problems.push(`${at}.icon must be a string (an icon name from "icons")`);
+  } else if (v !== '' && !ICON_NAME_PATTERN.test(v)) {
+    problems.push(`${at}.icon "${v}" is not a valid icon name (1-31 letters, digits, _ or -)`);
+  } else if (v !== '' && icons && !icons.has(v)) {
+    problems.push(`${at}.icon "${v}" is not in "icons"`);
+  }
+}
+
+/**
+ * Icons: the `icons` table ({"name": "/path.svg"}), "icon" / "iconsize"
+ * (+ "iconcolor" on display items) on keys and display items, and the
+ * "images" entries. Exported for tests.
+ */
+export function validateIcons(o: Obj): string[] {
+  const problems: string[] = [];
+  let icons: Set<string> | null = null;
+  if ('icons' in o) {
+    if (!isObj(o.icons)) {
+      problems.push('"icons" must be an object ({"name": "/icons/name.svg"})');
+    } else {
+      icons = new Set();
+      for (const [name, path] of Object.entries(o.icons)) {
+        if (!ICON_NAME_PATTERN.test(name)) {
+          problems.push(`icons: "${name}" is not a valid icon name (1-31 letters, digits, _ or -)`);
+          continue;
+        }
+        icons.add(name);
+        if (typeof path !== 'string' || extensionOf(normalizeKey(path)) !== 'svg') {
+          problems.push(`icons.${name} must be the path of an .svg file on the device (e.g. "/icons/${name}.svg")`);
+        } else {
+          const keyProblem = validateKey(normalizeKey(path));
+          if (keyProblem) problems.push(`icons.${name}: ${keyProblem}`);
+        }
+      }
+    }
+  }
+  // Without an "icons" table every reference is unknown.
+  const known = icons ?? new Set<string>();
+
+  const items: [string, boolean][] = [['buttons', false], ['mqttbuttons', false], ['displayitems', true], ['mqttdisplays', true]];
+  for (const [list, isDisplay] of items) {
+    const arr = o[list];
+    if (!Array.isArray(arr)) continue;
+    arr.forEach((e, i) => {
+      if (!isObj(e)) return;
+      const at = `${list}[${i}]`;
+      if ('icon' in e) checkIconRef(at, e.icon, known, problems);
+      if ('iconsize' in e && itemIconSize(e.iconsize, 1) === null) {
+        problems.push(`${at}.iconsize must be an integer <= ${ITEM_ICON_SIZE_MAX} (<= 0: the default)`);
+      }
+      if (isDisplay && 'iconcolor' in e && (typeof e.iconcolor !== 'string' || !HEX_COLOR_ANY.test(e.iconcolor))) {
+        problems.push(`${at}.iconcolor must be a colour "#rrggbb"`);
+      }
+    });
+  }
+
+  if (Array.isArray(o.images)) {
+    o.images.forEach((e, i) => {
+      const at = `images[${i}]`;
+      if (!isObj(e)) {
+        problems.push(`${at} must be an object`);
+        return;
+      }
+      if (!('name' in e)) problems.push(`${at}.name is required`);
+      // An icon needs the raster size; a src raster has its own (optional here).
+      for (const field of ['width', 'height']) {
+        if ('icon' in e ? !isIconSize(e[field]) : field in e && !isIconSize(e[field])) {
+          problems.push(`${at}.${field} must be ${SIZE_TEXT} (pixels)`);
+        }
+      }
+      for (const [field, min, max, integer] of IMAGE_NUMBERS) {
+        if (!(field in e)) continue;
+        const v = e[field];
+        if (typeof v !== 'number' || !Number.isFinite(v) || (integer && !Number.isInteger(v)) || v < min || v > max) {
+          problems.push(`${at}.${field} must be ${integer ? 'an integer' : 'a number'} ${rangeText(min, max)}`
+            + (field === 'page' ? '' : ' (pixels)'));
+        }
+      }
+      // Both given: the device shows the icon. Refused here as ambiguous.
+      if ('icon' in e && 'src' in e) problems.push(`${at} has both "icon" and "src" (use one; the device would show the icon)`);
+      if ('icon' in e) checkIconRef(at, e.icon, known, problems);
+      if ('src' in e && (typeof e.src !== 'string' || !IMAGE_SRC_KEY.test(e.src))) {
+        problems.push(`${at}.src must be a key in the device's images bucket ([A-Za-z0-9._-], ending in .bin)`);
+      }
+      if ('color' in e && (typeof e.color !== 'string' || !HEX_COLOR_ANY.test(e.color))) {
+        problems.push(`${at}.color must be a colour "#rrggbb"`);
+      }
+    });
+  }
+  return problems;
+}
+
 /**
  * Light structural check of a parsed config.json: things that would make
  * the firmware ignore whole sections, malformed "lists" entries, and invalid
@@ -287,7 +459,7 @@ export function validateConfigShape(cfg: unknown): string[] {
     return ['config.json must be a JSON object ({ ... })'];
   }
   const o = cfg as Record<string, unknown>;
-  for (const key of ['buttons', 'mqttbuttons', 'displayitems', 'mqttdisplays', 'brokers', 'lists']) {
+  for (const key of ['buttons', 'mqttbuttons', 'displayitems', 'mqttdisplays', 'brokers', 'lists', 'images']) {
     if (key in o && !Array.isArray(o[key])) problems.push(`"${key}" must be an array`);
   }
   for (const key of ['buttons', 'mqttbuttons']) {
@@ -305,6 +477,8 @@ export function validateConfigShape(cfg: unknown): string[] {
     });
   }
   if (Array.isArray(o.lists)) problems.push(...validateLists(o.lists));
+  problems.push(...validateIcons(o));
+  problems.push(...validateFonts(o));
   problems.push(...validateConfigNames(o));
   return problems;
 }

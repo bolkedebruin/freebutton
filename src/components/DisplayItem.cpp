@@ -15,6 +15,12 @@ namespace freebutton {
 
 unsigned long DisplayItem::next_id = 1;
 
+namespace {
+// LVGL pool an icon's image object takes (lv_image_t plus two local style
+// properties), with margin.
+constexpr size_t kRoomForIcon = 512;
+} // namespace
+
 DisplayItem::DisplayItem(const int x, const int y, const int width, const int boxtype, const int fontSize, const int alignment,
                         std::string  label, std::string  unit, const int round, const int page,
                         std::vector<Topic> topicConfigs)
@@ -24,6 +30,7 @@ DisplayItem::DisplayItem(const int x, const int y, const int width, const int bo
     , label(std::move(label)), unit(std::move(unit)), round(round), page(page)
 {
     topics = std::move(topicConfigs);
+    font_.store(fontref::pack(FONT_FACE_NONE, fontSize), std::memory_order_relaxed);
     // Topics will be registered later via ConfigManager::registerAllSubscriptions()
     // UI box creation is deferred until after configuration (called from fromJson)
 }
@@ -77,6 +84,12 @@ void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic
                 case DISPLAY_UNIT:
                     storeText(unitSlot_, data, id, "unit");
                     break;
+                case DISPLAY_ICON:
+                    // The state exists: configureIcon() made it for this topic.
+                    if (IconState* s = icon_.get()) {
+                        storeText(s->name, data, id, "icon");
+                    }
+                    break;
                 default:
                     // Debug only: runs under the broker's subscription lock.
                     ESP_LOGD(TAG, "DisplayItem %lu: Unhandled event type: %d", id, topicConfig.eventType);
@@ -97,8 +110,14 @@ bool DisplayItem::applyPending() {
         deleteBox();
         return false;
     }
-    if (box == nullptr && !buildBox()) {
-        return false;  // no LVGL memory now; the next render request retries
+    // A box built now draws with the current font anyway.
+    const bool fontChanged = fontDirty_.exchange(false, std::memory_order_acq_rel);
+    if (box == nullptr) {
+        if (!buildBox()) {
+            return false;  // no LVGL memory now; the next render request retries
+        }
+    } else if (fontChanged) {
+        drawConfigured();  // the new font; the slots below render over it
     }
     bool again = false;
     again |= valueSlot_.apply([this](const char* text) { ui_box_set_text(box, text); })
@@ -107,7 +126,23 @@ bool DisplayItem::applyPending() {
              == TextSlotApply::Busy;
     again |= unitSlot_.apply([this](const char* text) { ui_box_set_hint(box, text); })
              == TextSlotApply::Busy;
+    if (IconState* s = icon_.get()) {
+        again |= s->apply([this, s](const lv_image_dsc_t* dsc) { return showIcon(*s, dsc); });
+    }
     return again;
+}
+
+// LVGL lock held, box exists.
+bool DisplayItem::showIcon(IconState& s, const lv_image_dsc_t* dsc) {
+    if (dsc != nullptr && !ui_box_has_icon(box) && !ui::lvglHasRoom(kRoomForIcon)) {
+        if (!s.roomWarned) {
+            ESP_LOGE(TAG, "DisplayItem %lu: no LVGL memory for its icon", id);
+            s.roomWarned = true;
+        }
+        return false;  // shown without icon; the next change of icon retries
+    }
+    const lv_color_t tint = s.color != icon::kNoColor ? lv_color_hex(s.color) : ui_box_text_color(box);
+    return ui_box_set_icon(box, dsc, tint) && dsc != nullptr;
 }
 
 // LVGL lock held, box exists. Draws the configured label and unit and an
@@ -115,10 +150,21 @@ bool DisplayItem::applyPending() {
 // each field over them (a slot never written keeps the configured default).
 void DisplayItem::drawConfigured() {
     const int adjustedWidth = width == 0 ? 45 : width;
-    draw_box(box, label.c_str(), "", unit.c_str(), x, y, fontSize, adjustedWidth, alignment, boxType);
+    const uint32_t font = font_.load(std::memory_order_acquire);
+    const auto clampSize = [](const int size) { return static_cast<uint8_t>(size < 0 ? 0 : size > 255 ? 255 : size); };
+    const ui_box_fonts_t fonts = {
+        .face = static_cast<int16_t>(fontref::face(font)),
+        .fontsize = clampSize(fontref::size(font)),
+        .caption_face = static_cast<int16_t>(labelFontFace),
+        .caption_fontsize = clampSize(labelFontSize),
+    };
+    draw_box(box, label.c_str(), "", unit.c_str(), x, y, &fonts, adjustedWidth, alignment, boxType);
     valueSlot_.invalidate();
     captionSlot_.invalidate();
     unitSlot_.invalidate();
+    if (IconState* s = icon_.get()) {
+        s->name.invalidate();
+    }
 }
 
 // LVGL lock held.
@@ -153,8 +199,11 @@ bool DisplayItem::buildBox() {
 // LVGL lock held.
 void DisplayItem::deleteBox() {
     if (box != nullptr) {
-        ui_box_delete(box);
+        ui_box_delete(box);  // with its icon's image object
         box = nullptr;
+        if (IconState* s = icon_.get()) {
+            s->raster.release();
+        }
     }
 }
 
@@ -204,6 +253,56 @@ void DisplayItem::setDisplayValue(const std::string_view text) {
 
 void DisplayItem::setDisplayUnit(const std::string_view text) {
     storeText(unitSlot_, text, id, "unit");
+}
+
+void DisplayItem::setFont(const int face, const int size) {
+    font_.store(fontref::pack(face, size), std::memory_order_release);
+    fontDirty_.store(true, std::memory_order_release);
+    ui::requestPendingRender();
+}
+
+// Boot (config load), before the item is attached and subscribed.
+void DisplayItem::configureIcon(const JsonObject& data) {
+    configuredIconSize_ = icon::clampSize(data["iconsize"] | 0, icon::kDisplayDefaultSize);
+    configuredIconColor_ = icon::parseColor(data["iconcolor"] | "");
+    const char* name = data["icon"] | "";
+    bool wanted = name[0] != '\0';
+    for (const auto& t : topics) {
+        wanted = wanted || t.eventType == DISPLAY_ICON;
+    }
+    if (!wanted) {
+        return;  // no icon state: an item without icon costs one pointer
+    }
+    if (name[0] != '\0' && !icon::validName(name)) {
+        ESP_LOGW(TAG, "DisplayItem %lu: icon \"%s\" is not a valid icon name, ignored", id, name);
+        name = "";
+    }
+    IconState* s = ensureIcon();
+    if (s == nullptr) {
+        ESP_LOGE(TAG, "DisplayItem %lu: no memory for its icon", id);
+        return;
+    }
+    if (name[0] != '\0') {
+        s->name.write(name);
+    }
+}
+
+DisplayItem::SetIconResult DisplayItem::setIconName(const std::string_view name) {
+    if (!name.empty() && !icon::validName(name)) {
+        return SetIconResult::Invalid;
+    }
+    IconState* s = icon_.get();
+    if (s == nullptr) {
+        if (name.empty()) {
+            return SetIconResult::Ok;  // no icon to hide
+        }
+        s = ensureIcon();
+        if (s == nullptr) {
+            return SetIconResult::NoMemory;
+        }
+    }
+    storeText(s->name, name, id, "icon");
+    return SetIconResult::Ok;
 }
 
 } // freebutton

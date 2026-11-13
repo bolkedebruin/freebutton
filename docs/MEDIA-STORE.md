@@ -55,9 +55,18 @@ contiguous flash and **large files never fragment and never move**.
 - Large file (> 32 KB): whole pages, wherever free. Waste: the tail of the
   last page.
 - Small file (<= 32 KB): packed in shared pages in 4 KB sectors (the erase
-  unit), contiguous inside one page. Only shared pages can fragment; a nearly
-  empty shared page is emptied by copying its few files elsewhere (not while
-  they are open), then freed.
+  unit), contiguous inside one page. Only shared pages can fragment; when
+  whole pages run low, a nearly empty shared page is emptied by copying its
+  few files elsewhere (not while they are open), then freed.
+
+**Wear leveling** (as littlefs does it): allocation is next-fit. A cursor
+sweeps the data pages and wraps, so a file that is replaced over and over
+moves through all free pages instead of wearing out the first free one.
+The cursor lives in RAM and starts at a pseudo-random page on every mount.
+Data at rest never moves (no static leveling): the fonts' pages do not
+wear, the rest of the store shares the erases. Measured on a 5 MB store
+with 1.5 MB of fonts (`test_wear_*`): the busiest sector gets 1.06-1.08
+times the even share; before next-fit it was 3.7-30 times.
 
 RAM: a free-page bitmap (bits) and a small table of open files. Lookups scan
 the directory in mapped flash; no RAM index.
@@ -232,23 +241,43 @@ least 350 entries always fit; with short keys about 1000.
 
 ### Allocation details
 
+The allocation policy is RAM state only (cursor, fill page); the on-flash
+format does not record it, so changing it needs no migration.
+
+- Large file (> 32 KB): `ceil(size / 64 KB)` whole pages: the next free
+  pages from the cursor on, in sweep order (scattered and across the wrap
+  are fine: a mapping takes any list of pages). The cursor then moves past
+  the last one. At most 64 pages (4 MB). The cursor starts at a
+  pseudo-random page on mount, from `next_seq` and the directory generation.
 - Small file (1..32 KB): `ceil(size / 4 KB)` contiguous sectors inside one
-  page. Preference: a shared page already in use (packing), then a run that
-  is already erased, then the fullest page.
-- Large file (> 32 KB): `ceil(size / 64 KB)` whole pages. Preference: the
-  shortest contiguous run of free pages that fits (erased first), so the
-  mapping is one block; otherwise any free pages, erased first, in
-  ascending order. At most 64 pages (4 MB).
+  page, appended to the fill page; when it has no room, the next fresh page
+  from the cursor becomes the fill page. Sectors freed in older shared pages
+  are not reused one by one: once every file of a page is gone, the page is
+  free and the cursor reuses it in turn. Only while fewer than 4 whole
+  pages are free are holes in shared pages filled first.
 - Size 0: no space, location kind 0; `media_open` returns `data == NULL`.
 - Erase: `media_put_write` erases a sector (small) or the page (large, at
-  its first byte) just before writing into it, only when RAM does not know
-  it erased. `media_maintain` does one step per call: erase the stale
-  directory half, or one compaction step, or verify (read) a free page /
-  free sector of a shared page and erase it if it is not blank.
-- Compaction: the shared page with the fewest used sectors (at most 8, not
-  mapped) gives one file per call to a fuller shared page (never the other
-  way round, so it converges). Open files and pages with an open file are
-  never touched.
+  its first byte, only when no sector of it is known erased: a sector is
+  never erased twice for nothing) just before writing into it, only when
+  RAM does not know it erased. `media_maintain` does one step per call:
+  erase the stale directory half, or one compaction step, or verify (read)
+  and if needed erase the next free page from the cursor on (sector by
+  sector if part of it is already erased), or a free sector of the fill
+  page ahead of its next file. Holes in other shared pages are erased when
+  they are used.
+- Compaction: runs only while fewer than 4 whole pages are free, or after a
+  large upload failed for lack of whole pages (it costs writes and erases,
+  and next-fit leaves sparse pages behind on purpose). The shared page with
+  the fewest used sectors (at most 8, not mapped, not the fill page) gives
+  one file per call to a fuller shared page (never the other way round, so
+  it converges). Open files and pages with an open file are never touched.
+- Wear counters (RAM, since mount): sectors erased in total and on the
+  busiest page, and the directory generation, in `media_usage()` and on the
+  S3 HeadBucket (`x-fb-media-erase-sectors`, `x-fb-media-erase-page-max`,
+  `x-fb-media-dir-generation`). The directory pages are not leveled: a
+  64 KB half takes about 500 updates (worst case, 48 KB of live records,
+  about 125) before it is erased, so even an update every 5 minutes erases
+  each half about once a day.
 - Mapping: one mapping per open large file; small files in the same shared
   page share one page mapping (IDF refuses to map a page twice). The ESP
   backend checks with `spi_flash_cache2phys` that a multi-block mapping
@@ -276,30 +305,40 @@ is linked until something calls `media_init()`.
 
 LVGL `tiny_ttf` (stb_truetype) renders from the mapped TTF
 (`lv_tiny_ttf_create_data_ex`). Default fonts are committed in
-`media/fonts/` and uploaded to the bucket `fonts` (keys below). A missing or
-invalid font falls back to LVGL's built-in Montserrat 14, the only compiled
-font.
+`media/fonts/` (the upstream files, unmodified) and uploaded to the bucket
+`fonts` (keys below). config.json `"style"."fonts"` can add fonts from other
+keys in the bucket ([STYLE.md](STYLE.md)). A missing or invalid font falls
+back to LVGL's built-in Montserrat 12, the only compiled font.
 
 | Key | Use |
 |---|---|
-| `medium.ttf` | text, medium weight (all `fnt_medium_*` sizes) |
-| `semibold.ttf` | text, semibold (`fnt_semibold_*`) |
-| `icons.ttf` | Material Design Icons; fallback of both text fonts |
+| `medium.ttf` | system font `montserrat`: UI text, medium weight (Montserrat Medium, 198 KB). Protected |
+| `semibold.ttf` | system font `montserrat_semibold`: titles, semibold (Montserrat SemiBold, 198 KB). Protected |
+| `icons.ttf` | an ordinary font file: Material Design Icons. The factory config names it `mdi`, the fallback of the system fonts |
 
-- `icons.ttf` is the full Material Design Icons 7.4.47 set (7,447 icons,
-  1.06 MB), addressed by MDI's own codepoints; it also maps the media and
-  check symbols Montserrat lacks (⏭⏮⏯⏴⏵⏶⏷⏸⏹⏩⏪⏺ ✓✔✗✘) to MDI glyphs.
-  Built by `tools/fonts/build_fonts.py`, checked by `tools/fonts/check_fonts.py`.
+- The two system fonts exist without a config entry, and the firmware
+  screens (modals, progress bar, LVGL theme) use them directly. S3 DELETE of
+  `medium.ttf` or `semibold.ttf` answers 403; PUT is allowed (checked by
+  `ttf_check`), so they can be updated. A `"style"."fonts"` entry with a
+  system name may set `id`, `fallback` and `lineheight`, not `src`.
+- A font has a fallback only when config.json gives it one; no font name is
+  special in the firmware.
+
+- `icons.ttf` is the full Material Design Icons 7.4.47 webfont (7,447 icons,
+  1.31 MB), addressed by MDI's own codepoints (U+F0001-F1D17, cmap (3,10)
+  format 12).
 - tiny_ttf glyph and kerning caches are off (`lv_conf.h`): LVGL draws in
   bands and fetches each glyph again per band, so a cache smaller than the
   page's working set only misses, and a large one does not fit the LVGL pool.
   An uncached glyph costs 0.6-1 ms.
-- 48 and 72 px keep the old 1.03 em line box (page layouts unchanged); a
-  descender or an accent on a capital can be clipped by up to ~0.1 em.
+- The font `montserrat` keeps the old 1.03 em line box at 48 px and up (page
+  layouts unchanged); a descender or an accent on a capital can be clipped
+  by up to ~0.1 em.
 - `ttf_check.c` validates a font's tables before stb_truetype reads them (it
   trusts every offset); a damaged upload falls back to the built-in font.
 - Fonts reload about 1.5 s after the last PUT or DELETE in bucket `fonts`
-  (no reboot): `fnt_*` are stable wrappers, the new set is loaded, swapped
-  in and every display restyled, then the old fonts are destroyed and their
-  files closed (the store frees a replaced file's pages then). A reload waits
-  while the LVGL pool has less than 8 KB free.
+  (no reboot): every font instance (a font at one size) is a stable
+  wrapper; each instance of a changed file gets a new tiny_ttf font, one at
+  a time, every display is restyled, and the old file is closed once no
+  instance reads it (the store frees a replaced file's pages then). An
+  instance waits while the LVGL pool would keep less than 4 KB free.

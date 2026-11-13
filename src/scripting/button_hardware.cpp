@@ -112,6 +112,47 @@ int button_hw_set_top_label(int position, const char* topLabel) {
     return 0;
 }
 
+int button_hw_set_icon(int position, const char* name, size_t len) {
+    auto* button = configManager.getButtonByPosition(position);
+    if (!button || !button->getButtonObject()) {
+        ESP_LOGW(TAG, "Button at position %d not found or has no UI element", position);
+        return -1;
+    }
+    switch (button->setIconName(std::string_view(name ? name : "", name ? len : 0))) {
+        case freebutton::Button::SetIconResult::Ok:
+            return 0;
+        case freebutton::Button::SetIconResult::Invalid:
+            return -2;
+        case freebutton::Button::SetIconResult::NoMemory:
+            break;
+    }
+    return -3;
+}
+
+int button_hw_set_font(int position, int face, int size, bool top) {
+    auto* button = configManager.getButtonByPosition(position);
+    if (!button) {
+        ESP_LOGW(TAG, "Button at position %d not found", position);
+        return -1;
+    }
+    if (top) {
+        button->setTopLabelFont(face, size);
+    } else {
+        button->setLabelFont(face, size);
+    }
+    return 0;
+}
+
+int button_hw_restore_font(int position, bool top) {
+    auto* button = configManager.getButtonByPosition(position);
+    if (!button) {
+        ESP_LOGW(TAG, "Button at position %d not found", position);
+        return -1;
+    }
+    button->restoreFont(top);
+    return 0;
+}
+
 // Get button count from config.h
 int button_hw_get_count() {
     return BUTTON_COUNT;

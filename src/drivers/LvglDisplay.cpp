@@ -1,3 +1,4 @@
+#include "esp_private/esp_clk.h"
 #include "LvglDisplay.h"
 #include "../ui/wifi_qr_modal.h"
 #include "../ui/ota_modal.h"
@@ -13,14 +14,33 @@
 #include <freertos/task.h>
 
 #include "ui/fonts/fonts.h"
+#include "ui/render_stats.h"
 
 #define MAIN_DISPLAY_WIDTH 320
 #define MAIN_DISPLAY_HEIGHT 240
-#define MAIN_DISPLAY_BUFFER_SIZE 20
+// Draw buffers (bytes; LVGL renders RGB565, 2 bytes per pixel, so 19200 B
+// = 30 rows of 320). Two buffers let LVGL render the next band while the
+// previous one goes out by DMA. docs/PERFORMANCE.md has the measurements.
+#ifndef MAIN_BUF_BYTES
+#define MAIN_BUF_BYTES (MAIN_DISPLAY_WIDTH * 20 * 3)
+#endif
+#ifndef MAIN_BUF_COUNT
+#define MAIN_BUF_COUNT 1
+#endif
 
 #define SMALL_DISPLAY_WIDTH 160
 #define SMALL_DISPLAY_HEIGHT 80
-#define SMALL_DISPLAY_BUFFER_SIZE 5
+// Shared by all mini displays: 9600 B = 30 rows of 160, so a mini repaints
+// in 3 bands instead of 12 (2400 B): 22-28 ms instead of 50-71 ms on .81,
+// for 7.2 KB of heap paid once (docs/PERFORMANCE.md). LVGL's work per band
+// (object tree walk, glyph lookups, rasterizing a glyph again for every
+// band it crosses) dominates the repaint, not the pixels.
+#ifndef SMALL_BUF_BYTES
+#define SMALL_BUF_BYTES (SMALL_DISPLAY_WIDTH * 30 * 2)
+#endif
+#ifndef SMALL_BUF_COUNT
+#define SMALL_BUF_COUNT 1
+#endif
 
 namespace FreeButton {
 
@@ -33,6 +53,15 @@ std::unique_ptr<LvglDisplay> g_lvglDisplay;
 // captureScreens(), on the LVGL task, around one lv_refr_now() of s_capDisp;
 // the flush callbacks (same task) append what they send.
 static std::atomic<bool> s_screenshotRequested{false};
+// Benchmark (requestBench / runBench): repaints per display, 0 = none. The
+// result is a heap-allocated JSON text, handed over once by
+// takeBenchResult() (any task, under s_benchMux): no RAM is held for it
+// outside a run.
+static std::atomic<int> s_benchRequested{0};
+static portMUX_TYPE s_benchMux = portMUX_INITIALIZER_UNLOCKED;
+static constexpr size_t kBenchJsonMax = 3072;
+static char* s_benchJson = nullptr;
+static uint32_t s_benchSeq = 0;
 static lv_display_t* s_capDisp = nullptr;
 static BusAwareFile s_capFile;
 static bool s_capOk = false;
@@ -96,9 +125,16 @@ struct PanelBusHold {
 static PanelBusHold s_panelHold;
 
 // Waits for the pending band's DMA, then completes it for LVGL.
+// Render statistics (POST /api/bench): DMA bands started and the time spent
+// waiting for one to finish. LVGL task only.
+static uint32_t s_statFlushes = 0;
+static int64_t s_statDmaWaitUs = 0;
+
 static void completePanelDma() {
     if (!s_panelHold.dmaPending) return;
+    const int64_t w0 = esp_timer_get_time();
     s_panelHold.gfx->waitDMA();
+    s_statDmaWaitUs += esp_timer_get_time() - w0;
     s_panelHold.dmaPending = false;
     captureArea(s_panelHold.disp, &s_panelHold.area, s_panelHold.px);
     lv_display_flush_ready(s_panelHold.disp);
@@ -145,6 +181,7 @@ static void startPanelDma(const lv_area_t* area, uint8_t* px_map) {
     s_panelHold.gfx->setAddrWindow(area->x1, area->y1, width, height);
     s_panelHold.gfx->writePixelsDMA(reinterpret_cast<uint16_t*>(px_map), width * height);
     s_panelHold.dmaPending = true;
+    s_statFlushes++;
     s_panelHold.area = *area;
     s_panelHold.px = px_map;
 }
@@ -205,10 +242,13 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     }
 
     // Allocate display buffer
-    constexpr size_t buffer_size = MAIN_DISPLAY_WIDTH * MAIN_DISPLAY_BUFFER_SIZE * sizeof(lv_color_t);
+    constexpr size_t buffer_size = MAIN_BUF_BYTES;
     buffer1_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(32, buffer_size, MALLOC_CAP_DMA));
+    if (MAIN_BUF_COUNT > 1) {
+        buffer2_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(32, buffer_size, MALLOC_CAP_DMA));
+    }
 
-    if (!buffer1_) {
+    if (!buffer1_ || (MAIN_BUF_COUNT > 1 && !buffer2_)) {
         ESP_LOGE(TAG, "Failed to allocate LVGL buffer");
         return false;
     }
@@ -239,11 +279,12 @@ bool LvglDisplay::initialize(DisplayManager& displayManager) {
     lv_display_set_flush_cb(main_display_, flush_cb);
     lv_display_set_flush_wait_cb(main_display_, flush_wait_hold_cb);
 
-    // Set display buffer (single buffer only)
-    lv_display_set_buffers(main_display_, buffer1_, nullptr,
+    lv_display_set_buffers(main_display_, buffer1_, buffer2_,
                           buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-    // Set default theme
+    // Default theme, with the compiled font (LV_FONT_DEFAULT): firmware
+    // text without a style of its own (modals) is a bitmap font, drawn at
+    // once. The UI elements use config.json "style" (ui_style.c).
     lv_theme_t* theme = lv_theme_default_init(main_display_,
                                              lv_palette_main(LV_PALETTE_BLUE),
                                              lv_palette_main(LV_PALETTE_RED),
@@ -347,6 +388,9 @@ void LvglDisplay::task() {
     if (s_screenshotRequested.exchange(false)) {
         captureScreens();
     }
+    if (const int n = s_benchRequested.exchange(0); n > 0) {
+        runBench(n);
+    }
 
     // Process any pending WiFi QR modal operations
     wifi_qr_modal_process_pending();
@@ -411,6 +455,101 @@ void LvglDisplay::captureScreens() {
     ESP_LOGI(TAG, "screenshot: done in %lld ms", (esp_timer_get_time() - t0) / 1000);
 }
 
+void LvglDisplay::requestBench(int repaints) {
+    s_benchRequested.store(repaints < 1 ? 1 : (repaints > 50 ? 50 : repaints));
+}
+
+char* LvglDisplay::takeBenchResult(uint32_t* seq) {
+    taskENTER_CRITICAL(&s_benchMux);
+    char* json = s_benchJson;
+    s_benchJson = nullptr;
+    if (seq) *seq = s_benchSeq;
+    taskEXIT_CRITICAL(&s_benchMux);
+    return json;
+}
+
+// LVGL task, lock held. Each display (minis without an LVGL buffer are
+// skipped) is repainted `n` times, like a screenshot without the file
+// writes, every repaint timed to its last band on the wire. Per display:
+// average and best time, the time waiting for DMA, bands, and glyphs
+// rasterized with their cycles (fonts_stats).
+void LvglDisplay::runBench(int n) {
+    // On the heap, not the stack: the LVGL task's 8 KB stack is needed by
+    // the repaints themselves (a 3 KB local overflowed it). Allocated per
+    // run and freed by the reader (takeBenchResult).
+    char* json = static_cast<char*>(malloc(kBenchJsonMax));
+    if (!json) {
+        ESP_LOGW(TAG, "bench: no memory for the result");
+        return;
+    }
+    const size_t cap = kBenchJsonMax;
+    size_t len = 0;
+    const uint32_t seq = s_benchSeq + 1;
+    len += snprintf(json + len, cap - len, "{\"seq\":%lu,\"repaints\":%d,\"displays\":[",
+                    static_cast<unsigned long>(seq), n);
+    const size_t count = 1 + small_displays_.size();
+    bool first = true;
+    for (size_t i = 0; i < count; ++i) {
+        lv_display_t* disp = i == 0 ? main_display_ : small_displays_[i - 1];
+        if (!disp || !lv_display_get_buf_active(disp)) continue;
+        lv_obj_t* scr = lv_display_get_screen_active(disp);
+        if (!scr) continue;
+        releasePanelBus();
+        int64_t total = 0, best = INT64_MAX;
+        s_statFlushes = 0;
+        s_statDmaWaitUs = 0;
+        fonts_stats(nullptr, true);
+        render_stats_get(nullptr, true);
+        for (int r = 0; r < n; ++r) {
+            const int64_t t0 = esp_timer_get_time();
+            lv_obj_invalidate(scr);
+            lv_refr_now(disp);
+            releasePanelBus();  // the last band is on the wire too
+            const int64_t dt = esp_timer_get_time() - t0;
+            total += dt;
+            if (dt < best) best = dt;
+            vTaskDelay(1);  // the idle task runs (task watchdog), outside the timing
+        }
+        fonts_stats_t fs{};
+        fonts_stats(&fs, true);
+        render_stats_t rs{};
+        render_stats_get(&rs, true);
+        const uint32_t mhz = static_cast<uint32_t>(esp_clk_cpu_freq() / 1000000);
+        char name[8];
+        if (i == 0) {
+            snprintf(name, sizeof name, "main");
+        } else {
+            snprintf(name, sizeof name, "mini%u", static_cast<unsigned>(i - 1));
+        }
+        len += snprintf(json + len, len < cap ? cap - len : 0,
+                        "%s{\"display\":\"%s\",\"avg_us\":%lld,\"best_us\":%lld,\"dma_wait_us\":%lld,"
+                        "\"bands\":%lu,\"glyphs\":%lu,\"glyph_us\":%llu,\"lookups\":%lu,\"lookup_us\":%llu,\"blend\":[",
+                        first ? "" : ",", name, total / n, best, s_statDmaWaitUs / n,
+                        static_cast<unsigned long>(s_statFlushes / n), static_cast<unsigned long>(fs.glyphs / n),
+                        static_cast<unsigned long long>(fs.glyph_cycles / n / (mhz ? mhz : 240)),
+                        static_cast<unsigned long>(fs.lookups / n),
+                        static_cast<unsigned long long>(fs.lookup_cycles / n / (mhz ? mhz : 240)));
+        // per blend kind (render_stats.h order) and the mask: [calls, pixels, us]
+        for (int k = 0; k <= RENDER_BLEND_KINDS; ++k) {
+            const render_stat_t& st = k < RENDER_BLEND_KINDS ? rs.blend[k] : rs.mask;
+            len += snprintf(json + len, len < cap ? cap - len : 0, "%s[%lu,%lu,%llu]",
+                            k ? "," : "", static_cast<unsigned long>(st.calls / n),
+                            static_cast<unsigned long>(st.pixels / n),
+                            static_cast<unsigned long long>(st.cycles / n / (mhz ? mhz : 240)));
+        }
+        len += snprintf(json + len, len < cap ? cap - len : 0, "]}");
+        first = false;
+    }
+    if (len < cap) len += snprintf(json + len, cap - len, "]}");
+    ESP_LOGI(TAG, "bench: %s", json);
+    taskENTER_CRITICAL(&s_benchMux);
+    char* unread = s_benchJson;  // an earlier result nobody fetched
+    s_benchJson = json;
+    s_benchSeq = seq;
+    taskEXIT_CRITICAL(&s_benchMux);
+    free(unread);
+}
+
 void LvglDisplay::getLvglMemory(size_t& freeBytes, size_t& totalBytes) const {
     freeBytes = lvgl_mem_free_.load(std::memory_order_relaxed);
     totalBytes = lvgl_mem_total_.load(std::memory_order_relaxed);
@@ -460,12 +599,15 @@ void LvglDisplay::initializeSmallDisplays(DisplayManager& displayManager) {
     }
 
     // Allocate shared buffer for small displays
-    constexpr size_t small_buffer_size = SMALL_DISPLAY_WIDTH * SMALL_DISPLAY_BUFFER_SIZE * sizeof(lv_color_t);
+    constexpr size_t small_buffer_size = SMALL_BUF_BYTES;
     shared_small_buffer_ = static_cast<uint8_t*>(
         heap_caps_aligned_alloc(32, small_buffer_size, MALLOC_CAP_DMA)
     );
+    if (SMALL_BUF_COUNT > 1) {
+        shared_small_buffer2_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(32, small_buffer_size, MALLOC_CAP_DMA));
+    }
 
-    if (!shared_small_buffer_) {
+    if (!shared_small_buffer_ || (SMALL_BUF_COUNT > 1 && !shared_small_buffer2_)) {
         ESP_LOGE(TAG, "Failed to allocate shared small display buffer");
         return;
     }
@@ -661,8 +803,8 @@ bool LvglDisplay::acquireSmallDisplayBuffer(int index) const {
         return false;
     }
 
-    constexpr size_t small_buffer_size = SMALL_DISPLAY_WIDTH * SMALL_DISPLAY_BUFFER_SIZE * sizeof(lv_color_t);
-    lv_display_set_buffers(disp, shared_small_buffer_, nullptr,
+    constexpr size_t small_buffer_size = SMALL_BUF_BYTES;
+    lv_display_set_buffers(disp, shared_small_buffer_, shared_small_buffer2_,
                           small_buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     // Enable invalidation now that buffer is properly set

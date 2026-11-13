@@ -5,7 +5,7 @@ import {
   S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import {
-  _setClientFactory, createS3Client, listObjects, getObject, putObject, deleteObject, headObject,
+  _setClientFactory, createS3Client, listObjects, getObject, getObjectBytes, putObject, deleteObject, headObject,
   rebootDevice, mapError, endpointFor, rebootHeaderMiddleware, contentTypeFor,
   S3Error, StorageUnavailableError, APP_BUCKET, REBOOT_FIELD,
 } from '../device-storage';
@@ -117,6 +117,26 @@ describe('device-storage with the S3 client mocked', () => {
       ETag: '"e1"',
     });
     expect(await getObject('', 'scripts/main.js')).toEqual({ text: 'print(1);', etag: '"e1"' });
+  });
+
+  it('reads an object as bytes (fonts bucket); null when missing', async () => {
+    s3.on(GetObjectCommand, { Bucket: 'fonts', Key: 'icons.ttf' }).resolves({
+      Body: { transformToByteArray: async () => new Uint8Array([0, 1, 0, 0, 255]) } as never,
+      ETag: '"f1"',
+    });
+    expect(await getObjectBytes('', 'icons.ttf', 'fonts')).toEqual({ bytes: new Uint8Array([0, 1, 0, 0, 255]), etag: '"f1"' });
+    s3.on(GetObjectCommand, { Bucket: 'fonts', Key: 'gone.ttf' }).rejects(sdkError('NoSuchKey', 404));
+    expect(await getObjectBytes('', 'gone.ttf', 'fonts')).toBeNull();
+  });
+
+  it('writes and deletes in the fonts bucket with a font content type', async () => {
+    s3.on(PutObjectCommand).resolves({ ETag: '"n"' });
+    s3.on(DeleteObjectCommand).resolves({});
+    await putObject('', 'roboto.ttf', new Uint8Array([0, 1, 0, 0]), 'fonts');
+    await deleteObject('', 'roboto.ttf', 'fonts');
+    expect(s3.commandCalls(PutObjectCommand)[0].args[0].input).toMatchObject({ Bucket: 'fonts', Key: 'roboto.ttf', ContentType: 'font/ttf' });
+    expect(s3.commandCalls(DeleteObjectCommand)[0].args[0].input).toEqual({ Bucket: 'fonts', Key: 'roboto.ttf' });
+    expect(contentTypeFor('x.otf')).toBe('font/otf');
   });
 
   it('returns null for a missing object (NoSuchKey)', async () => {

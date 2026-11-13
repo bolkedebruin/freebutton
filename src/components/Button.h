@@ -10,8 +10,11 @@
 #include "types.h"
 #include "TopicHandler.h"
 #include "ButtonEventPlan.h"
+#include "IconRef.h"
+#include "FontRef.h"
 #include "ui/PendingRender.h"
 #include "utils/TextSlot.h"
+#include <atomic>
 #include <string>
 #include <vector>
 #include <memory>
@@ -60,6 +63,30 @@ private:
 
     void invalidatePending();
 
+    // Icon in the bottom area instead of the label (config "icon" /
+    // "iconsize", MQTT ICON, JS setIcon). Allocated only for keys that have
+    // one; the name slot is the runtime state like the label slots.
+    IconHolder icon_;
+    // Creates the icon state with the configured size; nullptr on OOM.
+    IconState* ensureIcon();
+    int configuredIconSize_ = icon::kButtonDefaultSize;
+
+    // Config "font" / "fontsize" (bottom label) and "topfont" /
+    // "topfontsize" (top label): the local layer over the key.label /
+    // key.toplabel styles (ui/ui_style.h). FONT_FACE_NONE and 0 = the
+    // style's (the shared style: no per-button style).
+    int fontFace_ = FONT_FACE_NONE;
+    int fontSize_ = 0;
+    int topFontFace_ = FONT_FACE_NONE;
+    int topFontSize_ = 0;
+    // The fonts now (fontref::pack): the configured ones until a script
+    // calls setFont() / setTopFont() (any task); applied by the LVGL task.
+    std::atomic<uint32_t> labelFont_{fontref::pack(FONT_FACE_NONE, 0)};
+    std::atomic<uint32_t> topLabelFont_{fontref::pack(FONT_FACE_NONE, 0)};
+    std::atomic<bool> fontDirty_{false};
+    // LVGL lock held, button exists.
+    void applyFonts();
+
     // Button position and device information
     uint32_t position_{0};
     uint8_t page_{1};
@@ -99,6 +126,27 @@ public:
     void setLabelText(std::string_view text);
     void setTopLabelText(std::string_view text);
 
+    // Icon name ("" hides the icon and shows the label). Any task, like the
+    // label setters. Invalid: not an icon name; NoMemory: the heap could not
+    // hold the icon state (only on the first icon of a key).
+    enum class SetIconResult : uint8_t { Ok, Invalid, NoMemory };
+    SetIconResult setIconName(std::string_view name);
+
+    // Font of the bottom / top label (a fonts.h face, FONT_FACE_NONE = the
+    // style's face; size 1..5 = step, else px, 0 = the style's). Any task:
+    // the LVGL task applies it.
+    void setLabelFont(int face, int size);
+    void setTopLabelFont(int face, int size);
+    // Back to the configured font and size of the label (top: the top
+    // label). Any task: the configured values are not written after boot.
+    void restoreFont(bool top) {
+        if (top) {
+            setTopLabelFont(topFontFace_, topFontSize_);
+        } else {
+            setLabelFont(fontFace_, fontSize_);
+        }
+    }
+
     // PendingRender (LVGL task, LVGL lock held)
     bool applyPending() override;
 
@@ -117,6 +165,25 @@ public:
         obj.Add("page", page_);
         obj.Add("label", label);
         obj.Add("toplabel", topLabel);  // the key configure() reads (Button+ format)
+        if (const IconState* s = icon_.get()) {
+            char name[TextSlot<IconState::kSlotBytes>::kBufferSize];
+            if (s->name.read(name) && name[0] != '\0') {
+                obj.Add("icon", static_cast<const char*>(name));
+            }
+            obj.Add("iconsize", static_cast<int>(s->size));
+        }
+        if (fontFace_ != FONT_FACE_NONE) {
+            obj.Add("font", fonts_face_name(fontFace_));
+        }
+        if (fontSize_ != 0) {
+            obj.Add("fontsize", fontSize_);
+        }
+        if (topFontFace_ != FONT_FACE_NONE) {
+            obj.Add("topfont", fonts_face_name(topFontFace_));
+        }
+        if (topFontSize_ != 0) {
+            obj.Add("topfontsize", topFontSize_);
+        }
 
         // topics array
         {
@@ -134,6 +201,8 @@ private:
     std::vector<Topic> topics;
 
     void publishToTopic(EventType eventType, const std::string& payload) const;
+    // "icon" / "iconsize", and the icon state for an ICON topic (Button.cpp).
+    void configureIcon(const JsonObject& data);
 
     // Configuration from JSON
     void configure(const JsonObject& data) {
@@ -177,6 +246,15 @@ private:
             // Normal for keys whose logic a script owns.
             ESP_LOGD(TAG, "Button at position %d has no topics", position_);
         }
+
+        configureIcon(data);
+
+        fontFace_ = fontref::parse(data["font"], TAG, "font");
+        fontSize_ = data["fontsize"] | 0;
+        topFontFace_ = fontref::parse(data["topfont"], TAG, "topfont");
+        topFontSize_ = data["topfontsize"] | 0;
+        labelFont_.store(fontref::pack(fontFace_, fontSize_), std::memory_order_release);
+        topLabelFont_.store(fontref::pack(topFontFace_, topFontSize_), std::memory_order_release);
 
         ESP_LOGI(TAG, "Configured Button %d at position %d", id, position_);
     }

@@ -93,7 +93,7 @@ void show_ota_modal(lv_obj_t* screen, const char* message) {
     if (title_label) {
         lv_label_set_text(title_label, "OTA Update");
         lv_obj_set_style_text_color(title_label, lv_color_white(), 0);
-        lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(title_label, LV_FONT_DEFAULT, 0);
     }
 
     // Create message label
@@ -121,7 +121,7 @@ void show_ota_modal(lv_obj_t* screen, const char* message) {
     if (percent_label) {
         lv_label_set_text(percent_label, "0%");
         lv_obj_set_style_text_color(percent_label, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(percent_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(percent_label, LV_FONT_DEFAULT, 0);
     }
 
     ESP_LOGI(TAG, "OTA modal displayed successfully");

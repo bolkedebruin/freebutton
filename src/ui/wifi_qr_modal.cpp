@@ -84,7 +84,7 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
     if (title_label) {
         lv_label_set_text(title_label, "WiFi Setup Required");
         lv_obj_set_style_text_color(title_label, lv_color_white(), 0);
-        lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(title_label, LV_FONT_DEFAULT, 0);
     }
 
     // Create instruction label
@@ -102,7 +102,7 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
     if (ssid_label) {
         lv_label_set_text_fmt(ssid_label, "\"%s\"", ssid);
         lv_obj_set_style_text_color(ssid_label, lv_color_hex(0x00FF00), 0);
-        lv_obj_set_style_text_font(ssid_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(ssid_label, LV_FONT_DEFAULT, 0);
     }
 
     // Create QR code (sized to fit in container without overflow)

@@ -38,6 +38,29 @@
         "ntpserver": "",
         "timezone": ""
     },
+    "style": {
+        "fonts": [
+            {"id": 1, "name": "mdi", "src": "icons.ttf"},
+            {"name": "montserrat", "fallback": "mdi"},
+            {"name": "montserrat_semibold", "fallback": "mdi"}
+        ],
+        "text": {"text_font": "montserrat", "text_color": "#ffffff"},
+        "title": {"text_font": "montserrat_semibold", "text_color": "#ffd700"},
+        "key": {
+            "label": {"text_size": 32},
+            "toplabel": {"text_size": 18}
+        },
+        "display": {
+            "value": {"text_size": 14},
+            "unit": {"text_color": "#999999"},
+            "caption": {"text_size": 14}
+        },
+        "list": {
+            "text_size": 32,
+            "text_color": "#808080",
+            "selected": {"bg_color": "#ffd700", "text_color": "#000000"}
+        }
+    },
     "buttons": [
         {
             "id": 0,
