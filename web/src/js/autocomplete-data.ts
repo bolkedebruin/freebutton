@@ -642,14 +642,14 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "label": "fb.main.left.display.setLabel",
         "type": "method",
         "detail": "(text: string) → void",
-        "info": "Set button display label",
+        "info": "Set button display label. Text markup applies: \\\\cRRGGBB colour, \\\\s{px} size, \\\\f{font} font, \\\\al \\\\ac \\\\ar alignment (write the backslash twice in a JS string); at most 90 bytes",
         "apply": "fb.main.left.display.setLabel(${1:text})"
       },
       {
         "label": "fb.main.left.display.setTopLabel",
         "type": "method",
         "detail": "(text: string) → void",
-        "info": "Set button display top label",
+        "info": "Set button display top label. Text markup applies as for setLabel; at most 90 bytes",
         "apply": "fb.main.left.display.setTopLabel(${1:text})"
       },
       {
@@ -712,14 +712,14 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "label": "fb.main.right.display.setLabel",
         "type": "method",
         "detail": "(text: string) → void",
-        "info": "Set button display label",
+        "info": "Set button display label. Text markup applies: \\\\cRRGGBB colour, \\\\s{px} size, \\\\f{font} font, \\\\al \\\\ac \\\\ar alignment (write the backslash twice in a JS string); at most 90 bytes",
         "apply": "fb.main.right.display.setLabel(${1:text})"
       },
       {
         "label": "fb.main.right.display.setTopLabel",
         "type": "method",
         "detail": "(text: string) → void",
-        "info": "Set button display top label",
+        "info": "Set button display top label. Text markup applies as for setLabel; at most 90 bytes",
         "apply": "fb.main.right.display.setTopLabel(${1:text})"
       },
       {
@@ -887,14 +887,14 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "label": "fb.bars[n].left.display.setLabel",
         "type": "method",
         "detail": "(text: string) → void",
-        "info": "Set button display label",
+        "info": "Set button display label. Text markup applies: \\\\cRRGGBB colour, \\\\s{px} size, \\\\f{font} font, \\\\al \\\\ac \\\\ar alignment (write the backslash twice in a JS string); at most 90 bytes",
         "apply": "fb.bars[n].left.display.setLabel(${1:text})"
       },
       {
         "label": "fb.bars[n].left.display.setTopLabel",
         "type": "method",
         "detail": "(text: string) → void",
-        "info": "Set button display top label",
+        "info": "Set button display top label. Text markup applies as for setLabel; at most 90 bytes",
         "apply": "fb.bars[n].left.display.setTopLabel(${1:text})"
       },
       {
@@ -999,14 +999,14 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "label": "fb.bars[n].right.display.setLabel",
         "type": "method",
         "detail": "(text: string) → void",
-        "info": "Set button display label",
+        "info": "Set button display label. Text markup applies: \\\\cRRGGBB colour, \\\\s{px} size, \\\\f{font} font, \\\\al \\\\ac \\\\ar alignment (write the backslash twice in a JS string); at most 90 bytes",
         "apply": "fb.bars[n].right.display.setLabel(${1:text})"
       },
       {
         "label": "fb.bars[n].right.display.setTopLabel",
         "type": "method",
         "detail": "(text: string) → void",
-        "info": "Set button display top label",
+        "info": "Set button display top label. Text markup applies as for setLabel; at most 90 bytes",
         "apply": "fb.bars[n].right.display.setTopLabel(${1:text})"
       },
       {

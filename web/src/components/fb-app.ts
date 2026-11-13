@@ -2,11 +2,12 @@ import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { emit, on } from '../js/app-state.js';
 import { getCode, getEditorView, openDocument } from '../js/editor.js';
-import { compile, compileForDevice } from '../js/compiler.js';
+import { compileForDevice } from '../js/compiler.js';
 import { validateCode, formatValidationErrors } from '../js/validator.js';
 import { workspace } from '../js/workspace.js';
 import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
 import { signedFetch } from '../js/auth.js';
+import { askConfirm } from './fb-dialog.js';
 
 @customElement('fb-app')
 export class FbApp extends LitElement {
@@ -29,6 +30,8 @@ export class FbApp extends LitElement {
       },
       // POST /api/reboot is protected: sign it (SigV4, src/js/auth.ts).
       fetchImpl: signedFetch,
+      // Questions (delete, discard, add to config.json) in the IDE's own dialog.
+      confirm: (message) => askConfirm(message),
     });
   }
 
@@ -48,16 +51,10 @@ export class FbApp extends LitElement {
       emit('save-request');
     }
 
-    // Ctrl/Cmd+Enter — compile
-    if (mod && e.key === 'Enter' && !e.shiftKey) {
+    // Ctrl/Cmd+Enter — deploy (the toolbar's primary action)
+    if (mod && e.key === 'Enter') {
       e.preventDefault();
-      this._compileShortcut();
-    }
-
-    // Ctrl/Cmd+Shift+Enter — validate
-    if (mod && e.key === 'Enter' && e.shiftKey) {
-      e.preventDefault();
-      this._validateShortcut();
+      emit('deploy-request');
     }
 
     // Ctrl/Cmd+L — clear console
@@ -66,43 +63,6 @@ export class FbApp extends LitElement {
       emit('console-clear');
     }
   };
-
-  private async _compileShortcut() {
-    const code = getCode();
-    if (!code.trim()) return;
-
-    const validation = validateCode(code);
-    if (!validation.valid) {
-      emit('compile-result', {
-        success: false,
-        error: 'Validation failed:\n' + formatValidationErrors(validation.errors)
-      });
-      return;
-    }
-
-    emit('compile-start');
-    try {
-      const bytecode = await compile(code, { targetAddr: 0, use32Bit: true });
-      emit('compile-result', { success: true, bytecode, size: bytecode.length });
-    } catch (err) {
-      emit('compile-result', {
-        success: false,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-  }
-
-  private _validateShortcut() {
-    const code = getCode();
-    if (!code.trim()) return;
-
-    const result = validateCode(code);
-    emit('validation-result', {
-      valid: result.valid,
-      errors: result.errors.map(e => e.message),
-      errorCount: result.errors.length
-    });
-  }
 
   /**
    * Deploy = save the source, then (for the boot script only) compile it for
@@ -213,6 +173,7 @@ export class FbApp extends LitElement {
           ></fb-right-pane>
         </div>
         <fb-settings-modal></fb-settings-modal>
+        <fb-dialog></fb-dialog>
       </div>
     `;
   }

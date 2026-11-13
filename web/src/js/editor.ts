@@ -24,20 +24,20 @@ import {
 } from '@codemirror/language';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-import { keymap, ViewUpdate } from '@codemirror/view';
+import { keymap, ViewUpdate, Decoration, MatchDecorator, ViewPlugin, type DecorationSet } from '@codemirror/view';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
-import { Compartment, EditorState, type Extension } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, type Extension } from '@codemirror/state';
 import { githubDark } from '@fsegurai/codemirror-theme-github-dark';
 import { indentMore, insertTab } from '@codemirror/commands';
 import { acceptCompletion } from '@codemirror/autocomplete';
-import { linter, lintGutter, forceLinting, type Diagnostic } from '@codemirror/lint';
+import { linter, lintGutter, forceLinting, nextDiagnostic, type Diagnostic } from '@codemirror/lint';
 import { indentUnit } from '@codemirror/language';
 import { freebuttonAutocomplete } from './autocomplete';
 import { validateCode } from './validator';
-import { emit, on } from './app-state';
+import { emit, on, sameConfigRef, type ConfigRef } from './app-state';
+import { itemAt, rangeOf } from './config-locate';
 import { getConfigNames } from './device-config';
-import { examples as examplesList, exampleMap } from './examples';
 import { validateJson, validateConfigShape, type FileKind } from './fs-rules';
 import { fontWarnings } from './font-config';
 import { fontBucketKeys } from './font-loader';
@@ -213,10 +213,42 @@ function cursorPositionExtension() {
     });
 }
 
-// Compat re-export: Record<id, code> for legacy consumers
-export const examples: Record<string, string> = Object.fromEntries(
-    examplesList.map(e => [e.id, e.code])
-);
+// The config.json entry under the cursor, as last published.
+let lastConfigRef: ConfigRef | null = null;
+
+function publishConfigSelection(ref: ConfigRef | null): void {
+    if (ref === lastConfigRef || sameConfigRef(ref, lastConfigRef)) return;
+    lastConfigRef = ref;
+    emit('config-selection', { ref });
+}
+
+/**
+ * config.json only: tell the virtual device which entry (key, display item,
+ * list, image) the cursor is in, so it can outline it.
+ */
+/**
+ * Private-use characters (the code points icon fonts use, e.g. the Material
+ * Design Icons in config.json labels) get the class cm-fb-glyph. Its CSS puts
+ * the device's fonts first, so the icon is drawn as on the device; the
+ * editor's own fonts would draw a placeholder box and hide the device font.
+ */
+const GLYPH_CHARS = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]+/gu;
+const glyphDecorator = new MatchDecorator({
+  regexp: GLYPH_CHARS,
+  decoration: Decoration.mark({ class: 'cm-fb-glyph' }),
+});
+const deviceGlyphExtension = ViewPlugin.fromClass(class {
+  decorations: DecorationSet;
+  constructor(view: EditorView) { this.decorations = glyphDecorator.createDeco(view); }
+  update(update: ViewUpdate) { this.decorations = glyphDecorator.updateDeco(update, this.decorations); }
+}, { decorations: v => v.decorations });
+
+function configSelectionExtension() {
+    return EditorView.updateListener.of((update: ViewUpdate) => {
+        if (!currentIsConfig || !(update.selectionSet || update.docChanged)) return;
+        publishConfigSelection(itemAt(update.state, update.state.selection.main.head));
+    });
+}
 
 /**
  * Initialize the CodeMirror editor
@@ -264,6 +296,8 @@ export function initEditor(parent: HTMLElement): EditorView {
             lintGutter(),
             // Custom extensions
             cursorPositionExtension(),
+            configSelectionExtension(),
+            deviceGlyphExtension,
             docChangeExtension(),
     ];
     editorView = new EditorView({
@@ -321,6 +355,33 @@ export function openDocument(content: string, kind: FileKind, opts: { isConfig?:
     editorView.setState(createState(content, kind));
     // setState is not a transaction, so update listeners don't see it.
     emit('editor-doc-change');
+    publishConfigSelection(null);
+}
+
+/**
+ * Select a config.json entry and scroll it into view (a click on the virtual
+ * device). False when config.json is not the open file or the entry is gone.
+ */
+export function revealConfigItem(ref: Pick<ConfigRef, 'list' | 'index'>): boolean {
+    if (!editorView || !currentIsConfig) return false;
+    const range = rangeOf(editorView.state, ref);
+    if (!range) return false;
+    editorView.dispatch({
+        // Head at the start: that is the end the view scrolls to.
+        selection: EditorSelection.single(range.to, range.from),
+        effects: EditorView.scrollIntoView(range.from, { y: 'start', yMargin: 48 }),
+    });
+    editorView.focus();
+    return true;
+}
+
+/** Move the cursor to the first problem the linter reports. False when there is none. */
+export function gotoFirstDiagnostic(): boolean {
+    if (!editorView) return false;
+    editorView.dispatch({ selection: { anchor: 0 } });
+    const found = nextDiagnostic(editorView);
+    editorView.focus();
+    return found;
 }
 
 export function getDocumentKind(): FileKind {
@@ -360,20 +421,6 @@ export function setCode(newContent: string): void {
  */
 export function clearEditor(): void {
     setCode('');
-}
-
-/**
- * Load an example script
- * @param name - The name of the example to load
- * @returns True if example was loaded, false otherwise
- */
-export function loadExample(name: string): boolean {
-    const example = exampleMap[name];
-    if (example) {
-        setCode(example.code);
-        return true;
-    }
-    return false;
 }
 
 /**

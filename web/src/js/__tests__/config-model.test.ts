@@ -36,7 +36,11 @@ describe('config.json -> button model', () => {
   it('skips buttons without a valid position and defaults page to 1', () => {
     const model = configToModel({ buttons: [{ label: 'x' }, { position: -1 }, { position: '4', label: 'str' }, null] });
     expect(model.pages[0].buttons).toEqual([
-      { position: 4, page: 1, label: 'str', topLabel: '', ledOn: false, ledColor: 'rgb(0,0,0)' },
+      {
+        position: 4, page: 1, label: 'str', topLabel: '', ledOn: false, ledColor: 'rgb(0,0,0)',
+        // Where the key comes from in the file (config-locate.ts).
+        ref: { kind: 'button', list: 'buttons', index: 2 },
+      },
     ]);
   });
 

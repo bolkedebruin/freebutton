@@ -154,3 +154,36 @@ export const FbLogo = (): TemplateResult => html`
     <text x="26" y="39" text-anchor="middle" font-family="DM Sans, sans-serif" font-weight="700" font-size="20" fill="white">FB</text>
   </svg>
 `;
+
+export const InfoIcon = (className = ''): TemplateResult => svg`
+  <svg class="${className}" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="16" x2="12" y2="12" />
+    <line x1="12" y1="8" x2="12.01" y2="8" />
+  </svg>
+`;
+
+export const MoreIcon = (className = ''): TemplateResult => svg`
+  <svg class="${className}" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+    <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
+  </svg>
+`;
+
+export const CameraIcon = (className = ''): TemplateResult => svg`
+  <svg class="${className}" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+    <circle cx="12" cy="13" r="4" />
+  </svg>
+`;
+
+export const TypeIcon = (className = ''): TemplateResult => svg`
+  <svg class="${className}" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="4 7 4 4 20 4 20 7" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" />
+  </svg>
+`;
+
+export const RefreshIcon = (className = ''): TemplateResult => svg`
+  <svg class="${className}" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+  </svg>
+`;

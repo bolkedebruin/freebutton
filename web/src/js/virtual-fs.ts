@@ -21,6 +21,7 @@ function detectType(name: string): FileEntry['type'] {
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const kb = bytes / 1024;
+  if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB`;
   return `${kb % 1 === 0 ? kb.toFixed(0) : kb.toFixed(1)} KB`;
 }
 

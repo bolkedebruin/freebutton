@@ -36,6 +36,7 @@
  *     streamed, so PutObject sends a plain body + x-amz-checksum-crc32,
  *     never aws-chunked)
  */
+import type { StorageUsage } from './app-state';
 import {
   S3Client,
   ListObjectsV2Command,
@@ -77,6 +78,8 @@ export interface ListResult {
   objects: FsObject[];
   /** CommonPrefixes when a delimiter was given ("scripts/"). */
   prefixes: string[];
+  /** Space of the bucket's store, when the device reported it with the listing. */
+  usage?: StorageUsage;
 }
 
 export interface PutResult {
@@ -136,6 +139,28 @@ export function endpointFor(baseUrl: string): string {
 /** Output field the middleware below sets from x-freebutton-reboot-required. */
 export const REBOOT_FIELD = 'FreebuttonRebootRequired';
 
+/** Output field the middleware below sets from the x-fb-fs-* / x-fb-media-* headers. */
+export const USAGE_FIELD = 'FreebuttonUsage';
+
+/**
+ * The space of a bucket's store, from the headers the device puts on its
+ * listings and HeadBucket: x-fb-fs-total/-used (the filesystem behind app,
+ * web and examples) or x-fb-media-total/-used/-free (fonts, images).
+ * Undefined when there are none (older firmware, another server).
+ */
+export function usageFromHeaders(headers: Record<string, string>): StorageUsage | undefined {
+  const num = (name: string): number | undefined => {
+    const v = Object.entries(headers).find(([k]) => k.toLowerCase() === name)?.[1];
+    return v !== undefined && /^\d+$/.test(String(v).trim()) ? Number(v) : undefined;
+  };
+  const out: StorageUsage = {};
+  const fsTotal = num('x-fb-fs-total'), fsUsed = num('x-fb-fs-used');
+  if (fsTotal !== undefined && fsUsed !== undefined) out.fs = { total: fsTotal, used: fsUsed };
+  const mTotal = num('x-fb-media-total'), mUsed = num('x-fb-media-used'), mFree = num('x-fb-media-free');
+  if (mTotal !== undefined && mUsed !== undefined && mFree !== undefined) out.media = { total: mTotal, used: mUsed, free: mFree };
+  return out.fs || out.media ? out : undefined;
+}
+
 type DeserializeHandler = (args: unknown) => Promise<{ response: unknown; output: unknown }>;
 
 /**
@@ -146,6 +171,10 @@ export function rebootHeaderMiddleware(next: DeserializeHandler): DeserializeHan
   return async (args) => {
     const result = await next(args);
     const headers = (result.response as { headers?: Record<string, string> } | undefined)?.headers ?? {};
+    const usage = usageFromHeaders(headers);
+    if (usage && result.output && typeof result.output === 'object') {
+      (result.output as Record<string, unknown>)[USAGE_FIELD] = usage;
+    }
     const value = Object.entries(headers).find(([k]) => k.toLowerCase() === 'x-freebutton-reboot-required')?.[1];
     if (value !== undefined && String(value).toLowerCase() === 'true' && result.output && typeof result.output === 'object') {
       (result.output as Record<string, unknown>)[REBOOT_FIELD] = true;
@@ -237,6 +266,7 @@ export async function listObjects(
   const client = clientFor(baseUrl);
   const objects: FsObject[] = [];
   const prefixes: string[] = [];
+  let usage: StorageUsage | undefined;
   let token: string | undefined;
   for (let page = 0; page < MAX_LIST_PAGES; page++) {
     let out: ListObjectsV2CommandOutput;
@@ -255,6 +285,7 @@ export async function listObjects(
     if (!out || typeof out !== 'object' || (out.IsTruncated === undefined && out.KeyCount === undefined)) {
       throw new StorageUnavailableError('Response is not an S3 ListBucketResult');
     }
+    usage = (out as unknown as Record<string, StorageUsage | undefined>)[USAGE_FIELD] ?? usage;
     for (const c of out.Contents ?? []) {
       if (!c.Key) continue;
       objects.push({
@@ -271,7 +302,7 @@ export async function listObjects(
     if (!out.IsTruncated || !next || next === token) break;
     token = next;
   }
-  return { objects, prefixes };
+  return { objects, prefixes, ...(usage ? { usage } : {}) };
 }
 
 /** Fetch an object's text. Returns null when it does not exist. */

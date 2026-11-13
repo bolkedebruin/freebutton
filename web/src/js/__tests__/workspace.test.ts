@@ -62,7 +62,7 @@ function fakeDevice(initial: Record<string, string>, readOnly: Record<string, Re
     },
   };
   _setClientFactory((base) => { bases.push(base); return client; });
-  return { files, calls, bases };
+  return { files, calls, bases, client };
 }
 
 function fakeEditor(): EditorAdapter & { content: string; kind: string } {
@@ -126,6 +126,30 @@ describe('workspace on a device', () => {
     expect(getConnectors()).toEqual([{ id: 2, type: 'display' }, { id: 3, type: 'bar' }]);
     // One list, then config + main.js reads: nothing more.
     expect(dev.calls).toEqual(['ListObjectsV2', 'GetObject config.json', 'GetObject scripts/main.js']);
+  });
+
+  it('does not save a file it could not read (the editor is empty then)', async () => {
+    const dev = fakeDevice({ 'scripts/main.js': 'print(1);' });
+    const send = dev.client.send.bind(dev.client);
+    let failReads = true;
+    dev.client.send = async (command: unknown) => {
+      const name = (command as object).constructor.name;
+      if (failReads && name === 'GetObjectCommand' && (command as { input: { Key?: string } }).input.Key === 'scripts/main.js') {
+        throw new TypeError('Failed to fetch');
+      }
+      return send(command);
+    };
+    const ed = await start();
+    expect(ed.content).toBe('');
+    expect(await ws.save()).toBe(false);
+    expect(dev.files.get('scripts/main.js')).toBe('print(1);');
+    expect(dev.calls.filter(c => c.startsWith('PutObject'))).toEqual([]);
+
+    // Once the file was read, saving works again.
+    failReads = false;
+    expect(await ws.open('scripts/main.js')).toBe(true);
+    expect(ed.content).toBe('print(1);');
+    expect(await ws.save()).toBe(true);
   });
 
   it('opens an existing main.js', async () => {

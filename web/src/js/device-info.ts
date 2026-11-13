@@ -59,7 +59,9 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 let currentBase = '';
 let intervalMs = 2000;
 let connected = false;
-let visible = false;
+// Who is showing device info now (the flip side, the Device view).
+const watchers = new Set<string>();
+let lastPollAt = 0;
 let unsubConnection: (() => void) | undefined;
 
 function stop(): void {
@@ -76,17 +78,20 @@ function stop(): void {
  * event and a re-render) for data nobody can see.
  */
 function sync(): void {
-  const shouldRun = connected && visible;
+  const shouldRun = connected && watchers.size > 0;
   if (shouldRun === (pollTimer !== undefined)) return;
   if (!shouldRun) {
     stop();
     return;
   }
-  void poll(); // fetch immediately so the panel isn't empty on flip
+  // Fetch immediately so the panel isn't empty on flip (unless the connect
+  // request just did).
+  if (Date.now() - lastPollAt >= intervalMs) void poll();
   pollTimer = setInterval(() => void poll(), intervalMs);
 }
 
 async function poll(): Promise<void> {
+  lastPollAt = Date.now();
   try {
     const data = await fetchDeviceInfo(currentBase);
     emit('device-info', { data });
@@ -115,6 +120,9 @@ export function initDeviceInfoPolling(pollIntervalMs = 2000): void {
     connected = e.detail.connected;
     if (connected) {
       currentBase = httpBaseFromWs(e.detail.url ?? '');
+      // One request per connection, also with nobody watching: the virtual
+      // device shows the device's name and real connector layout.
+      if (watchers.size === 0) void poll();
     } else {
       stop();
       emit('device-info', { data: null });
@@ -123,10 +131,13 @@ export function initDeviceInfoPolling(pollIntervalMs = 2000): void {
   });
 }
 
-/** Tell the poller whether anyone is currently looking at the device info. */
-export function setDeviceInfoVisible(isVisible: boolean): void {
-  if (visible === isVisible) return;
-  visible = isVisible;
+/**
+ * Tell the poller whether `who` is showing the device info now. It polls
+ * while a device is connected and at least one consumer is.
+ */
+export function setDeviceInfoVisible(isVisible: boolean, who = 'panel'): void {
+  if (watchers.has(who) === isVisible) return;
+  if (isVisible) watchers.add(who); else watchers.delete(who);
   sync();
 }
 
@@ -141,7 +152,8 @@ export function stopDeviceInfoPolling(): void {
   unsubConnection = undefined;
   initialized = false;
   connected = false;
-  visible = false;
+  watchers.clear();
+  lastPollAt = 0;
   currentBase = '';
 }
 

@@ -1,8 +1,24 @@
 import { LitElement, html } from 'lit';
 import { customElement } from 'lit/decorators.js';
-import { initEditor, loadExample } from '../js/editor.js';
+import { gotoFirstDiagnostic, initEditor } from '../js/editor.js';
 import { on, emit } from '../js/app-state.js';
 import type { EditorView } from 'codemirror';
+import { getFontTable } from '../js/device-config.js';
+import { familyName, fontLoader } from '../js/font-loader.js';
+
+/**
+ * font-family list of the device fonts that are loaded in the browser (the
+ * faces of config.json "style.fonts"), or '' when there are none. The editor
+ * draws icon glyphs with them (class cm-fb-glyph).
+ */
+export function deviceFontFamilies(): string {
+  return getFontTable().faces
+    .filter(f => f && fontLoader.isLoaded(f.name, f.src))
+    // The fonts config.json adds (icon fonts) before the system text fonts.
+    .sort((a, b) => Number(a.system) - Number(b.system))
+    .map(f => `"${familyName(f.name)}"`)
+    .join(', ');
+}
 
 @customElement('fb-code-editor')
 export class FbCodeEditor extends LitElement {
@@ -24,10 +40,20 @@ export class FbCodeEditor extends LitElement {
     }
 
     this._unsubs.push(
-      on('load-example', (e) => {
-        loadExample(e.detail.name);
-      })
+      on('goto-diagnostic', () => { gotoFirstDiagnostic(); }),
+      // A device font was loaded or dropped: the editor draws the icon glyphs
+      // in config.json with them.
+      on('preview-fonts-change', () => this._applyDeviceFonts()),
     );
+    this._applyDeviceFonts();
+  }
+
+  private _applyDeviceFonts() {
+    const families = deviceFontFamilies();
+    if (families) this.style.setProperty('--fb-device-fonts', families);
+    else this.style.removeProperty('--fb-device-fonts');
+    // The glyph widths changed: let CodeMirror measure again.
+    this._editor?.requestMeasure();
   }
 
   disconnectedCallback() {

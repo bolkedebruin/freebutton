@@ -33,7 +33,7 @@
  * State changes are published as `workspace-change` snapshots on the
  * app-state bus; progress/errors also go to the console pane.
  */
-import { emit, on, type WorkspaceFile, type WorkspaceMode, type WorkspaceSnapshot } from './app-state';
+import { emit, on, type StorageUsage, type WorkspaceFile, type WorkspaceMode, type WorkspaceSnapshot } from './app-state';
 import {
   CONFIG_KEY, MAIN_SCRIPT_KEY, MAIN_SCRIPT_TEMPLATE,
   canDeleteKey, fileKind, initialContentFor, isEditableKey, normalizeKey,
@@ -65,8 +65,8 @@ export interface EditorAdapter {
 
 export interface WorkspaceDeps {
   editor: EditorAdapter;
-  /** Ask the user (discard changes / delete). Defaults to window.confirm. */
-  confirm?: (message: string) => boolean;
+  /** Ask the user (discard changes / delete). Defaults to window.confirm; the IDE passes its own dialog. */
+  confirm?: (message: string) => boolean | Promise<boolean>;
   /** Used for POST /api/reboot only (storage goes through the S3 client). */
   fetchImpl?: typeof fetch;
   /** SVG -> RGBA (tests inject one; default: the browser canvas). */
@@ -143,6 +143,9 @@ export class Workspace {
   private iconSync: Promise<IconSyncResult | null> | null = null;
   private iconSyncNext: string | null | undefined = undefined;
   private storedUsesIcons = false;
+  /** The open file could not be read: the editor does not hold its text, so it must not be saved. */
+  private unread = false;
+  private storage: StorageUsage | null = null;
 
   private base = '';
   private deps: WorkspaceDeps | null = null;
@@ -170,6 +173,7 @@ export class Workspace {
       isNew: this.isNew,
       readOnly: this.readOnly,
       iconSyncing: this.iconSync !== null,
+      storage: this.storage ?? undefined,
     };
   }
 
@@ -233,6 +237,8 @@ export class Workspace {
     this.iconSync = null;
     this.iconSyncNext = undefined;
     this.storedUsesIcons = false;
+    this.unread = false;
+    this.storage = null;
   }
 
   /** Re-list files (Assets "refresh"), and the read-only buckets already loaded. */
@@ -246,6 +252,19 @@ export class Workspace {
       }
       for (const bucket of loaded) await this.listReadOnly(bucket);
     });
+  }
+
+  /**
+   * Text of a user file without opening it in the editor (the image view
+   * shows an SVG). Null when it does not exist or cannot be read.
+   */
+  async readText(rawKey: string): Promise<string | null> {
+    try {
+      return await this.backend().read(normalizeKey(rawKey));
+    } catch (err) {
+      this.note(`Could not read ${displayPath(normalizeKey(rawKey))}: ${describeError(err)}`, 'error');
+      return null;
+    }
   }
 
   /**
@@ -267,7 +286,7 @@ export class Workspace {
       this.note(`${displayPath(key)} is not editable here`, 'warn');
       return false;
     }
-    if (!opts.force && key !== this.currentKey && !this.confirmDiscard()) return false;
+    if (!opts.force && key !== this.currentKey && !(await this.confirmDiscard())) return false;
 
     return this.withBusy(async () => {
       let text: string | null;
@@ -275,6 +294,9 @@ export class Workspace {
         text = await this.backend().read(key);
       } catch (err) {
         this.note(`Could not open ${displayPath(key)}: ${describeError(err)}`, 'error');
+        // The editor does not hold this file's text: a save would replace the
+        // stored file with whatever is in the editor (an empty editor at start).
+        if (key === this.currentKey) this.unread = true;
         return false;
       }
       let isNew = false;
@@ -303,6 +325,10 @@ export class Workspace {
     const key = this.currentKey;
     const text = editor.getCode();
 
+    if (this.unread) {
+      this.note(`Not saved: ${displayPath(key)} could not be read, so the editor does not hold its text. Open the file again (or reload the page) first.`, 'error');
+      return false;
+    }
     const problem = validateKey(key) ?? validateBody(key, text);
     if (problem) {
       this.note(`Not saved: ${problem}`, 'error');
@@ -344,7 +370,7 @@ export class Workspace {
       return false;
     }
     if (this.files.some(f => f.key === key)) return this.open(key);
-    if (!this.confirmDiscard()) return false;
+    if (!(await this.confirmDiscard())) return false;
 
     const created = await this.withBusy(async () => {
       const content = initialContentFor(key);
@@ -375,7 +401,7 @@ export class Workspace {
       this.note(`${displayPath(key)} cannot be deleted`, 'warn');
       return false;
     }
-    if (!opts.skipConfirm && !this.ask(`Delete ${displayPath(key)}${this.mode === 'device' ? ' from the device' : ''}?`)) return false;
+    if (!opts.skipConfirm && !(await this.ask(`Delete ${displayPath(key)}${this.mode === 'device' ? ' from the device' : ''}?`))) return false;
 
     const removed = await this.withBusy(async () => {
       try {
@@ -388,6 +414,7 @@ export class Workspace {
       await this.listQuietly();
       return true;
     });
+    if (removed && key.endsWith('.svg') && this.mode === 'device' && this.storedUsesIcons) void this.syncIcons();
     if (removed && key === this.currentKey) {
       // The open file is gone: drop its buffer and go back to the boot script.
       await this.open(MAIN_SCRIPT_KEY, { force: true });
@@ -438,6 +465,8 @@ export class Workspace {
       }
       this.note(`Uploaded ${displayPath(key)} (${bytes} bytes). Use it in config.json: "icons": {"<name>": "${displayPath(key)}"}`, 'result');
       await this.listQuietly();
+      // A replaced SVG that config.json already uses: the device needs new rasters.
+      if (this.mode === 'device' && this.storedUsesIcons) void this.syncIcons();
       return key;
     });
   }
@@ -482,7 +511,7 @@ export class Workspace {
     const question = name in icons
       ? `Change icon "${name}" in config.json from ${JSON.stringify(icons[name])} to ${path}?`
       : `Add icon "${name}" (${path}) to config.json "icons"?`;
-    if (!this.ask(question)) return false;
+    if (!(await this.ask(question))) return false;
 
     o.icons = { ...icons, [name]: path };
     const indent = /\n([ \t]+)"/.exec(text ?? '')?.[1] ?? '  ';
@@ -563,7 +592,7 @@ export class Workspace {
       this.note(`fonts/${key} is the system font "${name}": it cannot be deleted (upload a new version to replace it)`, 'warn');
       return false;
     }
-    if (!opts.skipConfirm && !this.ask(`Delete fonts/${key} from the device?`)) return false;
+    if (!opts.skipConfirm && !(await this.ask(`Delete fonts/${key} from the device?`))) return false;
     return this.withBusy(async () => {
       try {
         await deleteObject(this.base, key, FONTS_BUCKET);
@@ -588,7 +617,7 @@ export class Workspace {
     if (isSystemFontSrc(key)) return true;
     const name = fontNameForKey(key);
     const snippet = `"style": {"fonts": [{"name": "${name}", "src": "${key}"}]}`;
-    const edited = await this.editConfig(snippet, (o) => {
+    const edited = await this.editConfig(snippet, async (o) => {
       if ('style' in o && !isRecord(o.style)) return { skip: `config.json "style" is not an object: add ${snippet} yourself` };
       const style = (o.style ?? {}) as Record<string, unknown>;
       if ('fonts' in style && !Array.isArray(style.fonts)) {
@@ -598,10 +627,10 @@ export class Workspace {
       if (fonts.some(e => isRecord(e) && e.src === key)) return { done: true };
       const same = fonts.find(e => isRecord(e) && e.name === name) as Record<string, unknown> | undefined;
       if (same) {
-        if (!this.ask(`Change font "${name}" in config.json from ${JSON.stringify(same.src)} to ${key}?`)) return { done: false };
+        if (!(await this.ask(`Change font "${name}" in config.json from ${JSON.stringify(same.src)} to ${key}?`))) return { done: false };
         o.style = { ...style, fonts: fonts.map(e => (e === same ? { ...same, src: key } : e)) };
       } else {
-        if (!this.ask(`Add font "${name}" (${key}) to config.json "style.fonts"?`)) return { done: false };
+        if (!(await this.ask(`Add font "${name}" (${key}) to config.json "style.fonts"?`))) return { done: false };
         const next = [...fonts, { name, src: key }];
         // A new "fonts" goes first in "style"; an existing one keeps its place.
         o.style = 'fonts' in style ? { ...style, fonts: next } : { fonts: next, ...style };
@@ -616,14 +645,14 @@ export class Workspace {
    * deleted font), after asking.
    */
   async removeFontFromConfig(key: string): Promise<boolean> {
-    return this.editConfig(`the "style.fonts" entry with "src": "${key}"`, (o) => {
+    return this.editConfig(`the "style.fonts" entry with "src": "${key}"`, async (o) => {
       const style = isRecord(o.style) ? o.style : null;
       if (!style || !Array.isArray(style.fonts)) return { done: true };
       const fonts = style.fonts as unknown[];
       const keep = fonts.filter(e => !(isRecord(e) && e.src === key));
       if (keep.length === fonts.length) return { done: true };
       const names = fonts.filter(e => !keep.includes(e)).map(e => `"${(e as Record<string, unknown>).name}"`).join(', ');
-      if (!this.ask(`Remove font ${names} (${key}) from config.json "style.fonts"?`)) return { done: false };
+      if (!(await this.ask(`Remove font ${names} (${key}) from config.json "style.fonts"?`))) return { done: false };
       style.fonts = keep;
       return { changed: `config.json: font ${names} removed` };
     });
@@ -636,7 +665,7 @@ export class Workspace {
    */
   private async editConfig(
     what: string,
-    change: (o: Record<string, unknown>) => { done: boolean } | { skip: string } | { changed: string },
+    change: (o: Record<string, unknown>) => Promise<{ done: boolean } | { skip: string } | { changed: string }>,
   ): Promise<boolean> {
     if (this.currentKey === CONFIG_KEY && this.dirty) {
       this.note(`config.json has unsaved changes: edit ${what} yourself`, 'warn');
@@ -658,7 +687,7 @@ export class Workspace {
     }
     if (typeof cfg !== 'object' || cfg === null || Array.isArray(cfg)) return false;
     const o = cfg as Record<string, unknown>;
-    const r = change(o);
+    const r = await change(o);
     if ('skip' in r) {
       this.note(r.skip, 'warn');
       return false;
@@ -832,6 +861,7 @@ export class Workspace {
       this.mode = 'device';
       this.message = '';
       this.files = toFiles(result);
+      this.noteUsage(result.usage);
     } catch (err) {
       if (err instanceof StorageUnavailableError) {
         if (this.mode !== 'local') {
@@ -860,9 +890,15 @@ export class Workspace {
     try {
       const result = await listObjects(this.base);
       this.files = toFiles(result);
+      this.noteUsage(result.usage);
     } catch (err) {
       this.message = `File list failed: ${describeError(err)}`;
     }
+  }
+
+  /** Keep the space a listing reported (each store's numbers are replaced by its own listings only). */
+  private noteUsage(usage: StorageUsage | undefined): void {
+    if (usage) this.storage = { ...this.storage, ...usage };
   }
 
   private async listReadOnly(bucket: ReadOnlyBucket): Promise<void> {
@@ -871,6 +907,7 @@ export class Workspace {
       const files = toFiles(result);
       this.readOnly = { ...this.readOnly, [bucket]: files };
       if (bucket === FONTS_BUCKET) void fontLoader.setListing(result.objects);
+      this.noteUsage(result.usage);
     } catch (err) {
       this.note(`Listing bucket ${bucket} failed: ${describeError(err)}`, 'warn');
     }
@@ -903,6 +940,7 @@ export class Workspace {
   }
 
   private load(key: string, text: string, isNew: boolean): void {
+    this.unread = false;
     this.suppressDirty = true;
     try {
       this.deps?.editor.open(text, fileKind(key), { isConfig: key === CONFIG_KEY });
@@ -929,12 +967,12 @@ export class Workspace {
     return parsed;
   }
 
-  private confirmDiscard(): boolean {
+  private async confirmDiscard(): Promise<boolean> {
     if (!this.dirty) return true;
     return this.ask(`Discard unsaved changes to ${displayPath(this.currentKey)}?`);
   }
 
-  private ask(message: string): boolean {
+  private async ask(message: string): Promise<boolean> {
     const fn = this.deps?.confirm ?? ((m: string) => (typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm(m) : true));
     return fn(message);
   }

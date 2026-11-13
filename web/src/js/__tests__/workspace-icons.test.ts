@@ -129,6 +129,15 @@ describe('workspace icons', () => {
     expect(getConfig()[0].buttons[0]).toMatchObject({ icon: 'rain', iconSize: 48 });
   });
 
+  it('pushes rasters after an SVG that config.json uses is uploaded again', async () => {
+    const dev = fakeDevice({ 'config.json': JSON.stringify(ICON_CONFIG), 'icons/rain.svg': SVG });
+    await start();
+    expect([...dev.images.keys()]).toEqual([]);
+    expect(await ws.uploadSvg({ name: 'rain.svg', text: async () => SVG })).toBe('icons/rain.svg');
+    await ws.pendingIconSync;
+    expect([...dev.images.keys()]).toEqual(['ico-rain-48x48.bin']);
+  });
+
   it('syncs rasters after config.json is saved, and deletes them when icons are removed', async () => {
     const dev = fakeDevice({ 'config.json': '{}', 'icons/rain.svg': SVG });
     const ed = await start();

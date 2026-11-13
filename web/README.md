@@ -144,7 +144,7 @@ The project uses Rollup with TypeScript to bundle CodeMirror 6 and application c
 - `@aws-sdk/client-s3` - S3 client for the device file storage (only the
   ListObjectsV2/Get/Put/Delete/Head commands are bundled, about 68 KB gzipped)
 
-## Device Files (Assets panel)
+## Device Files (App, Images and Fonts panels)
 
 The device serves LittleFS as a minimal S3-compatible API with path-style
 URLs and one bucket per kind of content. Each bucket is a directory on the
@@ -174,26 +174,69 @@ that is open in the editor.
   key can be at most 63 bytes and the body at most 64 KiB. `.json` files must be
   valid JSON. For `config.json` the IDE also checks the structure, then offers
   a reboot, because the device applies the config at boot.
-- **Deploy** (upload icon): saves the open file first. Then, for
-  `scripts/main.js` only, it validates the source, compiles it for the device
-  and uploads the bytecode as `main.jsc`, which is the file the firmware runs at
-  boot. Deploy only saves other files and does not compile them.
-- **Assets**: lists the files of bucket `app`. You cannot delete
-  `config.json`. The IDE requests this list when it starts, when you click
-  refresh, after a save, create or delete, and when the REPL connects to a
-  different device. It never polls.
-- **Examples** and **System** (in Assets): two collapsed, read-only groups.
-  Examples shows bucket `examples`; System shows buckets `web` and `fonts`.
-  The IDE lists a group's buckets only when you first expand it, lists them
-  again on refresh, and never downloads them. To load an example into the
-  editor, use the Examples panel. It has the same files, bundled into the IDE
-  at build time from `data/scripts/examples`.
+- **Deploy** (toolbar or Ctrl/Cmd+Enter), for `scripts/main.js` only: saves the
+  file, checks it, compiles it for the device and uploads the bytecode as
+  `main.jsc`, which is the file the firmware runs at boot. The button shows the
+  progress and the result. With another file open, Deploy is disabled and the
+  toolbar says why. There is no separate Compile or Validate step: the editor
+  checks the file as you type (click the error count in the status bar to go
+  to the first error), and Deploy refuses a script with errors.
+- **More** ("⋯" in the toolbar): Download bytecode (.jsc) compiles the open
+  script and saves the bytecode on your computer; Clear file text asks first.
+- **Left bar**: one selection decides the whole middle pane, the main view
+  and the list that belongs to it. Device and Docs have no list.
+- **App**, **Images**, **Fonts** (left bar): one sidebar panel each. *App*
+  is the editor with its file list (there is no separate Code entry); it
+  lists the files of bucket `app`: `.js`, `.json` and `.txt` open in the
+  editor; files the IDE cannot open are under "Other" and you can delete them
+  (firmware before 2026-11-13 refuses a delete of other extensions). You cannot
+  delete `config.json`. *Images* lists `icons/*.svg`; an image opens in a view
+  that shows it at several sizes. *Fonts* lists the fonts on the device and
+  shows the Fonts view. The IDE requests the lists when it starts, when you
+  click refresh, after a save, create or delete, and when the REPL connects to
+  a different device. It never polls.
+- **Used and free space**: the bottom line of the App, Images and Fonts panels.
+  App and Images are files of the device's filesystem; fonts are in its media
+  store. The numbers are the `x-fb-fs-*` and `x-fb-media-*` headers the device
+  puts on its S3 listings, so they cost no request (firmware without them: the
+  App panel shows what its files add up to).
+- **Update** (Device view): "Update firmware…" installs a `firmware.bin`; your
+  files stay. "Update filesystem…" installs a `littlefs.bin` (`pio run -t
+  buildfs`); it replaces every file on the device (config.json, scripts, the
+  IDE) and asks first. Both show the upload percentage, then "applying" while
+  the device restarts, then the result. To update the IDE and keep the files,
+  use `tools/scripts/ota_fs.py`.
+- **Drag and drop**: with Images or Fonts selected, drop `.svg`, `.ttf` or
+  `.otf` files anywhere on the middle pane to upload them. Each file goes where
+  its type belongs; other files are named in the console and not uploaded.
+- **Push images** (toolbar, only with the Images panel or an image open):
+  makes the rasters the device draws from the SVGs that `config.json` uses and
+  uploads them. The IDE also does this on every save of `config.json` and after
+  an SVG upload or delete, so the button is for a retry after a failure.
+- **Docs** (left bar): the keyboard shortcuts. The documentation is not linked
+  yet.
+- **Fonts view**: every font of bucket `fonts` draws the same sample text (you
+  can change it) at one of the device's sizes, so that you can compare them.
+  Each font has "Add to config.json" and Delete (not the system fonts).
+- **Examples** (left bar): bundled into the IDE at build time from
+  `data/scripts/examples`. The main pane shows the chosen example read-only;
+  looking at one makes no file and changes none.
+- **Device view** (Device in the left bar): status, free memory, storage use,
+  Reboot, and Screenshot. Screenshot shows what the displays show now, and
+  "Save as PNG" stores one on your computer. The device has to write the
+  frames to its storage for a moment (a frame does not fit its RAM); the IDE
+  downloads them and deletes them from the device at once
+  (`src/js/screenshot.ts`).
 - **Virtual device**: the key labels and top labels (`toplabel`, or `topLabel`
   in older files) come from the device's `config.json`. The connector layout
-  comes from `info.connectors`.
+  comes from `info.connectors`. With `config.json` open, the entry under the
+  cursor (key, display item, list or image) has an outline on the virtual
+  device, and a click on an item of the virtual device selects its entry in
+  `config.json` (`src/js/config-locate.ts`). The "i" button shows read-only
+  device info on the back.
 - **No device** (dev without hardware, or firmware without the S3 API): files
-  are kept in browser memory only, and the Assets panel says so. Firmware with
-  the older single bucket `fs` answers NoSuchBucket for `app`; the Assets panel
+  are kept in browser memory only, and the App panel says so. Firmware with
+  the older single bucket `fs` answers NoSuchBucket for `app`; the App panel
   then says that the device firmware must be updated.
 
 ### Build Dependencies

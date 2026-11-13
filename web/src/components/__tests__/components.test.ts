@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 
 // Import all components to register custom elements
 import '../fb-app.js';
@@ -18,7 +18,7 @@ import '../fb-console-output.js';
 import '../fb-console-input.js';
 import '../fb-file-drawer.js';
 import type { WorkspaceSnapshot } from '../../js/app-state.js';
-import { LOCAL_MESSAGE } from '../../js/workspace.js';
+import { LOCAL_MESSAGE, workspace } from '../../js/workspace.js';
 import { loadDefaultConfig, setPreviewConfig } from '../../js/device-config.js';
 import { configToModel, mapImage, mapList } from '../../js/config-model.js';
 import { setIconSources, _clearIconSources } from '../../js/icon-sync.js';
@@ -53,19 +53,85 @@ describe('Component Registration', () => {
 });
 
 describe('fb-navbar', () => {
-  it('renders nav items for Code, Assets, Examples, Device, Docs, Settings', async () => {
+  it('renders nav items for App, Images, Fonts, Examples, Device, Docs, Settings', async () => {
     const el = createElement('fb-navbar');
     await nextFrame();
 
     const navItems = el.querySelectorAll('fb-nav-item');
     const labels = Array.from(navItems).map(item => item.getAttribute('label'));
 
-    expect(labels).toContain('Code');
-    expect(labels).toContain('Assets');
+    expect(labels).not.toContain('Code');
+    for (const l of ['App', 'Images', 'Fonts', 'Docs']) expect(labels).toContain(l);
+    expect(labels).not.toContain('Assets');
     expect(labels).toContain('Examples');
     expect(labels).toContain('Device');
-    expect(labels).toContain('Docs');
     expect(labels).toContain('Settings');
+  });
+
+  it('App returns to the editor with the file list from another view', async () => {
+    const el = createElement('fb-navbar');
+    await nextFrame();
+    window.dispatchEvent(new CustomEvent('layout-change', { detail: { view: 'device', panel: null } }));
+    await nextFrame();
+    const got: unknown[] = [];
+    const onView = (e: Event) => got.push((e as CustomEvent).detail);
+    window.addEventListener('main-view', onView);
+    window.addEventListener('sidebar-panel', onView);
+    (Array.from(el.querySelectorAll('fb-nav-item')).find(i => i.getAttribute('label') === 'App') as HTMLElement).click();
+    window.removeEventListener('main-view', onView);
+    window.removeEventListener('sidebar-panel', onView);
+    expect(got).toEqual([{ view: 'editor' }, { panel: 'app', open: true }]);
+  });
+
+  it('Docs opens the Docs view, Fonts opens the panel and the Fonts view', async () => {
+    const el = createElement('fb-navbar');
+    await nextFrame();
+    const got: string[] = [];
+    const onView = (e: Event) => got.push('view:' + (e as CustomEvent).detail.view);
+    const onPanel = (e: Event) => got.push('panel:' + (e as CustomEvent).detail.panel);
+    window.addEventListener('main-view', onView);
+    window.addEventListener('sidebar-panel', onPanel);
+    const item = (label: string) => Array.from(el.querySelectorAll('fb-nav-item')).find(i => i.getAttribute('label') === label) as HTMLElement;
+    item('Docs').click();
+    item('Fonts').click();
+    window.removeEventListener('main-view', onView);
+    window.removeEventListener('sidebar-panel', onPanel);
+    expect(got).toEqual(['view:docs', 'view:fonts', 'panel:fonts']);
+
+    got.length = 0;
+    window.addEventListener('main-view', onView);
+    window.addEventListener('sidebar-panel', onPanel);
+    item('Images').click();
+    item('Examples').click();
+    window.removeEventListener('main-view', onView);
+    window.removeEventListener('sidebar-panel', onPanel);
+    expect(got).toEqual(['view:image', 'panel:images', 'view:example', 'panel:examples']);
+  });
+
+  it('every entry is a button, and Device opens the Device view', async () => {
+    const el = createElement('fb-navbar');
+    await nextFrame();
+    const items = Array.from(el.querySelectorAll('fb-nav-item'));
+    expect(items.every(i => i.querySelector('button') !== null)).toBe(true);
+
+    const views: CustomEvent[] = [];
+    const handler = (e: Event) => views.push(e as CustomEvent);
+    window.addEventListener('main-view', handler);
+    (items.find(i => i.getAttribute('label') === 'Device') as HTMLElement).click();
+    window.removeEventListener('main-view', handler);
+    expect(views.map(v => v.detail.view)).toEqual(['device']);
+  });
+
+  it('shows what is open (layout-change)', async () => {
+    const el = createElement('fb-navbar');
+    await nextFrame();
+    window.dispatchEvent(new CustomEvent('layout-change', { detail: { view: 'device', panel: 'examples' } }));
+    await nextFrame();
+    await nextFrame();
+    const pressed = Array.from(el.querySelectorAll('fb-nav-item'))
+      .filter(i => i.querySelector('button')?.getAttribute('aria-pressed') === 'true')
+      .map(i => i.getAttribute('label'));
+    expect(pressed).toEqual(['Examples', 'Device']);
   });
 
   it('has fixed width of 100px', async () => {
@@ -124,7 +190,7 @@ describe('fb-app keyboard shortcuts', () => {
 });
 
 describe('fb-navbar sidebar-panel events', () => {
-  it('Assets click dispatches sidebar-panel with assets', async () => {
+  it('App click dispatches sidebar-panel with app', async () => {
     const el = createElement('fb-navbar');
     await nextFrame();
 
@@ -133,14 +199,14 @@ describe('fb-navbar sidebar-panel events', () => {
     window.addEventListener('sidebar-panel', handler);
 
     const assetsItem = Array.from(el.querySelectorAll('fb-nav-item')).find(
-      item => item.getAttribute('label') === 'Assets'
+      item => item.getAttribute('label') === 'App'
     );
     assetsItem!.click();
     await nextFrame();
 
     window.removeEventListener('sidebar-panel', handler);
     expect(events.length).toBe(1);
-    expect(events[0].detail.panel).toBe('assets');
+    expect(events[0].detail.panel).toBe('app');
   });
 
   it('Examples click dispatches sidebar-panel with examples', async () => {
@@ -164,12 +230,109 @@ describe('fb-navbar sidebar-panel events', () => {
 });
 
 describe('fb-toolbar', () => {
-  it('renders icon buttons', async () => {
+  it('has two named actions, Save and Deploy, and no Compile or Validate', async () => {
     const el = createElement('fb-toolbar');
     await nextFrame();
 
-    const buttons = el.querySelectorAll('button');
-    expect(buttons.length).toBeGreaterThanOrEqual(5); // Play, Check, Upload, Download, Trash + Connect
+    expect(el.querySelector('[data-testid="toolbar-save"]')?.textContent).toContain('Save');
+    expect(el.querySelector('[data-testid="toolbar-deploy"]')?.textContent).toContain('Deploy');
+    const titles = Array.from(el.querySelectorAll('button')).map(b => b.getAttribute('title') ?? '');
+    expect(titles.some(t => /^(Compile|Validate)$/.test(t))).toBe(false);
+  });
+
+  it('shows the file actions only while the editor is the main view', async () => {
+    const el = createElement('fb-toolbar');
+    await nextFrame();
+    const ids = ['toolbar-save', 'toolbar-deploy', 'toolbar-more'];
+    const shown = () => ids.filter(id => el.querySelector(`[data-testid="${id}"]`));
+    expect(shown()).toEqual(ids);
+    window.dispatchEvent(new CustomEvent('layout-change', { detail: { view: 'device', panel: 'app' } }));
+    await nextFrame();
+    expect(shown()).toEqual([]);
+    expect(el.querySelector('[data-testid="connect-button"]')).not.toBeNull();
+    window.dispatchEvent(new CustomEvent('layout-change', { detail: { view: 'editor', panel: 'app' } }));
+    await nextFrame();
+    expect(shown()).toEqual(ids);
+  });
+
+  it('shows Push images only with the Images panel or an image open', async () => {
+    const el = createElement('fb-toolbar');
+    await nextFrame();
+    const push = () => el.querySelector('[data-testid="toolbar-push-images"]') as HTMLButtonElement | null;
+    expect(push()).toBeNull();
+    window.dispatchEvent(new CustomEvent('layout-change', { detail: { view: 'editor', panel: 'images' } }));
+    await nextFrame();
+    expect(push()?.textContent).toContain('Push images');
+    expect(push()!.disabled).toBe(true); // no device in the test
+    window.dispatchEvent(new CustomEvent('layout-change', { detail: { view: 'image', panel: null } }));
+    await nextFrame();
+    expect(push()).not.toBeNull();
+    window.dispatchEvent(new CustomEvent('layout-change', { detail: { view: 'editor', panel: 'app' } }));
+    await nextFrame();
+    expect(push()).toBeNull();
+  });
+
+  it('Deploy is for scripts/main.js only and says so', async () => {
+    const el = createElement('fb-toolbar');
+    await nextFrame();
+    const snap = (currentKey: string) => ({ mode: 'device', message: '', files: [], busy: false, currentKey, dirty: false, isNew: false });
+    window.dispatchEvent(new CustomEvent('workspace-change', { detail: snap('config.json') }));
+    await nextFrame();
+    const deploy = el.querySelector('[data-testid="toolbar-deploy"]') as HTMLButtonElement;
+    expect(deploy.disabled).toBe(true);
+    expect(el.querySelector('[data-testid="deploy-hint"]')?.textContent).toContain('scripts/main.js');
+
+    window.dispatchEvent(new CustomEvent('workspace-change', { detail: snap('scripts/main.js') }));
+    await nextFrame();
+    expect(deploy.disabled).toBe(false);
+    expect(el.querySelector('[data-testid="deploy-hint"]')).toBeNull();
+  });
+
+  it('shows the deploy progress and result next to the buttons', async () => {
+    const el = createElement('fb-toolbar');
+    await nextFrame();
+    window.dispatchEvent(new CustomEvent('workspace-change', {
+      detail: { mode: 'device', message: '', files: [], busy: false, currentKey: 'scripts/main.js', dirty: false, isNew: false },
+    }));
+    window.dispatchEvent(new CustomEvent('deploy-request'));
+    await nextFrame();
+    const deploy = el.querySelector('[data-testid="toolbar-deploy"]') as HTMLButtonElement;
+    expect(deploy.disabled).toBe(true);
+    expect(deploy.textContent).toContain('Deploying');
+
+    window.dispatchEvent(new CustomEvent('deploy-result', { detail: { success: false, message: 'Validation failed' } }));
+    await nextFrame();
+    expect(deploy.disabled).toBe(false);
+    expect(el.querySelector('[data-testid="toolbar-result"]')?.textContent).toContain('Validation failed');
+  });
+
+  it('keeps Download and Clear in the more menu', async () => {
+    const el = createElement('fb-toolbar');
+    await nextFrame();
+    expect(el.querySelector('[data-testid="toolbar-menu"]')).toBeNull();
+    (el.querySelector('[data-testid="toolbar-more"]') as HTMLElement).click();
+    await nextFrame();
+    expect(el.querySelector('[data-testid="menu-download"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="menu-clear"]')).not.toBeNull();
+  });
+
+  it('connects on Enter and offers Disconnect when connected', async () => {
+    const el = createElement('fb-toolbar');
+    await nextFrame();
+    const requests: CustomEvent[] = [];
+    const handler = (e: Event) => requests.push(e as CustomEvent);
+    window.addEventListener('connection-request', handler);
+    const input = el.querySelector('input[aria-label="Device address"]') as HTMLInputElement;
+    input.value = 'ws://10.0.0.5';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    window.removeEventListener('connection-request', handler);
+    expect(requests.map(r => r.detail.url)).toEqual(['ws://10.0.0.5']);
+
+    window.dispatchEvent(new CustomEvent('connection-change', { detail: { connected: true, url: 'ws://10.0.0.5' } }));
+    await nextFrame();
+    expect(el.querySelector('[data-testid="connect-button"]')?.textContent).toContain('Disconnect');
+    expect(el.querySelector('[data-testid="connection-state"]')?.textContent).toContain('Connected');
   });
 
   it('has a connection input with placeholder', async () => {
@@ -256,68 +419,108 @@ describe('fb-file-drawer', () => {
     ...over,
   });
 
-  async function drawerWith(snap: WorkspaceSnapshot) {
+  async function drawerWith(snap: WorkspaceSnapshot, panel: 'app' | 'images' | 'fonts' = 'app') {
     const el = createElement('fb-file-drawer');
+    (el as unknown as { panel: string }).panel = panel;
     await nextFrame();
     window.dispatchEvent(new CustomEvent('workspace-change', { detail: snap }));
     await nextFrame();
     return el;
   }
 
-  it('lists the app files and the read-only buckets as collapsed groups', async () => {
-    const el = await drawerWith(snapshot());
-    const keys = Array.from(el.querySelectorAll('[data-testid="user-files"] [data-key]')).map(n => n.getAttribute('data-key'));
-    expect(keys).toEqual(['config.json', 'scripts/main.js', 'scripts/util.js']);
-    // Not listed yet: no counts.
-    expect(el.querySelector('[data-testid="examples-files"]')!.textContent).toContain('read-only');
-    expect(el.querySelector('[data-testid="system-files"]')!.textContent).toContain('read-only');
+  it('one panel per kind: App (files and Other), Images, Fonts', async () => {
+    const snap = snapshot({
+      files: [
+        { key: 'config.json', size: 10082 },
+        { key: 'icons/sun.svg', size: 800 },
+        { key: 'screenshot-main.rgb565', size: 153608 },
+        { key: 'scripts/main.js', size: 1200 },
+      ],
+    });
+    const keys = (el: Element, id: string) => Array.from(el.querySelectorAll(`[data-testid="${id}"] [data-key]`)).map(n => n.getAttribute('data-key'));
+    const app = await drawerWith(snap);
+    expect(app.querySelector('[data-testid="panel-title"]')!.textContent).toBe('App');
+    expect(keys(app, 'user-files')).toEqual(['config.json', 'scripts/main.js']);
+    expect(keys(app, 'other-files')).toEqual(['screenshot-main.rgb565']);
+    expect(app.querySelector('[data-testid="icon-files"]')).toBeNull();
+    expect(app.querySelector('[data-testid="fonts-files"]')).toBeNull();
+
+    const icons = await drawerWith(snap, 'images');
+    expect(icons.querySelector('[data-testid="panel-title"]')!.textContent).toBe('Images');
+    expect(keys(icons, 'icon-files')).toEqual(['icons/sun.svg']);
+    expect(icons.querySelector('[data-testid="user-files"]')).toBeNull();
+    expect(icons.querySelector('[data-testid="other-files"]')).toBeNull();
   });
 
-  it('shows listed read-only buckets with counts, entries only when expanded', async () => {
+  it('shows used and free space of the store behind each panel', async () => {
+    const MB = 1024 * 1024;
+    const storage = { fs: { total: 4 * MB, used: MB }, media: { total: 8 * MB, used: 2 * MB, free: 5 * MB } };
+    const space = (el: Element) => el.querySelector('[data-testid="storage-space"]')!.textContent!.replace(/\s+/g, ' ').trim();
+    const snap = snapshot({ storage, readOnly: { fonts: [] } });
+    expect(space(await drawerWith(snap))).toBe('1.0 MB used 3.0 MB free');
+    expect(space(await drawerWith(snap, 'images'))).toBe('1.0 MB used 3.0 MB free');
+    expect(space(await drawerWith(snap, 'fonts'))).toBe('2.0 MB used 5.0 MB free');
+    // Without the device's numbers: what the listed files add up to (App only).
+    expect(space(await drawerWith(snapshot()))).toContain('3 files');
+    expect((await drawerWith(snapshot(), 'images')).querySelector('[data-testid="storage-space"]')).toBeNull();
+  });
+
+  it('has no Examples or System group (examples live in the Examples panel)', async () => {
     const el = await drawerWith(snapshot({
-      readOnly: {
-        examples: [{ key: 'button.js', size: 900 }],
-        web: [{ key: 'index.html.gz', size: 250000 }],
-        fonts: [{ key: 'mnt_medium_14.bin', size: 40000 }],
-      },
+      readOnly: { examples: [{ key: 'button.js', size: 900 }], web: [{ key: 'index.html.gz', size: 250000 }] },
     }));
-    const system = el.querySelector('[data-testid="system-files"]')!;
-    expect(system.textContent).toContain('1 files');
-    expect(system.textContent).not.toContain('index.html.gz');
-    expect(el.querySelector('[data-testid="examples-files"]')!.textContent).toContain('1 files');
-    expect(el.querySelector('[data-testid="fonts-files"]')!.textContent).toContain('1 files');
-
-    (el.querySelector('[data-testid="system-toggle"]') as HTMLButtonElement).click();
-    await nextFrame();
-    expect(system.textContent).toContain('index.html.gz');
-    // Read-only entries are not openable files.
-    expect(system.querySelector('[data-key]')).toBeNull();
-    expect(system.querySelector('[data-testid="delete-font"]')).toBeNull();
+    expect(el.querySelector('[data-testid="examples-files"]')).toBeNull();
+    expect(el.querySelector('[data-testid="system-files"]')).toBeNull();
+    expect(el.textContent).not.toContain('index.html.gz');
   });
 
-  it('fonts group: upload button, entries with a delete button when expanded', async () => {
+  it('a file the IDE cannot open can be deleted and opens the asset view', async () => {
+    const el = await drawerWith(snapshot({ files: [{ key: 'screenshot-main.rgb565', size: 153608 }] }));
+    const row = el.querySelector('[data-key="screenshot-main.rgb565"]')!;
+    expect(row.querySelector('[data-testid="delete-file"]')).not.toBeNull();
+
+    const views: CustomEvent[] = [];
+    const handler = (e: Event) => views.push(e as CustomEvent);
+    window.addEventListener('main-view', handler);
+    (row.querySelector('[data-testid="open-file"]') as HTMLElement).click();
+    await nextFrame();
+    window.removeEventListener('main-view', handler);
+    expect(views.map(v => v.detail)).toEqual([{ view: 'image', key: 'screenshot-main.rgb565' }]);
+  });
+
+  it('fonts panel: the fonts, upload, and a row opens the Fonts view', async () => {
     const el = await drawerWith(snapshot({
       readOnly: { fonts: [{ key: 'medium.ttf', size: 198000 }, { key: 'roboto.ttf', size: 160000 }] },
-    }));
+    }), 'fonts');
     const fonts = el.querySelector('[data-testid="fonts-files"]')!;
     expect(fonts.querySelector('[data-testid="upload-font"]')).not.toBeNull();
     expect(fonts.querySelector('[data-testid="font-upload-input"]')!.getAttribute('accept')).toContain('.ttf');
-    expect(fonts.textContent).not.toContain('roboto.ttf');
-    (el.querySelector('[data-testid="fonts-toggle"]') as HTMLButtonElement).click();
-    await nextFrame();
-    const rows = Array.from(fonts.querySelectorAll('[data-font-key]')).map(n => n.getAttribute('data-font-key'));
-    expect(rows).toEqual(['medium.ttf', 'roboto.ttf']);
-    const del = Array.from(fonts.querySelectorAll('[data-testid="delete-font"]')) as HTMLButtonElement[];
-    expect(del).toHaveLength(2);
-    // medium.ttf is a system font: its delete button is disabled.
-    expect(del.map(b => b.disabled)).toEqual([true, false]);
-    expect(del[0]!.title).toContain('system font');
+    expect(fonts.textContent).toContain('medium.ttf');
+    expect(fonts.textContent).toContain('roboto.ttf');
+    expect(el.querySelector('[data-testid="user-files"]')).toBeNull();
+
+    const views: CustomEvent[] = [];
+    const handler = (e: Event) => views.push(e as CustomEvent);
+    window.addEventListener('main-view', handler);
+    (fonts.querySelector('[data-testid="open-fonts"]') as HTMLElement).click();
+    window.removeEventListener('main-view', handler);
+    expect(views.map(v => v.detail.view)).toEqual(['fonts']);
   });
 
-  it('hides the read-only groups without a device', async () => {
-    const el = await drawerWith(snapshot({ mode: 'local', message: LOCAL_MESSAGE, files: [] }));
-    expect(el.querySelector('[data-testid="system-files"]')).toBeNull();
-    expect(el.querySelector('[data-testid="examples-files"]')).toBeNull();
+  it('explains what pushing icons does, next to the icons', async () => {
+    const el = await drawerWith(snapshot({ files: [{ key: 'icons/sun.svg', size: 800 }] }), 'images');
+    const status = el.querySelector('[data-testid="icon-files"] [data-testid="icon-sync-status"]')!;
+    expect(status.textContent).toContain('every save of config.json');
+    expect(status.textContent).toContain('Push images');
+  });
+
+  it('hides the device-only sections without a device', async () => {
+    const local = snapshot({ mode: 'local', message: LOCAL_MESSAGE, files: [{ key: 'icons/sun.svg', size: 800 }] });
+    const fonts = await drawerWith(local, 'fonts');
+    expect(fonts.querySelector('[data-testid="upload-font"]')).toBeNull();
+    expect(fonts.textContent).toContain('connect to one');
+    const images = await drawerWith(local, 'images');
+    expect(images.querySelector('[data-testid="icon-sync-status"]')).toBeNull();
   });
 
   it('offers delete only for deletable files (not config.json)', async () => {
@@ -573,25 +776,71 @@ describe('fb-virtual-device', () => {
     expect(graph?.textContent).toContain('40 KB');  // lvglFree in KB
   });
 
-  it('device name input is present and editable', async () => {
+  it('back side is read-only and hides the page tabs', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();
+    const tabs = el.querySelector('[data-testid="page-tabs"]') as HTMLElement;
+    expect(tabs.classList.contains('invisible')).toBe(false);
 
-    // Flip to settings
-    const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
-    gearBtn.click();
+    (el.querySelector('[data-testid="gear-icon"]') as HTMLElement).click();
     await nextFrame();
 
-    const input = el.querySelector('[data-testid="device-name-input"]') as HTMLInputElement;
-    expect(input).not.toBeNull();
-    expect(input.value).toBe('btn_fab028');
+    // No fields that look editable but are never saved.
+    expect(el.querySelector('.device-flip-back input')).toBeNull();
+    // The tabs belong to the front face.
+    expect(tabs.classList.contains('invisible')).toBe(true);
+    expect(Array.from(tabs.querySelectorAll('button')).every(b => (b as HTMLButtonElement).disabled)).toBe(true);
+  });
 
-    // Edit the name
-    input.value = 'my_device';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+  it('shows the device name on the TFT once the device reported it', async () => {
+    const el = createElement('fb-virtual-device');
     await nextFrame();
+    expect(el.querySelector('[data-testid="tft-device-name"]')?.textContent?.trim()).toBe('');
 
-    expect((el as any)._deviceName).toBe('my_device');
+    window.dispatchEvent(new CustomEvent('device-info', {
+      detail: {
+        data: {
+          deviceName: 'btn_a00001', ipv4: '1.1.1.1', ipv6: '::1', ssid: 's', rssi: -50,
+          mac: 'a', firmware: 'f', uptime: 1,
+          heapFree: 1, heapTotal: 2, heapMinFree: 1, lvglFree: 1, lvglTotal: 2,
+        },
+      },
+    }));
+    await nextFrame();
+    await nextFrame();
+    expect(el.querySelector('[data-testid="tft-device-name"]')?.textContent?.trim()).toBe('btn_a00001');
+  });
+
+  it('outlines the config entry under the editor cursor and reveals an entry on click', async () => {
+    const el = createElement('fb-virtual-device');
+    await nextFrame();
+    const { configToModel } = await import('../../js/config-model.js');
+    const { setPreviewConfig, clearPreviewConfig } = await import('../../js/device-config.js');
+    setPreviewConfig(configToModel({
+      buttons: [{ position: 1, label: 'A' }],
+      displayitems: [{ x: 0, y: 0, label: 'Temp' }, { x: 50, y: 0, label: 'Hum' }],
+    }));
+    await nextFrame();
+    const item = el.querySelector('[data-ref-kind="displayitem"][data-ref]') as HTMLElement;
+    expect(item).not.toBeNull();
+    const [list, index] = item.getAttribute('data-ref')!.split(':');
+
+    window.dispatchEvent(new CustomEvent('config-selection', {
+      detail: { ref: { kind: 'displayitem', list, index: Number(index) } },
+    }));
+    await nextFrame();
+    await nextFrame();
+    expect(el.querySelectorAll('[data-selected]').length).toBe(1);
+    expect(el.querySelector('[data-selected]')?.getAttribute('data-ref')).toBe(`${list}:${index}`);
+
+    const reveals: CustomEvent[] = [];
+    const handler = (e: Event) => reveals.push(e as CustomEvent);
+    window.addEventListener('config-reveal', handler);
+    (el.querySelector('[data-ref-kind="displayitem"][data-ref]') as HTMLElement).click();
+    window.removeEventListener('config-reveal', handler);
+    expect(reveals.length).toBe(1);
+    expect(reveals[0].detail.ref).toEqual({ kind: 'displayitem', list, index: Number(index) });
+    clearPreviewConfig();
   });
 
   it('renders real (heap + lvgl) SVG polylines once device data arrives', async () => {
@@ -1163,18 +1412,19 @@ describe('fb-editor-pane', () => {
     const el = createElement('fb-editor-pane');
     await nextFrame();
 
+    const sidebar = el.querySelector('[data-testid="sidebar"]') as HTMLElement;
     // Sidebar starts open with assets
-    expect(el.querySelector('.w-\\[200px\\]')).not.toBeNull();
+    expect(sidebar.style.width).not.toBe('0px');
 
     // Close by toggling assets again
-    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'assets' } }));
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'app' } }));
     await nextFrame();
-    expect(el.querySelector('.w-0')).not.toBeNull();
+    expect(sidebar.style.width).toBe('0px');
 
     // Reopen
-    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'assets' } }));
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'app' } }));
     await nextFrame();
-    expect(el.querySelector('.w-\\[200px\\]')).not.toBeNull();
+    expect(sidebar.style.width).not.toBe('0px');
   });
 
   it('switches from assets to examples panel', async () => {
@@ -1204,30 +1454,226 @@ describe('fb-editor-pane', () => {
     expect(el.querySelector('fb-file-drawer')).toBeNull();
 
     // Switch back to assets
-    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'assets' } }));
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'app' } }));
     await nextFrame();
     expect(el.querySelector('fb-file-drawer')).not.toBeNull();
   });
 
-  it('examples panel dispatches load-example on click', async () => {
+  it('an example is shown read-only in the main pane: no dialog, no file made or opened', async () => {
     const el = createElement('fb-editor-pane');
     await nextFrame();
-
-    // Open examples panel
     window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'examples' } }));
     await nextFrame();
 
-    const events: CustomEvent[] = [];
-    const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
-    window.addEventListener('load-example', handler);
-
-    const exampleBtn = el.querySelector('.group\\/example') as HTMLElement;
-    exampleBtn?.click();
+    const create = vi.spyOn(workspace, 'create').mockResolvedValue(false);
+    const open = vi.spyOn(workspace, 'open').mockResolvedValue(false);
+    const item = el.querySelectorAll('[data-example]')[1] as HTMLElement;
+    item.click();
+    await nextFrame();
     await nextFrame();
 
-    window.removeEventListener('load-example', handler);
-    expect(events.length).toBe(1);
-    expect(events[0].detail.name).toBeDefined();
+    expect(document.querySelector('fb-dialog [data-testid="dialog"]')).toBeNull();
+    expect(create).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    const view = el.querySelector('fb-example-view [data-testid="example-view"]')!;
+    expect(view.getAttribute('data-example-id')).toBe(item.getAttribute('data-example'));
+    expect(view.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('false');
+    expect(el.querySelector('fb-code-editor')!.classList.contains('hidden')).toBe(true);
+    create.mockRestore();
+    open.mockRestore();
+  });
+
+  it('a selection replaces the whole middle pane: Device and Docs close the list of another entry', async () => {
+    const el = createElement('fb-editor-pane');
+    await nextFrame();
+    const sidebar = el.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    const layouts: Array<{ view: string; panel: string | null }> = [];
+    const onLayout = (e: Event) => layouts.push((e as CustomEvent).detail);
+    window.addEventListener('layout-change', onLayout);
+    const go = async (name: string, detail: object) => { window.dispatchEvent(new CustomEvent(name, { detail })); await nextFrame(); };
+
+    await go('main-view', { view: 'example' });
+    await go('sidebar-panel', { panel: 'examples', open: true });
+    expect(el.querySelector('[data-example]')).not.toBeNull();
+    expect(el.querySelector('fb-example-view')).not.toBeNull();
+
+    await go('main-view', { view: 'device' });
+    expect(sidebar.style.width).toBe('0px');
+    expect(el.querySelector('[data-example]')).toBeNull();
+    expect(el.querySelector('fb-example-view')).toBeNull();
+    expect(layouts.at(-1)).toEqual({ view: 'device', panel: null });
+
+    await go('main-view', { view: 'fonts' });
+    expect(layouts.at(-1)).toEqual({ view: 'fonts', panel: 'fonts' });
+    await go('main-view', { view: 'docs' });
+    expect(layouts.at(-1)).toEqual({ view: 'docs', panel: null });
+    // Back to the editor from any other view: the editor with the App list.
+    await go('main-view', { view: 'editor' });
+    expect(layouts.at(-1)).toEqual({ view: 'editor', panel: 'app' });
+    await go('main-view', { view: 'fonts' });
+    await go('main-view', { view: 'editor' });
+    expect(layouts.at(-1)).toEqual({ view: 'editor', panel: 'app' });
+    // In the editor the list can be folded, and stays folded.
+    await go('sidebar-panel', { panel: 'app' });
+    await go('main-view', { view: 'editor' });
+    expect(layouts.at(-1)).toEqual({ view: 'editor', panel: null });
+    window.removeEventListener('layout-change', onLayout);
+  });
+
+  it('Images and Fonts take dropped files; other views do not', async () => {
+    const uploads = await import('../../js/uploads.js');
+    const dropped = vi.spyOn(uploads, 'uploadDropped').mockResolvedValue({ images: 1, fonts: 0 });
+    const el = createElement('fb-editor-pane');
+    await nextFrame();
+    const middle = el.querySelector('[data-testid="middle"]') as HTMLElement;
+    const file = new File(['<svg/>'], 'sun.svg');
+    const drag = (type: string) => {
+      const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
+      e.dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' };
+      middle.dispatchEvent(e);
+      return e;
+    };
+
+    // The editor (App) is shown: a drop is left to the browser.
+    expect(drag('dragover').defaultPrevented).toBe(false);
+    drag('drop');
+    expect(dropped).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new CustomEvent('main-view', { detail: { view: 'image' } }));
+    window.dispatchEvent(new CustomEvent('sidebar-panel', { detail: { panel: 'images', open: true } }));
+    await nextFrame();
+    drag('dragenter');
+    await nextFrame();
+    expect(el.querySelector('[data-testid="drop-overlay"]')?.textContent).toContain('.svg');
+    expect(drag('dragover').defaultPrevented).toBe(true);
+    drag('drop');
+    await nextFrame();
+    expect(dropped.mock.calls[0][0]).toEqual([file]);
+    expect(el.querySelector('[data-testid="drop-overlay"]')).toBeNull();
+    dropped.mockRestore();
+  });
+
+  it('the image view without a file shows the images, or how to add one', async () => {
+    const el = createElement('fb-editor-pane');
+    await nextFrame();
+    window.dispatchEvent(new CustomEvent('main-view', { detail: { view: 'image' } }));
+    await nextFrame();
+    expect(el.querySelector('[data-testid="image-overview-empty"]')?.textContent).toContain('No images yet');
+  });
+
+  it('shows a view in place of the editor and keeps the editor alive', async () => {
+    const el = createElement('fb-editor-pane');
+    await nextFrame();
+    const editor = el.querySelector('fb-code-editor') as HTMLElement;
+    expect(editor.classList.contains('hidden')).toBe(false);
+
+    window.dispatchEvent(new CustomEvent('main-view', { detail: { view: 'device' } }));
+    await nextFrame();
+    expect(el.querySelector('fb-device-view')).not.toBeNull();
+    expect(el.querySelector('fb-code-editor')).toBe(editor);
+    expect(editor.classList.contains('hidden')).toBe(true);
+    expect(el.querySelector('[data-testid="view-title"]')?.textContent).toContain('Device');
+
+    (el.querySelector('[data-testid="back-to-editor"]') as HTMLElement).click();
+    await nextFrame();
+    expect(el.querySelector('fb-device-view')).toBeNull();
+    expect(editor.classList.contains('hidden')).toBe(false);
+  });
+});
+
+describe('fb-device-view', () => {
+  it('offers a screenshot only with a device, and has the device actions', async () => {
+    await import('../fb-device-view.js');
+    const el = createElement('fb-device-view');
+    await nextFrame();
+    const shot = el.querySelector('[data-testid="take-screenshot"]') as HTMLButtonElement;
+    expect(shot).not.toBeNull();
+    expect(shot.disabled).toBe(true);
+    expect(el.querySelector('[data-testid="device-offline"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="device-reboot"]')).not.toBeNull();
+    expect(el.querySelector('fb-device-info')).not.toBeNull();
+
+    window.dispatchEvent(new CustomEvent('workspace-change', {
+      detail: { mode: 'device', message: '', files: [], busy: false, currentKey: 'scripts/main.js', dirty: false, isNew: false },
+    }));
+    await nextFrame();
+    expect(shot.disabled).toBe(false);
+    expect(el.querySelector('[data-testid="device-offline"]')).toBeNull();
+  });
+
+  it('update: firmware and filesystem buttons need a device, refuse a wrong file, show the phases', async () => {
+    await import('../fb-device-view.js');
+    const el = createElement('fb-device-view');
+    await nextFrame();
+    const button = () => el.querySelector('[data-testid="update-firmware"]') as HTMLButtonElement;
+    expect(button().disabled).toBe(true);
+    window.dispatchEvent(new CustomEvent('workspace-change', {
+      detail: { mode: 'device', message: '', files: [], busy: false, currentKey: 'scripts/main.js', dirty: false, isNew: false },
+    }));
+    await nextFrame();
+    expect(button().disabled).toBe(false);
+
+    // A picked file that is not an ESP32 image: said at once, nothing sent.
+    const view = el as unknown as { _updatePicked(kind: string, e: Event): Promise<void>; _fw: unknown; _fwName: string };
+    expect((el.querySelector('[data-testid="update-filesystem"]') as HTMLButtonElement).disabled).toBe(false);
+    const file = new File([new Uint8Array([0x50, 0x4b])], 'bundle.zip');
+    await view._updatePicked('filesystem', { target: { files: [file], value: '' } } as unknown as Event);
+    await nextFrame();
+    expect(el.querySelector('[data-testid="update-progress"]')!.textContent).toContain('not a LittleFS filesystem image');
+    await view._updatePicked('firmware', { target: { files: [file], value: '' } } as unknown as Event);
+    await nextFrame();
+    const progress = () => el.querySelector('[data-testid="update-progress"]')!;
+    expect(progress().getAttribute('data-phase')).toBe('failed');
+    expect(progress().textContent).toContain('not an ESP32 firmware image');
+
+    view._fwName = 'firmware.bin';
+    view._fw = { phase: 'uploading', percent: 42 };
+    await nextFrame();
+    expect(progress().textContent).toContain('Uploading firmware.bin · 42%');
+    expect(progress().querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('42');
+    expect(button().disabled).toBe(true);
+    view._fw = { phase: 'applying' };
+    await nextFrame();
+    expect(progress().textContent).toContain('Applying');
+    view._fw = { phase: 'done', message: 'The device is running 3.2.0.' };
+    await nextFrame();
+    expect(progress().textContent).toContain('Updated. The device is running 3.2.0.');
+    expect(button().disabled).toBe(false);
+  });
+});
+
+describe('fb-font-view', () => {
+  it('lists the device fonts with the config name; system fonts have no delete', async () => {
+    await import('../fb-font-view.js');
+    const el = createElement('fb-font-view');
+    await nextFrame();
+    window.dispatchEvent(new CustomEvent('workspace-change', {
+      detail: {
+        mode: 'device', message: '', files: [], busy: false, currentKey: 'scripts/main.js', dirty: false, isNew: false,
+        readOnly: { fonts: [{ key: 'medium.ttf', size: 198000 }, { key: 'Roboto-Bold.ttf', size: 160000 }] },
+      },
+    }));
+    await nextFrame();
+    const rows = Array.from(el.querySelectorAll('[data-font-key]'));
+    expect(rows.map(r => r.getAttribute('data-font-key'))).toEqual(['medium.ttf', 'Roboto-Bold.ttf']);
+    expect(rows[0].querySelector('[data-testid="delete-font"]')).toBeNull();
+    expect(rows[0].textContent).toContain('system');
+    expect(rows[1].querySelector('[data-testid="delete-font"]')).not.toBeNull();
+    expect(rows[1].textContent).toContain('"Roboto_Bold"');
+    // The device's sizes to compare at.
+    expect(Array.from(el.querySelectorAll('[data-font-px]')).map(b => b.getAttribute('data-font-px'))).toEqual(['14', '24', '32', '48', '72']);
+  });
+});
+
+describe('fb-image-view', () => {
+  it('says that an unknown type cannot be shown and offers Delete', async () => {
+    await import('../fb-image-view.js');
+    const el = createElement('fb-image-view') as HTMLElement & { fileKey: string };
+    el.fileKey = 'notes.bin';
+    await nextFrame();
+    await nextFrame();
+    expect(el.querySelector('[data-testid="image-unknown"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="image-delete"]')).not.toBeNull();
   });
 });
 

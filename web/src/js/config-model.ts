@@ -31,7 +31,7 @@
  * Key position on connector `id` is id*2+1 (left) and id*2+2 (right), the
  * same mapping the firmware uses (ButtonManager: position0 = connector*2+side).
  */
-import type { ButtonConfig, ConnectorConfig, DisplayItem, ImageConfig, ListConfig, PageConfig } from './app-state';
+import type { ButtonConfig, ConfigItemKind, ConfigRef, ConnectorConfig, DisplayItem, ImageConfig, ListConfig, PageConfig } from './app-state';
 import { DEFAULT_BUTTON_ICON_SIZE, DEFAULT_DISPLAY_ICON_SIZE, iconTable, isIconName, itemIconSize } from './icon-raster';
 import { fontNames, fontStyles, fontTable, hasFontTable, slotFont, FONTSIZE_MAX, SLOTS, type FontTable } from './font-config';
 import { DEFAULT_STYLES, StyleElement, styleColorHex, type ResolvedStyles } from './style-config';
@@ -118,12 +118,29 @@ function str(v: unknown): string {
   return '';
 }
 
-function firstArray(o: Obj, ...keys: string[]): unknown[] {
+/** The first of `keys` that is an array, with the key that was found ('' when none). */
+function firstArrayKey(o: Obj, ...keys: string[]): [string, unknown[]] {
   for (const k of keys) {
     const v = o[k];
-    if (Array.isArray(v)) return v;
+    if (Array.isArray(v)) return [k, v];
   }
-  return [];
+  return ['', []];
+}
+
+function withRef<T extends { ref?: ConfigRef }>(item: T | null, kind: ConfigItemKind, list: string, index: number): T | null {
+  if (item) item.ref = { kind, list, index };
+  return item;
+}
+
+/** The kind of entries a top-level config.json array holds (null: not drawn). */
+export function configListKind(list: string): ConfigItemKind | null {
+  switch (list) {
+    case 'buttons': case 'mqttbuttons': return 'button';
+    case 'displayitems': case 'mqttdisplays': return 'displayitem';
+    case 'lists': return 'list';
+    case 'images': return 'image';
+    default: return null;
+  }
 }
 
 /** Key positions on a connector (1-based, left then right). */
@@ -269,17 +286,25 @@ export function configToModel(cfg: unknown): DeviceModel {
   const o: Obj = isObj(cfg) ? cfg : {};
   const fonts = fontTable(o);
   const styles = fontStyles(o, fonts);
-  const buttons = firstArray(o, 'buttons', 'mqttbuttons')
-    .map(b => mapButton(b, fonts, styles))
+  // Every mapped entry keeps where it came from (`ref`), so the virtual device
+  // and the editor can point at each other (config-locate.ts).
+  const [buttonKey, buttonList] = firstArrayKey(o, 'buttons', 'mqttbuttons');
+  const buttons = buttonList
+    .map((b, index) => withRef(mapButton(b, fonts, styles), 'button', buttonKey, index))
     .filter((b): b is ButtonConfig => b !== null);
-  const items = firstArray(o, 'displayitems', 'mqttdisplays')
-    .map(d => mapDisplayItem(d, fonts, styles))
+  const [itemKey, itemList] = firstArrayKey(o, 'displayitems', 'mqttdisplays');
+  const items = itemList
+    .map((d, index) => {
+      const mapped = mapDisplayItem(d, fonts, styles);
+      if (mapped) mapped.item.ref = { kind: 'displayitem', list: itemKey, index };
+      return mapped;
+    })
     .filter((d): d is { page: number; item: DisplayItem } => d !== null);
   const lists = (Array.isArray(o.lists) ? o.lists : [])
-    .map(l => mapList(l, fonts, styles))
+    .map((l, index) => withRef(mapList(l, fonts, styles), 'list', 'lists', index))
     .filter((l): l is ListConfig => l !== null);
   const images = (Array.isArray(o.images) ? o.images : [])
-    .map(mapImage)
+    .map((m, index) => withRef(mapImage(m), 'image', 'images', index))
     .filter((m): m is ImageConfig => m !== null);
 
   const pageNumbers = new Set<number>([1]);

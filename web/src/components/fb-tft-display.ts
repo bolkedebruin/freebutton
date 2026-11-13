@@ -1,7 +1,8 @@
 import { LitElement, html, svg } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import type { DisplayItem, ImageConfig, ItemFont, ListConfig } from '../js/app-state.js';
-import { on } from '../js/app-state.js';
+import type { ConfigRef, DisplayItem, ImageConfig, ItemFont, ListConfig } from '../js/app-state.js';
+import { on, sameConfigRef } from '../js/app-state.js';
+import { nothing } from 'lit';
 import { getStyles } from '../js/device-config.js';
 import { fontsizePx, SLOTS, styleFont, unitFont } from '../js/font-config.js';
 import { StyleElement, styleItemPx, type ResolvedStyles } from '../js/style-config.js';
@@ -27,6 +28,10 @@ export class FbTftDisplay extends LitElement {
   @property({ attribute: false }) lists: ListConfig[] = [];
   /** Images (config.json "images") on the current page. */
   @property({ attribute: false }) images: ImageConfig[] = [];
+  /** The device's name for the status line ('' = not known: nothing shown). */
+  @property() deviceName = '';
+  /** The config.json entry under the editor cursor: outlined. */
+  @property({ attribute: false }) selected: ConfigRef | null = null;
   @state() private timeStr = '';
   private _timer?: number;
   private _offIcons?: () => void;
@@ -71,12 +76,24 @@ export class FbTftDisplay extends LitElement {
     if (img.icon) {
       // Like the device: an icon without width/height shows nothing.
       if (!img.width || !img.height) return '';
-      return html`<div class="absolute flex" data-image=${img.name} style=${box}>
+      return html`<div class="absolute flex cursor-pointer" data-image=${img.name}
+        data-ref=${this._refAttr(img.ref)} data-ref-kind="image" ?data-selected=${sameConfigRef(img.ref, this.selected)}
+        title="Show in config.json" style="${box} ${this._outline(img.ref)}">
         ${iconView(img.icon, img.width, img.height, img.color, SCREEN_SCALE)}
       </div>`;
     }
-    return html`<div class="absolute flex items-center justify-center border border-dashed border-white/40 text-[9px] text-gray-200 overflow-hidden"
-      data-image=${img.name} title=${img.src ? `images/${img.src}` : img.name} style=${box}>${img.src ?? img.name}</div>`;
+    return html`<div class="absolute flex items-center justify-center border border-dashed border-white/40 text-[9px] text-gray-200 overflow-hidden cursor-pointer"
+      data-image=${img.name} data-ref=${this._refAttr(img.ref)} data-ref-kind="image" ?data-selected=${sameConfigRef(img.ref, this.selected)}
+      title=${img.src ? `images/${img.src}` : img.name} style="${box} ${this._outline(img.ref)}">${img.src ?? img.name}</div>`;
+  }
+
+  /** Outline of the selected entry (drawn outside the box: no layout change). */
+  private _outline(ref: ConfigRef | undefined): string {
+    return sameConfigRef(ref, this.selected) ? 'outline: 2px solid #AF8BFF; outline-offset: 1px; z-index: 5;' : '';
+  }
+
+  private _refAttr(ref: ConfigRef | undefined) {
+    return ref ? `${ref.list}:${ref.index}` : nothing;
   }
 
   private _updateTime() {
@@ -123,8 +140,10 @@ export class FbTftDisplay extends LitElement {
     const middle = (list.rows - 1) * rowH / 2;
     const shift = middle - Math.max(0, list.selected) * rowH;
     return html`
-      <div class="absolute overflow-hidden" data-list=${list.name}
-        style="left: ${list.x}%; top: ${list.y}%; width: ${list.width}%; height: ${px(list.rows * rowH)};
+      <div class="absolute overflow-hidden cursor-pointer" data-list=${list.name}
+        data-ref=${this._refAttr(list.ref)} data-ref-kind="list" ?data-selected=${sameConfigRef(list.ref, this.selected)}
+        title="Show in config.json"
+        style="left: ${list.x}%; top: ${list.y}%; width: ${list.width}%; height: ${px(list.rows * rowH)}; ${this._outline(list.ref)}
           ${fontStyle(font, SCREEN_SCALE)} line-height: ${px(rowH)};">
         <div class="absolute left-0 right-0 rounded-[6px]" data-list-focus
           style="top: ${px(middle)}; height: ${px(rowH)}; background: ${list.focusColor};${sel.bgOpa !== undefined && sel.bgOpa < 255 ? ` opacity: ${sel.bgOpa / 255};` : ''}"></div>
@@ -152,7 +171,7 @@ export class FbTftDisplay extends LitElement {
       <div class="bg-[rgb(20,20,20)] w-[342px] h-[219px] flex py-[3.36px]">
         <!-- Left config dots column -->
         <div class="flex items-end w-[29.5px] h-[212.25px] pt-[12.32px] pb-[3.7px] font-fira">
-          <div class="text-white cursor-pointer flex items-center">
+          <div class="text-white flex items-center" aria-hidden="true">
             ${this._dotsIcon(24)}
           </div>
         </div>
@@ -165,8 +184,10 @@ export class FbTftDisplay extends LitElement {
             const valueFont = this._valueFont(item, styles);
             const value = this._isTimeItem(item) ? this.timeStr : (item.value ?? '');
             return html`
-            <div class="absolute" data-display-item=${item.name ?? item.id ?? ''}
-              style="left: ${item.x}%; top: ${item.y}%; width: ${item.width}%; border-bottom: 1px solid rgb(170, 170, 170);">
+            <div class="absolute cursor-pointer" data-display-item=${item.name ?? item.id ?? ''}
+              data-ref=${this._refAttr(item.ref)} data-ref-kind="displayitem" ?data-selected=${sameConfigRef(item.ref, this.selected)}
+              title="Show in config.json"
+              style="left: ${item.x}%; top: ${item.y}%; width: ${item.width}%; border-bottom: 1px solid rgb(170, 170, 170); ${this._outline(item.ref)}">
               <div class="my-[2px] leading-[1.15]" data-caption style=${textStyleCss(caption, SCREEN_SCALE)}>
                 ${richText(item.label ?? '', this._labelFont(item, styles), SLOTS.caption, SCREEN_SCALE)}
               </div>
@@ -185,14 +206,12 @@ export class FbTftDisplay extends LitElement {
 
           <!-- Status bar -->
           <div class="absolute text-[11.2px] font-normal font-[Montserrat,sans-serif] text-white text-left leading-[11.2px]"
-            style="top: 201px; left: 0;">
-            btn_fab028
-          </div>
+            data-testid="tft-device-name" style="top: 201px; left: 0;">${this.deviceName}</div>
         </div>
 
         <!-- Right config dots column -->
         <div class="flex items-end w-[29.5px] h-[212.25px] pt-[12.32px] pb-[3.7px] font-fira">
-          <div class="text-white cursor-pointer flex items-center">
+          <div class="text-white flex items-center" aria-hidden="true">
             ${this._dotsIcon(24)}
           </div>
         </div>

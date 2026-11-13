@@ -49,6 +49,13 @@ describe('path rules', () => {
     expect(canDeleteKey('scripts/util.js')).toBe(true);
   });
 
+  it('allows deleting files the IDE cannot open', () => {
+    expect(canDeleteKey('screenshot-main.rgb565')).toBe(true);
+    expect(canDeleteKey('notes.bin')).toBe(true);
+    expect(canDeleteKey('icons/a.svg')).toBe(true);
+    expect(canDeleteKey('')).toBe(false);
+  });
+
   it('validateKey mirrors the device rules', () => {
     expect(validateKey('scripts/main.js')).toBeNull();
     expect(validateKey('')).toMatch(/empty/);

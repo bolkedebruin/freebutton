@@ -150,6 +150,12 @@
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+/* Icon glyphs (private-use characters, editor.ts): the device's fonts first
+   (fb-code-editor sets the variable), as the editor's own fonts draw a
+   placeholder box for them. */
+.cm-fb-glyph {
+  font-family: var(--fb-device-fonts, monospace), monospace;
+}
 .cm-gutters {
   background: transparent !important;
   border-right: 1px solid var(--color-border-default);

@@ -72,6 +72,32 @@ describe('fb-settings-modal device access', () => {
     expect(q(el, 'device-access-state').textContent).toContain(AKID);
   });
 
+  it('Save replaces the form with a summary while the dialog stays open', async () => {
+    emit('open-settings');
+    await settled(el);
+    type(q<HTMLInputElement>(el, 'fbcred-input'), `FBCRED:${AKID}:${SECRET}`);
+    await settled(el);
+    q<HTMLButtonElement>(el, 'credentials-save').click();
+    await settled(el);
+    // The submitted form is gone: that is when a password manager offers to
+    // save, and the dialog is still there to see it happen.
+    expect(el.querySelector('[data-testid="credentials-form"]')).toBeNull();
+    expect(el.querySelector('[data-testid="device-access"]')).not.toBeNull();
+    expect(q(el, 'credentials-summary').textContent).toContain(AKID);
+
+    // "Change" brings the fields back, filled.
+    q<HTMLButtonElement>(el, 'credentials-edit').click();
+    await settled(el);
+    expect(q<HTMLInputElement>(el, 'akid-input').value).toBe(AKID);
+  });
+
+  it('has no switch that does nothing (MCP)', async () => {
+    emit('open-settings');
+    await settled(el);
+    expect(el.textContent).not.toContain('MCP');
+    expect(q(el, 'ripple-toggle').getAttribute('role')).toBe('switch');
+  });
+
   it('show/hide toggles the secret field', async () => {
     emit('open-settings');
     await settled(el);
