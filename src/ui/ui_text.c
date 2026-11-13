@@ -18,7 +18,7 @@
 /* \s0 and \s6..\s9 were always 14 px (\s1..\s5: the legacy steps). */
 #define UI_TEXT_DEFAULT_PX 14
 
-static int resolve_font(const char *name, const size_t len, const bool is_id, const int32_t id, void *ctx) {
+int ui_text_resolve_font(const char *name, const size_t len, const bool is_id, const int32_t id, void *ctx) {
     (void)ctx;
     const int face = is_id ? fonts_find_id(id) : fonts_find(name, len);
     return face >= 0 ? face : TEXT_FONT_UNKNOWN;
@@ -29,7 +29,7 @@ static int resolve_font(const char *name, const size_t len, const bool is_id, co
  * legacy step through style_logic_item_px, on a title element step 2 = 18
  * px; \s0 / \s6..\s9 = 14 px; or px), else the base px.
  */
-static lv_font_t *span_font(const text_span_t *s, const int base_face, const int base_px, const bool title) {
+lv_font_t *ui_text_span_font(const text_span_t *s, const int base_face, const int base_px, const bool title) {
     static bool unknown_warned = false;
     int face = base_face;
     if (s->font >= 0) {
@@ -100,7 +100,7 @@ void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
     }
     text_span_t spans[UI_TEXT_MAX_SPANS];
     text_parse_result_t parsed =
-        text_parse(text != NULL ? text : "", len, buf, spans, UI_TEXT_MAX_SPANS, resolve_font, NULL);
+        text_parse(text != NULL ? text : "", len, buf, spans, UI_TEXT_MAX_SPANS, ui_text_resolve_font, NULL);
 
     /* + 1: the row container */
     if (parsed.span_count > 1 && !pool_room_for(parsed.span_count + 1)) {
@@ -147,11 +147,13 @@ void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
     const lv_color_t base_color = lv_obj_get_style_text_color(obj, LV_PART_MAIN);
     lv_text_align_t text_align = LV_TEXT_ALIGN_LEFT;
     lv_align_t vertical_align = LV_ALIGN_CENTER;
+    bool aligned = false; /* the text has \\al, \\ac or \\ar */
 
     for (size_t i = 0; i < parsed.span_count; i++) {
         const text_span_t *s = &spans[i];
         if (s->align != TEXT_ALIGN_KEEP) {
             text_align = to_lv_align(s->align);
+            aligned = true;
         }
         if (s->valign != TEXT_VALIGN_KEEP) {
             vertical_align = to_lv_valign(s->valign);
@@ -162,7 +164,7 @@ void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
             break;
         }
         lv_obj_add_style(label, default_style, 0);
-        lv_obj_set_style_text_font(label, span_font(s, base_face, base_px, title), 0);
+        lv_obj_set_style_text_font(label, ui_text_span_font(s, base_face, base_px, title), 0);
         lv_obj_set_style_text_color(label, s->has_color ? lv_color_hex(s->color) : base_color, 0);
 
         /* The span's bytes as a C string, in place: the label copies them */
@@ -176,6 +178,24 @@ void ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
     /* Apply alignment to container */
     lv_obj_set_style_text_align(container, text_align, 0);
     lv_obj_align(container, vertical_align, 0, 0);
+
+    /* \\al \\ac \\ar in a display item: its caption, value and unit are flex
+     * rows as wide as their content, so the row of spans has nowhere to move.
+     * With an alignment the element takes the item's width and places the row
+     * on its main axis; without one it is as before. (A key display's row is
+     * not in a flex parent: lv_obj_align above centres it.) */
+    if (lv_obj_get_style_layout(obj, LV_PART_MAIN) == LV_LAYOUT_FLEX) {
+        if (aligned) {
+            lv_obj_set_width(obj, lv_pct(100));
+            lv_obj_set_style_flex_main_place(obj,
+                                             text_align == LV_TEXT_ALIGN_CENTER ? LV_FLEX_ALIGN_CENTER
+                                             : text_align == LV_TEXT_ALIGN_RIGHT ? LV_FLEX_ALIGN_END
+                                                                                  : LV_FLEX_ALIGN_START,
+                                             0);
+        } else if (lv_obj_remove_local_style_prop(obj, LV_STYLE_FLEX_MAIN_PLACE, 0)) {
+            lv_obj_set_width(obj, LV_SIZE_CONTENT); /* it was aligned before */
+        }
+    }
 
     lv_free(buf);
 }

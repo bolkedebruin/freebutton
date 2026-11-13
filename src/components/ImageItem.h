@@ -27,6 +27,7 @@
 #ifndef FREEBUTTON_IMAGEITEM_H
 #define FREEBUTTON_IMAGEITEM_H
 
+#include "ui/MainPage.h"
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -66,6 +67,7 @@ public:
 
     // PendingRender (LVGL task, LVGL lock held).
     bool applyPending() override;
+    bool shownNow() const override { return ui::visibleOnPage(page_, ui::shownPage()); }
 
 private:
     static constexpr auto TAG = "ImageItem";

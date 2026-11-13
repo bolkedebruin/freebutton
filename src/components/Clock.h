@@ -6,6 +6,7 @@
 #define FREEBUTTON_CLOCK_H_COMPONENT
 
 #include "mqtt/Component.h"
+#include "ui/MainPage.h"
 #include "ui/PendingRender.h"
 #include <string>
 #include <memory>
@@ -81,6 +82,7 @@ public:
 
     // PendingRender (LVGL task, LVGL lock held): build / delete for the shown page.
     bool applyPending() override;
+    bool shownNow() const override { return ui::visibleOnPage(page, ui::shownPage()); }
 
     // Getters for ConfigManager
     int getPage() const { return page; }

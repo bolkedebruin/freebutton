@@ -16,7 +16,6 @@ export class FbSettingsModal extends LitElement {
   createRenderRoot() { return this; }
 
   @state() private _open = false;
-  @state() private _mcpEnabled = false;
   @state() private _rippleEnabled = true;
 
   // Device access (SigV4 credentials, src/js/auth.ts)
@@ -27,6 +26,13 @@ export class FbSettingsModal extends LitElement {
   /** Why Settings opened by itself (the device refused a request). */
   @state() private _authAlert = '';
   @state() private _authStatus: { text: string; error: boolean } | null = null;
+  /**
+   * Show the stored credentials as a summary instead of the form. After Save
+   * this REMOVES the submitted form from the page, which is what a browser's
+   * password manager takes as a finished sign-in: it offers to save right
+   * then, with the dialog still open (and not only when the dialog closes).
+   */
+  @state() private _showSummary = false;
 
   private _unsubs: Array<() => void> = [];
 
@@ -38,6 +44,8 @@ export class FbSettingsModal extends LitElement {
       on('auth-required', (e) => {
         this._openSettings();
         this._authAlert = e.detail.message || 'The device requires access credentials.';
+        // The stored ones were refused: go straight to the fields.
+        this._showSummary = false;
       }),
     );
     // Opened from the device's QR link: the credentials are stored already;
@@ -47,6 +55,8 @@ export class FbSettingsModal extends LitElement {
       this._openSettings();
       this._akid = imported.accessKeyId;
       this._secret = imported.secretAccessKey;
+      // The form, so that Save can hand them to the password manager.
+      this._showSummary = false;
       this._authStatus = {
         text: 'Received from the device and stored in this browser. Save puts them in your password manager; Copy copies them as FBCRED text.',
         error: false,
@@ -83,6 +93,7 @@ export class FbSettingsModal extends LitElement {
       this._fbcred = '';
       this._authStatus = null;
       this._authAlert = '';
+      this._showSummary = !!stored;
     }
     this._open = true;
   }
@@ -125,7 +136,24 @@ export class FbSettingsModal extends LitElement {
     this._secret = creds.secretAccessKey;
     this._fbcred = '';
     this._authAlert = '';
-    this._authStatus = { text: 'Saved. Requests to the device are now signed.', error: false };
+    this._authStatus = { text: 'Saved in this browser. Requests to the device are now signed.', error: false };
+    this._showSummary = true;
+    void this._offerToPasswordManager(creds.accessKeyId, creds.secretAccessKey);
+  }
+
+  /**
+   * Chromium: ask the password manager directly (Credential Management API).
+   * Other browsers offer to save when the submitted form disappears, which
+   * the summary does. Failing or declining changes nothing for the IDE.
+   */
+  private async _offerToPasswordManager(id: string, password: string) {
+    const Ctor = (window as unknown as { PasswordCredential?: new (data: { id: string; password: string; name?: string }) => Credential }).PasswordCredential;
+    if (!Ctor || !navigator.credentials?.store) return;
+    try {
+      await navigator.credentials.store(new Ctor({ id, password, name: `FreeButton ${this._deviceOrigin}` }));
+    } catch {
+      // Not allowed here (insecure context, user setting): the form path remains.
+    }
   }
 
   private _clearCredentials() {
@@ -133,6 +161,7 @@ export class FbSettingsModal extends LitElement {
     this._akid = '';
     this._secret = '';
     this._fbcred = '';
+    this._showSummary = false;
     this._authStatus = { text: 'Credentials removed from this browser.', error: false };
   }
 
@@ -154,6 +183,21 @@ export class FbSettingsModal extends LitElement {
             data-testid="device-access-alert">${this._authAlert}</div>
         ` : ''}
 
+        ${this._showSummary && stored ? html`
+          <div class="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2" data-testid="credentials-summary">
+            <span class="w-2 h-2 rounded-full bg-status-green shrink-0" aria-hidden="true"></span>
+            <span class="flex-1 min-w-0 text-xs text-text-default truncate">Access key <span class="font-mono">${stored.accessKeyId}</span></span>
+            <button type="button" data-testid="credentials-edit"
+              class="${BUTTON_CLASS} text-gray-100 bg-white/5 hover:bg-white/10"
+              @click=${() => { this._showSummary = false; this._authStatus = null; }}>Change</button>
+            <button type="button" data-testid="credentials-copy"
+              class="${BUTTON_CLASS} text-gray-100 bg-white/5 hover:bg-white/10"
+              @click=${() => this._copyCredentials()}>Copy</button>
+            <button type="button" data-testid="credentials-clear"
+              class="${BUTTON_CLASS} text-status-red hover:bg-white/10"
+              @click=${() => this._clearCredentials()}>Remove</button>
+          </div>
+        ` : html`
         <label class="flex flex-col gap-1">
           <span class="text-xs text-gray-100">Paste FBCRED (from the QR code)</span>
           <input type="text" data-testid="fbcred-input" class=${INPUT_CLASS} autocomplete="off" spellcheck="false"
@@ -198,6 +242,7 @@ export class FbSettingsModal extends LitElement {
             @click=${() => this._clearCredentials()}>Clear</button>
         </div>
         </form>
+        `}
 
         ${this._authStatus ? html`
           <div class="text-xs ${this._authStatus.error ? 'text-status-red' : 'text-gray-100'}"
@@ -206,9 +251,9 @@ export class FbSettingsModal extends LitElement {
 
         <div class="text-[11px] leading-snug text-gray-200">
           Hold the device's factory button for 6 s: it shows its access key id and secret, and a QR code
-          that opens this IDE with them on a phone. They are stored in this browser only; Save also
-          offers them to your password manager (username = key id, password = secret), which can fill
-          them in here later. The connection to the device is not encrypted:
+          that opens this IDE with them on a phone. They are stored in this browser only. On Save your
+          browser offers to keep them in its password manager (username = key id, password = secret),
+          which can fill them in here later. The connection to the device is not encrypted:
           signing proves that the requests come from you, but others on the network can read the traffic.
         </div>
       </section>
@@ -218,10 +263,6 @@ export class FbSettingsModal extends LitElement {
 
   private _onBackdropClick(e: MouseEvent) {
     if (e.target === e.currentTarget) this._close();
-  }
-
-  private _toggleMcp() {
-    this._mcpEnabled = !this._mcpEnabled;
   }
 
   private _toggleRipple() {
@@ -243,6 +284,7 @@ export class FbSettingsModal extends LitElement {
             <h2 class="text-sm font-semibold text-text-default">Settings</h2>
             <button
               class="p-1 rounded-md text-gray-200 hover:text-text-default hover:bg-white/5 transition-colors"
+              title="Close" aria-label="Close settings"
               @click=${this._close}
             >${XIcon()}</button>
           </div>
@@ -251,33 +293,20 @@ export class FbSettingsModal extends LitElement {
           <div class="px-5 py-4 flex flex-col gap-4 max-h-[80vh] overflow-y-auto">
             ${this._renderDeviceAccess()}
 
-            <!-- MCP Server -->
-            <label class="flex items-center justify-between cursor-pointer group">
-              <div>
-                <div class="text-sm text-text-default">MCP Server</div>
-                <div class="text-xs text-gray-200 mt-0.5">Enable the Model Context Protocol server</div>
-              </div>
-              <div
-                class="relative w-9 h-5 rounded-full transition-colors ${this._mcpEnabled ? 'bg-purple-90' : 'bg-gray-80'}"
-                @click=${this._toggleMcp}
-              >
-                <div class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${this._mcpEnabled ? 'translate-x-4' : ''}"></div>
-              </div>
-            </label>
-
             <!-- Ripple Effect -->
-            <label class="flex items-center justify-between cursor-pointer group">
-              <div>
+            <div class="flex items-center justify-between gap-3">
+              <div id="ripple-label">
                 <div class="text-sm text-text-default">Background ripple</div>
                 <div class="text-xs text-gray-200 mt-0.5">Animated gradient on the background</div>
               </div>
-              <div
-                class="relative w-9 h-5 rounded-full transition-colors ${this._rippleEnabled ? 'bg-purple-90' : 'bg-gray-80'}"
+              <button type="button" role="switch" aria-checked=${this._rippleEnabled ? 'true' : 'false'} aria-labelledby="ripple-label"
+                data-testid="ripple-toggle"
+                class="relative shrink-0 w-9 h-5 rounded-full transition-colors ${this._rippleEnabled ? 'bg-purple-90' : 'bg-gray-80'}"
                 @click=${this._toggleRipple}
               >
-                <div class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${this._rippleEnabled ? 'translate-x-4' : ''}"></div>
-              </div>
-            </label>
+                <span class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${this._rippleEnabled ? 'translate-x-4' : ''}"></span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

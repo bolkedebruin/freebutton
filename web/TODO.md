@@ -1,0 +1,61 @@
+# Web IDE backlog
+
+From the UX review of 2026-11-13. Status: `open`, `done` (2026-11-13: done = implemented and unit-tested; see T16 for what was not checked on hardware).
+B = bug (broken or misleading), T = todo (redesign / improvement).
+
+## Bugs
+
+| Id | Status | Summary | Where |
+|----|--------|---------|-------|
+| B1 | done | Compile (button and Ctrl/Cmd+Enter) shows no result: nothing listens to `compile-result`. | `src/components/fb-toolbar.ts`, `src/components/fb-app.ts` |
+| B2 | done | Download compiles and then downloads nothing. | `src/components/fb-toolbar.ts` `_handleDownload` |
+| B3 | done | Clear empties the open file without confirmation. | `src/components/fb-toolbar.ts` `_handleClear` |
+| B4 | done | Device and Docs buttons in the left bar do nothing; Code is always shown active. | `src/components/fb-navbar.ts` |
+| B5 | done | Screenshots (`screenshot-*.rgb565`) and unknown file types are listed but cannot be viewed or deleted; tooltip says "icon source". | `src/components/fb-file-drawer.ts`, `src/js/fs-rules.ts` `canDeleteKey` |
+| B6 | done | Loading an example replaces the open file's text without asking; Save then overwrites `scripts/main.js`. | `src/js/editor.ts` `loadExample` |
+| B7 | done | Virtual device back side overflows into the console. | `src/components/fb-virtual-device.ts` `_faceHeight`, `src/app.css` `.device-flip-back` |
+| B8 | done | Page tabs stay active on the back side and change nothing visible. | `src/components/fb-virtual-device.ts` |
+| B9 | done | Device Name and NTP Server on the back side are editable but never saved. | `src/components/fb-virtual-device.ts` `_renderSettingsCard` |
+| B10 | done | TFT status line and default device name are hard-coded `btn_fab028`. | `src/components/fb-tft-display.ts`, `src/components/fb-virtual-device.ts` |
+| B11 | done | The "⋮" dots on the TFT and the keys have a pointer cursor and no action. | `src/components/fb-tft-display.ts`, `src/components/fb-button-grid.ts` |
+| B12 | done | Password manager offers to save the access key only after the Settings dialog closes. | `src/components/fb-settings-modal.ts` |
+| B13 | done | "MCP Server" toggle in Settings does nothing. | `src/components/fb-settings-modal.ts` |
+| B14 | done | Delete of `screenshot-*.rgb565` and other unknown files fails ("key must ... end in .js, .json, .txt or .svg"), and a leftover screenshot made "Take screenshot" fail. DeleteObject now takes any extension in `app` (not `.tmp`); the IDE no longer needs the delete to succeed. | `src/core/S3Logic.h` `checkWriteKey`, `web/src/js/screenshot.ts` |
+
+## Todos
+
+| Id | Status | Summary | Where |
+|----|--------|---------|-------|
+| T1 | done | Toolbar: two labelled actions, Save and Deploy; remove Compile and Validate (the linter validates as you type); Download .jsc and Clear in an overflow menu. | `src/components/fb-toolbar.ts` |
+| T2 | done | Connection field: label, Enter connects, Disconnect, state as text. | `src/components/fb-toolbar.ts` |
+| T3 | done | Deploy: busy state and a visible result next to the button. | `src/components/fb-toolbar.ts` |
+| T4 | done | Examples only in the Examples panel (remove the Assets "Examples" group). | `src/components/fb-file-drawer.ts` |
+| T5 | done | Replace "Sync icons" with an icon status line and a "Push now" action in the Icons section. | `src/components/fb-file-drawer.ts` |
+| T6 | done | Fonts view in the main pane: every font rendered at the device sizes for comparison. | new `src/components/fb-font-view.ts` |
+| T7 | done | Assets pane in sections (Files, Icons, Fonts, Other; screenshots are taken in the Device view and not kept); resizable; delete reachable by keyboard; in-app confirmation. | `src/components/fb-file-drawer.ts`, `src/components/fb-editor-pane.ts` |
+| T8 | done | config.json and virtual device linked both ways: the item under the cursor is outlined on the device; a click on a device item selects it in config.json. | new `src/js/config-locate.ts`, `src/components/fb-virtual-device.ts`, `src/js/editor.ts` |
+| T9 | done | Accessibility: nav items and toggles as buttons with `aria` state; status bar error count jumps to the error. | `src/components/fb-nav-item.ts`, `src/components/fb-status-bar.ts` |
+| T10 | done | Remove dead legacy code after confirming it is unused. | `src/js/ui.ts`, `src/js/main.ts`, `src/index.html` |
+| T11 | done | Device view in the main pane (info, memory, storage, reboot, screenshot); compact flip side. | new `src/components/fb-device-view.ts` |
+| T12 | open | Firmware: stream a screenshot to the client instead of writing `screenshot-*.rgb565` to LittleFS (flash wear, and the files exist for a moment). The IDE now deletes them right after the download. | `src/drivers/LvglDisplay.cpp` `requestScreenshot`, `src/core/WebServer.cpp` `/api/screenshot` |
+| T13 | open | Docs entry in the left bar: kept; it shows the keyboard shortcuts. Link the documentation from it when it is hosted. | `src/components/fb-navbar.ts` |
+| T14 | open | A click on an unconfigured key of the virtual device could offer to add a button entry to config.json. | `src/components/fb-button-grid.ts` |
+| T15 | open | Icons section: show how many rasters are out of date instead of a general note (needs a count from `icon-sync.ts`). | `src/components/fb-file-drawer.ts` |
+| T16 | open | Check on hardware: screenshot from the Device view, font specimens, the password-manager prompt in Chrome, Safari and Firefox. Only unit tests and one headless render (no device) were run. | |
+| T17 | done | Left bar: App, Images and Fonts as separate entries (one sidebar panel each) instead of one Assets panel. "Push images" is a toolbar button shown with the Images panel or an image; an SVG upload or delete pushes the rasters automatically. | `src/components/fb-navbar.ts`, `src/components/fb-file-drawer.ts` |
+| B15 | done | Fonts view drew the sample text for an icon font (`icons.ttf`) with the browser's fallback font. The view now reads the font's character table: an icon font shows its own glyphs, and characters a font lacks are listed instead of drawn. | `src/js/font-cmap.ts`, `src/components/fb-font-view.ts` |
+| T18 | done | Toolbar: Save, Deploy and the "more" menu only while the editor is the main view. | `src/components/fb-toolbar.ts` |
+| T19 | done | App, Images and Fonts panels show used and free space at the bottom (from the `x-fb-fs-*` / `x-fb-media-*` headers of the S3 listings; no separate endpoint). The Device view shows both stores. | `src/core/S3Server.cpp`, `src/js/device-storage.ts`, `src/components/fb-file-drawer.ts` |
+| T20 | done | Left bar: no Code entry; App is the editor with the file list. | `src/components/fb-navbar.ts` |
+| T21 | done | An example is shown read-only in the main pane: no dialog, no file made or changed. Images and Examples in the left bar switch the main pane too (images overview, example). | `src/components/fb-example-view.ts`, `src/components/fb-image-view.ts`, `src/components/fb-navbar.ts` |
+| T22 | done | Device view: "Update firmware…" (firmware.bin) and "Update filesystem…" (littlefs.bin, replaces every file after a warning), with upload percentage, "applying" while the device restarts, and the result. Not tried in a browser against a device yet. | `src/js/device-update.ts`, `src/components/fb-device-view.ts` |
+| T23 | open | "Update IDE" alone, without replacing the user's files: later. Needs bucket `web` writable for signed clients (docs/REFACTOR-FOLLOWUPS.md) and a bundle file to upload. | `src/core/S3Logic.h`, `src/core/S3Server.cpp` |
+| T24 | done | The image builder shipped five leftover files (`virt.json`, `virt2.json`, `config.json.home`, `config.json.old_style`, `bytecode_upload.html`) with every filesystem image; removed with the dead `/bytecode` page. | `tools/scripts/assemble_littlefs.py`, `src/core/WebServer.cpp` |
+| B16 | done | Icon glyphs in config.json (private-use characters, e.g. Material Design Icons) showed as placeholder boxes in the editor. They are now drawn with the device's loaded fonts. | `src/js/editor.ts`, `src/components/fb-code-editor.ts`, `src/app.css` |
+| B17 | done | Text markup (`\cRRGGBB`, `\s{px}`, `\f{font}`, alignment) was drawn only on the main display; a key display showed it as text. Key labels and top labels now take it (firmware and the virtual device), and hold 90 bytes instead of 26. In a JS string the backslash is written twice. | `src/ui/ui_button.c`, `src/components/Button.h`, `web/src/components/fb-button-grid.ts` |
+| T25 | done | Images and Fonts take dropped files (.svg, .ttf, .otf) anywhere on the middle pane. | `src/js/uploads.ts`, `src/components/fb-editor-pane.ts` |
+| B18 | done | The used/free space line showed the fallback until the first save: the first listing (the device probe) did not keep the usage the device sent with it. Found in a real browser run. | `src/js/workspace.ts` `probe` |
+| B19 | done | Save or Deploy after the open file could not be read (device busy) stored the empty editor over the file: `scripts/main.js` became 0 bytes on a device. The workspace now refuses to save a file it did not read. | `src/js/workspace.ts` |
+| B20 | open | Firmware: the heap runs out while the device serves the IDE (heapMinFree fell from 34 KB to 8 KB on one page load, to 1.5 KB with several in a row). Then S3 reads fail ("Device storage not reachable") and a bytecode upload answers "Write failed" (the 8.5 KB writer does not fit). A reboot, one page load and a short wait before Deploy works. | `src/core/WebServer.cpp` `onBytecodeUpload`, static file serving |
+| T26 | done | Firmware: `\al` `\ac` `\ar` now move the text inside a main display item (they had no effect there). | `src/ui/ui_text.c` |
+| B21 | done | Firmware: going from page 3 to page 1, the weather icons, CO2, humidity and filter stayed empty until their next MQTT value. A page change built the new page's widgets before the old page's were released, so the display memory ran short and values were skipped. Hidden widgets now release first. | `src/ui/PendingRender.cpp`, `src/ui/PendingRender.h` |

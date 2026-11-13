@@ -30,6 +30,8 @@ export interface ItemFont {
 }
 
 export interface DisplayItem {
+  /** Source entry in config.json (set by configToModel). */
+  ref?: ConfigRef;
   x: number;
   y: number;
   width: number;
@@ -65,6 +67,8 @@ export interface ConnectorConfig {
 }
 
 export interface ButtonConfig {
+  /** Source entry in config.json (set by configToModel). */
+  ref?: ConfigRef;
   position: number;
   label: string;
   topLabel: string;
@@ -88,6 +92,8 @@ export interface ButtonConfig {
  * (width x height) or any key of the device's `images` bucket ("src").
  */
 export interface ImageConfig {
+  /** Source entry in config.json (set by configToModel). */
+  ref?: ConfigRef;
   name: string;
   /** 1-based; 0 = every page. */
   page: number;
@@ -115,6 +121,8 @@ export interface ImageConfig {
  * device). Defaults applied (see config-model mapList).
  */
 export interface ListConfig {
+  /** Source entry in config.json (set by configToModel). */
+  ref?: ConfigRef;
   /** Script name (fb.main.list.next("name")); required. */
   name: string;
   /** 1-based; 0 = every page. */
@@ -137,6 +145,25 @@ export interface ListConfig {
   focusColor: string;
   focusTextColor: string;
 }
+
+/** The kinds of config.json entries the virtual device draws. */
+export type ConfigItemKind = 'button' | 'displayitem' | 'list' | 'image';
+
+/** Where an item of the virtual device comes from in config.json: `list`[`index`]. */
+export interface ConfigRef {
+  kind: ConfigItemKind;
+  /** The array's key as written in the file ("buttons", "mqttdisplays", ...). */
+  list: string;
+  index: number;
+}
+
+export function sameConfigRef(a: ConfigRef | null | undefined, b: ConfigRef | null | undefined): boolean {
+  return !!a && !!b && a.list === b.list && a.index === b.index;
+}
+
+/** What the main pane shows: the code editor or one of the views. */
+export type MainView = 'editor' | 'fonts' | 'image' | 'example' | 'device' | 'docs';
+export type SidebarPanel = 'app' | 'images' | 'fonts' | 'examples';
 
 /** Live preview of an unsaved config.json: 'live' = shown, 'stale' = text not valid JSON (last valid kept). */
 export type PreviewState = 'live' | 'stale';
@@ -215,6 +242,14 @@ export interface WorkspaceSnapshot {
   readOnly?: Partial<Record<'examples' | 'web' | 'fonts', WorkspaceFile[]>>;
   /** An icon sync (config.json icons -> bucket images) is running. */
   iconSyncing?: boolean;
+  /** Space on the device, from the usage headers of its listings; a part is absent until its bucket was listed (or on older firmware). */
+  storage?: StorageUsage;
+}
+
+/** Bytes of the device's two stores: the filesystem (app files, IDE) and the media store (fonts, images). */
+export interface StorageUsage {
+  fs?: { total: number; used: number };
+  media?: { total: number; used: number; free: number };
 }
 
 // Typed custom event map
@@ -272,11 +307,20 @@ declare global {
     'file-upload': CustomEvent<{ file: File }>;
 
     // Navigation events
-    'toggle-assets': CustomEvent<void>;
-    'sidebar-panel': CustomEvent<{ panel: 'assets' | 'examples' }>;
+    'sidebar-panel': CustomEvent<{ panel: SidebarPanel; open?: boolean }>;
     'load-example': CustomEvent<{ name: string }>;
     'nav-select': CustomEvent<{ item: string }>;
     'open-settings': CustomEvent<void>;
+    // Main pane: show a view (key = the file for 'image'; 'editor' = back to the code).
+    'main-view': CustomEvent<{ view: MainView; key?: string }>;
+    // What the main pane and the sidebar show now (the nav bar's active state).
+    'layout-change': CustomEvent<{ view: MainView; panel: SidebarPanel | null }>;
+    // The config.json entry under the editor cursor (null: none / other file).
+    'config-selection': CustomEvent<{ ref: ConfigRef | null }>;
+    // An item of the virtual device was clicked: select its config.json entry.
+    'config-reveal': CustomEvent<{ ref: ConfigRef }>;
+    // Jump to the first problem the linter reports (status bar).
+    'goto-diagnostic': CustomEvent<void>;
 
     // Device access (SigV4, src/js/auth.ts)
     // The device refused a request (403 + x-freebutton-auth: required);

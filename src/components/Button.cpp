@@ -147,7 +147,8 @@ void Button::currentLabel(char (&out)[kLabelTextBytes]) const { currentText(labe
 void Button::currentTopLabel(char (&out)[kLabelTextBytes]) const { currentText(topLabelSlot_, topLabel, out); }
 
 // LVGL task, LVGL lock held. Each slot hands over a stable stack copy of its
-// text (at most 27 bytes), rendered once; lv_label_set_text() copies it.
+// text (at most TextSlot::kCapacity bytes), rendered once; the label copies
+// it. Text markup applies (ui_button.h).
 bool Button::applyPending() {
     if (!button) {
         return false;  // createButton() requests a render once the button exists
@@ -202,6 +203,17 @@ const lv_font_t* labelFont(const uint32_t packed, const style_element_t el) {
 
 // LVGL lock held, button exists.
 void Button::applyFonts() {
+    // What a span of a text with markup starts from: the label's face and px.
+    const auto base = [](const uint32_t packed, const style_element_t el, int& face, int& px) {
+        const style_props_t* r = ui_style_resolved(el);
+        const int f = fontref::face(packed);
+        face = f == FONT_FACE_NONE ? r->face : f;
+        px = style_logic_item_px(fontref::size(packed), el == STYLE_EL_KEY_TOPLABEL, r->px);
+    };
+    int textFace = 0, textPx = 0, titleFace = 0, titlePx = 0;
+    base(labelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_LABEL, textFace, textPx);
+    base(topLabelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_TOPLABEL, titleFace, titlePx);
+    ui_button_set_base_fonts(button, textFace, textPx, titleFace, titlePx);
     ui_button_set_fonts(button,
                         labelFont(labelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_LABEL),
                         labelFont(topLabelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_TOPLABEL));

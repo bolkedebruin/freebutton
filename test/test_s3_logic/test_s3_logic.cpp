@@ -31,6 +31,23 @@ static const char* owner(const char* b, const char* k) {
     return o ? o->name : "";
 }
 
+static s3::KeyCheck dk(const char* k) { return s3::checkWriteKey(bucket("app"), k, strlen(k), true); }
+
+// DeleteObject takes any extension in a LittleFS bucket (screenshots, leftovers).
+void test_delete_key_takes_any_extension() {
+    TEST_ASSERT_TRUE(wk("screenshot-main.rgb565") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(dk("screenshot-main.rgb565") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(dk("scripts/old.bak") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(dk("noext") == s3::KeyCheck::Ok);
+    TEST_ASSERT_TRUE(dk("scripts/main.js.tmp") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(dk("../x.js") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(dk("a b.js") == s3::KeyCheck::Invalid);
+    TEST_ASSERT_TRUE(dk("js_bytecode_meta.json") == s3::KeyCheck::Forbidden);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("web"), "a.gz", 4, true) == s3::KeyCheck::ReadOnly);
+    TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "a.rgb565", 8, true) == s3::KeyCheck::Invalid);
+    TEST_ASSERT_EQUAL(0, s3::writeRefusal(bucket("app"), "screenshot-main.rgb565", 22, true).status);
+}
+
 // --- buckets ----------------------------------------------------------------
 
 void test_bucket_table() {
@@ -853,6 +870,7 @@ int main() {
     RUN_TEST(test_bucket_paths);
     RUN_TEST(test_write_rules_per_bucket);
     RUN_TEST(test_write_key_accepts_plain_paths);
+    RUN_TEST(test_delete_key_takes_any_extension);
     RUN_TEST(test_write_key_rejects_traversal_and_shape);
     RUN_TEST(test_write_key_extensions);
     RUN_TEST(test_write_key_other_buckets_and_protected);

@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <lvgl.h>
 
+#include "text_spans.h"
+
 /* Spans one text may have; more attribute changes than this and the last
  * span runs to the end of the text with its attributes. */
 #define UI_TEXT_MAX_SPANS 16
@@ -27,5 +29,11 @@
  */
 void ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * default_style,
                     int base_face, int base_px, bool title);
+
+/* For a caller that draws a one-span text itself (the key displays,
+ * ui_button.c). The \f{} resolver for text_parse(), and the font of a span:
+ * its \f face and \s size, else the base. */
+int ui_text_resolve_font(const char * name, size_t len, bool is_id, int32_t id, void * ctx);
+lv_font_t * ui_text_span_font(const text_span_t * s, int base_face, int base_px, bool title);
 
 #endif //BUTTON_UI_TEXT_H

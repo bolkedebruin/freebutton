@@ -15,9 +15,9 @@
 //   * Writers are serialised by one global spinlock (an ESP-IDF critical
 //     section on the device). Inside it they make seq odd, copy at most
 //     kBufferSize bytes, and make seq even again. No heap, no LVGL lock, no
-//     waiting beyond another writer's copy of at most 59 bytes.
+//     waiting beyond another writer's copy of at most 91 bytes.
 //   * The single reader (the LVGL task) copies the buffer to its own stack
-//     (at most 59 bytes) when seq is even and differs from the last applied
+//     (at most 91 bytes) when seq is even and differs from the last applied
 //     seq, then checks seq again. If a writer ran during the copy it copies
 //     again (up to kMaxCopyAttempts); if it is still unstable the text stays
 //     pending for the next tick. Only a stable copy is rendered, once.

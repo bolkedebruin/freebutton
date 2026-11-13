@@ -1,6 +1,6 @@
 import { LitElement, html, svg } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { on } from '../js/app-state.js';
+import { emit, on } from '../js/app-state.js';
 
 @customElement('fb-status-bar')
 export class FbStatusBar extends LitElement {
@@ -56,9 +56,14 @@ export class FbStatusBar extends LitElement {
     return html`
       <div class="flex items-center justify-between px-4 h-7 bg-bg-default border-t border-border-default text-xs font-mono">
         <span class="text-gray-200">Ln ${this._line}, Col ${this._col}</span>
-        <span class="status-indicator flex items-center gap-1.5 text-balance ${statusClass}">
-          ${statusIcon} ${statusText}
-        </span>
+        ${this._valid ? html`
+          <span class="status-indicator flex items-center gap-1.5 text-balance ${statusClass}"
+            title="Checked as you type">${statusIcon} ${statusText}</span>
+        ` : html`
+          <button class="status-indicator flex items-center gap-1.5 text-balance ${statusClass} hover:underline"
+            title="Go to the first error" data-testid="goto-error"
+            @click=${() => emit('goto-diagnostic')}>${statusIcon} ${statusText}</button>
+        `}
       </div>
     `;
   }

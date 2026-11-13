@@ -1971,7 +1971,7 @@
       "FbSmallDisplay": {
         "methods": [
           {
-            "description": "Set button display label",
+            "description": "Set button display label. Text markup applies: \\\\cRRGGBB colour, \\\\s{px} size, \\\\f{font} font, \\\\al \\\\ac \\\\ar alignment (write the backslash twice in a JS string); at most 90 bytes",
             "name": "setLabel",
             "params": [
               {
@@ -1983,7 +1983,7 @@
             "returns": "void"
           },
           {
-            "description": "Set button display top label",
+            "description": "Set button display top label. Text markup applies as for setLabel; at most 90 bytes",
             "name": "setTopLabel",
             "params": [
               {

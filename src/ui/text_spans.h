@@ -15,7 +15,8 @@
 //                 item's size; \s6 .. \s9 = step 6..9 (rendered as 14 px,
 //                 as before)
 //   \cRRGGBB      colour (6 hex digits)
-//   \al \ac \ar   text alignment (left, centre, right)
+//   \al \ac \ar   text alignment (left, centre, right) within the item's
+//                 width (main display) or the key display
 //   \vt \vm \vb   vertical alignment (top, middle, bottom)
 //   \uXXXX        the codepoint as UTF-8 (exactly 4 hex digits)
 //   \u{X...}      the codepoint as UTF-8 (1..6 hex digits, <= 0x10FFFF, not

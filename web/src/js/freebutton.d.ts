@@ -465,9 +465,9 @@ export interface FbSide {
 }
 
 export interface FbSmallDisplay {
-    /** Set button display label */
+    /** Set button display label. Text markup applies: \\cRRGGBB colour, \\s{px} size, \\f{font} font, \\al \\ac \\ar alignment (write the backslash twice in a JS string); at most 90 bytes */
     setLabel(text: string): void;
-    /** Set button display top label */
+    /** Set button display top label. Text markup applies as for setLabel; at most 90 bytes */
     setTopLabel(text: string): void;
     /** Label currently shown (last setLabel / MQTT text, else the config label) */
     getLabel(): string;

@@ -278,7 +278,10 @@ inline KeyCheck checkMediaKey(const Bucket& b, const char* key, size_t len) {
     return KeyCheck::Ok;
 }
 
-inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len) {
+// forDelete: DeleteObject. In a LittleFS bucket it takes a key of any
+// extension (files the firmware wrote itself, e.g. screenshot-*.rgb565, and
+// leftovers of older versions), except the ".tmp" sibling of a running PUT.
+inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len, bool forDelete = false) {
     if (!b.writable) return KeyCheck::ReadOnly;
     if (b.isMedia()) return checkMediaKey(b, key, len);
     if (!keyWellFormed(key, len, kWriteKeyMax)) return KeyCheck::Invalid;
@@ -291,6 +294,7 @@ inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len) {
     size_t last = 0;
     while (last < len && key[len - 1 - last] != '/') ++last;
     if (last + kTmpSuffixLen > kNameMax) return KeyCheck::Invalid;
+    if (forDelete) return endsWith(key, len, ".tmp") ? KeyCheck::Invalid : KeyCheck::Ok;
     // .svg: icon sources the IDE rasterizes into the images bucket (MediaImage.h).
     if (!endsWith(key, len, ".js") && !endsWith(key, len, ".json") && !endsWith(key, len, ".txt") &&
         !endsWith(key, len, ".svg")) {
@@ -322,8 +326,8 @@ struct HttpError {
 
 // The answer to a PutObject / DeleteObject key that checkWriteKey refuses
 // (status 0: allowed).
-inline HttpError writeRefusal(const Bucket& b, const char* key, size_t len) {
-    switch (checkWriteKey(b, key, len)) {
+inline HttpError writeRefusal(const Bucket& b, const char* key, size_t len, bool forDelete = false) {
+    switch (checkWriteKey(b, key, len, forDelete)) {
         case KeyCheck::Ok:
             return {0, nullptr, nullptr};
         case KeyCheck::ReadOnly:
@@ -343,6 +347,9 @@ inline HttpError writeRefusal(const Bucket& b, const char* key, size_t len) {
         return {400, "InvalidArgument", "key must be a flat name of [A-Za-z0-9._-], no '..', ending in .ttf or .otf"};
     }
     if (len > kWriteKeyMax) return {400, "KeyTooLongError", "key longer than 63 characters"};
+    if (forDelete) {
+        return {400, "InvalidArgument", "key must be [A-Za-z0-9._-/], no '..' or empty segments, and not end in .tmp"};
+    }
     return {400, "InvalidArgument",
             "key must be [A-Za-z0-9._-/], no '..' or empty segments, and end in .js, .json, .txt or .svg"};
 }
@@ -502,6 +509,11 @@ inline constexpr const char* kMediaReclaimableHeader = "x-fb-media-reclaimable";
 inline constexpr const char* kMediaEraseSectorsHeader = "x-fb-media-erase-sectors";
 inline constexpr const char* kMediaErasePageMaxHeader = "x-fb-media-erase-page-max";
 inline constexpr const char* kMediaDirGenerationHeader = "x-fb-media-dir-generation";
+
+// HeadBucket and listing headers of a LittleFS bucket (decimal bytes of the
+// whole filesystem, which app, web and examples share).
+inline constexpr const char* kFsTotalHeader = "x-fb-fs-total";
+inline constexpr const char* kFsUsedHeader = "x-fb-fs-used";
 
 // The mtime stored with an upload: now when the clock is set, else 0.
 inline uint32_t mediaMtime(bool clockValid, int64_t now) {

@@ -107,14 +107,15 @@ describe('initDeviceInfoPolling', () => {
     expect(events[events.length - 1]).toBeNull();
   });
 
-  it('does not poll while connected but not visible', async () => {
+  it('asks once on connect, then does not poll while not visible', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => SAMPLE });
     vi.stubGlobal('fetch', fetchMock);
 
     initDeviceInfoPolling(5); // short cadence: the interval would fire many times
     connect();
     await new Promise(r => setTimeout(r, 40));
-    expect(fetchMock).not.toHaveBeenCalled();
+    // One request per connection (the virtual device shows the name and layout).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     // ...and the interval stops again when the consumer goes away.
     setDeviceInfoVisible(true);

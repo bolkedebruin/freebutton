@@ -7,7 +7,7 @@ import {
 import {
   _setClientFactory, createS3Client, listObjects, getObject, getObjectBytes, putObject, deleteObject, headObject,
   rebootDevice, mapError, endpointFor, rebootHeaderMiddleware, contentTypeFor,
-  S3Error, StorageUnavailableError, APP_BUCKET, REBOOT_FIELD,
+  S3Error, StorageUnavailableError, APP_BUCKET, REBOOT_FIELD, USAGE_FIELD, usageFromHeaders,
 } from '../device-storage';
 
 /** An SDK-style service error as the client throws it. */
@@ -32,6 +32,11 @@ describe('device-storage with the S3 client mocked', () => {
   afterEach(() => _setClientFactory(null));
   // mockClient(S3Client) patches every instance: undo it for the wire tests.
   afterAll(() => s3.restore());
+
+  it('returns the space the device reported with the listing', async () => {
+    s3.on(ListObjectsV2Command).resolves({ KeyCount: 0, IsTruncated: false, [USAGE_FIELD]: { fs: { total: 10, used: 4 } } } as never);
+    expect((await listObjects('http://dev')).usage).toEqual({ fs: { total: 10, used: 4 } });
+  });
 
   it('lists all pages, following NextContinuationToken', async () => {
     s3.on(ListObjectsV2Command, { Bucket: APP_BUCKET, ContinuationToken: undefined }).resolves({
@@ -200,6 +205,19 @@ describe('device-storage helpers', () => {
     expect(contentTypeFor('a.json')).toBe('application/json');
     expect(contentTypeFor('a.js')).toBe('application/javascript');
     expect(contentTypeFor('a.txt')).toMatch(/^text\/plain/);
+  });
+
+  it('the middleware copies the usage headers of a listing to the output', async () => {
+    const mw = rebootHeaderMiddleware(async () => ({
+      response: { headers: { 'X-Fb-Fs-Total': '4849664', 'x-fb-fs-used': '806912' } },
+      output: {},
+    }));
+    const { output } = await mw({});
+    expect((output as Record<string, unknown>)[USAGE_FIELD]).toEqual({ fs: { total: 4849664, used: 806912 } });
+
+    expect(usageFromHeaders({ 'x-fb-media-total': '5111808', 'x-fb-media-used': '1835008', 'x-fb-media-free': '3276800' }))
+      .toEqual({ media: { total: 5111808, used: 1835008, free: 3276800 } });
+    expect(usageFromHeaders({ 'x-fb-fs-total': 'abc', etag: '"x"' })).toBeUndefined();
   });
 
   it('rebootHeaderMiddleware copies x-freebutton-reboot-required to the output', async () => {

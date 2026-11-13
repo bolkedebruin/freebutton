@@ -30,7 +30,8 @@
 //   PUT  /<b>/<key>             PutObject (plain or aws-chunked body; app, fonts
 //                               and images, read-only buckets answer 403
 //                               AccessDenied)
-//   DELETE /<b>/<key>           DeleteObject (as PUT)
+//   DELETE /<b>/<key>           DeleteObject (as PUT; in app a key of any
+//                               extension except .tmp)
 //   OPTIONS /<b>[/...]          CORS preflight
 //
 // /fonts/... is also the URL of the IDE's own web fonts (www/fonts/*.woff2):
@@ -69,6 +70,10 @@
 //             x-fb-media-used         allocated to live entries
 //             x-fb-media-free         free now
 //             x-fb-media-reclaimable  deleted/replaced, freed once closed
+//           and of a LittleFS bucket (the filesystem app, web and examples
+//           share; LittleFS walks it to count the used blocks):
+//             x-fb-fs-total           size of the filesystem
+//             x-fb-fs-used            used blocks
 //           and wear since boot (counted in 4 KB sectors; a page erase is 16):
 //             x-fb-media-erase-sectors   sectors erased
 //             x-fb-media-erase-page-max  most sector erases on one 64 KB page
@@ -125,7 +130,8 @@ constexpr const char* kXmlNs = " xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/
 constexpr const char* kExposeHeaders =
     "ETag, x-amz-checksum-crc32, x-freebutton-reboot-required, x-freebutton-auth, Date, x-amz-date, "
     "x-fb-media-total, x-fb-media-used, x-fb-media-free, x-fb-media-reclaimable, "
-    "x-fb-media-erase-sectors, x-fb-media-erase-page-max, x-fb-media-dir-generation";
+    "x-fb-media-erase-sectors, x-fb-media-erase-page-max, x-fb-media-dir-generation, "
+    "x-fb-fs-total, x-fb-fs-used";
 constexpr size_t kMountMax = 15;   // ESP_VFS_PATH_MAX
 constexpr int kMaxDepth = 6;       // directory levels walked by a listing
 constexpr uint8_t kMaxGets = 2;    // concurrent GetObject file handles
@@ -370,6 +376,21 @@ void sendXmlError(AsyncWebServerRequest* request, int status, const char* code, 
 
 void sendHttpError(AsyncWebServerRequest* request, const s3::HttpError& e) {
     sendXmlError(request, e.status, e.code, e.msg);
+}
+
+// Space of the bucket's store: the media partition, or the LittleFS
+// filesystem (HeadBucket and listings; the IDE shows it under its file lists).
+void addMediaUsageHeaders(AsyncWebServerResponse* response);
+void addUsageHeaders(AsyncWebServerResponse* response, const s3::Bucket& bucket) {
+    if (bucket.isMedia()) {
+        addMediaUsageHeaders(response);
+        return;
+    }
+    char num[11];
+    snprintf(num, sizeof num, "%lu", static_cast<unsigned long>(LittleFS.totalBytes()));
+    response->addHeader(s3::kFsTotalHeader, num);
+    snprintf(num, sizeof num, "%lu", static_cast<unsigned long>(LittleFS.usedBytes()));
+    response->addHeader(s3::kFsUsedHeader, num);
 }
 
 void addMediaUsageHeaders(AsyncWebServerResponse* response) {
@@ -892,7 +913,7 @@ void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
         "application/xml", [request](uint8_t* buffer, size_t maxLen, size_t) -> size_t {
             return listFill(request, buffer, maxLen);
         });
-    if (bucket.isMedia()) addMediaUsageHeaders(response);
+    addUsageHeaders(response, bucket);
     addCommonHeaders(response);
     request->send(response);
 }
@@ -1036,18 +1057,18 @@ void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
     request->send(response);
 }
 
-s3::HttpError checkWrite(const Target& t) {
-    return s3::writeRefusal(*t.bucket, t.key, t.keyLen);
+s3::HttpError checkWrite(const Target& t, bool forDelete = false) {
+    return s3::writeRefusal(*t.bucket, t.key, t.keyLen, forDelete);
 }
 
-bool writeKeyAllowed(AsyncWebServerRequest* request, const Target& t) {
-    const s3::HttpError r = checkWrite(t);
+bool writeKeyAllowed(AsyncWebServerRequest* request, const Target& t, bool forDelete = false) {
+    const s3::HttpError r = checkWrite(t, forDelete);
     if (r.status) sendHttpError(request, r);
     return r.status == 0;
 }
 
 void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
-    if (!writeKeyAllowed(request, t)) return;
+    if (!writeKeyAllowed(request, t, true)) return;
     if (t.bucket->isMedia()) {
         if (s3::mediaKeyDeleteProtected(*t.bucket, t.key, t.keyLen)) {
             sendXmlError(request, 403, "AccessDenied", "system font cannot be deleted");
@@ -1549,7 +1570,7 @@ public:
                     }
                     AsyncWebServerResponse* response = request->beginResponse(200);
                     response->addHeader("x-amz-bucket-region", "us-east-1");
-                    if (t.bucket->isMedia()) addMediaUsageHeaders(response);
+                    addUsageHeaders(response, *t.bucket);
                     addCommonHeaders(response);
                     request->send(response);
                 } else if (method == HTTP_GET && request->hasParam("location")) {

@@ -99,9 +99,15 @@ export function isStorableKey(key: string): boolean {
     && ((EDITABLE_EXTENSIONS as readonly string[]).includes(ext) || (UPLOAD_EXTENSIONS as readonly string[]).includes(ext));
 }
 
+/**
+ * Every user file can be deleted, also one the IDE cannot open (a screenshot
+ * a tool left behind, any unknown type): a file that is listed but can be
+ * neither viewed nor removed is a dead end. Not config.json (the device
+ * refuses it) and not the read-only buckets' directories.
+ */
 export function canDeleteKey(key: string): boolean {
   const k = normalizeKey(key);
-  return isStorableKey(k) && k !== CONFIG_KEY;
+  return k !== '' && !isSystemKey(k) && k !== CONFIG_KEY;
 }
 
 /** Validate an object key for writing. Returns an error message, or null if OK. */
