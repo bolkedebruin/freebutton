@@ -54,6 +54,26 @@ void test_hidden_widgets_apply_before_shown_ones() {
     a.unlink(); b.unlink(); c.unlink(); d.unlink(); every.unlink();
 }
 
+// A text that could not be drawn asks for another walk; it comes a number of
+// calls later, not at once (no spinning while the pool stays low).
+void test_render_later_walks_again_after_a_while() {
+    Probe p;
+    p.link();
+    requestPendingRender();
+    applyPendingRenders();
+    const int base = p.applied;
+    requestPendingRenderLater();
+    applyPendingRenders();
+    TEST_ASSERT_EQUAL(base, p.applied);          // not at once
+    int calls = 1;
+    while (p.applied == base && calls < 1000) { applyPendingRenders(); ++calls; }
+    TEST_ASSERT_EQUAL(base + 1, p.applied);      // once
+    TEST_ASSERT_TRUE(calls > 10 && calls < 200);
+    for (int i = 0; i < 300; ++i) applyPendingRenders();
+    TEST_ASSERT_EQUAL(base + 1, p.applied);      // and not again
+    p.unlink();
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -103,5 +123,6 @@ int main(int, char**) {
     RUN_TEST(test_show_page_and_refuse_below_one);
     RUN_TEST(test_page_change_requests_a_render_once);
     RUN_TEST(test_hidden_widgets_apply_before_shown_ones);
+    RUN_TEST(test_render_later_walks_again_after_a_while);
     return UNITY_END();
 }

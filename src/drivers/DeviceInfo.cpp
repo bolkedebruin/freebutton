@@ -4,6 +4,9 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 #include "LvglDisplay.h"
+extern "C" {
+#include "ui/ui_text.h"
+}
 #include "../scripting/device_hardware.h"
 #include "../scripting/ScriptEngine.h"
 
@@ -36,6 +39,7 @@ DeviceInfo DeviceInfoCollector::collectInfo() const {
     info.heapTotal = getTotalHeap();
     info.heapMinFree = getMinFreeHeap();
     getLvglMemory(info.lvglFree, info.lvglTotal);
+    ui_text_stats(&info.textCollapsed, &info.textSkipped);  // two word reads, no lock needed
     const auto js = Scripting::ScriptEngine::getInstance().heapUsage();
     info.jsHeapUsed = js.used;
     info.jsHeapFree = js.free;

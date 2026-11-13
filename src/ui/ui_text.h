@@ -26,9 +26,15 @@
  *             (style_logic_item_px).
  *  title:     a title element (the caption): \s2 = 18 px, as before.
  * A span's \f font or \s size replaces the base for that span.
+ * Returns false when the text was not drawn: the LVGL pool is too low now
+ * (its reserve, see ui_text.c). The element is then empty; draw it again
+ * later (DisplayItem does, through requestPendingRenderLater()).
  */
-void ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * default_style,
+bool ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * default_style,
                     int base_face, int base_px, bool title);
+
+/* Since boot: texts drawn in one format, and texts not drawn, for lack of pool. */
+void ui_text_stats(uint32_t * collapsed, uint32_t * skipped);
 
 /* For a caller that draws a one-span text itself (the key displays,
  * ui_button.c). The \f{} resolver for text_parse(), and the font of a span:

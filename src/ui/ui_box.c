@@ -127,7 +127,7 @@ void ui_box_delete(lv_obj_t* box)
 	lv_free(b);
 }
 
-void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit, int x, int y,
+bool ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit, int x, int y,
                    const ui_box_fonts_t* fonts, int width, int align, int boxtype) {
 	if (boxtype == 0)
 		lv_obj_add_style(box, &style_underline, 0);
@@ -137,13 +137,14 @@ void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const c
 	/* Fonts first: the unit drawn here used the previous (initially the
 	 * style's) size, unlike every later render of it. */
 	ui_box_set_fonts(box, fonts, boxtype);
-	ui_box_set_caption(box, caption);
-	ui_box_set_text(box, text);
-	ui_box_set_hint(box, unit);
+	bool drawn = ui_box_set_caption(box, caption);
+	drawn = ui_box_set_text(box, text) && drawn;
+	drawn = ui_box_set_hint(box, unit) && drawn;
 	lv_obj_set_align(box, align == 0 ? LV_ALIGN_TOP_LEFT : align);
 
 	lv_obj_set_pos(box, x * 320 / 100, y * 240 / 100);
 	lv_obj_set_width(box, width * 320 / 100);
+	return drawn;
 }
 
 
@@ -159,28 +160,30 @@ static int base_px(const int item_fontsize, const bool title, const style_props_
 	return style_logic_item_px(item_fontsize, title, r->px);
 }
 
-void ui_box_set_caption(lv_obj_t* box, const char* caption)
+bool ui_box_set_caption(lv_obj_t* box, const char* caption)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
 	/* Its own font: "labelfont" / "labelfontsize", else display.caption
 	 * (by default system bold 14; legacy step 2 = 18 px) */
 	const style_props_t* r = ui_style_resolved(STYLE_EL_DISPLAY_CAPTION);
-	ui_render_text(b->title, caption, ui_style_get(STYLE_EL_DISPLAY_CAPTION), base_face(b->fonts.caption_face, r),
-	               base_px(b->fonts.caption_fontsize, true, r), true);
+	const bool drawn = ui_render_text(b->title, caption, ui_style_get(STYLE_EL_DISPLAY_CAPTION),
+	                                  base_face(b->fonts.caption_face, r),
+	                                  base_px(b->fonts.caption_fontsize, true, r), true);
     /* An empty caption takes no room: hidden flex children get no column
      * gap either (the theme's ~8 px per gap pushed text past the box). */
     lv_obj_set_hidden(b->title, caption == NULL || caption[0] == '\0');
+    return drawn;
 }
 
-void ui_box_set_text(lv_obj_t* box, const char* text)
+bool ui_box_set_text(lv_obj_t* box, const char* text)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
 	const style_props_t* r = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
-	ui_render_text(b->text, text, ui_style_get(STYLE_EL_DISPLAY_VALUE), base_face(b->fonts.face, r),
-	               base_px(b->fonts.fontsize, false, r), false);
+	return ui_render_text(b->text, text, ui_style_get(STYLE_EL_DISPLAY_VALUE), base_face(b->fonts.face, r),
+	                      base_px(b->fonts.fontsize, false, r), false);
 }
 
-void ui_box_set_hint(lv_obj_t* box, const char* hint)
+bool ui_box_set_hint(lv_obj_t* box, const char* hint)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
 	/* The item's "font" / "fontsize" are the value's and the unit's; without
@@ -192,9 +195,10 @@ void ui_box_set_hint(lv_obj_t* box, const char* hint)
 	                 : (u->has & STYLE_HAS_FONT)      ? u->face
 	                                                  : v->face;
 	const int px = style_logic_item_px(b->fonts.fontsize, false, (u->has & STYLE_HAS_SIZE) ? u->px : v->px);
-	ui_render_text(b->hint, hint, ui_style_get(STYLE_EL_DISPLAY_UNIT), face, px, false);
+	const bool drawn = ui_render_text(b->hint, hint, ui_style_get(STYLE_EL_DISPLAY_UNIT), face, px, false);
     /* An empty unit takes no room (see ui_box_set_caption). */
     lv_obj_set_hidden(b->hint, hint == NULL || hint[0] == '\0');
+    return drawn;
 }
 
 /* The legacy step whose padding the value gets: the item's step as it is;

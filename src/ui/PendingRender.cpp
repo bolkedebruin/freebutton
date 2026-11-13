@@ -17,6 +17,12 @@ PendingRender* g_head = nullptr;
 // it walks the list, so a write that lands during the walk is seen next tick.
 std::atomic<bool> g_requested{false};
 
+// requestPendingRenderLater(): calls of applyPendingRenders() left until the
+// widgets are walked again (0 = none pending). LVGL task only. The LVGL loop
+// calls it every few milliseconds, so this is a fraction of a second.
+constexpr int kRetryAfterCalls = 50;
+int g_retryIn = 0;
+
 } // namespace
 
 // Both walk the list (a few dozen widgets at most, and only when a widget is
@@ -48,10 +54,18 @@ void requestPendingRender() {
     g_requested.store(true, std::memory_order_release);
 }
 
+void requestPendingRenderLater() {
+    if (g_retryIn == 0) {
+        g_retryIn = kRetryAfterCalls;
+    }
+}
+
 void applyPendingRenders() {
-    if (!g_requested.exchange(false, std::memory_order_acq_rel)) {
+    const bool retryNow = g_retryIn > 0 && --g_retryIn == 0;
+    if (!g_requested.exchange(false, std::memory_order_acq_rel) && !retryNow) {
         return;
     }
+    g_retryIn = 0;  // this walk is the retry; a widget asks again if it still fails
     bool again = false;
     // Release first, then build (PendingRender::shownNow). Both passes keep
     // the list (config) order.

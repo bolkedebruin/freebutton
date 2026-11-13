@@ -26,11 +26,13 @@ typedef struct {
 } ui_box_fonts_t;
 
 // Sets the fonts first, then draws caption, text and unit with them.
-void ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit,
+// These four return false when a text was not drawn for lack of LVGL pool
+// (ui_text.h): the caller draws it again later.
+bool ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit,
                    int x, int y, const ui_box_fonts_t* fonts, int width, int align, int boxtype);
-void ui_box_set_caption(lv_obj_t* box, const char* caption);
-void ui_box_set_text(lv_obj_t* box, const char* text);
-void ui_box_set_hint(lv_obj_t* box, const char* hint);
+bool ui_box_set_caption(lv_obj_t* box, const char* caption);
+bool ui_box_set_text(lv_obj_t* box, const char* text);
+bool ui_box_set_hint(lv_obj_t* box, const char* hint);
 // For the text drawn after it (callers redraw caption, text and unit).
 void ui_box_set_fonts(lv_obj_t* box, const ui_box_fonts_t* fonts, int boxtype);
 
@@ -50,9 +52,9 @@ bool ui_box_has_icon(lv_obj_t* box);
 lv_color_t ui_box_text_color(lv_obj_t* box);
 
 // Alias for draw_box function as requested in the requirements
-static inline void draw_box(lv_obj_t* box, const char* label, const char* value, const char* unit,
+static inline bool draw_box(lv_obj_t* box, const char* label, const char* value, const char* unit,
                            int x, int y, const ui_box_fonts_t* fonts, int width, int align, int boxtype) {
-    ui_box_update(box, label, value, unit, x, y, fonts, width, align, boxtype);
+    return ui_box_update(box, label, value, unit, x, y, fonts, width, align, boxtype);
 }
 
 #ifdef __cplusplus

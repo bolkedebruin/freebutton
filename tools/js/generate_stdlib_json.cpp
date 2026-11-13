@@ -502,9 +502,10 @@ public:
         // Boolean class (constructor only, no static/proto methods we can extract)
         classes["Boolean"] = emitClass("Boolean", nullptr, nullptr);
 
-        // Date class (has static methods)
+        // Date class (static now(), and the getters of an instance)
         extern const JSPropDef js_date[];
-        classes["Date"] = emitClass("Date", js_date, nullptr);
+        extern const JSPropDef js_date_proto[];
+        classes["Date"] = emitClass("Date", js_date, js_date_proto);
 
         // Function class (has prototype methods)
         extern const JSPropDef js_function_proto[];

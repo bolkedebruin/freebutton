@@ -63,6 +63,8 @@ std::string toJson(const DeviceInfo& info) {
     appendNumber(out, "heapMinFree", static_cast<long long>(info.heapMinFree)); out += ',';
     appendNumber(out, "lvglFree", static_cast<long long>(info.lvglFree));       out += ',';
     appendNumber(out, "lvglTotal", static_cast<long long>(info.lvglTotal));  out += ',';
+    appendNumber(out, "textSkipped", static_cast<long long>(info.textSkipped));     out += ',';
+    appendNumber(out, "textCollapsed", static_cast<long long>(info.textCollapsed)); out += ',';
     appendNumber(out, "jsHeapUsed", static_cast<long long>(info.jsHeapUsed)); out += ',';
     appendNumber(out, "jsHeapFree", static_cast<long long>(info.jsHeapFree)); out += ',';
     appendNumber(out, "jsHeapSize", static_cast<long long>(info.jsHeapSize)); out += ',';

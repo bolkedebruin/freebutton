@@ -23,6 +23,8 @@ struct DeviceInfo {
     size_t heapMinFree;  // internal heap low-water mark since boot
     size_t lvglFree;     // LVGL allocator free bytes
     size_t lvglTotal;    // LVGL allocator total bytes
+    uint32_t textSkipped = 0;    // since boot: texts not drawn at first for lack of LVGL pool (drawn again later)
+    uint32_t textCollapsed = 0;  // since boot: texts drawn in one format for lack of LVGL pool
     size_t jsHeapUsed = 0;  // JS heap, live data after a GC
     size_t jsHeapFree = 0;  // JS heap free (objects and the JS stack)
     size_t jsHeapSize = 0;  // JS heap buffer

@@ -52,6 +52,11 @@ private:
 // Any task, lock-free, no heap: there is new text to render.
 void requestPendingRender();
 
+// LVGL task (from an applyPending()): a text could not be drawn now (the LVGL
+// pool was too low); walk the widgets again a little later. Not at once: that
+// would spin while the pool stays low.
+void requestPendingRenderLater();
+
 // LVGL task, LVGL lock held.
 void applyPendingRenders();
 
