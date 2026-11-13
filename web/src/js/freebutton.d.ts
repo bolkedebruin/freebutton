@@ -131,6 +131,28 @@ export interface DateConstructor {
     now(): number;
 }
 
+export interface Date {
+    valueOf(): any;
+    /** Returns the numeric value corresponding to the time */
+    getTime(): number;
+    /** Returns the year of the specified date */
+    getFullYear(): number;
+    /** Returns the month in the specified date */
+    getMonth(): number;
+    /** Returns the day of the month */
+    getDate(): number;
+    /** Returns the day of the week */
+    getDay(): number;
+    /** Returns the hour */
+    getHours(): number;
+    /** Returns the minutes */
+    getMinutes(): number;
+    /** Returns the seconds */
+    getSeconds(): number;
+    /** Returns the milliseconds */
+    getMilliseconds(): number;
+}
+
 export interface Error {
     /** Returns a string representing the error */
     toString(): string;
