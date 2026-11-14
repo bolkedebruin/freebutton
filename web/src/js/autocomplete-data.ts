@@ -171,6 +171,27 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "() → string",
         "info": "Get firmware version string",
         "apply": "system.version()"
+      },
+      {
+        "label": "system.id",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Get the device id, for example \"btn_a00001\": the first part of the device's MQTT topics and its network name. Each call makes a new string: call it once and keep the result.",
+        "apply": "system.id()"
+      },
+      {
+        "label": "system.name",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Get the device name: \"core.name\" of config.json, or the device id when the config has none. Each call makes a new string.",
+        "apply": "system.name()"
+      },
+      {
+        "label": "system.model",
+        "type": "method",
+        "detail": "() → string",
+        "info": "Get the hardware model, for example \"Model 1 Version 9\". Each call makes a new string.",
+        "apply": "system.model()"
       }
     ]
   },

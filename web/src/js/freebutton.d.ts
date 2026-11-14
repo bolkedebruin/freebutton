@@ -74,6 +74,15 @@ export interface SystemAPI {
     /** Get firmware version string */
     version(): string;
 
+    /** Get the device id, for example "btn_a00001": the first part of the device's MQTT topics and its network name. Each call makes a new string: call it once and keep the result. */
+    id(): string;
+
+    /** Get the device name: "core.name" of config.json, or the device id when the config has none. Each call makes a new string. */
+    name(): string;
+
+    /** Get the hardware model, for example "Model 1 Version 9". Each call makes a new string. */
+    model(): string;
+
 }
 
 export interface ArrayConstructor {

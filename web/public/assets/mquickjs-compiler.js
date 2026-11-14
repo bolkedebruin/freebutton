@@ -54,6 +54,12 @@ class MQuickJSCompiler {
 
         const targetAddr = options.targetAddr || 0;
         const use32Bit = options.use32Bit !== false; // Default true
+        // Where the device's stdlib ROM table is (0: unknown). Only given for
+        // a device built from this compiler's table (stdlibId()): the
+        // bytecode then refers to the device's built-in names directly.
+        if (this.module._set_target_rom_base) {
+            this.module._set_target_rom_base((options.romBase || 0) >>> 0);
+        }
 
         // Allocate memory for the UTF-8 source. sourceCode.length counts
         // UTF-16 code units, which is too small for non-ASCII text (MDI icon
@@ -96,6 +102,15 @@ class MQuickJSCompiler {
             // Free allocated memory
             this.module._free(sourcePtr);
         }
+    }
+
+    /**
+     * Identity of the stdlib table this compiler was built with (the device
+     * reports its own as "stdlib_id"); 0 for a compiler build without it.
+     * @returns {number}
+     */
+    stdlibId() {
+        return this.ready && this.module._get_stdlib_id ? (this.module._get_stdlib_id() >>> 0) : 0;
     }
 
     /**

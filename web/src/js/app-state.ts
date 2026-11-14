@@ -268,7 +268,7 @@ declare global {
 
     // Deploy events (compile-for-device + upload to the serving device, same-origin)
     'deploy-request': CustomEvent<void>;
-    'deploy-result': CustomEvent<{ success: boolean; message: string; size?: number }>;
+    'deploy-result': CustomEvent<{ success: boolean; message: string; size?: number; note?: string }>;
 
     // Connection events
     'connection-change': CustomEvent<{ connected: boolean; url: string }>;

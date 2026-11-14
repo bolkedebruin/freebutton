@@ -213,7 +213,7 @@ export class FbEditorPane extends LitElement {
       ['Ctrl/Cmd + F', 'Find in the open file'],
     ];
     return html`
-      <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 text-sm text-text-default" data-testid="docs-view">
+      <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar pane-scroll p-6 text-sm text-text-default" data-testid="docs-view">
         <p class="text-gray-100 max-w-prose">The documentation is not linked from the IDE yet. Hover a function of the <code>fb</code> API in the editor for its description; the Examples panel has a script for each part of it.</p>
         <h3 class="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-200">Keyboard shortcuts</h3>
         <table class="text-xs">
@@ -290,7 +290,7 @@ export class FbEditorPane extends LitElement {
           <!-- Sidebar -->
           <div class="shrink-0 border-r border-border-default bg-glass-dark backdrop-blur-md overflow-hidden ${isOpen ? '' : 'border-r-0'}"
             style="width: ${isOpen ? this._sidebarWidth : 0}px;" data-testid="sidebar">
-            <div class="p-3 h-full overflow-y-auto custom-scrollbar" style="width: ${this._sidebarWidth}px;">
+            <div class="p-3 h-full overflow-y-auto custom-scrollbar pane-scroll" data-pane="sidebar" style="width: ${this._sidebarWidth}px;">
               ${this._activePanel && this._activePanel !== 'examples'
                 ? html`<fb-file-drawer .panel=${this._activePanel}></fb-file-drawer>` : ''}
               ${this._activePanel === 'examples' ? this._renderExamplesPanel() : ''}
@@ -298,7 +298,7 @@ export class FbEditorPane extends LitElement {
           </div>
           ${isOpen ? html`
             <fb-resize-handle class="w-[6px] -ml-[3px] cursor-col-resize shrink-0 z-10" data-direction="horizontal"
-              title="Drag to resize" @resize=${this._onSidebarResize}></fb-resize-handle>
+              data-scroll-source='[data-pane="sidebar"]' @resize=${this._onSidebarResize}></fb-resize-handle>
           ` : ''}
           <div class="flex-1 min-w-0 flex flex-col overflow-hidden">
             ${this._renderFileHeader()}

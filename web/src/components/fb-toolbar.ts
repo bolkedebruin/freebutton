@@ -63,7 +63,7 @@ export class FbToolbar extends LitElement {
       on('deploy-result', (e) => {
         this._deploying = false;
         this._showResult(e.detail.success, e.detail.success
-          ? (e.detail.size !== undefined ? `Deployed · ${e.detail.size} bytes` : 'Saved')
+          ? (e.detail.size !== undefined ? `Deployed · ${e.detail.size} bytes${e.detail.note ? ' · ' + e.detail.note : ''}` : 'Saved')
           : e.detail.message);
       }),
     );

@@ -8,6 +8,7 @@ import { workspace } from '../js/workspace.js';
 import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
 import { signedFetch } from '../js/auth.js';
 import { askConfirm } from './fb-dialog.js';
+import { scriptStatusOf, waitForScriptStart, type ScriptStatus } from '../js/script-status.js';
 
 @customElement('fb-app')
 export class FbApp extends LitElement {
@@ -117,6 +118,13 @@ export class FbApp extends LitElement {
         type: 'info'
       });
 
+      // The script's start count before the upload: the restart shows as one more.
+      const readStatus = async (): Promise<ScriptStatus | null> => {
+        const r = await signedFetch(base + '/api/device');
+        return r.ok ? scriptStatusOf(await r.json()) : null;
+      };
+      const before = await readStatus().catch(() => null);
+
       const formData = new FormData();
       const blob = new Blob([bytecode as BlobPart], { type: 'application/octet-stream' });
       formData.append('file', blob, MAIN_BYTECODE_NAME);
@@ -142,7 +150,26 @@ export class FbApp extends LitElement {
 
       const okMsg = '✓ Uploaded ' + bytecode.length + ' bytes to device as ' + MAIN_BYTECODE_NAME;
       emit('console-line', { text: okMsg, type: 'result' });
-      emit('deploy-result', { success: true, message: okMsg, size: bytecode.length });
+
+      // 4. The device restarts its script engine by itself (no reboot). Older
+      //    firmware does not say "restart": the script runs after a reboot.
+      if (result.restart !== true) {
+        const note = 'reboot the device to run it';
+        emit('console-line', { text: 'The new script runs after a reboot of the device.', type: 'info' });
+        emit('deploy-result', { success: true, message: okMsg, size: bytecode.length, note });
+        return;
+      }
+      const outcome = await waitForScriptStart(readStatus, before);
+      if (outcome.kind === 'failed') {
+        throw new Error('The script was uploaded but failed when it started: ' + outcome.error);
+      }
+      if (outcome.kind === 'running') {
+        emit('console-line', { text: '✓ The new script is running', type: 'result' });
+        emit('deploy-result', { success: true, message: okMsg, size: bytecode.length, note: 'running' });
+      } else {
+        emit('console-line', { text: 'The device did not confirm that the new script started.', type: 'info' });
+        emit('deploy-result', { success: true, message: okMsg, size: bytecode.length, note: 'start not confirmed' });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       emit('console-line', { text: 'Deploy failed: ' + message, type: 'error' });
@@ -165,6 +192,7 @@ export class FbApp extends LitElement {
           <fb-resize-handle
             class="w-[16px] cursor-col-resize shrink-0"
             data-direction="horizontal"
+            data-scroll-source="fb-editor-pane"
             @resize=${this._onHorizontalResize}
           ></fb-resize-handle>
           <fb-right-pane

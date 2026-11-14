@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { syncIcons, svgKeyFor, iconSources, iconPreviewUrl, _clearIconSources, type IconSyncDeps } from '../icon-sync';
+import { syncIcons, svgKeyFor, iconSources, iconPreviewUrl, parseManifest, _clearIconSources, type IconSyncDeps } from '../icon-sync';
 import { encodeLvglBin, type ExistingObject } from '../icon-raster';
 import { md5Hex } from '../md5';
 import { S3Error } from '../device-storage';
@@ -140,6 +140,98 @@ describe('syncIcons', () => {
     const svg = decodeURIComponent(url.slice(url.indexOf(',') + 1));
     expect(svg).toContain('width="48"');
     expect(svg).toContain('preserveAspectRatio="xMidYMid meet"');
+  });
+});
+
+describe('syncIcons with the raster manifest', () => {
+  beforeEach(() => _clearIconSources());
+
+  /** fakeDeps plus a manifest in memory and a count of renders. */
+  function manifestDeps(app: Record<string, string>, images: ExistingObject[], manifest: string | null) {
+    const f = fakeDeps(app, images);
+    const state = { manifest, writes: 0, renders: 0 };
+    const rasterize = f.deps.rasterize;
+    f.deps.rasterize = async (svg, w, h) => { state.renders++; return rasterize(svg, w, h); };
+    f.deps.readManifest = async () => state.manifest;
+    f.deps.writeManifest = async (text) => { state.manifest = text; state.writes++; };
+    return { ...f, state };
+  }
+  const APP = { 'icons/rain.svg': SVG, 'icons/two.svg': SVG.replace('<path', '<path class="two"') };
+  /** What another browser left for the same sources: right sizes, other pixels (ETags). */
+  function otherBrowserImages(stored: Map<string, Uint8Array>): ExistingObject[] {
+    return [...stored].map(([key, bytes]) => ({ key, size: bytes.length, etag: '"' + 'ab'.repeat(16) + '"' }));
+  }
+
+  it('records the source of every raster it uploads', async () => {
+    const { deps, state, stored } = manifestDeps(APP, [], null);
+    const r = await syncIcons(CFG, deps);
+    expect(r.uploaded.length).toBe(stored.size);
+    expect(state.writes).toBe(1);
+    const m = parseManifest(state.manifest);
+    expect(Object.keys(m.rasters).sort()).toEqual([...stored.keys()].sort());
+    for (const [key, bytes] of stored) expect(m.rasters[key].size).toBe(bytes.length);
+  });
+
+  it('keeps rasters whose source did not change, without rendering or writing', async () => {
+    const first = manifestDeps(APP, [], null);
+    await syncIcons(CFG, first.deps);
+    const second = manifestDeps(APP, otherBrowserImages(first.stored), first.state.manifest);
+    const r = await syncIcons(CFG, second.deps);
+    expect(r.uploaded).toEqual([]);
+    expect(r.removed).toEqual([]);
+    expect(r.unchanged.length).toBe(first.stored.size);
+    expect(second.state.renders).toBe(0);
+    expect(second.state.writes).toBe(0);
+    expect(second.calls.filter(c => c.startsWith('PUT'))).toEqual([]);
+  });
+
+  it('uploads only the rasters of the SVG that changed', async () => {
+    const first = manifestDeps(APP, [], null);
+    await syncIcons(CFG, first.deps);
+    const changed = { ...APP, 'icons/rain.svg': SVG.replace('M0 0', 'M1 1') };
+    const second = manifestDeps(changed, otherBrowserImages(first.stored), first.state.manifest);
+    const r = await syncIcons(CFG, second.deps);
+    expect(r.uploaded.length).toBeGreaterThan(0);
+    expect(r.uploaded.every(k => k.startsWith('ico-rain-'))).toBe(true);
+    expect(r.unchanged.every(k => k.startsWith('ico-two-'))).toBe(true);
+    expect(second.state.writes).toBe(1);
+  });
+
+  it('takes over rasters made without a manifest instead of writing them again', async () => {
+    const first = manifestDeps(APP, [], null);
+    await syncIcons(CFG, first.deps);
+    const second = manifestDeps(APP, otherBrowserImages(first.stored), null);
+    const r = await syncIcons(CFG, second.deps);
+    expect(r.uploaded).toEqual([]);
+    expect(second.state.writes).toBe(1);
+    expect(Object.keys(parseManifest(second.state.manifest).rasters).length).toBe(first.stored.size);
+  });
+
+  it('writes a raster again when the device has another size for it', async () => {
+    const first = manifestDeps(APP, [], null);
+    await syncIcons(CFG, first.deps);
+    const images = otherBrowserImages(first.stored).map((o, i) => i === 0 ? { ...o, size: o.size + 1 } : o);
+    const second = manifestDeps(APP, images, first.state.manifest);
+    const r = await syncIcons(CFG, second.deps);
+    expect(r.uploaded).toEqual([images[0].key]);
+  });
+
+  it('drops the entries of rasters the config no longer wants', async () => {
+    const first = manifestDeps(APP, [], null);
+    await syncIcons(CFG, first.deps);
+    const cfg = { ...CFG, displayitems: [] };
+    const second = manifestDeps(APP, otherBrowserImages(first.stored), first.state.manifest);
+    const r = await syncIcons(cfg, second.deps);
+    expect(r.removed.length).toBeGreaterThan(0);
+    const left = Object.keys(parseManifest(second.state.manifest).rasters);
+    expect(left.length).toBeGreaterThan(0);
+    expect(left.some(k => r.removed.includes(k))).toBe(false);
+  });
+
+  it('reads a broken manifest as empty', () => {
+    expect(parseManifest('not json').rasters).toEqual({});
+    expect(parseManifest('{"v":2,"rasters":{"a":{"src":"x","size":1}}}').rasters).toEqual({});
+    expect(parseManifest(null).rasters).toEqual({});
   });
 });
 

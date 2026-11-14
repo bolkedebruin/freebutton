@@ -84,8 +84,23 @@ export async function compile(sourceCode: string, options: CompileOptions = {}):
 
     return await compilerInstance.compile(sourceCode, {
         targetAddr: options.targetAddr || 0,
-        use32Bit: options.use32Bit !== false
-    });
+        use32Bit: options.use32Bit !== false,
+        romBase: (options as { romBase?: number }).romBase || 0,
+    } as CompileOptions);
+}
+
+/**
+ * Where the device's built-in (stdlib) table is, when the device says so and
+ * it is the table this compiler was built with; else 0. With it the compiler
+ * resolves the built-in names (Date, Math, ...) itself. Without it the device
+ * looks them up while the upload arrives, and misses a name whose text comes
+ * in a later part of the upload than the code that uses it.
+ */
+export function romBaseFor(info: { rom_base?: string; atoms_id?: string }, compilerStdlibId: number): number {
+    if (!info.rom_base || !info.atoms_id || !compilerStdlibId) return 0;
+    const device = parseInt(info.atoms_id, 16) >>> 0;
+    const rom = parseInt(info.rom_base, 16) >>> 0;
+    return device === (compilerStdlibId >>> 0) && rom !== 0 ? rom : 0;
 }
 
 /**
@@ -139,6 +154,9 @@ export async function getDeviceVirtualAddress(deviceUrl: string = ''): Promise<{
     offset: string;
     virtual_addr: string;
     free_space: number;
+    /** Firmware with the built-in table address: see romBaseFor(). */
+    rom_base?: string;
+    atoms_id?: string;
 }> {
     const response = await signedFetch(`${deviceUrl}/api/bytecode/next_address`);
 
@@ -167,9 +185,17 @@ export async function compileForDevice(sourceCode: string, deviceUrl: string = '
     console.log(`Target virtual address: ${addressInfo.virtual_addr} (${targetAddr})`);
     console.log(`Free space: ${addressInfo.free_space} bytes`);
 
-    // Compile with the correct target address
+    // Compile with the correct target address, and for the device's own
+    // built-in table when it is this compiler's.
+    if (!compilerInstance) await initCompiler();
+    const stdlibId = (compilerInstance as unknown as { stdlibId?: () => number } | null)?.stdlibId?.() ?? 0;
+    const romBase = romBaseFor(addressInfo, stdlibId);
+    if (!romBase && addressInfo.atoms_id) {
+        console.warn('The device firmware and this IDE were built from different script libraries: deploy may not run correctly. Update the device\'s IDE (filesystem) or firmware.');
+    }
     return await compile(sourceCode, {
         targetAddr,
-        use32Bit: true
-    });
+        use32Bit: true,
+        romBase,
+    } as CompileOptions);
 }
