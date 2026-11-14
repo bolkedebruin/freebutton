@@ -177,6 +177,11 @@ Item fields keep their meaning. They are local styles over the style.
 - **`fontsize`.** 1..5 are the legacy steps: 14, 24, 32, 48 and 72 px. On a
   title element (`key.toplabel`, `display.caption`) step 2 is 18 px. 6..72
   are px. An absent field uses the style's size.
+- **Padding of a display item.** The space under the caption and the
+  value follows the value's size: the step itself, or for a size in px the
+  nearest step (`"fontsize": 14` = step 1, 24 = step 2, ...). Two cases
+  have no such padding: a size under 14 px, and an item without
+  `fontsize` whose 14 px comes from the style.
 - **A font without a size**, or a size without a font, takes the other
   from the style.
 - **Markup** (`\f{name}`, `\s{px}`, `\s1`..`\s5`, `\c`) applies per span, on

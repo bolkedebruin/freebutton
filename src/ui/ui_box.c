@@ -201,10 +201,13 @@ bool ui_box_set_hint(lv_obj_t* box, const char* hint)
     return drawn;
 }
 
-/* The legacy step whose padding the value gets: the item's step as it is;
+/* The step whose padding the value gets: the item's legacy step as it is;
  * else the value's px (the item's, or the style's without one) as the
- * nearest step's px (14/24/32/48/72), but 14 px and less none (as the old
- * default fontsize 14 and the old invalid steps 6..9 always had). */
+ * nearest step's px (14/24/32/48/72). Two cases get none: less than 14 px
+ * (as the old invalid steps 6..9 always had), and 14 px that comes from the
+ * style because the item has no size (as the old default fontsize 14 always
+ * had). An item's own "fontsize": 14 is step 1, so a pixel size can replace
+ * every legacy step. */
 static int padding_step(const int fontsize)
 {
 	static const uint8_t step_px[5] = {14, 24, 32, 48, 72};
@@ -212,7 +215,7 @@ static int padding_step(const int fontsize)
 		return fontsize;
 	}
 	const int px = style_logic_item_px(fontsize, false, ui_style_resolved(STYLE_EL_DISPLAY_VALUE)->px);
-	if (px <= 14 || px > FONT_PX_MAX) {
+	if (px < 14 || (px == 14 && fontsize == 0) || px > FONT_PX_MAX) {
 		return 0;
 	}
 	int best = 0;
