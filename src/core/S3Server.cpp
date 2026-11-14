@@ -136,6 +136,8 @@ constexpr size_t kMountMax = 15;   // ESP_VFS_PATH_MAX
 constexpr int kMaxDepth = 6;       // directory levels walked by a listing
 constexpr uint8_t kMaxGets = 2;    // concurrent GetObject file handles
 constexpr int kSearchesPerFill = 4;
+// Entries one walk of a LittleFS bucket collects (ListState::batch: 97 bytes each).
+constexpr int kListBatch = 12;
 
 // PutState::path and kWriteKeyMax assume writes go to the LittleFS root.
 constexpr bool writableBucketsAtRoot() {
@@ -260,7 +262,16 @@ struct ListState {
     const s3::Bucket* bucket = nullptr;
     char prefix[s3::kReadKeyMax + 1] = {};
     char marker[s3::kReadKeyMax + 1] = {};
+    // The entry found (findNext). During a walk of a LittleFS bucket: the
+    // upper bound, i.e. the largest entry of a full batch.
     char best[s3::kReadKeyMax + 1] = {};
+    // LittleFS buckets: the next entries after the marker, in order, found
+    // by one walk (kListBatch of them, so a listing takes a walk per
+    // kListBatch entries and not one per entry: 68 files took 10 s).
+    uint8_t batchCount = 0;
+    uint8_t batchNext = 0;
+    bool batchIsPrefix[kListBatch] = {};
+    char batch[kListBatch][s3::kReadKeyMax + 1] = {};
     // "<mount>/[<dir>/]<rel>": the walk appends names to rel (= the key) in place.
     char path[kMountMax + 1 + s3::kDirMax + 1 + s3::kReadKeyMax + 2] = {};
 
@@ -571,16 +582,35 @@ bool dirHasFile(ListState* s, size_t relLen, int depth) {
     return found;
 }
 
-// Offers value[0..len) (rel prefix) as the next listing entry.
+// Offers value[0..len) (rel prefix) as one of the next listing entries: the
+// batch keeps the kListBatch smallest values above the marker, in order.
+// Once it is full, its largest value is the bound (best) for the walk.
 void consider(ListState* s, size_t len, bool isPrefix, size_t dirLenToCheck, int depth) {
     const char* value = s->rel();
     if (s->hasMarker && cmpN(value, len, s->marker) <= 0) return;
     if (s->haveBest && cmpN(value, len, s->best) >= 0) return;
+    // Where it goes; a value already there (files rolled up to one prefix) is not new.
+    int at = 0;
+    while (at < s->batchCount) {
+        const int c = cmpN(value, len, s->batch[at]);
+        if (c == 0) return;
+        if (c < 0) break;
+        ++at;
+    }
     if (dirLenToCheck && !dirHasFile(s, dirLenToCheck, depth + 1)) return;
-    memcpy(s->best, value, len);  // dirHasFile left rel[0..dirLen) intact
-    s->best[len] = '\0';
-    s->bestIsPrefix = isPrefix;
-    s->haveBest = true;
+    const int last = s->batchCount < kListBatch ? s->batchCount : kListBatch - 1;   // a full batch drops its largest
+    for (int i = last; i > at; --i) {
+        memcpy(s->batch[i], s->batch[i - 1], sizeof s->batch[i]);
+        s->batchIsPrefix[i] = s->batchIsPrefix[i - 1];
+    }
+    memcpy(s->batch[at], value, len);  // dirHasFile left rel[0..dirLen) intact
+    s->batch[at][len] = '\0';
+    s->batchIsPrefix[at] = isPrefix;
+    if (s->batchCount < kListBatch) ++s->batchCount;
+    if (s->batchCount == kListBatch) {
+        memcpy(s->best, s->batch[kListBatch - 1], sizeof s->best);
+        s->haveBest = true;
+    }
 }
 
 void scanDir(ListState* s, size_t relLen, int depth) {
@@ -628,8 +658,10 @@ void scanDir(ListState* s, size_t relLen, int depth) {
     rel[relLen] = '\0';
 }
 
-// Finds the smallest listing value > marker into best. Stateless between
-// calls: one walk per entry, pruned to the subtrees that can hold it.
+// Finds the smallest listing value > marker into best. LittleFS buckets:
+// one walk finds the next kListBatch entries (pruned to the subtrees that
+// can hold them); the calls after it take them from the batch. A file made
+// or removed meanwhile shows from the next walk on.
 // Media bucket: the store iterates in byte-wise key order, so the next value
 // is the first key > marker that has the prefix, rolled up at the delimiter.
 // best doubles as the iteration cursor; the item's size, mtime and MD5 are
@@ -669,9 +701,19 @@ bool findNext(ListState* s) {
     ++s->searches;
     if (s->noMatch) return false;
     if (s->bucket->isMedia()) return s->haveBest = findNextMedia(s);
-    s->rel()[0] = '\0';
-    scanDir(s, 0, 0);
-    return s->haveBest;
+    if (s->batchNext >= s->batchCount) {
+        s->batchCount = 0;
+        s->batchNext = 0;
+        s->rel()[0] = '\0';
+        scanDir(s, 0, 0);
+        if (s->batchCount == 0) return s->haveBest = false;
+    } else {
+        --s->searches;  // from the batch: no walk
+    }
+    memcpy(s->best, s->batch[s->batchNext], sizeof s->best);
+    s->bestIsPrefix = s->batchIsPrefix[s->batchNext];
+    ++s->batchNext;
+    return s->haveBest = true;
 }
 
 template <class S>
@@ -777,8 +819,9 @@ bool prepareNext(ListState* s, int& budget, bool haveOutput) {
                 break;
         }
         if (budget <= 0 && haveOutput) return false;
-        --budget;
+        const uint16_t walksBefore = s->searches;
         const bool found = findNext(s);
+        if (s->searches != walksBefore) --budget;  // only a walk costs time
         if (s->emitted >= s->maxKeys) {
             s->truncated = found;
             s->phase = ListState::Footer;

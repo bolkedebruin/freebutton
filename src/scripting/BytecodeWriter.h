@@ -28,7 +28,9 @@ public:
      * @param total_size Total bytecode size from Content-Length
      * @return ESP_OK on success, error code otherwise
      */
-    esp_err_t beginWrite(const char* name, size_t total_size);
+    // atoms_resolved: the image already refers to this build's ROM atoms
+    // (the IDE's compiler did that): no lookup context is allocated.
+    esp_err_t beginWrite(const char* name, size_t total_size, bool atoms_resolved = false);
 
     /**
      * Write bytecode chunk to flash with inline relocation

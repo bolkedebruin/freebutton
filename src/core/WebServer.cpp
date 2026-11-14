@@ -16,6 +16,7 @@
 #include "drivers/DeviceInfo.h"
 #include "drivers/LvglDisplay.h"
 #include "S3Server.h"
+#include "StaticCache.h"
 #include "Auth.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
@@ -310,8 +311,15 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         }
         upload->writer = new (mem) BytecodeWriter();
 
+        // "atoms=<id>": the compiler resolved the built-in names for the ROM
+        // atoms with that identity. When they are this build's, the writer
+        // needs no lookup context (8 KB of heap less during the upload).
+        bool atomsResolved = false;
+        if (const AsyncWebParameter* p = request->getParam("atoms")) {
+            atomsResolved = strtoul(p->value().c_str(), nullptr, 16) == bytecode_stdlib_atoms_id();
+        }
         // Initialize with total size for upfront flash erase
-        const esp_err_t err = upload->writer->beginWrite(filename.c_str(), content_length);
+        const esp_err_t err = upload->writer->beginWrite(filename.c_str(), content_length, atomsResolved);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "beginWrite failed: 0x%x", err);
             upload->error = err;
@@ -619,7 +627,14 @@ void webserver_start() {
     s3_register(server);
 
     // Serve the locally-built web IDE bundle (with .gz auto-negotiation) from
-    // LittleFS /www/. index.html is the default document for "/".
+    // LittleFS /www/. index.html is the default document for "/". Files with
+    // a content hash in their name and the IDE's web fonts may be kept by the
+    // browser, so a later page load asks for index.html and little else; the
+    // rest is checked again every time (ETag).
+    server.serveStatic("/assets/", LittleFS, "/www/assets/", "public, max-age=31536000, immutable")
+        .setFilter([](AsyncWebServerRequest* request) { return freebutton::isHashedAssetUrl(request->url()); });
+    server.serveStatic("/fonts/", LittleFS, "/www/fonts/", "public, max-age=604800")
+        .setFilter([](AsyncWebServerRequest* request) { return freebutton::isWebFontUrl(request->url()); });
     server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
 
     ESP_LOGI(TAG, "Starting webserver");

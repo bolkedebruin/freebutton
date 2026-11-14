@@ -169,7 +169,7 @@ void BytecodeWriter::cleanup() {
     }
 }
 
-esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size) {
+esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size, const bool atoms_resolved) {
     if (!partition_) {
         ESP_LOGE(TAG, "Partition not initialized");
         return ESP_ERR_INVALID_STATE;
@@ -226,19 +226,22 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size) {
         return err;
     }
 
-    // Allocate QuickJS context for ROM atom translation
-    reloc_ctx_mem_ = static_cast<uint8_t*>(malloc(RELOC_CTX_HEAP_SIZE));
-    if (!reloc_ctx_mem_) {
-        ESP_LOGE(TAG, "Failed to allocate context heap");
-        cleanup();
-        return ESP_ERR_NO_MEM;
-    }
+    // QuickJS context for the ROM atom lookup; not needed for an image whose
+    // ROM atoms the compiler resolved (reloc_ctx_ stays null).
+    if (!atoms_resolved) {
+        reloc_ctx_mem_ = static_cast<uint8_t*>(malloc(RELOC_CTX_HEAP_SIZE));
+        if (!reloc_ctx_mem_) {
+            ESP_LOGE(TAG, "Failed to allocate context heap");
+            cleanup();
+            return ESP_ERR_NO_MEM;
+        }
 
-    reloc_ctx_ = JS_NewContext(reloc_ctx_mem_, RELOC_CTX_HEAP_SIZE, &js_stdlib);
-    if (!reloc_ctx_) {
-        ESP_LOGE(TAG, "Failed to create QuickJS context");
-        cleanup();
-        return ESP_ERR_NO_MEM;
+        reloc_ctx_ = JS_NewContext(reloc_ctx_mem_, RELOC_CTX_HEAP_SIZE, &js_stdlib);
+        if (!reloc_ctx_) {
+            ESP_LOGE(TAG, "Failed to create QuickJS context");
+            cleanup();
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     // Allocate read buffer for relocation callbacks
@@ -305,7 +308,7 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
     BCRelocState reloc_state;
     reloc_state.ctx = reloc_ctx_;
     reloc_state.offset = relocation_target_addr_ + sizeof(JSBytecodeHeader);
-    reloc_state.update_atoms = 1;
+    reloc_state.update_atoms = reloc_ctx_ != nullptr ? 1 : 0;   // no context: the compiler resolved them
     reloc_state.read_func = relocReadCallback;
     reloc_state.read_opaque = this;
     // The IDE resolves the ROM atoms itself when it knows this build's table
