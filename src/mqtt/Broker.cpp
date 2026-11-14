@@ -241,7 +241,13 @@ void MqttBroker::subscribe(std::string_view topic, const int qos, MqttSubscriber
             // Topic already exists, add subscriber if not already present
             if (std::ranges::find(it->subscribers, subscriber) == it->subscribers.end()) {
                 // An entry without subscribers is a pending UNSUBSCRIBE; adding
-                // one cancels it (and the broker subscription is kept).
+                // one cancels it. The topic is subscribed again all the same:
+                // the broker then sends its retained message to the new
+                // subscriber, as it would have after the UNSUBSCRIBE (a
+                // restarted script subscribes to the topics of the old one).
+                if (it->subscribers.empty()) {
+                    it->sent = false;
+                }
                 it->subscribers.push_back(subscriber);
             } else {
                 ESP_LOGW(TAG, "Subscriber already registered for topic: %.*s", (int)topic.length(), topic.data());

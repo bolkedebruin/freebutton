@@ -62,6 +62,19 @@ private:
 
     void invalidatePending();
 
+    // Which texts a script wrote last (kScript* bits): set by the script
+    // setters, cleared by a message on the key's own config topic. Only a
+    // text from a script is dropped when the script engine restarts
+    // (restoreConfigState()). Not exact when both write the same slot at the
+    // same moment: then the bit can name the wrong writer once.
+    static constexpr uint8_t kScriptLabel = 1;
+    static constexpr uint8_t kScriptTopLabel = 2;
+    static constexpr uint8_t kScriptIcon = 4;
+    std::atomic<uint8_t> scriptWrote_{0};
+    // kScriptLabel / kScriptTopLabel: draw the configured text again in the
+    // next applyPending() (its slot was reset). LVGL lock held.
+    uint8_t redrawConfigured_ = 0;
+
     // Icon in the bottom area instead of the label (config "icon" /
     // "iconsize", MQTT ICON, JS setIcon). Allocated only for keys that have
     // one; the name slot is the runtime state like the label slots.
@@ -145,6 +158,13 @@ public:
             setLabelFont(fontFace_, fontSize_);
         }
     }
+
+    // Script engine restart (ConfigManager::restoreConfigState): label, top
+    // label and icon a script set (not those from the key's config topics)
+    // and the fonts go back to the config. LVGL lock held, no script code
+    // running; the LVGL task draws on its next tick. The caller requests the
+    // render.
+    void restoreConfigState();
 
     // PendingRender (LVGL task, LVGL lock held)
     bool applyPending() override;

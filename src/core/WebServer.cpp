@@ -12,6 +12,7 @@
 #include "scripting/BytecodeWriter.h"
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/WebSocketREPL.h"
+#include "scripting/ScriptEngine.h"
 #include "drivers/DeviceInfo.h"
 #include "drivers/LvglDisplay.h"
 #include "S3Server.h"
@@ -272,6 +273,7 @@ void handleRemoteFirmwareUpdate(AsyncWebServerRequest *request) {
 struct BytecodeUpload {
     BytecodeWriter* writer;
     esp_err_t error;
+    bool restart;  // the boot script was stored: the engine restarts with it
 };
 
 static void destroyWriter(BytecodeUpload* upload) {
@@ -294,6 +296,7 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         if (!upload) return;  // handleBytecodeUpload answers 500
         upload->writer = nullptr;
         upload->error = ESP_OK;
+        upload->restart = false;
         request->_tempObject = upload;
         request->onDisconnect([request]() {
             destroyWriter(static_cast<BytecodeUpload*>(request->_tempObject));
@@ -328,6 +331,14 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         ESP_LOGI(TAG, "Bytecode upload complete: %s", filename.c_str());
         upload->error = err;
         destroyWriter(upload);
+        // The boot script (main.jsc, or script.jsc while there is no
+        // main.jsc) is stored: ask the loop task to restart the engine with
+        // it. Only a request: this is the async_tcp task. Asked here and not
+        // in handleBytecodeUpload, so it also happens when the client goes
+        // away before the answer. Another name changes nothing that runs.
+        if (err == ESP_OK && BytecodeRegistry::instance().isBootScript(filename.c_str())) {
+            upload->restart = Scripting::ScriptEngine::getInstance().requestRestart();
+        }
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "Upload failed during chunk write: 0x%x", err);
         upload->error = err;
@@ -347,7 +358,11 @@ void handleBytecodeUpload(AsyncWebServerRequest *request) {
     destroyWriter(upload);
 
     if (err == ESP_OK) {
-        request->send(200, "application/json", R"({"status":"success"})");
+        // "restart": the stored script is being started now (no reboot
+        // needed). Firmware before the script restart has no such field.
+        request->send(200, "application/json",
+                      upload->restart ? R"({"status":"success","restart":true})"
+                                      : R"({"status":"success","restart":false})");
     } else {
         char body[96];
         snprintf(body, sizeof body, R"({"status":"error","message":"Write failed","code":%d})", err);
@@ -576,10 +591,16 @@ void webserver_start() {
         const uint32_t offset = registry.getNextOffset();
         const uint32_t virtual_addr = registry.getVirtualBaseAddress() + offset;
         const size_t free_space = registry.getFreeSpace();
-        char body[160];
+        // rom_base / atoms_id: where this build's stdlib ROM table is and
+        // which ROM atoms it has. An IDE whose compiler has the same atoms
+        // resolves them for this address (BytecodeWriter.cpp).
+        char body[224];
         int n = snprintf(body, sizeof(body),
-            "{\"offset\":\"0x%lx\",\"virtual_addr\":\"0x%lx\",\"free_space\":%zu}",
-            (unsigned long)offset, (unsigned long)virtual_addr, free_space);
+            "{\"offset\":\"0x%lx\",\"virtual_addr\":\"0x%lx\",\"free_space\":%zu,"
+            "\"rom_base\":\"0x%lx\",\"atoms_id\":\"0x%lx\"}",
+            (unsigned long)offset, (unsigned long)virtual_addr, free_space,
+            (unsigned long)bytecode_stdlib_rom_base(),
+            (unsigned long)bytecode_stdlib_atoms_id());
         if (n < 0 || n >= (int)sizeof(body)) {
             request->send(500, "application/json", "{\"error\":\"next_address overflow\"}");
             return;

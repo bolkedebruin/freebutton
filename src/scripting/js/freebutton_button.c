@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "mquickjs.h"
+#include "js_reset.h"
 
 // Import the hardware abstraction layer (ESP32 only)
 #ifdef ESP_PLATFORM
@@ -139,6 +140,33 @@ static bool js_button_release_wrapper(int position) {
         return false;
     }
     return result == JS_FALSE;
+}
+
+/*
+ * Engine restart (js_reset.h): no key has a handler any more. The native
+ * registrations go too, so the button task does not enter the engine for a
+ * press and the default action (configured topics, HA event) always runs.
+ * A press the button task had already picked up before the reset still calls
+ * a wrapper once the engine lock is free; the wrapper reads this table, so it
+ * finds no handler (or the new script's handler).
+ */
+void js_button_callbacks_reset(JSContext *ctx)
+{
+    (void)ctx;
+    for (int idx = 0; idx < MAX_BUTTONS; idx++) {
+        button_hw_register_click_callback(idx + 1, NULL);
+        button_hw_register_long_press_callback(idx + 1, NULL);
+        button_hw_register_release_callback(idx + 1, NULL);
+
+        js_button_callbacks[idx].clickAllocated = 0;
+        js_button_callbacks[idx].longPressAllocated = 0;
+        js_button_callbacks[idx].releaseAllocated = 0;
+        js_button_callbacks[idx].ctx = NULL;
+        // Cleared, not deleted: the context is about to be freed.
+        js_gcref_forget(&js_button_callbacks[idx].clickCallback);
+        js_gcref_forget(&js_button_callbacks[idx].longPressCallback);
+        js_gcref_forget(&js_button_callbacks[idx].releaseCallback);
+    }
 }
 
 /*

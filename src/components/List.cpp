@@ -126,6 +126,7 @@ void List::configure(const ArduinoJson::JsonObject& data) {
     options_ = std::move(options);
     count_.store(count, std::memory_order_release);
     selected_.store(list::clampSelected(data["selected"] | 0, count), std::memory_order_release);
+    configSelected_ = static_cast<int16_t>(selected());
 }
 
 void List::attach() {
@@ -172,6 +173,13 @@ void List::setItems(std::string options, const int count) {
     options.shrink_to_fit();
     {
         const ItemsLock lock;
+        if (!itemsReplaced_) {
+            // Keep the config items for restoreConfigState(); `options`
+            // then takes the empty string below.
+            configOptions_.swap(options_);
+            configCount_ = static_cast<int16_t>(this->count());
+            itemsReplaced_ = true;
+        }
         options_.swap(options);
         count_.store(count, std::memory_order_release);
         selected_.store(list::clampSelected(selected(), count), std::memory_order_release);
@@ -184,6 +192,28 @@ void List::setItems(std::string options, const int count) {
 void List::setFont(const int face, const int size) {
     font_.store(fontref::pack(face, size), std::memory_order_release);
     fontDirty_.store(true, std::memory_order_release);
+    requestRender();
+}
+
+void List::restoreConfigState() {
+    std::string scriptOptions;  // freed outside the lock
+    {
+        const ItemsLock lock;
+        if (itemsReplaced_) {
+            scriptOptions.swap(options_);
+            options_.swap(configOptions_);
+            count_.store(configCount_, std::memory_order_release);
+            itemsReplaced_ = false;
+            itemsDirty_.store(true, std::memory_order_release);
+        }
+        const int configured = list::clampSelected(configSelected_, count());
+        if (selected_.exchange(configured, std::memory_order_acq_rel) != configured) {
+            selectionDirty_.store(true, std::memory_order_release);
+        }
+    }
+    if (font_.load(std::memory_order_acquire) != fontref::pack(fontFace_, fontSize_)) {
+        restoreFont();
+    }
     requestRender();
 }
 

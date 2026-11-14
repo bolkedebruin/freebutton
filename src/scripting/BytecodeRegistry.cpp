@@ -405,7 +405,23 @@ void BytecodeRegistry::pin(uint32_t offset, uint32_t size) {
         if (e > top) top = e;
     }
     if (top > pin_floor_) pin_floor_ = top;
-    ESP_LOGW(TAG, "Pin table full; uploads go above 0x%lx until reboot", (unsigned long)pin_floor_);
+    ESP_LOGW(TAG, "Pin table full; uploads go above 0x%lx until the script restarts", (unsigned long)pin_floor_);
+}
+
+void BytecodeRegistry::unpinAll() {
+    Lock lock;
+    if (pin_count_ || pin_floor_) {
+        ESP_LOGI(TAG, "Released %d pinned region(s)", static_cast<int>(pin_count_));
+    }
+    pin_count_ = 0;
+    pin_floor_ = 0;
+}
+
+bool BytecodeRegistry::isBootScript(const char* name) const {
+    Lock lock;
+    if (!name) return false;
+    if (strcmp(name, "main.jsc") == 0) return true;
+    return strcmp(name, "script.jsc") == 0 && find("main.jsc") == nullptr;
 }
 
 uint32_t BytecodeRegistry::getNextOffset() const {
@@ -568,6 +584,18 @@ uint32_t bytecode_current_app_id(void) {
     return id ? id : 1;  // 0 means "unknown" in BytecodeEntry::app_id
 }
 
+uint32_t bytecode_stdlib_rom_base(void) {
+    return reinterpret_cast<uint32_t>(js_stdlib.stdlib_table);
+}
+
+uint32_t bytecode_stdlib_atoms_id(void) {
+    static uint32_t cached = 0;
+    if (cached == 0) {
+        cached = JS_StdlibAtomsId(&js_stdlib);
+    }
+    return cached;
+}
+
 uint32_t bytecode_stdlib_id(void) {
     static uint32_t cached = 0;
     if (cached != 0) {
@@ -606,7 +634,8 @@ bool bytecode_registry_find(const char* name, BytecodeEntry* entry) {
                  static_cast<unsigned long>(bytecode_current_app_id()));
         return false;
     }
-    // The caller maps and runs it in place: keep the region until reboot.
+    // The caller maps and runs it in place: keep the region while the
+    // context lives (unpinAll()).
     registry.pin(found->offset, found->size);
     if (entry) *entry = *found;
     return true;

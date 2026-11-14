@@ -43,6 +43,12 @@ private:
         std::string effect{"none"};
     } state_;
 
+    // All ButtonLeds, for restoreScriptPixels(). Linked at construction
+    // (boot, before any script runs) and never unlinked: the LEDs live as
+    // long as the firmware runs.
+    ButtonLed* next_ = nullptr;
+    static ButtonLed* first_;
+
 public:
     // ledIndex is the physical NeoPixel strip index for this LED, computed by the
     // caller from the live topology (see ButtonManager::createLEDsForAllButtons):
@@ -57,7 +63,19 @@ public:
         , ledNumber_(ledNumber)
         , deviceId_(deviceId)
         , brokerId_(brokerId)
-        , ledIndex_(ledIndex) {}
+        , ledIndex_(ledIndex)
+        , next_(first_) { first_ = this; }
+
+    ButtonLed(const ButtonLed&) = delete;
+    ButtonLed& operator=(const ButtonLed&) = delete;
+
+    // Scripts write strip pixels directly (led_hw_set_color), past the state
+    // kept here. noteScriptPixel() records which (script code);
+    // restoreScriptPixels() puts those pixels back to the state of their
+    // ButtonLed (off after boot), a pixel without one to black, and forgets
+    // them (script engine restart, no script code running).
+    static void noteScriptPixel(int ledIndex) noexcept;
+    static void restoreScriptPixels() noexcept;
 
     // Home Assistant discovery: write this LED's light config (no heap).
     void writeDiscovery(freebutton::ha::DiscoveryOut& out) const;
@@ -121,6 +139,8 @@ public:
 
 private:
     void updateDisplay() const noexcept;
+    // The pixel for state_, without showing the strip.
+    void writePixel() const noexcept;
 
     // JSON serialization for MQTT publishing
     [[nodiscard]] std::string stateToJson() const;

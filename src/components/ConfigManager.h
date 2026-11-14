@@ -216,11 +216,31 @@ public:
     DisplayItem* addDisplayItem(std::unique_ptr<DisplayItem> item);
 
     /**
-     * Remove a display item by ID
+     * Remove a display item by ID (script code). An item a script made is
+     * destroyed. A config item is parked: no longer shown, counted or found,
+     * but kept (with its config topics subscribed) so restoreConfigState()
+     * can show it again; its memory is not freed.
      * @param id ID of display item to remove
      * @return true if removed, false if not found
      */
     bool removeDisplayItem(unsigned long id);
+
+    /**
+     * Puts everything a script can change back to its config.json state, as
+     * after boot. Called on the main task with the script engine lock held,
+     * after the old script's handlers and timers are gone and before the new
+     * script runs. Takes the locks it needs (items, LVGL) itself.
+     *
+     * Restored: display items a script made (removed) or removed (shown
+     * again), their texts, icon, font, position and page; key label, top
+     * label, icon and fonts; list items, selection and font; images; the
+     * shown page; LED pixels a script set. A text or icon that came from an
+     * item's own config topic stays. See docs/SCRIPT-RESTART.md.
+     *
+     * Safe when no script ever ran and when called twice. Must not be called
+     * with the LVGL lock held.
+     */
+    void restoreConfigState();
 
     /**
      * Get memory usage statistics
@@ -276,7 +296,9 @@ private:
     // the broker's subscription lock and the LVGL lock). The only lock taken
     // while holding it is a broker's subscriptionsLock_ (registerTopics() in
     // forEachDisplayItem at boot); nothing takes it while holding the LVGL
-    // lock or a subscription lock.
+    // lock or a subscription lock. restoreConfigState() reads the vector
+    // without it while it holds the LVGL lock: only script code changes the
+    // vector, and none runs then (script engine lock).
     class ItemsLock {
     public:
         ItemsLock();
@@ -286,6 +308,12 @@ private:
     };
 
     std::vector<std::unique_ptr<DisplayItem>> displayItems;
+    // Config items a script removed (removeDisplayItem), until
+    // restoreConfigState() puts them back. Guarded like displayItems.
+    std::vector<std::unique_ptr<DisplayItem>> parkedItems_;
+    // DisplayItem::next_id after config load (0: nothing loaded yet), so a
+    // restarted script's display.create() returns the same ids as after boot.
+    unsigned long nextItemIdAfterLoad_ = 0;
     std::vector<std::unique_ptr<Button>> buttons;
     std::vector<std::unique_ptr<Clock>> clocks;
     std::vector<std::unique_ptr<List>> lists;

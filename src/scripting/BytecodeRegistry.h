@@ -50,12 +50,13 @@ struct BytecodeEntry {
 // several calls in a row hold a BytecodeRegistry::Lock.
 //
 // Space management: an upload goes into the lowest free gap that does not
-// overlap an active entry, a pinned region (bytecode loaded since boot -
-// the JS engine executes it in place from flash, so it must not be
-// overwritten until the next reboot) or an upload in progress. Replacing a
-// name frees its old region once it is no longer pinned (i.e. after a
-// reboot), so repeated uploads of the same name alternate between two
-// regions instead of marching through the partition.
+// overlap an active entry, a pinned region (bytecode loaded into the current
+// JS context - the engine executes it in place from flash, so it must not
+// be overwritten while that context lives) or an upload in progress.
+// Replacing a name frees its old region once it is no longer pinned: after
+// a reboot, or after a script restart (ScriptEngine::restart() frees the
+// context and calls unpinAll()). So repeated uploads of the same name
+// alternate between two regions instead of marching through the partition.
 class BytecodeRegistry {
 public:
     static BytecodeRegistry& instance();
@@ -114,8 +115,20 @@ public:
     bool reserve(uint32_t offset, size_t size);
     void releaseReservation();
 
-    // Mark [offset, offset+size) as executing from flash until reboot.
+    // Mark [offset, offset+size) as executing from flash: kept until
+    // unpinAll() or a reboot.
     void pin(uint32_t offset, uint32_t size);
+
+    // Forget every pin (and the floor set when the pin table overflowed).
+    // Only when no JS context exists that could execute the pinned bytecode:
+    // ScriptEngine::restart() calls it between freeing the old context and
+    // creating the new one. Active entries and the reservation of an upload
+    // in progress are not touched.
+    void unpinAll();
+
+    // True when `name` is the script that runs at start: "main.jsc", or
+    // "script.jsc" while there is no active "main.jsc". Does not pin.
+    bool isBootScript(const char* name) const;
 
     // Offset the next (small) upload would get, and the free gap there.
     uint32_t getNextOffset() const;
@@ -188,6 +201,11 @@ uint32_t bytecode_current_app_id(void);
 // a CRC32 of the table with its references to itself taken as offsets, so
 // it is the same in every build with the same table, wherever it lies.
 uint32_t bytecode_stdlib_id(void);
+// Address of this build's stdlib ROM table (what BytecodeEntry::rom_base holds).
+uint32_t bytecode_stdlib_rom_base(void);
+// Identity of this build's ROM atoms (the engine's JS_StdlibAtomsId): the
+// IDE's compiler has the same value when it was built from the same stdlib.
+uint32_t bytecode_stdlib_atoms_id(void);
 
 #ifdef __cplusplus
 }

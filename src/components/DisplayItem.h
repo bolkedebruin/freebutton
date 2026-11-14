@@ -87,6 +87,31 @@ private:
     uint32_t configuredIconColor_ = icon::kNoColor;
     IconState* ensureIcon() { return icon_.ensure(configuredIconSize_, configuredIconColor_); }
 
+    // Which texts a script wrote last (kScript* bits). A script setter sets
+    // the bit after it stored the text, a message on the item's own config
+    // topic clears it: the slots are shared, and only a text from a script
+    // is dropped when the script engine restarts (restoreConfigState()).
+    // Not exact when both write the same slot at the same moment: then the
+    // bit can name the wrong writer once.
+    static constexpr uint8_t kScriptValue = 1;
+    static constexpr uint8_t kScriptCaption = 2;
+    static constexpr uint8_t kScriptUnit = 4;
+    static constexpr uint8_t kScriptIcon = 8;
+    std::atomic<uint8_t> scriptWrote_{0};
+
+    // Config "x" / "y" / "page", next to the run-time x / y / page a script
+    // changes (setPosition, setPage), and the item's place among the config
+    // items (-1: a script made it). Written at config load only.
+    int16_t configX_ = 0;
+    int16_t configY_ = 0;
+    int16_t configPage_ = 1;
+    int16_t configOrder_ = -1;
+
+    // A script removed this config item: it is kept (ConfigManager), not
+    // shown and not found, until the script engine restarts. Its config
+    // topics stay subscribed, so it comes back with current values.
+    std::atomic<bool> parked_{false};
+
     // Value + unit font now (fontref::pack): the configured one until a
     // script calls setFont() (any task); fontDirty_ has the LVGL task redraw.
     std::atomic<uint32_t> font_{fontref::pack(FONT_FACE_NONE, 0)};
@@ -270,9 +295,28 @@ public:
     // shows the box on its next tick (see ui/MainPage.h).
     void setPage(int newPage);
 
+    // Config load (ConfigManager), after configure(): the item is the
+    // order-th config item; its x / y / page now are the configured ones.
+    void markFromConfig(int order);
+    bool fromConfig() const { return configOrder_ >= 0; }
+    int configOrder() const { return configOrder_; }
+
+    // A script removed this config item (script code): its box goes on the
+    // LVGL task's next tick. restoreConfigState() shows it again.
+    void park();
+
+    // Script engine restart (ConfigManager::restoreConfigState): everything a
+    // script changed goes back to the config: texts and icon a script set
+    // (not those from the item's config topics), font, position, page, and a
+    // parked item is shown again. LVGL lock held, no script code running;
+    // the LVGL task redraws on its next tick. The caller requests the render.
+    void restoreConfigState();
+
     // PendingRender (LVGL task, LVGL lock held)
     bool applyPending() override;
-    bool shownNow() const override { return ui::visibleOnPage(page, ui::shownPage()); }
+    bool shownNow() const override {
+        return !parked_.load(std::memory_order_acquire) && ui::visibleOnPage(page, ui::shownPage());
+    }
 
 };
 

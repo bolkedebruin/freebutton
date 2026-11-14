@@ -43,8 +43,10 @@ std::string toJson(const DeviceInfo& info) {
     // Worst case is 325 B (153 B of fixed keys/punctuation + a fully expanded
     // IPv6, a 32-char SSID and 6-digit memory figures) plus <= 106 B of
     // topology (mainConnector + 4 connectors) and <= 70 B of build identity
-    // (commit, dirty, model), so 512 never reallocates.
-    out.reserve(512);
+    // (commit, dirty, model) and <= 110 B of script status (scriptStarts,
+    // scriptError up to 63 chars), so 640 never reallocates unless the
+    // error text needs many escapes.
+    out.reserve(640);
     out += '{';
     appendString(out, "deviceName", info.deviceName);   out += ',';
     appendString(out, "ipv4", info.ipv4Address);         out += ',';
@@ -68,6 +70,9 @@ std::string toJson(const DeviceInfo& info) {
     appendNumber(out, "jsHeapUsed", static_cast<long long>(info.jsHeapUsed)); out += ',';
     appendNumber(out, "jsHeapFree", static_cast<long long>(info.jsHeapFree)); out += ',';
     appendNumber(out, "jsHeapSize", static_cast<long long>(info.jsHeapSize)); out += ',';
+    // User script: starts since boot, and why the last start failed ("" = it ran).
+    appendNumber(out, "scriptStarts", info.scriptStarts);                     out += ',';
+    appendString(out, "scriptError", info.scriptError);                       out += ',';
     // Hardware topology (the web IDE lays out its virtual device from it).
     appendNumber(out, "mainConnector", info.mainConnector);                  out += ',';
     out += "\"connectors\":[";

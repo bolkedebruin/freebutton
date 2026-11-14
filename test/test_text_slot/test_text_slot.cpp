@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../../src/utils/TextSlot.h"
+#include "../../src/components/SlotReset.h"
 
 using freebutton::TextSlot;
 using freebutton::TextSlotApply;
@@ -174,6 +175,34 @@ void test_invalidate_rerenders_only_written_slots() {
     TEST_ASSERT_EQUAL_STRING("Raam", r.last.c_str());
 }
 
+// Script engine restart (components/SlotReset.h): a reset slot is "never
+// written" again, so the configured default stays, and takes new text after.
+void test_reset_slot_is_never_written_again() {
+    TextSlot<32> slot;
+    Recorder r;
+    slot.write("Raam");
+    slot.apply(r);
+    TEST_ASSERT_EQUAL(1, r.renders);
+
+    freebutton::resetSlot(slot);
+    char out[TextSlot<32>::kBufferSize];
+    TEST_ASSERT_FALSE(slot.hasText());
+    TEST_ASSERT_FALSE(slot.read(out));
+    slot.invalidate();  // the widget was redrawn with its defaults
+    TEST_ASSERT_EQUAL(static_cast<int>(TextSlotApply::Clean), static_cast<int>(slot.apply(r)));
+    TEST_ASSERT_EQUAL(1, r.renders);
+
+    slot.write("Deur");
+    TEST_ASSERT_EQUAL(static_cast<int>(TextSlotApply::Applied), static_cast<int>(slot.apply(r)));
+    TEST_ASSERT_EQUAL(2, r.renders);
+    TEST_ASSERT_EQUAL_STRING("Deur", r.last.c_str());
+
+    freebutton::resetSlot(slot);  // twice in a row, and on a reset slot
+    freebutton::resetSlot(slot);
+    TEST_ASSERT_FALSE(slot.hasText());
+    TEST_ASSERT_EQUAL(static_cast<int>(TextSlotApply::Clean), static_cast<int>(slot.apply(r)));
+}
+
 // The renderer gets a private copy: a writer that changes (and lengthens) the
 // slot while the render runs must not change the text being rendered, as
 // lv_label_set_text() measures and copies in two passes. The newer text is
@@ -318,6 +347,7 @@ int main(int, char**) {
     RUN_TEST(test_empty_payload_is_rendered);
     RUN_TEST(test_truncation_at_boundary_and_logged_once);
     RUN_TEST(test_invalidate_rerenders_only_written_slots);
+    RUN_TEST(test_reset_slot_is_never_written_again);
     RUN_TEST(test_render_sees_stable_copy_while_slot_changes);
     RUN_TEST(test_write_during_copy_retries_and_renders_once);
     RUN_TEST(test_continuous_writes_report_busy_and_stay_pending);

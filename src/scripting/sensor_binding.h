@@ -50,6 +50,10 @@ int sensor_hw_get_all_ids(int* ids, int maxCount);
 // The callback will be invoked when the sensor value changes
 void sensor_hw_register_change_callback(int sensorId, SensorChangeCallback callback);
 
+// Engine restart: no sensor has a change callback, and the remembered values
+// are back at their boot state (0). Engine lock held.
+void sensor_hw_reset_change_callbacks(void);
+
 // Notify of sensor value - called from sampleSensors() for each sensor
 // Handles change detection and dispatches callback if value changed beyond threshold
 void sensor_hw_notify_value(int sensorId, float value);

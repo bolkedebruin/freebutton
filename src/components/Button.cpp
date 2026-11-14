@@ -4,6 +4,7 @@
 //
 
 #include "Button.h"
+#include "SlotReset.h"
 #include "ButtonEventPlan.h"
 #include "config.h"
 #include "mqtt/Registry.h"
@@ -99,18 +100,23 @@ void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_vie
                      id, (int)topic.length(), topic.data(), (int)data.length(), data.data(), topicConfig.eventType);
 
             switch (topicConfig.eventType) {
+                // Each also notes that the text is no longer a script's
+                // (scriptWrote_): it stays when the script engine restarts.
                 case LABEL:
                     storeText(labelSlot_, data, id, "label");
+                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptLabel), std::memory_order_acq_rel);
                     break;
 
                 case TOP_LABEL:
                     storeText(topLabelSlot_, data, id, "top label");
+                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptTopLabel), std::memory_order_acq_rel);
                     break;
 
                 case ICON:
                     // The state exists: configureIcon() made it for this topic.
                     if (IconState* s = icon_.get()) {
                         storeText(s->name, data, id, "icon");
+                        scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptIcon), std::memory_order_acq_rel);
                     }
                     break;
 
@@ -155,6 +161,16 @@ bool Button::applyPending() {
     }
     if (fontDirty_.exchange(false, std::memory_order_acq_rel)) {
         applyFonts();
+    }
+    if (redrawConfigured_ != 0) {
+        // restoreConfigState() reset these slots: the configured text again.
+        if (redrawConfigured_ & kScriptTopLabel) {
+            ui_button_set_title(button, topLabel.c_str());
+        }
+        if (redrawConfigured_ & kScriptLabel) {
+            ui_button_set_text(button, label.c_str());
+        }
+        redrawConfigured_ = 0;
     }
     bool again = false;
     again |= labelSlot_.apply([this](const char* text) { ui_button_set_text(button, text); })
@@ -235,10 +251,41 @@ void Button::setTopLabelFont(const int face, const int size) {
 // JS mqtt.subscribe() callback, so like onMessage they only store the text.
 void Button::setLabelText(const std::string_view text) {
     storeText(labelSlot_, text, id, "label");
+    scriptWrote_.fetch_or(kScriptLabel, std::memory_order_acq_rel);
 }
 
 void Button::setTopLabelText(const std::string_view text) {
     storeText(topLabelSlot_, text, id, "top label");
+    scriptWrote_.fetch_or(kScriptTopLabel, std::memory_order_acq_rel);
+}
+
+// LVGL lock held (so applyPending() is not running), no script code running.
+// Only stores and flags: the LVGL task draws on its next tick.
+void Button::restoreConfigState() {
+    const uint8_t wrote = scriptWrote_.exchange(0, std::memory_order_acq_rel);
+    if (wrote & kScriptLabel) {
+        resetSlot(labelSlot_);
+    }
+    if (wrote & kScriptTopLabel) {
+        resetSlot(topLabelSlot_);
+    }
+    if (button != nullptr) {
+        redrawConfigured_ |= wrote & (kScriptLabel | kScriptTopLabel);
+    }
+    if (wrote & kScriptIcon) {
+        // The state exists: the script's setIcon made it at the latest. ""
+        // (no config icon) shows the label again.
+        if (IconState* s = icon_.get()) {
+            s->name.write(s->configName());
+        }
+    }
+    const uint32_t configuredFont = fontref::pack(fontFace_, fontSize_);
+    const uint32_t configuredTopFont = fontref::pack(topFontFace_, topFontSize_);
+    const bool labelChanged = labelFont_.exchange(configuredFont, std::memory_order_acq_rel) != configuredFont;
+    const bool topChanged = topLabelFont_.exchange(configuredTopFont, std::memory_order_acq_rel) != configuredTopFont;
+    if (labelChanged || topChanged) {
+        fontDirty_.store(true, std::memory_order_release);
+    }
 }
 
 IconState* Button::ensureIcon() {
@@ -260,7 +307,7 @@ void Button::configureIcon(const JsonObject& data) {
         ESP_LOGW(TAG, "Button at position %u: icon \"%s\" is not a valid icon name, ignored", position_, name);
         name = "";
     }
-    IconState* s = ensureIcon();
+    IconState* s = icon_.ensure(configuredIconSize_, icon::kNoColor, name);  // keeps the config name
     if (s == nullptr) {
         ESP_LOGE(TAG, "Button at position %u: no memory for its icon", position_);
         return;
@@ -286,6 +333,7 @@ Button::SetIconResult Button::setIconName(const std::string_view name) {
         }
     }
     storeText(s->name, name, id, "icon");
+    scriptWrote_.fetch_or(kScriptIcon, std::memory_order_acq_rel);
     return SetIconResult::Ok;
 }
 

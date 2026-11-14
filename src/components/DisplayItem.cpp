@@ -3,6 +3,7 @@
 //
 
 #include "DisplayItem.h"
+#include "SlotReset.h"
 #include "mqtt/Registry.h"
 #include "drivers/LvglDisplay.h"
 #include "ui/LvglRoom.h"
@@ -75,19 +76,25 @@ void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic
                      id, (int)topic.length(), topic.data(), (int)data.length(), data.data(), topicConfig.eventType);
 
             switch (topicConfig.eventType) {
+                // Each also notes that the text is no longer a script's
+                // (scriptWrote_): it stays when the script engine restarts.
                 case DISPLAY_LABEL:
                     storeText(captionSlot_, data, id, "caption");
+                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptCaption), std::memory_order_acq_rel);
                     break;
                 case DISPLAY_VALUE:
                     storeText(valueSlot_, data, id, "value");
+                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptValue), std::memory_order_acq_rel);
                     break;
                 case DISPLAY_UNIT:
                     storeText(unitSlot_, data, id, "unit");
+                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptUnit), std::memory_order_acq_rel);
                     break;
                 case DISPLAY_ICON:
                     // The state exists: configureIcon() made it for this topic.
                     if (IconState* s = icon_.get()) {
                         storeText(s->name, data, id, "icon");
+                        scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptIcon), std::memory_order_acq_rel);
                     }
                     break;
                 default:
@@ -106,7 +113,7 @@ void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic
 // bytes), rendered once. Runs on every render request of any widget, so the
 // hidden case is one page check.
 bool DisplayItem::applyPending() {
-    if (!ui::visibleOnPage(page, ui::shownPage())) {
+    if (parked_.load(std::memory_order_acquire) || !ui::visibleOnPage(page, ui::shownPage())) {
         deleteBox();
         return false;
     }
@@ -226,6 +233,62 @@ void DisplayItem::setPage(const int newPage) {
     ui::requestPendingRender();
 }
 
+void DisplayItem::markFromConfig(const int order) {
+    configOrder_ = static_cast<int16_t>(order);
+    configX_ = static_cast<int16_t>(x);
+    configY_ = static_cast<int16_t>(y);
+    configPage_ = static_cast<int16_t>(page);
+}
+
+void DisplayItem::park() {
+    parked_.store(true, std::memory_order_release);
+    ui::requestPendingRender();  // deletes the box
+}
+
+// LVGL lock held (so applyPending() is not running), no script code running.
+// Only stores and flags: the LVGL task draws on its next tick.
+void DisplayItem::restoreConfigState() {
+    bool redraw = false;
+    // A slot back to "never written" shows the configured default, which
+    // only a redraw of the box puts there.
+    const uint8_t wrote = scriptWrote_.exchange(0, std::memory_order_acq_rel);
+    if (wrote & kScriptValue) {
+        resetSlot(valueSlot_);
+        redraw = true;
+    }
+    if (wrote & kScriptCaption) {
+        resetSlot(captionSlot_);
+        redraw = true;
+    }
+    if (wrote & kScriptUnit) {
+        resetSlot(unitSlot_);
+        redraw = true;
+    }
+    if (wrote & kScriptIcon) {
+        // The state exists: the script's setIcon made it at the latest. ""
+        // (no config icon) hides the icon.
+        if (IconState* s = icon_.get()) {
+            s->name.write(s->configName());
+        }
+    }
+    if (fromConfig()) {
+        if (x != configX_ || y != configY_) {
+            x = configX_;
+            y = configY_;
+            redraw = true;
+        }
+        page = configPage_;  // applyPending() looks at it on every walk
+    }
+    const uint32_t configured = fontref::pack(fontFace, fontSize);
+    if (font_.exchange(configured, std::memory_order_acq_rel) != configured) {
+        redraw = true;
+    }
+    parked_.store(false, std::memory_order_release);
+    if (redraw) {
+        redraw_ = true;  // a shown box: drawConfigured() in the next applyPending()
+    }
+}
+
 const std::string DisplayItem::getComponentType() const {
     return "display_item";
 }
@@ -259,14 +322,17 @@ void DisplayItem::detach() {
 // only store the text.
 void DisplayItem::setDisplayLabel(const std::string_view text) {
     storeText(captionSlot_, text, id, "caption");
+    scriptWrote_.fetch_or(kScriptCaption, std::memory_order_acq_rel);
 }
 
 void DisplayItem::setDisplayValue(const std::string_view text) {
     storeText(valueSlot_, text, id, "value");
+    scriptWrote_.fetch_or(kScriptValue, std::memory_order_acq_rel);
 }
 
 void DisplayItem::setDisplayUnit(const std::string_view text) {
     storeText(unitSlot_, text, id, "unit");
+    scriptWrote_.fetch_or(kScriptUnit, std::memory_order_acq_rel);
 }
 
 void DisplayItem::setFont(const int face, const int size) {
@@ -291,7 +357,7 @@ void DisplayItem::configureIcon(const JsonObject& data) {
         ESP_LOGW(TAG, "DisplayItem %lu: icon \"%s\" is not a valid icon name, ignored", id, name);
         name = "";
     }
-    IconState* s = ensureIcon();
+    IconState* s = icon_.ensure(configuredIconSize_, configuredIconColor_, name);  // keeps the config name
     if (s == nullptr) {
         ESP_LOGE(TAG, "DisplayItem %lu: no memory for its icon", id);
         return;
@@ -316,6 +382,7 @@ DisplayItem::SetIconResult DisplayItem::setIconName(const std::string_view name)
         }
     }
     storeText(s->name, name, id, "icon");
+    scriptWrote_.fetch_or(kScriptIcon, std::memory_order_acq_rel);
     return SetIconResult::Ok;
 }
 

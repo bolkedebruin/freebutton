@@ -10,6 +10,7 @@
 #include <sys/time.h>
 #include "mquickjs.h"
 #include "mquickjs_ext.h"
+#include "js_reset.h"
 
 // Console output callback for WebSocket REPL
 // When set, console output is sent to both stdout AND the callback (see mquickjs.h)
@@ -390,6 +391,32 @@ JSValue js_loadUserBytecode(JSContext *ctx, JSValue *this_val, int argc, JSValue
     return ret;
 #endif
 }
+
+// Engine restart: drop every pending timer and interval (js_reset.h). The
+// refs are cleared, not deleted: the context is about to be freed.
+// js_timer_next_id keeps counting, so an id the old script got never names a
+// timer of the new script.
+void js_timers_reset(JSContext *ctx) {
+    (void)ctx;
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        JSTimer *th = &js_timer_list[i];
+        th->allocated = false;
+        js_gcref_forget(&th->func);
+        th->timeout = 0;
+        th->id = 0;
+    }
+}
+
+#ifndef EMSCRIPTEN
+// Engine restart: forget everything the script registered (js_reset.h).
+// MQTT first: it stops the MQTT tasks queueing events for the old script.
+void js_bindings_reset(JSContext *ctx) {
+    js_mqtt_reset(ctx);
+    js_timers_reset(ctx);
+    js_button_callbacks_reset(ctx);
+    js_sensor_callbacks_reset(ctx);
+}
+#endif
 
 // Process timers - call this periodically from your main loop
 // Returns the number of milliseconds until the next timer needs to run

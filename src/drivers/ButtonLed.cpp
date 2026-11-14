@@ -6,6 +6,7 @@
 #include "ButtonLed.h"
 #include "NeoPixel.h"
 #include "mqtt/HaEntities.h"
+#include <atomic>
 #include <cstdio>
 #include "mqtt/Component.h"
 #include <ArduinoJson.h>
@@ -14,7 +15,47 @@
 
 static auto TAG = "led";
 
+ButtonLed* ButtonLed::first_ = nullptr;
+
+namespace {
+// Strip pixels a script wrote since the last restore, one bit per pixel.
+std::atomic<uint16_t> g_scriptPixels{0};
+static_assert(NeoPixelController::NUMBER_OF_LEDS <= 16, "one bit per LED in g_scriptPixels");
+} // namespace
+
+void ButtonLed::noteScriptPixel(const int ledIndex) noexcept {
+    if (ledIndex >= 0 && ledIndex < NeoPixelController::NUMBER_OF_LEDS) {
+        g_scriptPixels.fetch_or(static_cast<uint16_t>(1u << ledIndex), std::memory_order_acq_rel);
+    }
+}
+
+void ButtonLed::restoreScriptPixels() noexcept {
+    uint16_t pixels = g_scriptPixels.exchange(0, std::memory_order_acq_rel);
+    if (pixels == 0) {
+        return;  // no script touched an LED: nothing to write, no show()
+    }
+    for (const ButtonLed* led = first_; led != nullptr; led = led->next_) {
+        const uint16_t bit = led->ledIndex_ >= 0 && led->ledIndex_ < NeoPixelController::NUMBER_OF_LEDS
+                                 ? static_cast<uint16_t>(1u << led->ledIndex_) : 0;
+        if (pixels & bit) {
+            led->writePixel();
+            pixels = static_cast<uint16_t>(pixels & ~bit);
+        }
+    }
+    for (int i = 0; i < NeoPixelController::NUMBER_OF_LEDS; ++i) {
+        if (pixels & (1u << i)) {
+            neopixels.setPixel(i, CRGB::Black);
+        }
+    }
+    NeoPixelController::show();
+}
+
 void ButtonLed::updateDisplay() const noexcept {
+    writePixel();
+    NeoPixelController::show();
+}
+
+void ButtonLed::writePixel() const noexcept {
     if (state_.on) {
         const uint8_t scaledR = (state_.red * state_.brightness) / 255;
         const uint8_t scaledG = (state_.green * state_.brightness) / 255;
@@ -25,7 +66,6 @@ void ButtonLed::updateDisplay() const noexcept {
     } else {
         neopixels.setPixel(ledIndex_, CRGB::Black);
     }
-    NeoPixelController::show();
 }
 
 // Public methods for state retrieval (used by Button component for publishing)

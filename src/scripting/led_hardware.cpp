@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <esp_log.h>
 #include "drivers/NeoPixel.h"
+#include "drivers/ButtonLed.h"
 #include "led_hardware.h"
 
 static const char* LTAG = "led_hw";
@@ -26,6 +27,8 @@ int led_hw_set_color(int position, uint8_t r, uint8_t g, uint8_t b) {
 
     CRGB color = NeoPixelController::colorFromRGB(r, g, b);
     neopixels.setPixel(position, color);
+    // Script-made state: undone when the script engine restarts.
+    ButtonLed::noteScriptPixel(position);
     NeoPixelController::show();
 
     return 0;  // Success

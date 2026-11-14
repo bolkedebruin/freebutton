@@ -129,6 +129,15 @@ void sensor_hw_register_change_callback(int sensorId, SensorChangeCallback callb
     }
 }
 
+// Engine restart: as after boot
+void sensor_hw_reset_change_callbacks(void) {
+    for (int i = 0; i < MAX_SENSORS; i++) {
+        sensorRegistered[i] = false;
+        changeCallbacks[i] = nullptr;
+        previousValues[i] = 0.0f;
+    }
+}
+
 // Notify of sensor value - called from sampleSensors() after each sensor sample()
 void sensor_hw_notify_value(int sensorId, float value) {
     // Only process if sensor ID is in valid range and has a registered callback
@@ -153,7 +162,10 @@ void sensor_hw_notify_value(int sensorId, float value) {
         if (changeCallbacks[sensorId]) {
             ESP_LOGD(TAG, "Invoking onChange callback for sensor %d", sensorId);
             const Scripting::EngineLock lock;
-            changeCallbacks[sensorId](sensorId, value);
+            // Read again under the lock: an engine restart clears the table.
+            if (const SensorChangeCallback callback = changeCallbacks[sensorId]) {
+                callback(sensorId, value);
+            }
         }
     }
 }

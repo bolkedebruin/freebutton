@@ -20,6 +20,7 @@
 #include <string.h>
 #include "mquickjs.h"
 #include "mqtt_topic_match.h"
+#include "js_reset.h"
 
 // ESP32-specific includes
 #ifdef ESP_PLATFORM
@@ -44,6 +45,7 @@ static inline void mqtt_binding_register_disconnect_callback(void (*cb)(uint8_t)
 static inline void mqtt_binding_register_message_filter(int (*f)(uint8_t, const char*, size_t)) {}
 static inline void mqtt_binding_lock(void) {}
 static inline void mqtt_binding_unlock(void) {}
+static inline void mqtt_binding_reset(void) {}
 #endif
 
 // Maximum subscriptions per broker
@@ -275,8 +277,9 @@ static void js_mqtt_disconnect_wrapper(uint8_t brokerId) {
  * Register the wrappers with the binding layer (once). Also needed for
  * mqtt.onConnect()/onDisconnect() without any mqtt.subscribe().
  */
+static int callbacks_registered = 0;
+
 static void js_mqtt_register_wrappers(void) {
-    static int callbacks_registered = 0;
     if (!callbacks_registered) {
         mqtt_binding_register_message_callback(js_mqtt_message_wrapper);
         mqtt_binding_register_connect_callback(js_mqtt_connect_wrapper);
@@ -284,6 +287,61 @@ static void js_mqtt_register_wrappers(void) {
         // Last: from here on the MQTT task queues events for the wrappers.
         mqtt_binding_register_message_filter(js_mqtt_message_filter);
         callbacks_registered = 1;
+    }
+}
+
+/*
+ * Engine restart (js_reset.h): no subscription, no connect / disconnect
+ * handler, nothing queued, and the engine's subscriptions are gone at the
+ * brokers (topics another firmware component also uses stay subscribed).
+ *
+ * Order:
+ *  1. Under the JS MQTT lock the table is emptied: from here the MQTT task's
+ *     filter matches nothing, so no further message is queued.
+ *  2. mqtt_binding_reset() takes the filter and the wrappers away, discards
+ *     what is still in the queue (messages and connect / disconnect events
+ *     received for the old script) and unsubscribes at the brokers.
+ * The MQTT tasks are never waited for: the lock is held for the table update
+ * only, as in mqtt.subscribe() / mqtt.unsubscribe().
+ */
+void js_mqtt_reset(JSContext *ctx)
+{
+    (void)ctx;
+    // 16 pointers on the stack: the topic strings are freed outside the lock.
+    char *old_topics[MAX_BROKERS * MAX_SUBSCRIPTIONS_PER_BROKER];
+    int old_count = 0;
+
+    mqtt_binding_lock();
+    for (int b = 0; b < MAX_BROKERS; b++) {
+        for (int i = 0; i < MAX_SUBSCRIPTIONS_PER_BROKER; i++) {
+            MqttSubscription *sub = &js_mqtt_brokers[b].subscriptions[i];
+            if (sub->topic)
+                old_topics[old_count++] = sub->topic;
+            sub->allocated = 0;
+            sub->topic = NULL;
+        }
+    }
+    mqtt_binding_unlock();
+
+    mqtt_binding_reset();
+    callbacks_registered = 0;
+
+    for (int i = 0; i < old_count; i++)
+        free(old_topics[i]);
+
+    // The rest is only used with the engine lock held. The refs are cleared,
+    // not deleted: the context is about to be freed.
+    for (int b = 0; b < MAX_BROKERS; b++) {
+        BrokerCallbacks *broker = &js_mqtt_brokers[b];
+        broker->ctx = NULL;
+        broker->connectAllocated = 0;
+        broker->disconnectAllocated = 0;
+        js_gcref_forget(&broker->connectCallback);
+        js_gcref_forget(&broker->disconnectCallback);
+        for (int i = 0; i < MAX_SUBSCRIPTIONS_PER_BROKER; i++) {
+            broker->subscriptions[i].ctx = NULL;
+            js_gcref_forget(&broker->subscriptions[i].callback);
+        }
     }
 }
 

@@ -28,6 +28,12 @@ struct DeviceInfo {
     size_t jsHeapUsed = 0;  // JS heap, live data after a GC
     size_t jsHeapFree = 0;  // JS heap free (objects and the JS stack)
     size_t jsHeapSize = 0;  // JS heap buffer
+    // User script (ScriptEngine): starts since boot (1 after a normal boot
+    // with a script, +1 per restart after a deploy) and the result of the
+    // last start: "" = ran without exception, else a short message
+    // (exception text, "no script", "checksum mismatch", ...).
+    uint32_t scriptStarts = 0;
+    char scriptError[64] = "";
 
     // Hardware topology from the I2C scan at boot: type per connector 0..3
     // (0 = empty, 1 = bar, 2 = large display; same encoding as config.json

@@ -63,6 +63,10 @@ public:
     void setFont(int face, int size);
     // Back to the configured "font" / "fontsize".
     void restoreFont() { setFont(fontFace_, fontSize_); }
+    // Script engine restart (ConfigManager::restoreConfigState): the config
+    // items, selection and font again. Any task, no script code running;
+    // the LVGL task renders on its next tick.
+    void restoreConfigState();
 
     int getPage() const { return page_; }
 
@@ -110,6 +114,14 @@ private:
     std::atomic<int> selected_{-1};
     std::atomic<bool> itemsDirty_{false};
     std::atomic<bool> selectionDirty_{false};
+    // The config items while a script's setItems() has replaced them: the
+    // first setItems() moves options_ here instead of freeing it (no copy; a
+    // list no script changes keeps one string). Under the items mutex.
+    std::string configOptions_;
+    int16_t configCount_ = 0;
+    bool itemsReplaced_ = false;
+    // Config "selected" (clamped). Written at config load only.
+    int16_t configSelected_ = -1;
     // The font now (fontref::pack): the configured one until setFont().
     std::atomic<uint32_t> font_{fontref::pack(FONT_FACE_NONE, 0)};
     std::atomic<bool> fontDirty_{false};
