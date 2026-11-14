@@ -68,6 +68,9 @@ JSValue js_freebutton_display_setPage(JSContext *ctx, JSValue *this_val, int arg
 JSValue js_freebutton_system_uptime(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_freebutton_system_freeHeap(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_freebutton_system_version(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_system_id(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_system_name(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_freebutton_system_model(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 // Device API declarations
 JSValue js_freebutton_device_connectorType(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

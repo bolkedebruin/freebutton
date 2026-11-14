@@ -169,6 +169,9 @@ STUB_FUNC(js_freebutton_mqtt_onDisconnect);
 STUB_FUNC(js_freebutton_system_uptime);
 STUB_FUNC(js_freebutton_system_freeHeap);
 STUB_FUNC(js_freebutton_system_version);
+STUB_FUNC(js_freebutton_system_id);
+STUB_FUNC(js_freebutton_system_name);
+STUB_FUNC(js_freebutton_system_model);
 STUB_FUNC(js_fb_device_proxy);
 
 // Stub global functions

@@ -13,6 +13,7 @@
 #ifndef FREEBUTTON_HOMEASSISTANTDISCOVERY_H
 #define FREEBUTTON_HOMEASSISTANTDISCOVERY_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -48,6 +49,9 @@ public:
     // Set global device information (used for all entities)
     static void setDeviceInfo(const HomeAssistantDevice& device);
     static void setDeviceName(std::string name);
+    // Copies the friendly name into buf (at most cap bytes, no terminator)
+    // and returns the number of bytes copied. Any task.
+    static size_t copyDeviceName(char* buf, size_t cap);
 
     // Callback for when a broker connects: a round starts once the connect
     // burst (resubscriptions, retained messages) has settled.

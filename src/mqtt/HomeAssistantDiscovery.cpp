@@ -408,6 +408,13 @@ void HomeAssistantDiscovery::setDeviceName(std::string name) {
     deviceInfo.name = std::move(name);
 }
 
+size_t HomeAssistantDiscovery::copyDeviceName(char* buf, const size_t cap) {
+    DeviceLock lock;
+    const size_t n = deviceInfo.name.size() < cap ? deviceInfo.name.size() : cap;
+    deviceInfo.name.copy(buf, n);
+    return n;
+}
+
 void HomeAssistantDiscovery::onBrokerConnected(const uint8_t brokerId) {
     // Runs in the MQTT task (MQTT_EVENT_CONNECTED), which must stay free to
     // drain the outbox: only mark the round; poll() publishes it once the
