@@ -37,6 +37,7 @@
  *     never aws-chunked)
  */
 import type { StorageUsage } from './app-state';
+import { oneAtATime } from './device-queue';
 import {
   S3Client,
   ListObjectsV2Command,
@@ -271,12 +272,12 @@ export async function listObjects(
   for (let page = 0; page < MAX_LIST_PAGES; page++) {
     let out: ListObjectsV2CommandOutput;
     try {
-      out = await client.send(new ListObjectsV2Command({
+      out = await oneAtATime(() => client.send(new ListObjectsV2Command({
         Bucket: opts.bucket ?? APP_BUCKET,
         ...(opts.prefix ? { Prefix: opts.prefix } : {}),
         ...(opts.delimiter ? { Delimiter: opts.delimiter } : {}),
         ...(token ? { ContinuationToken: token } : {}),
-      })) as ListObjectsV2CommandOutput;
+      }))) as ListObjectsV2CommandOutput;
     } catch (err) {
       throw mapError(err);
     }
@@ -312,12 +313,15 @@ export async function getObject(
   bucket: Bucket = APP_BUCKET,
 ): Promise<{ text: string; etag?: string } | null> {
   try {
-    const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as {
-      Body?: { transformToString(): Promise<string> };
-      ETag?: string;
-    };
-    const text = out.Body ? await out.Body.transformToString() : '';
-    return { text, ...(out.ETag ? { etag: out.ETag } : {}) };
+    // The body is read inside the queue's turn: the device is still sending it.
+    return await oneAtATime(async () => {
+      const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as {
+        Body?: { transformToString(): Promise<string> };
+        ETag?: string;
+      };
+      const text = out.Body ? await out.Body.transformToString() : '';
+      return { text, ...(out.ETag ? { etag: out.ETag } : {}) };
+    });
   } catch (err) {
     if (statusOf(err as SdkErrorLike) === 404) return null; // NoSuchKey
     throw mapError(err);
@@ -334,12 +338,14 @@ export async function getObjectBytes(
   bucket: Bucket = APP_BUCKET,
 ): Promise<{ bytes: Uint8Array; etag?: string } | null> {
   try {
-    const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as {
-      Body?: { transformToByteArray(): Promise<Uint8Array> };
-      ETag?: string;
-    };
-    const bytes = out.Body ? await out.Body.transformToByteArray() : new Uint8Array(0);
-    return { bytes, ...(out.ETag ? { etag: out.ETag } : {}) };
+    return await oneAtATime(async () => {
+      const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as {
+        Body?: { transformToByteArray(): Promise<Uint8Array> };
+        ETag?: string;
+      };
+      const bytes = out.Body ? await out.Body.transformToByteArray() : new Uint8Array(0);
+      return { bytes, ...(out.ETag ? { etag: out.ETag } : {}) };
+    });
   } catch (err) {
     if (statusOf(err as SdkErrorLike) === 404) return null; // NoSuchKey
     throw mapError(err);
@@ -349,7 +355,7 @@ export async function getObjectBytes(
 /** Whether an object exists (HEAD). */
 export async function headObject(baseUrl: string, key: string, bucket: Bucket = APP_BUCKET): Promise<boolean> {
   try {
-    await clientFor(baseUrl).send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    await oneAtATime(() => clientFor(baseUrl).send(new HeadObjectCommand({ Bucket: bucket, Key: key })));
     return true;
   } catch (err) {
     // HEAD has no body, so a 404 arrives without an S3 code.
@@ -383,12 +389,12 @@ export async function putObject(
   bucket: WritableBucket = APP_BUCKET,
 ): Promise<PutResult> {
   try {
-    const out = await clientFor(baseUrl).send(new PutObjectCommand({
+    const out = await oneAtATime(() => clientFor(baseUrl).send(new PutObjectCommand({
       Bucket: bucket,
       Key: key,
       Body: body,
       ContentType: contentTypeFor(key),
-    })) as { ETag?: string; [REBOOT_FIELD]?: boolean };
+    }))) as { ETag?: string; [REBOOT_FIELD]?: boolean };
     return {
       ...(out?.ETag ? { etag: out.ETag } : {}),
       rebootRequired: out?.[REBOOT_FIELD] === true,
@@ -400,7 +406,7 @@ export async function putObject(
 
 export async function deleteObject(baseUrl: string, key: string, bucket: WritableBucket = APP_BUCKET): Promise<void> {
   try {
-    await clientFor(baseUrl).send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    await oneAtATime(() => clientFor(baseUrl).send(new DeleteObjectCommand({ Bucket: bucket, Key: key })));
   } catch (err) {
     throw mapError(err);
   }

@@ -2,7 +2,7 @@ import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { emit, on } from '../js/app-state.js';
 import { getCode, getEditorView, openDocument } from '../js/editor.js';
-import { compileForDevice } from '../js/compiler.js';
+import { compileForDeviceEx } from '../js/compiler.js';
 import { validateCode, formatValidationErrors } from '../js/validator.js';
 import { workspace } from '../js/workspace.js';
 import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
@@ -111,7 +111,7 @@ export class FbApp extends LitElement {
       // 3. Compile relocated for the device and upload as main.jsc.
       const base = workspace.deviceBase;
       emit('console-line', { text: 'Compiling for device...', type: 'info' });
-      const bytecode = await compileForDevice(code, base);
+      const { bytecode, atomsId } = await compileForDeviceEx(code, base);
 
       emit('console-line', {
         text: 'Compiled ' + bytecode.length + ' bytes — uploading ' + MAIN_BYTECODE_NAME + '...',
@@ -130,7 +130,8 @@ export class FbApp extends LitElement {
       formData.append('file', blob, MAIN_BYTECODE_NAME);
 
       // Multipart body: signed with x-amz-content-sha256 UNSIGNED-PAYLOAD.
-      const response = await signedFetch(base + '/api/bytecode/upload', {
+      const uploadUrl = base + '/api/bytecode/upload' + (atomsId ? '?atoms=' + encodeURIComponent(atomsId) : '');
+      const response = await signedFetch(uploadUrl, {
         method: 'POST',
         body: formData
       });

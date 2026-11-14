@@ -175,6 +175,15 @@ export async function getDeviceVirtualAddress(deviceUrl: string = ''): Promise<{
  * @returns The compiled bytecode pre-relocated for the device
  */
 export async function compileForDevice(sourceCode: string, deviceUrl: string = ''): Promise<Uint8Array> {
+    return (await compileForDeviceEx(sourceCode, deviceUrl)).bytecode;
+}
+
+/**
+ * compileForDevice(), plus `atomsId`: the device's "atoms_id" when the
+ * compiler resolved the built-in names for it, else "". The upload passes it
+ * on ("?atoms=<id>") so that the device needs no lookup memory.
+ */
+export async function compileForDeviceEx(sourceCode: string, deviceUrl: string = ''): Promise<{ bytecode: Uint8Array; atomsId: string }> {
     // Get the target virtual address from the device
     const addressInfo = await getDeviceVirtualAddress(deviceUrl);
 
@@ -193,9 +202,10 @@ export async function compileForDevice(sourceCode: string, deviceUrl: string = '
     if (!romBase && addressInfo.atoms_id) {
         console.warn('The device firmware and this IDE were built from different script libraries: deploy may not run correctly. Update the device\'s IDE (filesystem) or firmware.');
     }
-    return await compile(sourceCode, {
+    const bytecode = await compile(sourceCode, {
         targetAddr,
         use32Bit: true,
         romBase,
     } as CompileOptions);
+    return { bytecode, atomsId: romBase ? (addressInfo.atoms_id ?? '') : '' };
 }
