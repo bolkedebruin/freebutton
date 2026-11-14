@@ -47,7 +47,7 @@ echo "  -> $BUILD/freebutton_stdlib.h, mquickjs_atom.h"
 # freebutton_stubs_wasm.c provides no-op stubs for the hardware APIs so their
 # names land in the atom table; the real implementations run on-device only.
 echo "Step 2: compiling to WebAssembly..."
-EXPORTED_FUNCTIONS='["_compile_js_to_bytecode","_get_bytecode_buffer","_get_error_message","_get_bytecode_size","_malloc","_free"]'
+EXPORTED_FUNCTIONS='["_compile_js_to_bytecode","_get_bytecode_buffer","_get_error_message","_get_bytecode_size","_set_target_rom_base","_get_stdlib_id","_malloc","_free"]'
 EXPORTED_RUNTIME='["ccall","cwrap","HEAPU8","UTF8ToString","stringToUTF8"]'
 
 emcc \

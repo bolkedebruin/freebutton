@@ -23,6 +23,10 @@ typedef struct {
     int update_atoms;        // BOOL
     BCRelocReadFunc read_func;  // Callback to read data (NULL = use relocated ptr)
     void *read_opaque;          // Opaque data for read_func
+    // [rom_lo, rom_hi): this build's stdlib ROM table. A pointer into it is a
+    // ROM atom the compiler already resolved for this device: left as it is.
+    uintptr_t rom_lo;
+    uintptr_t rom_hi;
 } BCRelocState;
 
 int JS_RelocateHdr(BCRelocState *s, JSBytecodeHeader *hdr, uintptr_t new_base_addr);
@@ -304,6 +308,11 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
     reloc_state.update_atoms = 1;
     reloc_state.read_func = relocReadCallback;
     reloc_state.read_opaque = this;
+    // The IDE resolves the ROM atoms itself when it knows this build's table
+    // (/api/bytecode/next_address): a chunk can refer to a string that only
+    // arrives in a later chunk, and such a reference cannot be looked up here.
+    reloc_state.rom_lo = reinterpret_cast<uintptr_t>(js_stdlib.stdlib_table);
+    reloc_state.rom_hi = reloc_state.rom_lo + js_stdlib.stdlib_table_len * sizeof(JSWord);
 
     // Process header on first chunk
     if (reloc_state_ == RelocationState::HEADER_PENDING) {
