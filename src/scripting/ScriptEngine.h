@@ -135,13 +135,6 @@ public:
     // Script execution (takes the engine lock)
     ScriptResult execute(std::string_view script, const char* filename = "<eval>");
 
-    // REPL support
-    bool evalLine(std::string_view line);  // Evaluate single line (non-blocking)
-
-    // Get last result as string
-    std::string getLastOutput() const { return lastResult_.output; }
-    std::string getLastError() const { return lastResult_.error; }
-
     // Get the JSContext for advanced operations (like timer processing)
     JSContext* getContext() const { return ctx_; }
 
@@ -196,7 +189,6 @@ private:
     // Helper functions
     static void logCallback(void* opaque, const void* buf, size_t buf_len);
     std::string jsValueToString(JSValue value) const;
-    void printException() const;
 
     // Disable copy and move
     ScriptEngine(const ScriptEngine&) = delete;

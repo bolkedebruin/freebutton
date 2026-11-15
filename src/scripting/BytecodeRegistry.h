@@ -6,6 +6,7 @@
 #ifndef BYTECODE_REGISTRY_H
 #define BYTECODE_REGISTRY_H
 
+#include <initializer_list>
 #include <vector>
 #include <string>
 #include <stdint.h>
@@ -43,9 +44,14 @@ struct BytecodeEntry {
     }
 };
 
+// The script that runs at start: the IDE's boot script, else the legacy name
+// (BytecodeRegistry::bootScriptName()).
+inline constexpr char kBootScriptName[] = "main.jsc";
+inline constexpr char kLegacyBootScriptName[] = "script.jsc";
+
 // One registry per device: it maps the js_user partition once (the mapping's
 // virtual address is baked into relocated bytecode) and is shared by the
-// uploader (async_tcp task), the boot loader and loadUserBytecode() (JS task).
+// uploader (async_tcp task) and the boot loader (JS task).
 // Every public method is serialised by a recursive mutex; callers that make
 // several calls in a row hold a BytecodeRegistry::Lock.
 //
@@ -93,9 +99,6 @@ public:
     // Find bytecode by name. The pointer is valid while a Lock is held.
     const BytecodeEntry* find(const char* name) const;
 
-    // List all active bytecode entries
-    std::vector<BytecodeEntry> list() const;
-
     // Calls f(const BytecodeEntry&) for every active entry (holds the lock).
     template <class F>
     void forEachActive(F&& f) const {
@@ -104,9 +107,6 @@ public:
             if (entry.active) f(entry);
         }
     }
-
-    // Remove bytecode entry (marks as inactive)
-    bool remove(const char* name);
 
     // First free offset that fits `size` bytes (see class comment).
     bool allocate(size_t size, uint32_t* offset) const;
@@ -126,20 +126,31 @@ public:
     // in progress are not touched.
     void unpinAll();
 
-    // True when `name` is the script that runs at start: "main.jsc", or
-    // "script.jsc" while there is no active "main.jsc". Does not pin.
+    // The boot script rule, in one place: the script that runs at start is
+    // kBootScriptName, else kLegacyBootScriptName. Asks present(name) for the
+    // names in that order and returns the first for which it is true,
+    // nullptr when it is true for none.
+    template <class Present>
+    static const char* bootScriptName(Present&& present) {
+        for (const char* name : {kBootScriptName, kLegacyBootScriptName}) {
+            if (present(name)) return name;
+        }
+        return nullptr;
+    }
+
+    // True when `name` is the script that runs at start: kBootScriptName, or
+    // kLegacyBootScriptName while there is no active kBootScriptName. Does
+    // not pin.
     bool isBootScript(const char* name) const;
 
-    // Offset the next (small) upload would get, and the free gap there.
+    // Offset the next (small) upload would get.
     uint32_t getNextOffset() const;
-    size_t getFreeSpace() const;
 
     // Get partition base address (physical flash address)
     uint32_t getPartitionAddress() const;
 
-    // Get/set virtual memory base address (from mmap)
+    // Virtual memory base address of the partition (from mmap)
     uint32_t getVirtualBaseAddress() const;
-    void setVirtualBaseAddress(uint32_t addr);
 
 private:
     BytecodeRegistry();

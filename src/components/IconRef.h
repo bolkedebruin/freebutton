@@ -30,6 +30,7 @@
 #include <string_view>
 
 #include "IconLogic.h"
+#include "SlotReset.h"
 #include "ui/MediaImage.h"
 #include "utils/TextSlot.h"
 
@@ -171,9 +172,46 @@ public:
         return fresh;
     }
 
+    // Script engine restart (LVGL lock held), for an icon a script wrote
+    // last: back to the config "icon" name; "" (no config icon) hides the
+    // icon. Without a state there is nothing to restore.
+    void restoreConfigName() {
+        if (IconState* s = get()) {
+            s->name.write(s->configName());
+        }
+    }
+
 private:
     std::atomic<IconState*> state_{nullptr};
 };
+
+// Result of a script's setIcon. Invalid: not an icon name; NoMemory: the heap
+// could not hold the icon state (only on the first icon of an item).
+enum class SetIconResult : uint8_t { Ok, Invalid, NoMemory };
+
+// Script code: the icon name of a button or display item ("" hides the
+// icon). Like the text setters it only stores the name, and notes in
+// scriptWrote (bit) that a script wrote it last. sizePx / tint: for the icon
+// state when this is the item's first icon.
+inline SetIconResult setIconFromScript(IconHolder& holder, const std::string_view name, const int sizePx,
+                                       const uint32_t tint, const SlotOwner owner,
+                                       std::atomic<uint8_t>& scriptWrote, const uint8_t bit) {
+    if (!name.empty() && !icon::validName(name)) {
+        return SetIconResult::Invalid;
+    }
+    IconState* s = holder.get();
+    if (s == nullptr) {
+        if (name.empty()) {
+            return SetIconResult::Ok;  // no icon to hide
+        }
+        s = holder.ensure(sizePx, tint);
+        if (s == nullptr) {
+            return SetIconResult::NoMemory;
+        }
+    }
+    storeFromScript(s->name, name, owner, "icon", scriptWrote, bit);
+    return SetIconResult::Ok;
+}
 
 } // namespace freebutton
 

@@ -165,22 +165,26 @@ void ScriptEngine::startUserScript() {
 
 // Must load bytecode BEFORE executing any JavaScript to avoid RAM atom conflicts.
 void ScriptEngine::runBootScript() {
-    // Find bytecode in registry: the IDE's boot script "main.jsc", else
-    // the legacy "script.jsc". A found entry is pinned.
+    // Find bytecode in registry: the boot script, else the legacy name
+    // (BytecodeRegistry::bootScriptName). A found entry is pinned.
     BytecodeEntry entry;
-    if (!bytecode_registry_find("main.jsc", &entry) && !bytecode_registry_find("script.jsc", &entry)) {
+    const char* bootName = BytecodeRegistry::bootScriptName(
+        [&entry](const char* name) { return bytecode_registry_find(name, &entry); });
+    if (bootName == nullptr) {
         // Stored for another firmware build (the registry logged it), or nothing stored.
         bool stale = false;
         {
             BytecodeRegistry::Lock registryLock;
             auto& registry = BytecodeRegistry::instance();
-            stale = registry.find("main.jsc") != nullptr || registry.find("script.jsc") != nullptr;
+            stale = BytecodeRegistry::bootScriptName([&registry](const char* name) {
+                        return registry.find(name) != nullptr;
+                    }) != nullptr;
         }
         if (stale) {
             setScriptError("other firmware build");
         } else {
             ESP_LOGI(TAG, "No user script found");
-            ESP_LOGI(TAG, "Upload main.jsc via web interface to run custom code");
+            ESP_LOGI(TAG, "Upload %s via web interface to run custom code", kBootScriptName);
             setScriptError("no script");
         }
         return;
@@ -380,20 +384,6 @@ ScriptResult ScriptEngine::execute(std::string_view script, const char* filename
     return lastResult_;
 }
 
-bool ScriptEngine::evalLine(std::string_view line) {
-    auto result = execute(line, "<repl>");
-
-    if (result.success) {
-        if (!result.output.empty() && result.output != "undefined") {
-            ESP_LOGI("REPL", "%s", result.output.c_str());
-        }
-        return true;
-    } else {
-        ESP_LOGE("REPL", "Error: %s", result.error.c_str());
-        return false;
-    }
-}
-
 // Static callback for logging
 void ScriptEngine::logCallback(void* opaque, const void* buf, size_t buf_len) {
     (void)opaque;
@@ -460,14 +450,6 @@ std::string ScriptEngine::jsValueToString(const JSValue value) const {
 
     // For other types, return generic representation
     return "[object]";
-}
-
-void ScriptEngine::printException() const {
-    if (!ctx_) return;
-
-    JSValue exception = JS_GetException(ctx_);
-    std::string exceptionStr = jsValueToString(exception);
-    ESP_LOGE(TAG, "Exception: %s", exceptionStr.c_str());
 }
 
 ScriptEngine::HeapUsage ScriptEngine::measureHeap() const {

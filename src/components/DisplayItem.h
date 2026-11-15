@@ -85,19 +85,18 @@ private:
     IconHolder icon_;
     int configuredIconSize_ = icon::kDisplayDefaultSize;
     uint32_t configuredIconColor_ = icon::kNoColor;
-    IconState* ensureIcon() { return icon_.ensure(configuredIconSize_, configuredIconColor_); }
 
     // Which texts a script wrote last (kScript* bits). A script setter sets
     // the bit after it stored the text, a message on the item's own config
-    // topic clears it: the slots are shared, and only a text from a script
-    // is dropped when the script engine restarts (restoreConfigState()).
-    // Not exact when both write the same slot at the same moment: then the
-    // bit can name the wrong writer once.
+    // topic clears it (SlotReset.h): the slots are shared, and only a text
+    // from a script is dropped when the script engine restarts
+    // (restoreConfigState()).
     static constexpr uint8_t kScriptValue = 1;
     static constexpr uint8_t kScriptCaption = 2;
     static constexpr uint8_t kScriptUnit = 4;
     static constexpr uint8_t kScriptIcon = 8;
     std::atomic<uint8_t> scriptWrote_{0};
+    SlotOwner slotOwner() const { return {"DisplayItem", id}; }
 
     // Config "x" / "y" / "page", next to the run-time x / y / page a script
     // changes (setPosition, setPage), and the item's place among the config
@@ -281,7 +280,7 @@ public:
     void setDisplayUnit(std::string_view text);
 
     // Icon name ("" hides it). Any task, like the text setters.
-    enum class SetIconResult : uint8_t { Ok, Invalid, NoMemory };
+    using SetIconResult = freebutton::SetIconResult;
     SetIconResult setIconName(std::string_view name);
 
     // Font of value and unit (a fonts.h face, FONT_FACE_NONE = the style's;

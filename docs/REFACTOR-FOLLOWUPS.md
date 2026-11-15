@@ -32,7 +32,7 @@ Then browse `http://freebutton.local/` (or the device IP):
 - [ ] `mquickjs.wasm` instantiates (served `application/wasm` + gzip) — compile a script in the editor.
 - [ ] `GET /api/version` returns `{version, git_commit, dirty, model}` matching `include/config.h`.
 - [ ] **Compile → deploy** to the device (the newly-wired Upload/Deploy button): round-trips `/api/bytecode/next_address` → `/api/bytecode/upload`, script runs on device.
-- [ ] SPA deep-links / refresh serve `index.html` (onNotFound fallback).
+- [ ] An unknown GET is a 404 (the IDE has no client-side routing; the former `index.html` fallback in onNotFound was removed).
 
 ---
 

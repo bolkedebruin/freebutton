@@ -74,21 +74,6 @@ void Button::registerTopics() {
     }
 }
 
-namespace {
-
-// Store text for the LVGL task. Any task; no heap, no LVGL lock.
-template <size_t Bytes>
-void storeText(TextSlot<Bytes>& slot, const std::string_view text, const unsigned long id, const char* field) {
-    if (slot.write(text).firstTruncation) {
-        ESP_LOGW("Button", "Button %lu: %s of %u bytes cut to %u (logged once per button)",
-                 id, field, static_cast<unsigned>(text.size()),
-                 static_cast<unsigned>(TextSlot<Bytes>::kCapacity));
-    }
-    ui::requestPendingRender();
-}
-
-} // namespace
-
 // Runs in the MQTT task. Right after connect the broker sends the retained
 // label and top label of every button in a burst, so this must not block: it
 // only copies the payload into the button's slot and returns. The LVGL task
@@ -103,20 +88,17 @@ void Button::onMessage(uint8_t brokerId, std::string_view topic, std::string_vie
                 // Each also notes that the text is no longer a script's
                 // (scriptWrote_): it stays when the script engine restarts.
                 case LABEL:
-                    storeText(labelSlot_, data, id, "label");
-                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptLabel), std::memory_order_acq_rel);
+                    storeFromConfigTopic(labelSlot_, data, slotOwner(), "label", scriptWrote_, kScriptLabel);
                     break;
 
                 case TOP_LABEL:
-                    storeText(topLabelSlot_, data, id, "top label");
-                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptTopLabel), std::memory_order_acq_rel);
+                    storeFromConfigTopic(topLabelSlot_, data, slotOwner(), "top label", scriptWrote_, kScriptTopLabel);
                     break;
 
                 case ICON:
                     // The state exists: configureIcon() made it for this topic.
                     if (IconState* s = icon_.get()) {
-                        storeText(s->name, data, id, "icon");
-                        scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptIcon), std::memory_order_acq_rel);
+                        storeFromConfigTopic(s->name, data, slotOwner(), "icon", scriptWrote_, kScriptIcon);
                     }
                     break;
 
@@ -250,34 +232,24 @@ void Button::setTopLabelFont(const int face, const int size) {
 // JS bindings. These run in the JS task, or in an MQTT task when called from a
 // JS mqtt.subscribe() callback, so like onMessage they only store the text.
 void Button::setLabelText(const std::string_view text) {
-    storeText(labelSlot_, text, id, "label");
-    scriptWrote_.fetch_or(kScriptLabel, std::memory_order_acq_rel);
+    storeFromScript(labelSlot_, text, slotOwner(), "label", scriptWrote_, kScriptLabel);
 }
 
 void Button::setTopLabelText(const std::string_view text) {
-    storeText(topLabelSlot_, text, id, "top label");
-    scriptWrote_.fetch_or(kScriptTopLabel, std::memory_order_acq_rel);
+    storeFromScript(topLabelSlot_, text, slotOwner(), "top label", scriptWrote_, kScriptTopLabel);
 }
 
 // LVGL lock held (so applyPending() is not running), no script code running.
 // Only stores and flags: the LVGL task draws on its next tick.
 void Button::restoreConfigState() {
     const uint8_t wrote = scriptWrote_.exchange(0, std::memory_order_acq_rel);
-    if (wrote & kScriptLabel) {
-        resetSlot(labelSlot_);
-    }
-    if (wrote & kScriptTopLabel) {
-        resetSlot(topLabelSlot_);
-    }
+    resetIfScriptWrote(labelSlot_, wrote, kScriptLabel);
+    resetIfScriptWrote(topLabelSlot_, wrote, kScriptTopLabel);
     if (button != nullptr) {
         redrawConfigured_ |= wrote & (kScriptLabel | kScriptTopLabel);
     }
     if (wrote & kScriptIcon) {
-        // The state exists: the script's setIcon made it at the latest. ""
-        // (no config icon) shows the label again.
-        if (IconState* s = icon_.get()) {
-            s->name.write(s->configName());
-        }
+        icon_.restoreConfigName();  // "" (no config icon) shows the label again
     }
     const uint32_t configuredFont = fontref::pack(fontFace_, fontSize_);
     const uint32_t configuredTopFont = fontref::pack(topFontFace_, topFontSize_);
@@ -286,10 +258,6 @@ void Button::restoreConfigState() {
     if (labelChanged || topChanged) {
         fontDirty_.store(true, std::memory_order_release);
     }
-}
-
-IconState* Button::ensureIcon() {
-    return icon_.ensure(configuredIconSize_, icon::kNoColor);
 }
 
 // Boot (config load), before the button is created and subscribed.
@@ -319,22 +287,8 @@ void Button::configureIcon(const JsonObject& data) {
 
 // Script code (JS task). Like the label setters, only stores the name.
 Button::SetIconResult Button::setIconName(const std::string_view name) {
-    if (!name.empty() && !icon::validName(name)) {
-        return SetIconResult::Invalid;
-    }
-    IconState* s = icon_.get();
-    if (s == nullptr) {
-        if (name.empty()) {
-            return SetIconResult::Ok;  // no icon to hide
-        }
-        s = ensureIcon();
-        if (s == nullptr) {
-            return SetIconResult::NoMemory;
-        }
-    }
-    storeText(s->name, name, id, "icon");
-    scriptWrote_.fetch_or(kScriptIcon, std::memory_order_acq_rel);
-    return SetIconResult::Ok;
+    return setIconFromScript(icon_, name, configuredIconSize_, icon::kNoColor, slotOwner(), scriptWrote_,
+                             kScriptIcon);
 }
 
 const std::string Button::getComponentType() const {

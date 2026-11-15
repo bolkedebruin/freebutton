@@ -253,7 +253,8 @@ void handleRemoteFirmwareUpdate(AsyncWebServerRequest *request) {
 
     int firmware_id = 0;
     if (request->hasParam("id")) {
-        firmware_id = std::stoi(request->getParam("id")->value().c_str());
+        // strtol, not std::stoi: without exceptions a non-numeric id aborts the firmware.
+        firmware_id = static_cast<int>(strtol(request->getParam("id")->value().c_str(), nullptr, 10));
         ESP_LOGI(TAG, "Firmware ID: %d", firmware_id);
     }
 
@@ -434,26 +435,6 @@ static void handleReboot(AsyncWebServerRequest *request) {
     request->send(200, "application/json", R"({"status":"rebooting"})");
 }
 
-void handleBytecodeDownload(AsyncWebServerRequest *request) {
-    // Download the temp file created by BytecodeWriter
-    // Default name is "script" but can be overridden
-    String filename = "script.jsc";
-    if (request->hasParam("name")) {
-        filename = request->getParam("name")->value();
-    }
-
-    String temp_path = String("/tmp_reloc_") + filename;
-
-    // Check if file exists
-    if (!LittleFS.exists(temp_path)) {
-        request->send(404, "text/plain", "Temp file not found. Upload bytecode first.");
-        return;
-    }
-
-    // Send file directly from LittleFS
-    request->send(LittleFS, temp_path, "application/octet-stream", true);
-}
-
 void webserver_start() {
     // The web IDE is now served locally from LittleFS /www/ (same-origin), so the
     // wildcard CORS + Private-Network-Access DefaultHeaders that the former
@@ -474,8 +455,8 @@ void webserver_start() {
     fbauth::init();
     fbauth::installGate(server);
 
-    // SPA fallback: any GET that is not an API/WebSocket route and does not map
-    // to a static file serves the gzipped app shell so client-side routing works.
+    // No route and no static file: 404. (OPTIONS and the captive portal are
+    // answered first.)
     server.onNotFound([](AsyncWebServerRequest *request){
         if (request->method() == HTTP_OPTIONS) {
             request->send(200);
@@ -483,23 +464,10 @@ void webserver_start() {
         }
         // Captive portal: OS connectivity probes (/hotspot-detect.html,
         // /generate_204, /connecttest.txt, ...) resolve to us via the portal's
-        // DNS. Redirect every unknown GET to the WiFi setup page; without this
-        // the SPA fallback below answered them with the web IDE.
+        // DNS. Redirect every unknown GET to the WiFi setup page.
         if (is_captive_portal_active() && request->method() == HTTP_GET) {
             request->redirect("http://192.168.4.1/");
             return;
-        }
-        const String& url = request->url();
-        if (request->method() == HTTP_GET &&
-            !url.startsWith("/api") && !url.startsWith("/ws")) {
-            static constexpr const char* SPA_SHELL = "/www/index.html.gz";
-            if (LittleFS.exists(SPA_SHELL)) {
-                AsyncWebServerResponse *response =
-                    request->beginResponse(LittleFS, SPA_SHELL, "text/html");
-                response->addHeader("Content-Encoding", "gzip");
-                request->send(response);
-                return;
-            }
         }
         request->send(404);
     });
@@ -590,23 +558,15 @@ void webserver_start() {
         request->send(202, "application/json", "{\"status\":\"requested\"}");
     });
 
-    // Reports where the next (small) uploaded bytecode blob would land in the
-    // js_user partition and the free gap there (the device relocates uploads
-    // itself; the IDE compiles position-independent bytecode).
+    // What the IDE's compiler needs to know of this build (the name is from
+    // the time the IDE relocated bytecode itself; the device now places and
+    // relocates uploads). rom_base / atoms_id: where this build's stdlib ROM
+    // table is and which ROM atoms it has. An IDE whose compiler has the same
+    // atoms resolves them for this address (BytecodeWriter.cpp).
     server.on("/api/bytecode/next_address", HTTP_GET, [](AsyncWebServerRequest *request){
-        auto& registry = BytecodeRegistry::instance();
-        BytecodeRegistry::Lock lock;
-        const uint32_t offset = registry.getNextOffset();
-        const uint32_t virtual_addr = registry.getVirtualBaseAddress() + offset;
-        const size_t free_space = registry.getFreeSpace();
-        // rom_base / atoms_id: where this build's stdlib ROM table is and
-        // which ROM atoms it has. An IDE whose compiler has the same atoms
-        // resolves them for this address (BytecodeWriter.cpp).
-        char body[224];
+        char body[64];
         int n = snprintf(body, sizeof(body),
-            "{\"offset\":\"0x%lx\",\"virtual_addr\":\"0x%lx\",\"free_space\":%zu,"
-            "\"rom_base\":\"0x%lx\",\"atoms_id\":\"0x%lx\"}",
-            (unsigned long)offset, (unsigned long)virtual_addr, free_space,
+            "{\"rom_base\":\"0x%lx\",\"atoms_id\":\"0x%lx\"}",
             (unsigned long)bytecode_stdlib_rom_base(),
             (unsigned long)bytecode_stdlib_atoms_id());
         if (n < 0 || n >= (int)sizeof(body)) {

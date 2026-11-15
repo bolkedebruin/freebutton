@@ -44,21 +44,6 @@ DisplayItem::~DisplayItem() {
     detach();
 }
 
-namespace {
-
-// Store text for the LVGL task. Any task; no heap, no LVGL lock.
-template <size_t Bytes>
-void storeText(TextSlot<Bytes>& slot, const std::string_view text, const unsigned long id, const char* field) {
-    if (slot.write(text).firstTruncation) {
-        ESP_LOGW("DisplayItem", "DisplayItem %lu: %s of %u bytes cut to %u (logged once per item)",
-                 id, field, static_cast<unsigned>(text.size()),
-                 static_cast<unsigned>(TextSlot<Bytes>::kCapacity));
-    }
-    ui::requestPendingRender();
-}
-
-} // namespace
-
 void DisplayItem::registerTopics() {
     for (const auto& topic : topics) {
         addSubscription(topic.brokerId, topic.topic);
@@ -79,22 +64,18 @@ void DisplayItem::onMessage(const uint8_t brokerId, const std::string_view topic
                 // Each also notes that the text is no longer a script's
                 // (scriptWrote_): it stays when the script engine restarts.
                 case DISPLAY_LABEL:
-                    storeText(captionSlot_, data, id, "caption");
-                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptCaption), std::memory_order_acq_rel);
+                    storeFromConfigTopic(captionSlot_, data, slotOwner(), "caption", scriptWrote_, kScriptCaption);
                     break;
                 case DISPLAY_VALUE:
-                    storeText(valueSlot_, data, id, "value");
-                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptValue), std::memory_order_acq_rel);
+                    storeFromConfigTopic(valueSlot_, data, slotOwner(), "value", scriptWrote_, kScriptValue);
                     break;
                 case DISPLAY_UNIT:
-                    storeText(unitSlot_, data, id, "unit");
-                    scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptUnit), std::memory_order_acq_rel);
+                    storeFromConfigTopic(unitSlot_, data, slotOwner(), "unit", scriptWrote_, kScriptUnit);
                     break;
                 case DISPLAY_ICON:
                     // The state exists: configureIcon() made it for this topic.
                     if (IconState* s = icon_.get()) {
-                        storeText(s->name, data, id, "icon");
-                        scriptWrote_.fetch_and(static_cast<uint8_t>(~kScriptIcon), std::memory_order_acq_rel);
+                        storeFromConfigTopic(s->name, data, slotOwner(), "icon", scriptWrote_, kScriptIcon);
                     }
                     break;
                 default:
@@ -252,24 +233,11 @@ void DisplayItem::restoreConfigState() {
     // A slot back to "never written" shows the configured default, which
     // only a redraw of the box puts there.
     const uint8_t wrote = scriptWrote_.exchange(0, std::memory_order_acq_rel);
-    if (wrote & kScriptValue) {
-        resetSlot(valueSlot_);
-        redraw = true;
-    }
-    if (wrote & kScriptCaption) {
-        resetSlot(captionSlot_);
-        redraw = true;
-    }
-    if (wrote & kScriptUnit) {
-        resetSlot(unitSlot_);
-        redraw = true;
-    }
+    redraw |= resetIfScriptWrote(valueSlot_, wrote, kScriptValue);
+    redraw |= resetIfScriptWrote(captionSlot_, wrote, kScriptCaption);
+    redraw |= resetIfScriptWrote(unitSlot_, wrote, kScriptUnit);
     if (wrote & kScriptIcon) {
-        // The state exists: the script's setIcon made it at the latest. ""
-        // (no config icon) hides the icon.
-        if (IconState* s = icon_.get()) {
-            s->name.write(s->configName());
-        }
+        icon_.restoreConfigName();  // "" (no config icon) hides the icon
     }
     if (fromConfig()) {
         if (x != configX_ || y != configY_) {
@@ -321,18 +289,15 @@ void DisplayItem::detach() {
 // JS bindings (loop or button task, JS engine lock held). Like onMessage they
 // only store the text.
 void DisplayItem::setDisplayLabel(const std::string_view text) {
-    storeText(captionSlot_, text, id, "caption");
-    scriptWrote_.fetch_or(kScriptCaption, std::memory_order_acq_rel);
+    storeFromScript(captionSlot_, text, slotOwner(), "caption", scriptWrote_, kScriptCaption);
 }
 
 void DisplayItem::setDisplayValue(const std::string_view text) {
-    storeText(valueSlot_, text, id, "value");
-    scriptWrote_.fetch_or(kScriptValue, std::memory_order_acq_rel);
+    storeFromScript(valueSlot_, text, slotOwner(), "value", scriptWrote_, kScriptValue);
 }
 
 void DisplayItem::setDisplayUnit(const std::string_view text) {
-    storeText(unitSlot_, text, id, "unit");
-    scriptWrote_.fetch_or(kScriptUnit, std::memory_order_acq_rel);
+    storeFromScript(unitSlot_, text, slotOwner(), "unit", scriptWrote_, kScriptUnit);
 }
 
 void DisplayItem::setFont(const int face, const int size) {
@@ -368,22 +333,8 @@ void DisplayItem::configureIcon(const JsonObject& data) {
 }
 
 DisplayItem::SetIconResult DisplayItem::setIconName(const std::string_view name) {
-    if (!name.empty() && !icon::validName(name)) {
-        return SetIconResult::Invalid;
-    }
-    IconState* s = icon_.get();
-    if (s == nullptr) {
-        if (name.empty()) {
-            return SetIconResult::Ok;  // no icon to hide
-        }
-        s = ensureIcon();
-        if (s == nullptr) {
-            return SetIconResult::NoMemory;
-        }
-    }
-    storeText(s->name, name, id, "icon");
-    scriptWrote_.fetch_or(kScriptIcon, std::memory_order_acq_rel);
-    return SetIconResult::Ok;
+    return setIconFromScript(icon_, name, configuredIconSize_, configuredIconColor_, slotOwner(), scriptWrote_,
+                             kScriptIcon);
 }
 
 } // freebutton

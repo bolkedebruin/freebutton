@@ -156,17 +156,6 @@ const BytecodeEntry* BytecodeRegistry::find(const char* name) const {
     return nullptr;
 }
 
-std::vector<BytecodeEntry> BytecodeRegistry::list() const {
-    Lock lock;
-    std::vector<BytecodeEntry> active_entries;
-    for (const auto& entry : entries_) {
-        if (entry.active) {
-            active_entries.push_back(entry);
-        }
-    }
-    return active_entries;
-}
-
 void BytecodeRegistry::rebaseStale() {
     Lock lock;
     const uint32_t app = bytecode_current_app_id();
@@ -293,21 +282,6 @@ bool BytecodeRegistry::rebaseEntry(const BytecodeEntry& old) {
     return true;
 }
 
-bool BytecodeRegistry::remove(const char* name) {
-    Lock lock;
-    if (!name) return false;
-
-    for (auto& entry : entries_) {
-        if (strcmp(entry.name, name) == 0) {
-            entry.active = false;
-            ESP_LOGI(TAG, "Marked entry '%s' as inactive", name);
-            return true;
-        }
-    }
-
-    return false;
-}
-
 uint32_t BytecodeRegistry::usableSize() const {
     if (!user_partition_) return 0;
     return user_partition_->size < MAX_PARTITION_SIZE ? user_partition_->size : MAX_PARTITION_SIZE;
@@ -420,20 +394,18 @@ void BytecodeRegistry::unpinAll() {
 bool BytecodeRegistry::isBootScript(const char* name) const {
     Lock lock;
     if (!name) return false;
-    if (strcmp(name, "main.jsc") == 0) return true;
-    return strcmp(name, "script.jsc") == 0 && find("main.jsc") == nullptr;
+    // `name` counts as present: the first candidate is then `name` itself,
+    // unless a name that goes before it is stored.
+    const char* boot = bootScriptName([&](const char* candidate) {
+        return strcmp(candidate, name) == 0 || find(candidate) != nullptr;
+    });
+    return boot != nullptr && strcmp(boot, name) == 0;
 }
 
 uint32_t BytecodeRegistry::getNextOffset() const {
     Lock lock;
     uint32_t offset = 0;
     return allocate(SECTOR_SIZE, &offset) ? offset : usableSize();
-}
-
-size_t BytecodeRegistry::getFreeSpace() const {
-    Lock lock;
-    const uint32_t offset = getNextOffset();
-    return nextUsedStart(offset) - offset;
 }
 
 uint32_t BytecodeRegistry::getPartitionAddress() const {
@@ -568,11 +540,6 @@ bool BytecodeRegistry::initVirtualMapping() {
 
 uint32_t BytecodeRegistry::getVirtualBaseAddress() const {
     return virtual_base_addr_;
-}
-
-void BytecodeRegistry::setVirtualBaseAddress(uint32_t addr) {
-    virtual_base_addr_ = addr;
-    ESP_LOGI(TAG, "Virtual base address set to 0x%lx", addr);
 }
 
 // C interface for mquickjs binding

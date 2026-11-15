@@ -185,7 +185,6 @@ STUB_FUNC(js_setTimeout);
 STUB_FUNC(js_clearTimeout);
 STUB_FUNC(js_gc);
 STUB_FUNC(js_load);
-STUB_FUNC(js_loadMapped);
 STUB_FUNC(js_performance_now);
 
 // Skip the main() function when including stdlib files

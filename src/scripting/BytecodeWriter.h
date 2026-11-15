@@ -43,21 +43,6 @@ public:
      */
     esp_err_t write(const uint8_t* data, size_t size, bool final);
 
-    /**
-     * Erase bytecode from registry (marks as inactive, doesn't erase flash)
-     * @param name Script identifier
-     * @return ESP_OK on success
-     */
-    esp_err_t erase(const char* name);
-
-    /**
-     * Validate bytecode format
-     * @param bytecode Bytecode buffer
-     * @param size Bytecode size
-     * @return true if valid QuickJS bytecode
-     */
-    static bool validate(const uint8_t* bytecode, size_t size);
-
 private:
     BytecodeRegistry& registry_;  // the shared instance
     const esp_partition_t* partition_;

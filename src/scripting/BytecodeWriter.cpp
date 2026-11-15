@@ -14,23 +14,7 @@ extern "C" {
 #include "lib/mquickjs/mquickjs.h"
 #include "lib/mquickjs/mquickjs_ext.h"
 
-// QuickJS internal relocation structures and functions
-typedef uint8_t* (*BCRelocReadFunc)(void *opaque, uintptr_t offset, size_t size);
-
-typedef struct {
-    JSContext *ctx;
-    uintptr_t offset;        // Relocation offset (target - base)
-    int update_atoms;        // BOOL
-    BCRelocReadFunc read_func;  // Callback to read data (NULL = use relocated ptr)
-    void *read_opaque;          // Opaque data for read_func
-    // [rom_lo, rom_hi): this build's stdlib ROM table. A pointer into it is a
-    // ROM atom the compiler already resolved for this device: left as it is.
-    uintptr_t rom_lo;
-    uintptr_t rom_hi;
-} BCRelocState;
-
-int JS_RelocateHdr(BCRelocState *s, JSBytecodeHeader *hdr, uintptr_t new_base_addr);
-int JS_RelocateMtag(BCRelocState *s, uint8_t *buf, uint32_t buf_len);
+// BCRelocState, JS_RelocateHdr and JS_RelocateMtag come from mquickjs.h.
 extern const JSSTDLibraryDef js_stdlib;  // For creating temp context with ROM atoms
 } // C
 
@@ -105,28 +89,6 @@ BytecodeWriter::BytecodeWriter()
 
 BytecodeWriter::~BytecodeWriter() {
     cleanup();
-}
-
-bool BytecodeWriter::validate(const uint8_t* bytecode, size_t size) {
-    if (!bytecode || size == 0) {
-        ESP_LOGE(TAG, "Invalid bytecode pointer or size");
-        return false;
-    }
-
-    if (size > MAX_BYTECODE_SIZE) {
-        ESP_LOGE(TAG, "Bytecode too large: %zu bytes (max %zu)",
-                 size, MAX_BYTECODE_SIZE);
-        return false;
-    }
-
-    // Use QuickJS validation
-    if (!JS_IsBytecode(bytecode, size)) {
-        ESP_LOGE(TAG, "Invalid QuickJS bytecode format");
-        return false;
-    }
-
-    ESP_LOGI(TAG, "Bytecode validation passed (%zu bytes)", size);
-    return true;
 }
 
 esp_err_t BytecodeWriter::eraseRegion(uint32_t offset, size_t size) const {
@@ -633,28 +595,6 @@ esp_err_t BytecodeWriter::finalizeWrite() {
     cleanup();
     writing_ = false;
     current_name_[0] = '\0';
-
-    return ESP_OK;
-}
-
-esp_err_t BytecodeWriter::erase(const char* name) {
-    if (!name) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // Mark as inactive in registry
-    if (!registry_.remove(name)) {
-        ESP_LOGW(TAG, "Bytecode '%s' not found", name);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    // Save registry
-    if (!registry_.save()) {
-        ESP_LOGE(TAG, "Failed to save registry");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    ESP_LOGI(TAG, "Marked bytecode '%s' as inactive", name);
 
     return ESP_OK;
 }

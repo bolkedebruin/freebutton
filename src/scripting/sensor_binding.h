@@ -13,6 +13,10 @@
 extern "C" {
 #endif
 
+// Maximum number of sensors a script can watch: sensor IDs 0..MAX_SENSORS-1
+// (sensor_binding.cpp and js/freebutton_sensor.c size their tables with it).
+#define MAX_SENSORS 8
+
 // Sensor information structure (returned by sensor_hw_get_info)
 typedef struct {
     int id;

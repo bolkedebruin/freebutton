@@ -23,8 +23,10 @@
 #include "../sensor_binding.h"
 static const char *TAG = "SensorJS";
 #else
-// Host build stubs for generator
+// Host build stubs for generator (sensor_binding.h is not included here:
+// these stubs stand in for it, MAX_SENSORS included)
 #include <stdbool.h>
+#define MAX_SENSORS 8
 #define ESP_LOGI(tag, ...)
 #define ESP_LOGE(tag, ...)
 #define ESP_LOGW(tag, ...)
@@ -37,9 +39,6 @@ static inline int sensor_hw_get_all_ids(int* ids, int max) { return 0; }
 static inline void sensor_hw_register_change_callback(int id, void (*cb)(int, float)) {}
 static inline void sensor_hw_reset_change_callbacks(void) {}
 #endif
-
-// Maximum number of sensors (must match sensor_binding.cpp)
-#define MAX_SENSORS 8
 
 // Storage for JavaScript onChange callbacks using JSGCRef for GC protection
 static struct {

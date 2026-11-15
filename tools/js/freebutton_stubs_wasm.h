@@ -18,7 +18,6 @@ JSValue js_clearTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
 JSValue js_date_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_performance_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_loadMapped(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 // LED API declarations
 JSValue js_freebutton_led_count(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

@@ -15,9 +15,6 @@
 
 static const char* TAG = "SensorBinding";
 
-// Maximum number of sensors (must match freebutton_sensor.c)
-#define MAX_SENSORS 8
-
 // Static buffer for returning sensor info (to avoid dynamic allocation)
 static SensorInfo cachedInfo;
 
