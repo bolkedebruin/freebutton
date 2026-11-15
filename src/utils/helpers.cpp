@@ -90,10 +90,3 @@ std::string roundme(const std::string_view input, const int precision) {
 	oss << std::fixed << std::setprecision(precision) << value;
 	return oss.str();
 }
-
-void generateMacBasedPassword(char* buffer, size_t bufferSize, const uint8_t* mac) {
-    if (bufferSize < 9 || !buffer || !mac) return; // Ensure buffer is large enough and pointers are valid
-
-    // Create password: "fb" + last 6 hex digits of MAC address
-    snprintf(buffer, bufferSize, "fb%02x%02x%02x", mac[3], mac[4], mac[5]);
-}

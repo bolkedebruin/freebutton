@@ -927,15 +927,6 @@
         {"name": "filename", "type": "string", "description": "Path to the JavaScript file"}
       ],
       "returns": "any"
-    },
-    "loadMapped": {
-      "description": "Loads a memory-mapped bytecode file for efficient execution",
-      "params": [
-        {"name": "filename", "type": "string", "description": "Path to the bytecode file"},
-        {"name": "offset", "type": "number", "description": "Offset in the file"},
-        {"name": "size", "type": "number", "description": "Size to read"}
-      ],
-      "returns": "any"
     }
   }
 }

@@ -10,16 +10,7 @@
 // Run: npm run generate-types to regenerate
 
 export type {
-    LedAPI,
-    ButtonAPI,
-    SensorAPI,
-    MqttAPI,
-    ConsoleAPI,
-    PerformanceAPI,
-    MathConstructor,
-    JSONConstructor,
     CompileOptions,
-    CompilerVersion,
     MQuickJSCompiler
 } from './freebutton.d.ts';
 
@@ -27,7 +18,7 @@ export type {
 // Autocomplete Types (Web App Specific)
 // ============================================================================
 
-export interface CompletionItem {
+interface CompletionItem {
     label: string;
     type: string;
     detail: string;
@@ -35,10 +26,10 @@ export interface CompletionItem {
     apply: string;
 }
 
-export interface APIMethodGroup {
+interface APIMethodGroup {
     methods: CompletionItem[];
 }
 
 export interface FreebuttonAPIDefinition {
-    [key: string]: APIMethodGroup;  // Allow any API from stdlib-globals.json
+    [key: string]: APIMethodGroup;  // any API of the stdlib
 }

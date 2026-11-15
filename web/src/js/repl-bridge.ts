@@ -2,6 +2,7 @@
  * REPL Bridge - Connects WebSocket events to app-state events
  */
 import { on, emit } from './app-state';
+import { pageSettled } from './device-queue';
 import { getWebSocket } from './websocket';
 import { deviceOrigin, getCredentials } from './auth';
 
@@ -60,7 +61,8 @@ export function initReplBridge(): void {
   // Auto-connect to the device that served this IDE. When loaded from
   // http://freebutton.local the REPL connects to ws://freebutton.local/ws/repl
   // with no user action; the toolbar input can still override with an explicit URL.
-  ws.connect('');
+  // Not before the browser has the page's own files (device-queue.ts).
+  void pageSettled().then(() => ws.connect(''));
 
   // Handle eval requests from console input
   on('console-eval', async (e) => {

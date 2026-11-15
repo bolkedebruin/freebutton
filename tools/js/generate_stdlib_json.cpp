@@ -169,6 +169,9 @@ STUB_FUNC(js_freebutton_mqtt_onDisconnect);
 STUB_FUNC(js_freebutton_system_uptime);
 STUB_FUNC(js_freebutton_system_freeHeap);
 STUB_FUNC(js_freebutton_system_version);
+STUB_FUNC(js_freebutton_system_id);
+STUB_FUNC(js_freebutton_system_name);
+STUB_FUNC(js_freebutton_system_model);
 STUB_FUNC(js_fb_device_proxy);
 
 // Stub global functions
@@ -182,7 +185,6 @@ STUB_FUNC(js_setTimeout);
 STUB_FUNC(js_clearTimeout);
 STUB_FUNC(js_gc);
 STUB_FUNC(js_load);
-STUB_FUNC(js_loadMapped);
 STUB_FUNC(js_performance_now);
 
 // Skip the main() function when including stdlib files

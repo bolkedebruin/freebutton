@@ -25,6 +25,7 @@
  * SigV4 gives authenticity and replay protection, NOT confidentiality.
  */
 import { SignatureV4 } from '@smithy/signature-v4';
+import { oneAtATime } from './device-queue';
 import { Sha256Js } from '@smithy/core/checksum';
 import { escapeUri } from '@smithy/core/protocols';
 import { toHex } from '@smithy/core/serde';
@@ -467,7 +468,16 @@ function canResend(body: unknown): boolean {
  * with a corrected clock. Same signature as fetch, so it can be passed
  * wherever a `fetchImpl` is accepted.
  */
-export async function signedFetch(
+export function signedFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  deps: SignedFetchDeps = {},
+): Promise<Response> {
+  // One request to the device at a time (device-queue.ts).
+  return oneAtATime(() => signedFetchNow(input, init, deps));
+}
+
+async function signedFetchNow(
   input: RequestInfo | URL,
   init: RequestInit = {},
   deps: SignedFetchDeps = {},

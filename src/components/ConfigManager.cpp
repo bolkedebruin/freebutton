@@ -13,6 +13,9 @@
 #include "Clock.h"
 #include "drivers/LvglDisplay.h"
 #include "ui/ui_style.h"
+#include "ui/MainPage.h"
+#include "ui/PendingRender.h"
+#include "drivers/ButtonLed.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -278,6 +281,7 @@ void ConfigManager::loadFromFile(const std::string& filename) {
     }
 
     names_.compact();
+    nextItemIdAfterLoad_ = DisplayItem::next_id;
 
     // Register all component subscriptions now that brokers are configured
     registerAllSubscriptions();
@@ -377,11 +381,14 @@ void ConfigManager::clear() {
     // Clear vectors - this will automatically call destructors and free memory.
     // Display items are taken out under the lock and destroyed outside it.
     std::vector<std::unique_ptr<DisplayItem>> oldItems;
+    std::vector<std::unique_ptr<DisplayItem>> oldParked;
     {
         const ItemsLock lock;
         oldItems.swap(displayItems);
+        oldParked.swap(parkedItems_);
     }
     oldItems.clear();
+    oldParked.clear();
     buttons.clear();
     clocks.clear();
     lists.clear();
@@ -467,6 +474,14 @@ bool ConfigManager::removeDisplayItem(unsigned long id) {
         if (it != displayItems.end()) {
             removed = std::move(*it);
             displayItems.erase(it);
+            if (removed->fromConfig()) {
+                // Parked, not destroyed: what config.json says about it is
+                // only in this object (restoreConfigState()).
+                removed->park();
+                parkedItems_.emplace_back(std::move(removed));
+                ESP_LOGI(TAG, "Parked config DisplayItem: id=%lu", id);
+                return true;
+            }
         }
     }
 
@@ -480,6 +495,77 @@ bool ConfigManager::removeDisplayItem(unsigned long id) {
 
     ESP_LOGW(TAG, "DisplayItem not found: id=%lu", id);
     return false;
+}
+
+// Main task, script engine lock held (no script code runs, so nothing adds or
+// removes display items meanwhile), LVGL lock not held.
+//
+// Locks, never nested: 1. the items lock (per vector operation); the
+// destructor of a script-made item, outside it, takes the LVGL lock;
+// 2. the LVGL lock, once, for all display items and keys (only stores and
+// flags; the LVGL task draws afterwards; inside it the text slots' writer
+// spinlock per reset slot); 3. the lists' items mutex, per list.
+// No heap is allocated; memory is only given back.
+void ConfigManager::restoreConfigState() {
+    // 1. Items a script made go, one at a time: taken out under the lock,
+    // destroyed outside it (the destructor takes the LVGL lock).
+    while (true) {
+        std::unique_ptr<DisplayItem> scriptItem;
+        {
+            const ItemsLock lock;
+            const auto it = std::find_if(displayItems.begin(), displayItems.end(),
+                [](const std::unique_ptr<DisplayItem>& item) { return !item->fromConfig(); });
+            if (it == displayItems.end()) {
+                break;
+            }
+            scriptItem = std::move(*it);
+            displayItems.erase(it);
+        }
+        ESP_LOGI(TAG, "Script restart: removing script-made DisplayItem id=%lu", scriptItem->id);
+    }
+
+    // Config items a script removed come back at their config place (what
+    // is left is in config order). The vector kept its capacity.
+    {
+        const ItemsLock lock;
+        for (auto& parked : parkedItems_) {
+            const int order = parked->configOrder();
+            const auto pos = std::find_if(displayItems.begin(), displayItems.end(),
+                [order](const std::unique_ptr<DisplayItem>& item) { return item->configOrder() > order; });
+            displayItems.insert(pos, std::move(parked));
+        }
+        parkedItems_.clear();
+        parkedItems_.shrink_to_fit();
+        if (nextItemIdAfterLoad_ != 0) {
+            DisplayItem::next_id = nextItemIdAfterLoad_;
+        }
+    }
+
+    // 2. Run-time state of the display items and keys. The LVGL lock keeps
+    // their applyPending() from running while slots and flags are reset.
+    {
+        auto& display = FreeButton::getLvglDisplay();
+        display.lock();
+        for (auto& item : displayItems) {
+            item->restoreConfigState();
+        }
+        for (auto& button : buttons) {
+            button->restoreConfigState();
+        }
+        display.unlock();
+    }
+
+    // 3. Lists, images, the shown page, LEDs.
+    for (auto& l : lists) {
+        l->restoreConfigState();
+    }
+    for (auto& image : images) {
+        image->restoreConfigState();
+    }
+    ui::showPage(ui::kFirstPage);
+    ButtonLed::restoreScriptPixels();
+
+    ui::requestPendingRender();
 }
 
 ConfigManager::MemoryStats ConfigManager::getMemoryStats() const {
@@ -539,6 +625,7 @@ void ConfigManager::loadDisplayItems(const ArduinoJson::JsonArray& itemsArray) {
                 }
             }
             addName(NameTable::Kind::DisplayItem, item->id, itemElement.as<ArduinoJson::JsonObject>());
+            item->markFromConfig(static_cast<int>(displayItems.size()));
             displayItems.emplace_back(std::move(item));
         } else {
             ESP_LOGW(TAG, "Failed to create DisplayItem from JSON");

@@ -12,9 +12,11 @@
 #include "scripting/BytecodeWriter.h"
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/WebSocketREPL.h"
+#include "scripting/ScriptEngine.h"
 #include "drivers/DeviceInfo.h"
 #include "drivers/LvglDisplay.h"
 #include "S3Server.h"
+#include "StaticCache.h"
 #include "Auth.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
@@ -251,7 +253,8 @@ void handleRemoteFirmwareUpdate(AsyncWebServerRequest *request) {
 
     int firmware_id = 0;
     if (request->hasParam("id")) {
-        firmware_id = std::stoi(request->getParam("id")->value().c_str());
+        // strtol, not std::stoi: without exceptions a non-numeric id aborts the firmware.
+        firmware_id = static_cast<int>(strtol(request->getParam("id")->value().c_str(), nullptr, 10));
         ESP_LOGI(TAG, "Firmware ID: %d", firmware_id);
     }
 
@@ -272,6 +275,7 @@ void handleRemoteFirmwareUpdate(AsyncWebServerRequest *request) {
 struct BytecodeUpload {
     BytecodeWriter* writer;
     esp_err_t error;
+    bool restart;  // the boot script was stored: the engine restarts with it
 };
 
 static void destroyWriter(BytecodeUpload* upload) {
@@ -294,6 +298,7 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         if (!upload) return;  // handleBytecodeUpload answers 500
         upload->writer = nullptr;
         upload->error = ESP_OK;
+        upload->restart = false;
         request->_tempObject = upload;
         request->onDisconnect([request]() {
             destroyWriter(static_cast<BytecodeUpload*>(request->_tempObject));
@@ -307,8 +312,15 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         }
         upload->writer = new (mem) BytecodeWriter();
 
+        // "atoms=<id>": the compiler resolved the built-in names for the ROM
+        // atoms with that identity. When they are this build's, the writer
+        // needs no lookup context (8 KB of heap less during the upload).
+        bool atomsResolved = false;
+        if (const AsyncWebParameter* p = request->getParam("atoms")) {
+            atomsResolved = strtoul(p->value().c_str(), nullptr, 16) == bytecode_stdlib_atoms_id();
+        }
         // Initialize with total size for upfront flash erase
-        const esp_err_t err = upload->writer->beginWrite(filename.c_str(), content_length);
+        const esp_err_t err = upload->writer->beginWrite(filename.c_str(), content_length, atomsResolved);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "beginWrite failed: 0x%x", err);
             upload->error = err;
@@ -328,6 +340,14 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         ESP_LOGI(TAG, "Bytecode upload complete: %s", filename.c_str());
         upload->error = err;
         destroyWriter(upload);
+        // The boot script (main.jsc, or script.jsc while there is no
+        // main.jsc) is stored: ask the loop task to restart the engine with
+        // it. Only a request: this is the async_tcp task. Asked here and not
+        // in handleBytecodeUpload, so it also happens when the client goes
+        // away before the answer. Another name changes nothing that runs.
+        if (err == ESP_OK && BytecodeRegistry::instance().isBootScript(filename.c_str())) {
+            upload->restart = Scripting::ScriptEngine::getInstance().requestRestart();
+        }
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "Upload failed during chunk write: 0x%x", err);
         upload->error = err;
@@ -347,7 +367,11 @@ void handleBytecodeUpload(AsyncWebServerRequest *request) {
     destroyWriter(upload);
 
     if (err == ESP_OK) {
-        request->send(200, "application/json", R"({"status":"success"})");
+        // "restart": the stored script is being started now (no reboot
+        // needed). Firmware before the script restart has no such field.
+        request->send(200, "application/json",
+                      upload->restart ? R"({"status":"success","restart":true})"
+                                      : R"({"status":"success","restart":false})");
     } else {
         char body[96];
         snprintf(body, sizeof body, R"({"status":"error","message":"Write failed","code":%d})", err);
@@ -411,26 +435,6 @@ static void handleReboot(AsyncWebServerRequest *request) {
     request->send(200, "application/json", R"({"status":"rebooting"})");
 }
 
-void handleBytecodeDownload(AsyncWebServerRequest *request) {
-    // Download the temp file created by BytecodeWriter
-    // Default name is "script" but can be overridden
-    String filename = "script.jsc";
-    if (request->hasParam("name")) {
-        filename = request->getParam("name")->value();
-    }
-
-    String temp_path = String("/tmp_reloc_") + filename;
-
-    // Check if file exists
-    if (!LittleFS.exists(temp_path)) {
-        request->send(404, "text/plain", "Temp file not found. Upload bytecode first.");
-        return;
-    }
-
-    // Send file directly from LittleFS
-    request->send(LittleFS, temp_path, "application/octet-stream", true);
-}
-
 void webserver_start() {
     // The web IDE is now served locally from LittleFS /www/ (same-origin), so the
     // wildcard CORS + Private-Network-Access DefaultHeaders that the former
@@ -451,8 +455,8 @@ void webserver_start() {
     fbauth::init();
     fbauth::installGate(server);
 
-    // SPA fallback: any GET that is not an API/WebSocket route and does not map
-    // to a static file serves the gzipped app shell so client-side routing works.
+    // No route and no static file: 404. (OPTIONS and the captive portal are
+    // answered first.)
     server.onNotFound([](AsyncWebServerRequest *request){
         if (request->method() == HTTP_OPTIONS) {
             request->send(200);
@@ -460,23 +464,10 @@ void webserver_start() {
         }
         // Captive portal: OS connectivity probes (/hotspot-detect.html,
         // /generate_204, /connecttest.txt, ...) resolve to us via the portal's
-        // DNS. Redirect every unknown GET to the WiFi setup page; without this
-        // the SPA fallback below answered them with the web IDE.
+        // DNS. Redirect every unknown GET to the WiFi setup page.
         if (is_captive_portal_active() && request->method() == HTTP_GET) {
             request->redirect("http://192.168.4.1/");
             return;
-        }
-        const String& url = request->url();
-        if (request->method() == HTTP_GET &&
-            !url.startsWith("/api") && !url.startsWith("/ws")) {
-            static constexpr const char* SPA_SHELL = "/www/index.html.gz";
-            if (LittleFS.exists(SPA_SHELL)) {
-                AsyncWebServerResponse *response =
-                    request->beginResponse(LittleFS, SPA_SHELL, "text/html");
-                response->addHeader("Content-Encoding", "gzip");
-                request->send(response);
-                return;
-            }
         }
         request->send(404);
     });
@@ -567,19 +558,17 @@ void webserver_start() {
         request->send(202, "application/json", "{\"status\":\"requested\"}");
     });
 
-    // Reports where the next (small) uploaded bytecode blob would land in the
-    // js_user partition and the free gap there (the device relocates uploads
-    // itself; the IDE compiles position-independent bytecode).
+    // What the IDE's compiler needs to know of this build (the name is from
+    // the time the IDE relocated bytecode itself; the device now places and
+    // relocates uploads). rom_base / atoms_id: where this build's stdlib ROM
+    // table is and which ROM atoms it has. An IDE whose compiler has the same
+    // atoms resolves them for this address (BytecodeWriter.cpp).
     server.on("/api/bytecode/next_address", HTTP_GET, [](AsyncWebServerRequest *request){
-        auto& registry = BytecodeRegistry::instance();
-        BytecodeRegistry::Lock lock;
-        const uint32_t offset = registry.getNextOffset();
-        const uint32_t virtual_addr = registry.getVirtualBaseAddress() + offset;
-        const size_t free_space = registry.getFreeSpace();
-        char body[160];
+        char body[64];
         int n = snprintf(body, sizeof(body),
-            "{\"offset\":\"0x%lx\",\"virtual_addr\":\"0x%lx\",\"free_space\":%zu}",
-            (unsigned long)offset, (unsigned long)virtual_addr, free_space);
+            "{\"rom_base\":\"0x%lx\",\"atoms_id\":\"0x%lx\"}",
+            (unsigned long)bytecode_stdlib_rom_base(),
+            (unsigned long)bytecode_stdlib_atoms_id());
         if (n < 0 || n >= (int)sizeof(body)) {
             request->send(500, "application/json", "{\"error\":\"next_address overflow\"}");
             return;
@@ -598,7 +587,14 @@ void webserver_start() {
     s3_register(server);
 
     // Serve the locally-built web IDE bundle (with .gz auto-negotiation) from
-    // LittleFS /www/. index.html is the default document for "/".
+    // LittleFS /www/. index.html is the default document for "/". Files with
+    // a content hash in their name and the IDE's web fonts may be kept by the
+    // browser, so a later page load asks for index.html and little else; the
+    // rest is checked again every time (ETag).
+    server.serveStatic("/assets/", LittleFS, "/www/assets/", "public, max-age=31536000, immutable")
+        .setFilter([](AsyncWebServerRequest* request) { return freebutton::isHashedAssetUrl(request->url()); });
+    server.serveStatic("/fonts/", LittleFS, "/www/fonts/", "public, max-age=604800")
+        .setFilter([](AsyncWebServerRequest* request) { return freebutton::isWebFontUrl(request->url()); });
     server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
 
     ESP_LOGI(TAG, "Starting webserver");

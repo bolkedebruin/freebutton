@@ -11,6 +11,9 @@
 
 #include <esp_log.h>
 
+#include <cstdlib>
+#include <cstring>
+
 extern "C" {
 #include "ui/ui.h"
 }
@@ -41,6 +44,7 @@ ImageItem::~ImageItem() {
     }
     deleteImage();
     display.unlock();
+    std::free(configWant_);
 }
 
 std::unique_ptr<ImageItem> ImageItem::fromJson(const ArduinoJson::JsonObject& config) {
@@ -68,6 +72,7 @@ void ImageItem::configure(const ArduinoJson::JsonObject& data) {
     } else if (src[0] != '\0' && !setSrc(src)) {
         ESP_LOGW(TAG, "Image: src key longer than %u bytes, ignored", static_cast<unsigned>(icon::kKeyMax));
     }
+    configured_ = true;
 }
 
 void ImageItem::attach() {
@@ -86,9 +91,39 @@ bool ImageItem::store(const char tag, const std::string_view value) {
     if (!icon::encodeWant(want, sizeof(want), tag, value)) {
         return false;
     }
+    if (configured_ && !scriptSet_) {
+        keepConfigWant();
+    }
     want_.write(want);
     ui::requestPendingRender();
     return true;
+}
+
+// Script code, before its first write: want_ still holds the config's.
+void ImageItem::keepConfigWant() {
+    scriptSet_ = true;
+    char want[TextSlot<kWantSlotBytes>::kBufferSize];
+    if (!want_.read(want) || want[0] == '\0') {
+        return;  // the config shows nothing
+    }
+    const size_t n = std::strlen(want) + 1;
+    configWant_ = static_cast<char*>(std::malloc(n));
+    if (configWant_ == nullptr) {
+        ESP_LOGE(TAG, "Image: no memory to keep its config image; a script restart will show nothing");
+        return;
+    }
+    std::memcpy(configWant_, want, n);
+}
+
+void ImageItem::restoreConfigState() {
+    if (!scriptSet_) {
+        return;
+    }
+    want_.write(configWant_ != nullptr ? configWant_ : "");
+    std::free(configWant_);
+    configWant_ = nullptr;
+    scriptSet_ = false;
+    ui::requestPendingRender();
 }
 
 bool ImageItem::setIcon(const std::string_view name) {

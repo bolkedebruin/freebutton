@@ -5,6 +5,9 @@
  *   system.uptime()    - Get uptime in seconds
  *   system.freeHeap()  - Get free heap memory in bytes
  *   system.version()   - Get firmware version string
+ *   system.id()        - Get the device id
+ *   system.name()      - Get the device name
+ *   system.model()     - Get the hardware model
  */
 
 #include <stdio.h>
@@ -18,6 +21,9 @@
 static inline uint32_t system_hw_get_uptime(void) { return 0; }
 static inline uint32_t system_hw_get_free_heap(void) { return 0; }
 static inline const char* system_hw_get_version(void) { return ""; }
+static inline const char* system_hw_get_id(void) { return ""; }
+static inline const char* system_hw_get_model(void) { return ""; }
+static inline size_t system_hw_get_name(char* buf, size_t cap) { (void)buf; (void)cap; return 0; }
 #endif
 
 /**
@@ -51,4 +57,36 @@ JSValue js_freebutton_system_version(JSContext *ctx, JSValue *this_val, int argc
 {
     const char* version = system_hw_get_version();
     return JS_NewString(ctx, version);
+}
+
+/**
+ * @jsapi system.id
+ * @description Get the device id, for example "btn_a00001": the first part of the device's MQTT topics and its network name. Each call makes a new string: call it once and keep the result.
+ * @returns {string} Device id
+ */
+JSValue js_freebutton_system_id(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return JS_NewString(ctx, system_hw_get_id());
+}
+
+/**
+ * @jsapi system.name
+ * @description Get the device name: "core.name" of config.json, or the device id when the config has none. Each call makes a new string.
+ * @returns {string} Device name
+ */
+JSValue js_freebutton_system_name(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char name[64];
+    const size_t len = system_hw_get_name(name, sizeof(name));
+    return JS_NewStringLen(ctx, name, len);
+}
+
+/**
+ * @jsapi system.model
+ * @description Get the hardware model, for example "Model 1 Version 9". Each call makes a new string.
+ * @returns {string} Hardware model
+ */
+JSValue js_freebutton_system_model(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return JS_NewString(ctx, system_hw_get_model());
 }

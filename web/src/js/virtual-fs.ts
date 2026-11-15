@@ -4,9 +4,9 @@
  * Used as the workspace's fallback store when no device storage API is
  * reachable (dev without hardware, older firmware): files saved there live
  * only for this browser session. Keys follow the device's object keys
- * ("scripts/main.js"). Emits files-change events via app-state on mutation.
+ * ("scripts/main.js").
  */
-import { emit, type FileEntry } from './app-state';
+import type { FileEntry } from './app-state';
 
 function detectType(name: string): FileEntry['type'] {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
@@ -34,13 +34,11 @@ class VirtualFS {
       return false;
     }
     this._files.set(name, { data, type: detectType(name) });
-    this._notify();
     return true;
   }
 
   deleteFile(name: string): void {
     this._files.delete(name);
-    this._notify();
   }
 
   getFile(name: string): Uint8Array | undefined {
@@ -70,14 +68,6 @@ class VirtualFS {
     let total = 0;
     this._files.forEach(({ data }) => { total += data.byteLength; });
     return total;
-  }
-
-  private _notify(): void {
-    emit('files-change', {
-      files: this.getFileList(),
-      used: this.usedSpace,
-      total: this.totalSpace,
-    });
   }
 }
 

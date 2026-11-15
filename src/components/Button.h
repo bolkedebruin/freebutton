@@ -62,12 +62,23 @@ private:
 
     void invalidatePending();
 
+    // Which texts a script wrote last (kScript* bits): set by the script
+    // setters, cleared by a message on the key's own config topic
+    // (SlotReset.h). Only a text from a script is dropped when the script
+    // engine restarts (restoreConfigState()).
+    static constexpr uint8_t kScriptLabel = 1;
+    static constexpr uint8_t kScriptTopLabel = 2;
+    static constexpr uint8_t kScriptIcon = 4;
+    std::atomic<uint8_t> scriptWrote_{0};
+    SlotOwner slotOwner() const { return {"Button", id}; }
+    // kScriptLabel / kScriptTopLabel: draw the configured text again in the
+    // next applyPending() (its slot was reset). LVGL lock held.
+    uint8_t redrawConfigured_ = 0;
+
     // Icon in the bottom area instead of the label (config "icon" /
     // "iconsize", MQTT ICON, JS setIcon). Allocated only for keys that have
     // one; the name slot is the runtime state like the label slots.
     IconHolder icon_;
-    // Creates the icon state with the configured size; nullptr on OOM.
-    IconState* ensureIcon();
     int configuredIconSize_ = icon::kButtonDefaultSize;
 
     // Config "font" / "fontsize" (bottom label) and "topfont" /
@@ -128,7 +139,7 @@ public:
     // Icon name ("" hides the icon and shows the label). Any task, like the
     // label setters. Invalid: not an icon name; NoMemory: the heap could not
     // hold the icon state (only on the first icon of a key).
-    enum class SetIconResult : uint8_t { Ok, Invalid, NoMemory };
+    using SetIconResult = freebutton::SetIconResult;
     SetIconResult setIconName(std::string_view name);
 
     // Font of the bottom / top label (a fonts.h face, FONT_FACE_NONE = the
@@ -145,6 +156,13 @@ public:
             setLabelFont(fontFace_, fontSize_);
         }
     }
+
+    // Script engine restart (ConfigManager::restoreConfigState): label, top
+    // label and icon a script set (not those from the key's config topics)
+    // and the fonts go back to the config. LVGL lock held, no script code
+    // running; the LVGL task draws on its next tick. The caller requests the
+    // render.
+    void restoreConfigState();
 
     // PendingRender (LVGL task, LVGL lock held)
     bool applyPending() override;

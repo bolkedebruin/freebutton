@@ -8,10 +8,11 @@
 #include <Preferences.h>
 #include <esp_log.h>
 #include <esp_mac.h>
+#include <esp_random.h>
 
 #include "mdns.h"
 #include "../ui/wifi_qr_modal.h"
-#include "../utils/helpers.h"
+#include "../utils/SetupPassword.h"
 #include "../drivers/LvglDisplay.h"
 
 // Declared in WifiManager.h (not included here: its wifi_event_handler
@@ -31,18 +32,15 @@ bool wifiConnected = false;
 TaskHandle_t wifiTaskHandle = nullptr;
 
 static auto AP_SSID = "FreeButton";
-static char AP_PASSWORD[9] = ""; // 8 chars + null terminator
 
-// Generate unique password based on MAC address (wrapper for ESP32)
-void generateMacBasedPasswordForWifi(char* buffer, size_t bufferSize) {
-    if (bufferSize < 9) return; // Ensure buffer is large enough
-
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA); // More efficient than WiFi.macAddress()
-
-    // Use the extracted function for testability
-    generateMacBasedPassword(buffer, bufferSize, mac);
-}
+// Password of the setup access point: random per device (form and alphabet in
+// utils/SetupPassword.h), kept in NVS namespace "wifi", key "ap_pass", next to
+// the WiFi credentials. It stays the same across reboots and firmware updates
+// and is made again when it is missing: after reset_wifi_credentials() (which
+// clears the namespace) or an NVS erase. It is shown on the display only
+// (ui/wifi_qr_modal): never log it and never put it in an HTTP response.
+static constexpr char kNvsApPassword[] = "ap_pass";
+static char AP_PASSWORD[freebutton::kSetupPasswordLen + 1] = "";
 
 static const IPAddress apIP(192, 168, 4, 1);
 static const IPAddress netMask(255, 255, 255, 0);
@@ -269,20 +267,53 @@ void saveWiFiCredentials(const char* ssid, const char* password) {
 
 static bool qrModalPending = false;
 
+static uint8_t randomByte() {
+    uint8_t b;
+    esp_fill_random(&b, 1);
+    return b;
+}
+
+// Reads the setup password from NVS into AP_PASSWORD, or makes and stores a
+// new one. Call it after WiFi has started: esp_fill_random() gives true
+// random numbers only while the RF subsystem is on (ESP-IDF, "Random Number
+// Generation"); before that it is a pseudo-random generator. rfStarted false
+// (WiFi did not start): a password for this boot only, nothing stored, so the
+// next boot makes one with the RF entropy source on.
+static void loadOrCreateSetupPassword(const bool rfStarted) {
+    wifiPrefs.begin("wifi", false);
+    if (wifiPrefs.isKey(kNvsApPassword)) {
+        char stored[sizeof(AP_PASSWORD)] = {};
+        wifiPrefs.getString(kNvsApPassword, stored, sizeof(stored));
+        if (freebutton::isValidSetupPassword(stored)) {
+            memcpy(AP_PASSWORD, stored, sizeof(AP_PASSWORD));
+            wifiPrefs.end();
+            return;
+        }
+    }
+
+    freebutton::generateSetupPassword(randomByte, AP_PASSWORD);
+    if (!rfStarted) {
+        ESP_LOGE(TAG, "WiFi did not start: setup password not stored (it changes at the next boot)");
+    } else if (wifiPrefs.putString(kNvsApPassword, AP_PASSWORD) == 0) {
+        ESP_LOGE(TAG, "could not store the setup password in NVS (it changes on every boot)");
+    } else {
+        ESP_LOGW(TAG, "new setup access point password generated; it is shown on the display");
+    }
+    wifiPrefs.end();
+}
+
 void start_wifimanager_portal() {
     ESP_LOGI(TAG, "Starting WiFi Configuration Portal");
 
     // Mark that QR modal should be shown (will be shown later after main screen loads)
     qrModalPending = true;
 
-    // Generate unique password based on MAC address if not already set
+    // Set up access point. The mode change starts WiFi (RF on), which the
+    // random generator needs: the password is read or made after it.
+    const bool rfStarted = WiFi.mode(WIFI_AP_STA);
     if (AP_PASSWORD[0] == '\0') {
-        generateMacBasedPasswordForWifi(AP_PASSWORD, sizeof(AP_PASSWORD));
-        ESP_LOGI(TAG, "Generated MAC-based AP password: %s", AP_PASSWORD);
+        loadOrCreateSetupPassword(rfStarted);
     }
-
-    // Set up access point
-    WiFi.mode(WIFI_AP_STA);
     WiFi.softAPConfig(apIP, apIP, netMask);
     WiFi.softAP(AP_SSID, AP_PASSWORD);
 
@@ -476,7 +507,8 @@ void start_wifi_manager() {
 void reset_wifi_credentials() {
     ESP_LOGW(TAG, "Resetting WiFi credentials\n");
 
-    // Clear saved credentials
+    // Clear saved credentials. This also removes the setup access point
+    // password ("ap_pass"): the portal makes a new one after the restart.
     wifiPrefs.begin("wifi", false);
     wifiPrefs.clear();
     wifiPrefs.end();

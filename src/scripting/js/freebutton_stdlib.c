@@ -84,6 +84,9 @@ static const JSClassDef js_freebutton_mqtt_obj =
  *   system.uptime()    - Get device uptime in seconds
  *   system.freeHeap()  - Get free heap memory in bytes
  *   system.version()   - Get firmware version string
+ *   system.id()        - Get the device id
+ *   system.name()      - Get the device name
+ *   system.model()     - Get the hardware model
  *
  * The actual function implementations are in freebutton_system.c which is
  * compiled separately as part of the ESP32 firmware build.
@@ -92,6 +95,9 @@ static const JSPropDef js_freebutton_system[] = {
     JS_CFUNC_DEF("uptime", 0, js_freebutton_system_uptime),
     JS_CFUNC_DEF("freeHeap", 0, js_freebutton_system_freeHeap),
     JS_CFUNC_DEF("version", 0, js_freebutton_system_version),
+    JS_CFUNC_DEF("id", 0, js_freebutton_system_id),
+    JS_CFUNC_DEF("name", 0, js_freebutton_system_name),
+    JS_CFUNC_DEF("model", 0, js_freebutton_system_model),
     JS_PROP_END,
 };
 

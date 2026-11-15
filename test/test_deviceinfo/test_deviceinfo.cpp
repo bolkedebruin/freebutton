@@ -7,6 +7,7 @@
 // needed; its `#include "DeviceInfo.h"` resolves relative to its own directory.
 //
 #include <unity.h>
+#include <cstdio>
 #include <string>
 
 #include "../../src/drivers/DeviceInfoJson.cpp"
@@ -96,6 +97,7 @@ void test_exact_key_set() {
              "\"heapMinFree\"", "\"lvglFree\"", "\"lvglTotal\"",
              "\"textSkipped\"", "\"textCollapsed\"",
              "\"jsHeapUsed\"", "\"jsHeapFree\"", "\"jsHeapSize\"",
+             "\"scriptStarts\"", "\"scriptError\"",
              "\"mainConnector\"", "\"connectors\"", "\"commit\"", "\"dirty\"", "\"model\"" }) {
         TEST_ASSERT_TRUE_MESSAGE(contains(json, key), key);
     }
@@ -122,6 +124,17 @@ void test_build_identity() {
     TEST_ASSERT_TRUE(contains(none, "\"commit\":\"\",\"dirty\":false,\"model\":\"\","));
 }
 
+void test_script_status() {
+    // Default: no script was started, no error text.
+    const std::string none = toJson(makeSample());
+    TEST_ASSERT_TRUE(contains(none, "\"jsHeapSize\":16384,\"scriptStarts\":0,\"scriptError\":\"\",\"mainConnector\""));
+    DeviceInfo info = makeSample();
+    info.scriptStarts = 3;
+    snprintf(info.scriptError, sizeof(info.scriptError), "%s", "TypeError: \"x\" is not a function");
+    const std::string json = toJson(info);
+    TEST_ASSERT_TRUE(contains(json, "\"scriptStarts\":3,\"scriptError\":\"TypeError: \\\"x\\\" is not a function\","));
+}
+
 void test_no_connectors_is_empty_list() {
     const std::string json = toJson(makeSample());
     TEST_ASSERT_TRUE(contains(json, "\"mainConnector\":-1,\"connectors\":[]}"));
@@ -145,6 +158,7 @@ int main(int, char**) {
     RUN_TEST(test_connectors_list_only_present_ones);
     RUN_TEST(test_build_identity);
     RUN_TEST(test_no_connectors_is_empty_list);
+    RUN_TEST(test_script_status);
     RUN_TEST(test_contains_numeric_fields);
     RUN_TEST(test_memory_is_bytes_not_kb);
     RUN_TEST(test_valid_json_shape);

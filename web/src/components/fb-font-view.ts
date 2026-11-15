@@ -29,7 +29,8 @@ function specimenFamily(key: string): string {
  * font) shows its own glyphs. Each row has the
  * name config.json refers to the font by, "Add to config.json" and Delete
  * (not for the system fonts). The files are downloaded once per session, one
- * after the other.
+ * after the other. Every font takes the height its specimen needs; the view
+ * scrolls (the cards do not shrink to fit it).
  */
 @customElement('fb-font-view')
 export class FbFontView extends LitElement {
@@ -104,7 +105,7 @@ export class FbFontView extends LitElement {
     const has = this._glyphs.get(key);
     // The font's characters are unknown: draw the sample as the browser does.
     if (!has) {
-      return html`<div class="text-white whitespace-nowrap leading-[1.25]" data-testid="font-specimen" style=${style}>${sample}</div>`;
+      return html`<div class="text-white whitespace-nowrap leading-[1.5]" data-testid="font-specimen" style=${style}>${sample}</div>`;
     }
     const missing = missingChars(sample, has);
     const wanted = new Set([...sample].filter(ch => !/\s/.test(ch)));
@@ -115,13 +116,13 @@ export class FbFontView extends LitElement {
         <div class="text-[11px] text-gray-200 mb-3 font-sans" data-testid="font-glyph-note">
           This font has none of the sample's characters. Its own glyphs (${own.length}${own.length > GLYPH_LIMIT ? `, the first ${GLYPH_LIMIT} shown` : ''}):
         </div>
-        <div class="text-white flex flex-wrap gap-x-3 gap-y-2 leading-[1.25]" data-testid="font-glyphs" style=${style}>
+        <div class="text-white flex flex-wrap gap-x-3 gap-y-2 leading-[1.5]" data-testid="font-glyphs" style=${style}>
           ${own.slice(0, GLYPH_LIMIT).map(cp => html`<span title="U+${cp.toString(16).toUpperCase().padStart(4, '0')}">${String.fromCodePoint(cp)}</span>`)}
         </div>
       `;
     }
     return html`
-      <div class="text-white whitespace-nowrap leading-[1.25]" data-testid="font-specimen" style=${style}>${[...sample].map(ch =>
+      <div class="text-white whitespace-nowrap leading-[1.5]" data-testid="font-specimen" style=${style}>${[...sample].map(ch =>
         missing.includes(ch) ? html`<span class="opacity-25" style="font-family: sans-serif" title="Not in this font">□</span>` : ch)}</div>
       ${missing.length ? html`
         <div class="text-[11px] text-status-orange mt-2 font-sans" data-testid="font-missing">Not in this font: ${missing.join(' ')}</div>
@@ -134,7 +135,7 @@ export class FbFontView extends LitElement {
     const st = this._states[font.key];
     const name = fontNameForKey(font.key);
     return html`
-      <div class="rounded-xl border border-border-default overflow-hidden" data-font-key=${font.key}>
+      <div class="shrink-0 rounded-xl border border-border-default overflow-hidden" data-font-key=${font.key}>
         <div class="flex items-center gap-3 px-4 py-2 bg-white/5">
           <div class="flex-1 min-w-0">
             <div class="text-xs text-text-default font-mono truncate">${font.key}
@@ -152,7 +153,7 @@ export class FbFontView extends LitElement {
               @click=${() => this._delete(font.key)}>Delete</button>
           `}
         </div>
-        <div class="bg-[rgb(30,30,30)] px-4 py-4 overflow-x-auto custom-scrollbar">
+        <div class="bg-[rgb(30,30,30)] px-4 py-4 overflow-x-auto overflow-y-hidden custom-scrollbar scroll-chain">
           ${st === 'failed'
             ? html`<div class="text-xs text-status-red">This font could not be loaded for the preview.</div>`
             : st !== 'ready'
@@ -167,8 +168,8 @@ export class FbFontView extends LitElement {
     const ws = this._ws;
     const fonts = this._fonts;
     return html`
-      <div class="h-full overflow-y-auto custom-scrollbar p-6 flex flex-col gap-4" data-testid="font-view">
-        <div class="flex flex-wrap items-center gap-3">
+      <div class="h-full overflow-y-auto custom-scrollbar pane-scroll p-6 flex flex-col gap-4" data-testid="font-view">
+        <div class="shrink-0 flex flex-wrap items-center gap-3">
           <h2 class="text-sm font-semibold text-text-default mr-auto">Fonts on the device</h2>
           <label class="flex items-center gap-2 text-xs text-gray-100">
             Sample
@@ -191,7 +192,7 @@ export class FbFontView extends LitElement {
           : fonts.length === 0
             ? html`<div class="text-xs text-gray-200" data-testid="font-view-empty">${ws.readOnly?.fonts ? 'No fonts on the device.' : 'Reading the font list…'}</div>`
             : fonts.map(f => this._renderFont(f))}
-        <div class="text-[11px] leading-relaxed text-gray-200 max-w-[70ch]">
+        <div class="shrink-0 text-[11px] leading-relaxed text-gray-200 max-w-[70ch]">
           Sizes are the device's pixels (the previews on the right are scaled down). Upload .ttf / .otf files with
           the + in the Fonts panel. The device reloads its fonts on every change.
         </div>

@@ -48,7 +48,7 @@ import { checkTtf, MAX_FONT_BYTES } from './ttf-check';
 import { fontWarnings, hasFontTable, isSystemFontSrc, SYSTEM_FONTS, validFontSrc } from './font-config';
 import { fontLoader, wireFontLoader } from './font-loader';
 import { iconSizeSlots, iconTable } from './icon-raster';
-import { readIconSources, setIconSources, syncIcons, type IconSyncDeps, type IconSyncResult } from './icon-sync';
+import { ICON_MANIFEST_KEY, readIconSources, setIconSources, syncIcons, type IconSyncDeps, type IconSyncResult } from './icon-sync';
 import { prepareSvg, rasterizeSvg, SvgError } from './icon-render';
 import { virtualFS } from './virtual-fs';
 import { configToModel } from './config-model';
@@ -815,6 +815,8 @@ export class Workspace {
       deleteImage: (key) => deleteObject(base, key, IMAGES_BUCKET),
       rasterize: this.deps?.rasterize ?? rasterizeSvg,
       log,
+      readManifest: async () => (await getObject(base, ICON_MANIFEST_KEY))?.text ?? null,
+      writeManifest: async (text) => { await putObject(base, ICON_MANIFEST_KEY, text); },
     });
     if (!result.ok) {
       this.message = result.noBucket

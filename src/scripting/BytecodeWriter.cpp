@@ -14,19 +14,7 @@ extern "C" {
 #include "lib/mquickjs/mquickjs.h"
 #include "lib/mquickjs/mquickjs_ext.h"
 
-// QuickJS internal relocation structures and functions
-typedef uint8_t* (*BCRelocReadFunc)(void *opaque, uintptr_t offset, size_t size);
-
-typedef struct {
-    JSContext *ctx;
-    uintptr_t offset;        // Relocation offset (target - base)
-    int update_atoms;        // BOOL
-    BCRelocReadFunc read_func;  // Callback to read data (NULL = use relocated ptr)
-    void *read_opaque;          // Opaque data for read_func
-} BCRelocState;
-
-int JS_RelocateHdr(BCRelocState *s, JSBytecodeHeader *hdr, uintptr_t new_base_addr);
-int JS_RelocateMtag(BCRelocState *s, uint8_t *buf, uint32_t buf_len);
+// BCRelocState, JS_RelocateHdr and JS_RelocateMtag come from mquickjs.h.
 extern const JSSTDLibraryDef js_stdlib;  // For creating temp context with ROM atoms
 } // C
 
@@ -103,28 +91,6 @@ BytecodeWriter::~BytecodeWriter() {
     cleanup();
 }
 
-bool BytecodeWriter::validate(const uint8_t* bytecode, size_t size) {
-    if (!bytecode || size == 0) {
-        ESP_LOGE(TAG, "Invalid bytecode pointer or size");
-        return false;
-    }
-
-    if (size > MAX_BYTECODE_SIZE) {
-        ESP_LOGE(TAG, "Bytecode too large: %zu bytes (max %zu)",
-                 size, MAX_BYTECODE_SIZE);
-        return false;
-    }
-
-    // Use QuickJS validation
-    if (!JS_IsBytecode(bytecode, size)) {
-        ESP_LOGE(TAG, "Invalid QuickJS bytecode format");
-        return false;
-    }
-
-    ESP_LOGI(TAG, "Bytecode validation passed (%zu bytes)", size);
-    return true;
-}
-
 esp_err_t BytecodeWriter::eraseRegion(uint32_t offset, size_t size) const {
     if (!partition_) {
         return ESP_ERR_INVALID_STATE;
@@ -165,7 +131,7 @@ void BytecodeWriter::cleanup() {
     }
 }
 
-esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size) {
+esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size, const bool atoms_resolved) {
     if (!partition_) {
         ESP_LOGE(TAG, "Partition not initialized");
         return ESP_ERR_INVALID_STATE;
@@ -222,19 +188,22 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size) {
         return err;
     }
 
-    // Allocate QuickJS context for ROM atom translation
-    reloc_ctx_mem_ = static_cast<uint8_t*>(malloc(RELOC_CTX_HEAP_SIZE));
-    if (!reloc_ctx_mem_) {
-        ESP_LOGE(TAG, "Failed to allocate context heap");
-        cleanup();
-        return ESP_ERR_NO_MEM;
-    }
+    // QuickJS context for the ROM atom lookup; not needed for an image whose
+    // ROM atoms the compiler resolved (reloc_ctx_ stays null).
+    if (!atoms_resolved) {
+        reloc_ctx_mem_ = static_cast<uint8_t*>(malloc(RELOC_CTX_HEAP_SIZE));
+        if (!reloc_ctx_mem_) {
+            ESP_LOGE(TAG, "Failed to allocate context heap");
+            cleanup();
+            return ESP_ERR_NO_MEM;
+        }
 
-    reloc_ctx_ = JS_NewContext(reloc_ctx_mem_, RELOC_CTX_HEAP_SIZE, &js_stdlib);
-    if (!reloc_ctx_) {
-        ESP_LOGE(TAG, "Failed to create QuickJS context");
-        cleanup();
-        return ESP_ERR_NO_MEM;
+        reloc_ctx_ = JS_NewContext(reloc_ctx_mem_, RELOC_CTX_HEAP_SIZE, &js_stdlib);
+        if (!reloc_ctx_) {
+            ESP_LOGE(TAG, "Failed to create QuickJS context");
+            cleanup();
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     // Allocate read buffer for relocation callbacks
@@ -301,9 +270,14 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
     BCRelocState reloc_state;
     reloc_state.ctx = reloc_ctx_;
     reloc_state.offset = relocation_target_addr_ + sizeof(JSBytecodeHeader);
-    reloc_state.update_atoms = 1;
+    reloc_state.update_atoms = reloc_ctx_ != nullptr ? 1 : 0;   // no context: the compiler resolved them
     reloc_state.read_func = relocReadCallback;
     reloc_state.read_opaque = this;
+    // The IDE resolves the ROM atoms itself when it knows this build's table
+    // (/api/bytecode/next_address): a chunk can refer to a string that only
+    // arrives in a later chunk, and such a reference cannot be looked up here.
+    reloc_state.rom_lo = reinterpret_cast<uintptr_t>(js_stdlib.stdlib_table);
+    reloc_state.rom_hi = reloc_state.rom_lo + js_stdlib.stdlib_table_len * sizeof(JSWord);
 
     // Process header on first chunk
     if (reloc_state_ == RelocationState::HEADER_PENDING) {
@@ -621,28 +595,6 @@ esp_err_t BytecodeWriter::finalizeWrite() {
     cleanup();
     writing_ = false;
     current_name_[0] = '\0';
-
-    return ESP_OK;
-}
-
-esp_err_t BytecodeWriter::erase(const char* name) {
-    if (!name) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // Mark as inactive in registry
-    if (!registry_.remove(name)) {
-        ESP_LOGW(TAG, "Bytecode '%s' not found", name);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    // Save registry
-    if (!registry_.save()) {
-        ESP_LOGE(TAG, "Failed to save registry");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    ESP_LOGI(TAG, "Marked bytecode '%s' as inactive", name);
 
     return ESP_OK;
 }

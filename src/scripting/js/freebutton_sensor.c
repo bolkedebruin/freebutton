@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "mquickjs.h"
+#include "js_reset.h"
 
 // ESP32-specific includes
 #ifdef ESP_PLATFORM
@@ -22,8 +23,10 @@
 #include "../sensor_binding.h"
 static const char *TAG = "SensorJS";
 #else
-// Host build stubs for generator
+// Host build stubs for generator (sensor_binding.h is not included here:
+// these stubs stand in for it, MAX_SENSORS included)
 #include <stdbool.h>
+#define MAX_SENSORS 8
 #define ESP_LOGI(tag, ...)
 #define ESP_LOGE(tag, ...)
 #define ESP_LOGW(tag, ...)
@@ -34,10 +37,8 @@ static inline const char* sensor_hw_get_type(int id) { return ""; }
 static inline const SensorInfo* sensor_hw_get_info(int id) { return NULL; }
 static inline int sensor_hw_get_all_ids(int* ids, int max) { return 0; }
 static inline void sensor_hw_register_change_callback(int id, void (*cb)(int, float)) {}
+static inline void sensor_hw_reset_change_callbacks(void) {}
 #endif
-
-// Maximum number of sensors (must match sensor_binding.cpp)
-#define MAX_SENSORS 8
 
 // Storage for JavaScript onChange callbacks using JSGCRef for GC protection
 static struct {
@@ -90,6 +91,23 @@ static void js_sensor_change_wrapper(int sensorId, float value) {
         if (str) {
             ESP_LOGW(TAG, "Exception in sensor %d onChange callback: %.*s", sensorId, (int)len, str);
         }
+    }
+}
+
+/*
+ * Engine restart (js_reset.h): no sensor has an onChange handler any more,
+ * and the native side forgets its callback pointers and remembered values.
+ */
+void js_sensor_callbacks_reset(JSContext *ctx)
+{
+    (void)ctx;
+    sensor_hw_reset_change_callbacks();
+
+    for (int i = 0; i < MAX_SENSORS; i++) {
+        js_sensor_callbacks[i].allocated = 0;
+        js_sensor_callbacks[i].ctx = NULL;
+        // Cleared, not deleted: the context is about to be freed.
+        js_gcref_forget(&js_sensor_callbacks[i].changeCallback);
     }
 }
 

@@ -127,6 +127,16 @@ void mqtt_binding_register_message_filter(mqtt_js_message_filter_t filter);
 void mqtt_binding_lock(void);
 void mqtt_binding_unlock(void);
 
+/*
+ * Engine restart, engine lock held, after the JS subscription table was
+ * emptied: as after boot. No filter and no callbacks registered, the queue
+ * empty (events received for the old script are discarded, not delivered to
+ * the new one), and the engine's subscriptions removed at every broker. A
+ * topic another firmware component also subscribes to stays subscribed.
+ * Takes the JS MQTT lock itself; does not wait for the MQTT tasks otherwise.
+ */
+void mqtt_binding_reset(void);
+
 #ifdef __cplusplus
 }
 

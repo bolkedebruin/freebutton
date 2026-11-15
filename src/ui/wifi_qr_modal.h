@@ -14,7 +14,8 @@ extern "C" {
  * @brief Show a modal dialog with WiFi QR code for access point connection
  * @param screen Parent screen object
  * @param ssid The WiFi SSID to display
- * @param password The WiFi password (can be empty for open networks)
+ * @param password The WiFi password (can be empty for open networks). It is
+ *                 shown as text and encoded in the QR code; it is not logged.
  */
 void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password);
 

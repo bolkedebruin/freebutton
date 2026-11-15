@@ -60,6 +60,10 @@ public:
     bool setIcon(std::string_view name);
     bool setSrc(std::string_view key);
 
+    // Script engine restart (ConfigManager::restoreConfigState): the config
+    // "icon" / "src" again when a script changed it. No script code running.
+    void restoreConfigState();
+
     int getPage() const { return page_; }
 
     template<typename OutputStream>
@@ -91,6 +95,14 @@ private:
 
     // What to show (icon::encodeWant): runtime state, seeded from config.
     TextSlot<kWantSlotBytes> want_;
+    // The config's want_, kept from the first setIcon() / setSrc() of a
+    // script until the script engine restarts (malloc'd at its length;
+    // nullptr: the config shows nothing). An image no script changes costs
+    // nothing. Script code and restoreConfigState() only (script engine lock).
+    char* configWant_ = nullptr;
+    bool scriptSet_ = false;
+    bool configured_ = false;     // configure() is done: later writes are a script's
+    void keepConfigWant();
 
     RasterRef raster_;            // LVGL lock held
     lv_obj_t* image_ = nullptr;   // LVGL lock held

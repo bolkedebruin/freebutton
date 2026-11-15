@@ -79,28 +79,21 @@ void show_wifi_qr_modal(lv_obj_t* screen, const char* ssid, const char* password
     lv_obj_set_style_pad_gap(container, 8, 0);  // Reduced gap
     lv_obj_set_scrollbar_mode(container, LV_SCROLLBAR_MODE_OFF);  // Disable scrollbars
 
+    // Two text lines above the QR code. The setup password is not shown as
+    // text: it is in the QR code only (and never logged).
+
     // Create title label
     lv_obj_t* title_label = lv_label_create(container);
     if (title_label) {
-        lv_label_set_text(title_label, "WiFi Setup Required");
+        lv_label_set_text(title_label, "WiFi setup: scan to join");
         lv_obj_set_style_text_color(title_label, lv_color_white(), 0);
         lv_obj_set_style_text_font(title_label, LV_FONT_DEFAULT, 0);
-    }
-
-    // Create instruction label
-    lv_obj_t* instruction_label = lv_label_create(container);
-    if (instruction_label) {
-        lv_label_set_text(instruction_label, "Scan QR code to connect to:");
-        lv_obj_set_style_text_color(instruction_label, lv_color_hex(0xCCCCCC), 0);
-        lv_label_set_long_mode(instruction_label, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(instruction_label, LV_PCT(90));
-        lv_obj_set_style_text_align(instruction_label, LV_TEXT_ALIGN_CENTER, 0);
     }
 
     // Create SSID label
     lv_obj_t* ssid_label = lv_label_create(container);
     if (ssid_label) {
-        lv_label_set_text_fmt(ssid_label, "\"%s\"", ssid);
+        lv_label_set_text_fmt(ssid_label, "Network: %s", ssid);
         lv_obj_set_style_text_color(ssid_label, lv_color_hex(0x00FF00), 0);
         lv_obj_set_style_text_font(ssid_label, LV_FONT_DEFAULT, 0);
     }

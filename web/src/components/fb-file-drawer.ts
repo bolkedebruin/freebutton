@@ -6,6 +6,7 @@ import { formatFileSize } from '../js/virtual-fs.js';
 import { workspace, LOCAL_MESSAGE } from '../js/workspace.js';
 import { uploadFonts, uploadImages } from '../js/uploads.js';
 import { canDeleteKey, fileKind, isEditableKey, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
+import { ICON_MANIFEST_KEY } from '../js/icon-sync.js';
 
 /**
  * The sidebar panels for what is stored on the device (or in the in-browser
@@ -272,7 +273,8 @@ export class FbFileDrawer extends LitElement {
 
   render() {
     const ws = this._ws;
-    const texts = ws.files.filter(f => isEditableKey(f.key));
+    // The raster manifest is the IDE's own bookkeeping (icon-sync.ts): not listed.
+    const texts = ws.files.filter(f => isEditableKey(f.key) && f.key !== ICON_MANIFEST_KEY);
     const icons = ws.files.filter(f => !isEditableKey(f.key) && fileKind(f.key) === 'svg');
     const others = ws.files.filter(f => !isEditableKey(f.key) && fileKind(f.key) !== 'svg');
     const usedBytes = ws.files.reduce((n, f) => n + f.size, 0);

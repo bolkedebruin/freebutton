@@ -189,6 +189,18 @@ JSValue js_freebutton_system_version(JSContext *ctx, JSValue *this_val, int argc
     return JS_NewString(ctx, "wasm");
 }
 
+JSValue js_freebutton_system_id(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_NewString(ctx, "wasm");
+}
+
+JSValue js_freebutton_system_name(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_NewString(ctx, "wasm");
+}
+
+JSValue js_freebutton_system_model(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    return JS_NewString(ctx, "wasm");
+}
+
 /*
  * Device API Stubs
  */

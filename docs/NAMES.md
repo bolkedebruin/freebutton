@@ -60,4 +60,6 @@ fb.key("sceneUp").display.setLabel("Up");
 The device reads the table only after `config.json` loads at boot, and the
 table does not change after that. If a script removes a display item, the
 item's name stays in the table. The name then refers to an id that does not
-exist, and `setValue` returns `false`.
+exist, and `setValue` returns `false`. A config item removed this way is kept
+in memory and comes back when the script engine restarts
+(`docs/SCRIPT-RESTART.md`).

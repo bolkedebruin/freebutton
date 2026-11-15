@@ -12,6 +12,7 @@
  * as UNSIGNED-PAYLOAD (the device cannot hash it), see auth.ts payloadHash.
  */
 import { signatureHeaders } from './auth';
+import { sleep as defaultSleep } from './sleep';
 
 export type UpdateKind = 'firmware' | 'filesystem';
 export type UpdatePhase = 'uploading' | 'applying' | 'done' | 'failed';
@@ -52,6 +53,7 @@ function xhrUpload(url: string, body: FormData, headers: Record<string, string>,
   });
 }
 
+// Not through the device queue (device-queue.ts): this polls a restarting device, and a request that hangs would hold up every queued one.
 async function deviceState(base: string, fetchImpl: typeof fetch): Promise<DeviceState | null> {
   try {
     const res = await fetchImpl(`${base}/api/device`, { signal: AbortSignal.timeout(3000) });
@@ -89,7 +91,7 @@ export async function updateDevice(
   const base = baseUrl.replace(/\/+$/, '');
   const fetchImpl = deps.fetchImpl ?? fetch.bind(globalThis);
   const sign = deps.sign ?? signatureHeaders;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? (() => Date.now());
   const absolute = (path: string) => (base || (typeof location !== 'undefined' ? location.origin : '')) + path;
   const end = (p: UpdateProgress) => { onProgress(p); return p; };

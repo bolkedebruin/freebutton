@@ -25,10 +25,12 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <new>
 #include <string_view>
 
 #include "IconLogic.h"
+#include "SlotReset.h"
 #include "ui/MediaImage.h"
 #include "utils/TextSlot.h"
 
@@ -90,8 +92,21 @@ struct IconState {
     uint16_t size;              // square, px
     uint32_t color;             // A8 tint, icon::kNoColor = the item's text colour
     bool roomWarned = false;    // LVGL task: no LVGL memory for the image, logged once
+    // Length of the config "icon" name kept behind this struct (0: the config
+    // has no icon). Written once by IconHolder::ensure(), before the state is
+    // published.
+    uint8_t configNameLen = 0;
 
     IconState(const int sizePx, const uint32_t tint) : size(static_cast<uint16_t>(sizePx)), color(tint) {}
+
+    // The config "icon" name ("" without one). The name slot is run-time
+    // state (MQTT, scripts write over it), so the configured name is kept
+    // apart: in the same allocation, right behind the struct, only for items
+    // whose config has an icon (its length + 1 bytes). Read when the script
+    // engine restarts.
+    const char* configName() const {
+        return configNameLen != 0 ? reinterpret_cast<const char*>(this + 1) : "";
+    }
 
     // LVGL task, LVGL lock held. Renders the newest name (or the same one
     // again after a change to the images bucket) through
@@ -130,15 +145,24 @@ public:
 
     // Config load or script code. Creates the state on first use; nullptr when
     // the heap is out of memory (malloc, never a throwing / aborting new).
-    IconState* ensure(const int sizePx, const uint32_t tint) {
+    // configName: the config "icon" name (a valid icon name, or empty), kept
+    // for IconState::configName(); used only when the state is created here.
+    IconState* ensure(const int sizePx, const uint32_t tint, const std::string_view configName = {}) {
         if (IconState* s = get()) {
             return s;
         }
-        void* mem = std::malloc(sizeof(IconState));
+        const size_t nameLen = configName.size() <= icon::kNameMax ? configName.size() : 0;
+        void* mem = std::malloc(sizeof(IconState) + (nameLen != 0 ? nameLen + 1 : 0));
         if (mem == nullptr) {
             return nullptr;
         }
         auto* fresh = new (mem) IconState(sizePx, tint);
+        if (nameLen != 0) {
+            char* tail = reinterpret_cast<char*>(fresh + 1);
+            std::memcpy(tail, configName.data(), nameLen);
+            tail[nameLen] = '\0';
+            fresh->configNameLen = static_cast<uint8_t>(nameLen);
+        }
         IconState* expected = nullptr;
         if (!state_.compare_exchange_strong(expected, fresh, std::memory_order_acq_rel)) {
             fresh->~IconState();
@@ -148,9 +172,46 @@ public:
         return fresh;
     }
 
+    // Script engine restart (LVGL lock held), for an icon a script wrote
+    // last: back to the config "icon" name; "" (no config icon) hides the
+    // icon. Without a state there is nothing to restore.
+    void restoreConfigName() {
+        if (IconState* s = get()) {
+            s->name.write(s->configName());
+        }
+    }
+
 private:
     std::atomic<IconState*> state_{nullptr};
 };
+
+// Result of a script's setIcon. Invalid: not an icon name; NoMemory: the heap
+// could not hold the icon state (only on the first icon of an item).
+enum class SetIconResult : uint8_t { Ok, Invalid, NoMemory };
+
+// Script code: the icon name of a button or display item ("" hides the
+// icon). Like the text setters it only stores the name, and notes in
+// scriptWrote (bit) that a script wrote it last. sizePx / tint: for the icon
+// state when this is the item's first icon.
+inline SetIconResult setIconFromScript(IconHolder& holder, const std::string_view name, const int sizePx,
+                                       const uint32_t tint, const SlotOwner owner,
+                                       std::atomic<uint8_t>& scriptWrote, const uint8_t bit) {
+    if (!name.empty() && !icon::validName(name)) {
+        return SetIconResult::Invalid;
+    }
+    IconState* s = holder.get();
+    if (s == nullptr) {
+        if (name.empty()) {
+            return SetIconResult::Ok;  // no icon to hide
+        }
+        s = holder.ensure(sizePx, tint);
+        if (s == nullptr) {
+            return SetIconResult::NoMemory;
+        }
+    }
+    storeFromScript(s->name, name, owner, "icon", scriptWrote, bit);
+    return SetIconResult::Ok;
+}
 
 } // namespace freebutton
 

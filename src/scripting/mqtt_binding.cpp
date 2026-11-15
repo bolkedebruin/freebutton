@@ -64,15 +64,18 @@ SemaphoreHandle_t queueLock() {
 // MQTT task. Never waits for script code.
 void enqueue(const RecordKind kind, const uint8_t brokerId, const std::string_view topic,
              const std::string_view payload) {
-    const mqtt_js_message_filter_t filter = g_js_message_filter.load(std::memory_order_acquire);
-    if (!filter) {
+    if (!g_js_message_filter.load(std::memory_order_acquire)) {
         return;  // no script uses MQTT
     }
     if (xSemaphoreTake(queueLock(), kMqttTaskLockWait) != pdTRUE) {
         g_dropped.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    const bool wanted = kind != kMessage || filter(brokerId, topic.data(), topic.size());
+    // Read again under the lock: an engine restart takes the filter away and
+    // empties the queue under this lock (mqtt_binding_reset), and nothing may
+    // be queued after that.
+    const mqtt_js_message_filter_t filter = g_js_message_filter.load(std::memory_order_acquire);
+    const bool wanted = filter && (kind != kMessage || filter(brokerId, topic.data(), topic.size()));
     const bool queued = !wanted || g_queue.push(kind, brokerId, topic, payload);
     xSemaphoreGive(queueLock());
     if (!queued) {
@@ -220,6 +223,33 @@ void mqtt_binding_register_disconnect_callback(mqtt_js_disconnect_callback_t cal
 
 void mqtt_binding_register_message_filter(mqtt_js_message_filter_t filter) {
     g_js_message_filter.store(filter, std::memory_order_release);
+}
+
+void mqtt_binding_reset(void) {
+    // Producer side first. An MQTT task that waits for the lock right now
+    // finds no filter when it gets it (enqueue) and queues nothing.
+    mqtt_binding_lock();
+    g_js_message_filter.store(nullptr, std::memory_order_release);
+    while (!g_queue.empty()) {
+        g_queue.pop();
+    }
+    mqtt_binding_unlock();
+
+    // Consumer side: processPending() runs with the engine lock, which the
+    // caller holds.
+    g_js_message_callback = nullptr;
+    g_js_connect_callback = nullptr;
+    g_js_disconnect_callback = nullptr;
+
+    // Only the engine's subscriber goes: a topic that another component also
+    // subscribes to keeps its broker subscription; the others get an
+    // UNSUBSCRIBE from the MQTT task (or are just forgotten while offline).
+    // Not under the JS MQTT lock (a leaf lock); the broker takes its own.
+    MqttBrokerRegistry::forEachBroker([](uint8_t, MqttBroker* broker) {
+        if (broker) {
+            broker->unsubscribe(&g_js_subscriber);
+        }
+    });
 }
 
 void mqtt_binding_lock(void) {

@@ -63,7 +63,7 @@ export class FbToolbar extends LitElement {
       on('deploy-result', (e) => {
         this._deploying = false;
         this._showResult(e.detail.success, e.detail.success
-          ? (e.detail.size !== undefined ? `Deployed · ${e.detail.size} bytes` : 'Saved')
+          ? (e.detail.size !== undefined ? `Deployed · ${e.detail.size} bytes${e.detail.note ? ' · ' + e.detail.note : ''}` : 'Saved')
           : e.detail.message);
       }),
     );
@@ -120,7 +120,7 @@ export class FbToolbar extends LitElement {
       return;
     }
     try {
-      const bytecode = await compile(code, { targetAddr: 0, use32Bit: true });
+      const bytecode = await compile(code, { use32Bit: true });
       const url = URL.createObjectURL(new Blob([bytecode as BlobPart], { type: 'application/octet-stream' }));
       const a = document.createElement('a');
       a.href = url;

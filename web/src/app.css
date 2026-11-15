@@ -190,15 +190,6 @@
   content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Ccircle cx='4' cy='4' r='3.5' fill='%23E24B32'/%3E%3C/svg%3E") !important;
 }
 
-/* === Scrollbar Hiding === */
-.hide-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-.hide-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-
 /* === Custom Scrollbar (for code areas) === */
 .custom-scrollbar {
   overscroll-behavior: contain;
@@ -216,6 +207,27 @@
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--color-gray-200);
+}
+/* Browsers without ::-webkit-scrollbar (Firefox): the standard properties.
+   Not for the others: there they would switch the rules above off. */
+@supports not selector(::-webkit-scrollbar) {
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-gray-80) transparent;
+  }
+}
+/* The scrolling element of a main view: the pill on the divider at its right
+   is its scrollbar (fb-resize-handle), so its own is not drawn. */
+.pane-scroll {
+  scrollbar-width: none;
+}
+.pane-scroll::-webkit-scrollbar {
+  display: none;
+}
+/* A scroll area inside another one (a font specimen that scrolls sideways
+   inside the Fonts view): the wheel goes on to the outer area. */
+.custom-scrollbar.scroll-chain {
+  overscroll-behavior: auto;
 }
 
 /* === Device Card Flip === */

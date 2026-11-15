@@ -80,8 +80,9 @@ The device boots without WiFi credentials and starts the configuration
 portal (`src/core/WifiManager.cpp`):
 
 1. The display shows a QR code with the access point: SSID `FreeButton`,
-   password 8 characters derived from the MAC address (also shown on the
-   display, and logged on the serial console).
+   and its password as text (random per device, only on the display; see
+   "WiFi setup access point" in [AUTH.md](AUTH.md)). The NVS erase of this
+   migration makes a new password.
 2. Connect to that access point. The captive portal opens, or browse to
    `http://192.168.4.1/`.
 3. Pick the network (the list comes from `/scan`), enter its password and
@@ -139,10 +140,11 @@ compiler and checks that it matches the firmware's stdlib.
 2. Settings → Device access: the new credentials (step 3).
 3. Open `scripts/main.js` (restored in step 4).
 4. Deploy (toolbar: "Deploy: save, compile main.js and upload as main.jsc").
-   The IDE saves the source, asks the device where the bytecode will go
-   (`GET /api/bytecode/next_address`), compiles it relocated for that
-   address and uploads it as `main.jsc` (`POST /api/bytecode/upload`,
-   signed). The device runs `main.jsc` at boot; only `scripts/main.js` is
+   The IDE saves the source, asks the device for its stdlib ROM table
+   (`GET /api/bytecode/next_address`: `rom_base`, `atoms_id`), compiles
+   position-independent bytecode and uploads it as `main.jsc`
+   (`POST /api/bytecode/upload`, signed); the device places and relocates
+   it. The device runs `main.jsc` at boot; only `scripts/main.js` is
    compiled, other `.js` files are only stored.
 
 ## 7. Verify

@@ -13,6 +13,10 @@
 extern "C" {
 #endif
 
+// Maximum number of sensors a script can watch: sensor IDs 0..MAX_SENSORS-1
+// (sensor_binding.cpp and js/freebutton_sensor.c size their tables with it).
+#define MAX_SENSORS 8
+
 // Sensor information structure (returned by sensor_hw_get_info)
 typedef struct {
     int id;
@@ -49,6 +53,10 @@ int sensor_hw_get_all_ids(int* ids, int maxCount);
 // Register onChange callback for a specific sensor
 // The callback will be invoked when the sensor value changes
 void sensor_hw_register_change_callback(int sensorId, SensorChangeCallback callback);
+
+// Engine restart: no sensor has a change callback, and the remembered values
+// are back at their boot state (0). Engine lock held.
+void sensor_hw_reset_change_callbacks(void);
 
 // Notify of sensor value - called from sampleSensors() for each sensor
 // Handles change detection and dispatches callback if value changed beyond threshold

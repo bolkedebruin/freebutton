@@ -28,7 +28,9 @@ public:
      * @param total_size Total bytecode size from Content-Length
      * @return ESP_OK on success, error code otherwise
      */
-    esp_err_t beginWrite(const char* name, size_t total_size);
+    // atoms_resolved: the image already refers to this build's ROM atoms
+    // (the IDE's compiler did that): no lookup context is allocated.
+    esp_err_t beginWrite(const char* name, size_t total_size, bool atoms_resolved = false);
 
     /**
      * Write bytecode chunk to flash with inline relocation
@@ -40,21 +42,6 @@ public:
      * @return ESP_OK on success, error code otherwise
      */
     esp_err_t write(const uint8_t* data, size_t size, bool final);
-
-    /**
-     * Erase bytecode from registry (marks as inactive, doesn't erase flash)
-     * @param name Script identifier
-     * @return ESP_OK on success
-     */
-    esp_err_t erase(const char* name);
-
-    /**
-     * Validate bytecode format
-     * @param bytecode Bytecode buffer
-     * @param size Bytecode size
-     * @return true if valid QuickJS bytecode
-     */
-    static bool validate(const uint8_t* bytecode, size_t size);
 
 private:
     BytecodeRegistry& registry_;  // the shared instance

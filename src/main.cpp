@@ -28,12 +28,6 @@ namespace Scripting {
     void processWebSocketRepl();
 }
 
-extern "C" {
-    #include "scripting/file_hardware_mmap.h"
-    #include <mquickjs.h>
-    #include <esp_crc.h>
-}
-
 using namespace FreeButton;
 
 static const auto TAG = "main";
@@ -172,97 +166,14 @@ void setup() {
         // while it is still running; the engine lock keeps them out.
         const Scripting::EngineLock engineLock;
 
-        // Load and execute user script from flash if it exists
-        // Must load bytecode BEFORE executing any JavaScript to avoid RAM atom conflicts
-        JSContext* ctx = scriptEngine.getContext();
-
         // Bytecode relocated for the previous firmware build: rebased for
         // this one when the stdlib table is the same (no deploy needed).
         BytecodeRegistry::instance().rebaseStale();
 
-        // Find bytecode in registry: the IDE's boot script "main.jsc", else
-        // the legacy "script.jsc".
-        BytecodeEntry entry;
-        if (bytecode_registry_find("main.jsc", &entry) || bytecode_registry_find("script.jsc", &entry)) {
-            ESP_LOGI(TAG, "Found user script '%s' in bytecode registry", entry.name);
-
-            // Memory map from flash
-            MappedFile* mapped = file_hw_mmap("js_user", entry.offset, entry.size);
-            if (mapped) {
-                // Verify checksum
-                uint32_t checksum = esp_crc32_le(0, mapped->data, mapped->size);
-                if (checksum == entry.checksum) {
-                    // Verify bytecode relocation before loading
-                    auto hdr = reinterpret_cast<const JSBytecodeHeader *>(mapped->data);
-                    uintptr_t expected_base = reinterpret_cast<uintptr_t>(hdr + 1);
-
-                    ESP_LOGI(TAG, "Bytecode header: base_addr=0x%lx, expected=0x%lx",
-                             (unsigned long)hdr->base_addr, (unsigned long)expected_base);
-
-                    if (hdr->base_addr != expected_base) {
-                        ESP_LOGE(TAG, "Bytecode relocation mismatch! Need to re-upload.");
-                        file_hw_munmap(mapped);
-                    } else {
-                        // Load bytecode directly from flash (zero-copy, already relocated)
-                        JSValue userFunc = JS_LoadBytecode(ctx, mapped->data);
-
-                        if (!JS_IsException(userFunc)) {
-                            ESP_LOGI(TAG, "User bytecode loaded successfully");
-                            // fb only now: its RAM atoms would have blocked the load.
-                            scriptEngine.initDeviceApi();
-                            JSValue result = JS_Run(ctx, userFunc);
-
-                            if (JS_IsException(result)) {
-                                ESP_LOGE(TAG, "User script execution failed");
-                                JSValue exception = JS_GetException(ctx);
-                                JSCStringBuf buf;
-                                const char* err = JS_ToCString(ctx, exception, &buf);
-                                if (err) {
-                                    ESP_LOGE(TAG, "Error: %s", err);
-                                }
-
-                                // Also try to get the stack trace
-                                JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
-                                if (!JS_IsUndefined(stack)) {
-                                    JSCStringBuf stack_buf;
-                                    const char* stack_str = JS_ToCString(ctx, stack, &stack_buf);
-                                    if (stack_str) {
-                                        ESP_LOGE(TAG, "Stack: %s", stack_str);
-                                    }
-                                }
-                            } else {
-                                ESP_LOGI(TAG, "User script executed successfully");
-
-                                // Print the result
-                                JSCStringBuf buf;
-                                const char* result_str = JS_ToCString(ctx, result, &buf);
-                                if (result_str) {
-                                    ESP_LOGI(TAG, "Result: %s", result_str);
-                                }
-                            }
-                        } else {
-                            ESP_LOGE(TAG, "Failed to load bytecode");
-                            JSValue exception = JS_GetException(ctx);
-                            JSCStringBuf buf;
-                            const char* err = JS_ToCString(ctx, exception, &buf);
-                            if (err) {
-                                ESP_LOGE(TAG, "Error: %s", err);
-                            }
-                        }
-                    }
-                } else {
-                    ESP_LOGE(TAG, "Bytecode checksum mismatch");
-                }
-                // Note: We keep mapped for zero-copy execution
-            } else {
-                ESP_LOGE(TAG, "Failed to memory map user script");
-            }
-        } else {
-            ESP_LOGI(TAG, "No user script found");
-            ESP_LOGI(TAG, "Upload main.jsc via web interface to run custom code");
-        }
-        // No (loadable) user script: the REPL and later scripts still need fb.
-        scriptEngine.initDeviceApi();
+        // Load and run the boot script (main.jsc, else script.jsc), then
+        // build fb. The same sequence runs after a script restart
+        // (ScriptEngine::restart()).
+        scriptEngine.startUserScript();
     } else {
         ESP_LOGE(TAG, "Failed to initialize ScriptEngine");
     }
@@ -315,6 +226,10 @@ void loop() {
     // on the button task), always under the engine lock. MQTT messages and
     // REPL requests are queued by their own tasks and delivered here.
     if (scriptEngine.isInitialized()) {
+        // A new boot script was uploaded: restart the engine with it. First,
+        // so the queued MQTT messages, REPL lines and timers below already
+        // belong to the new script.
+        scriptEngine.processRestartRequest();
         MqttBinding::processPending();
         Scripting::processWebSocketRepl();
         int64_t delay_ms = scriptEngine.processTimers();

@@ -234,7 +234,7 @@ export class FbDeviceView extends LitElement {
   render() {
     const online = this._ws.mode === 'device';
     return html`
-      <div class="h-full overflow-y-auto custom-scrollbar p-6 flex flex-col gap-4" data-testid="device-view">
+      <div class="h-full overflow-y-auto custom-scrollbar pane-scroll p-6 flex flex-col gap-4" data-testid="device-view">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-sm font-semibold text-text-default mr-auto">Device</h2>
           <button class="px-3 py-1.5 rounded-md text-xs bg-white/5 text-text-default hover:bg-white/10"

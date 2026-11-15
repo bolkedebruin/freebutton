@@ -40,7 +40,10 @@ DeviceInfo DeviceInfoCollector::collectInfo() const {
     info.heapMinFree = getMinFreeHeap();
     getLvglMemory(info.lvglFree, info.lvglTotal);
     ui_text_stats(&info.textCollapsed, &info.textSkipped);  // two word reads, no lock needed
-    const auto js = Scripting::ScriptEngine::getInstance().heapUsage();
+    const auto& engine = Scripting::ScriptEngine::getInstance();
+    const auto js = engine.heapUsage();
+    info.scriptStarts = engine.scriptStarts();
+    engine.copyScriptError(info.scriptError, sizeof(info.scriptError));
     info.jsHeapUsed = js.used;
     info.jsHeapFree = js.free;
     info.jsHeapSize = js.size;

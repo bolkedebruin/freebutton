@@ -69,7 +69,7 @@ export class FbImageView extends LitElement {
   private _renderOverview() {
     const files = this._svgFiles;
     return html`
-      <div class="h-full overflow-y-auto custom-scrollbar p-6 flex flex-col gap-5" data-testid="image-overview">
+      <div class="h-full overflow-y-auto custom-scrollbar pane-scroll p-6 flex flex-col gap-5" data-testid="image-overview">
         <h2 class="text-sm font-semibold text-text-default">Images${files.length ? html` · ${files.length}` : ''}</h2>
         ${files.length === 0 ? html`
           <div class="text-xs leading-relaxed text-gray-100 max-w-[60ch]" data-testid="image-overview-empty">
@@ -191,7 +191,7 @@ export class FbImageView extends LitElement {
     if (!this.fileKey) return this._renderOverview();
     const file = this._ws.files.find(f => f.key === this.fileKey);
     return html`
-      <div class="h-full overflow-y-auto custom-scrollbar p-6 flex flex-col gap-5" data-testid="image-view">
+      <div class="h-full overflow-y-auto custom-scrollbar pane-scroll p-6 flex flex-col gap-5" data-testid="image-view">
         <div class="flex items-center gap-3">
           <div class="flex-1 min-w-0">
             <h2 class="text-sm font-semibold text-text-default font-mono truncate">/${this.fileKey}</h2>

@@ -51,5 +51,7 @@ web/.env.production.local
 # clangd index cache
 .cache/
 
-# Device backups (tools/scripts/ota_fs.py, media_sync.py pull): user data, may hold secrets
-devices/*/backup/
+# The files of one's own devices (config.json, scripts, images, Home Assistant
+# notes, backups written by tools/scripts/ota_fs.py and media_sync.py) are a
+# repository of their own, checked out here: see docs/DEVICES.md.
+/devices/

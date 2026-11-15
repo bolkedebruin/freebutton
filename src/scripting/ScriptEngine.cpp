@@ -4,6 +4,8 @@
 
 #include "ScriptEngine.h"
 #include "WebSocketREPL.h"
+#include "BytecodeRegistry.h"
+#include "components/ConfigManager.h"
 #include <Arduino.h>
 #include <cstring>
 #include <esp_log.h>
@@ -23,7 +25,15 @@ extern "C" {
 
     // Initialize the fb object tree (hierarchical device API, built entirely in C)
     void device_hw_init_fb(void* ctx);
+
+    #include "file_hardware_mmap.h"
+    #include "js/js_reset.h"
+    #include <esp_crc.h>
 }
+
+// The device configuration (main.cpp). restart() puts back what the old
+// script changed.
+extern freebutton::ConfigManager configManager;
 
 namespace Scripting {
 
@@ -35,6 +45,10 @@ SemaphoreHandle_t engineMutex() {
     static SemaphoreHandle_t handle = xSemaphoreCreateRecursiveMutexStatic(&buffer);
     return handle;
 }
+
+// Mapping of the boot script that the current context executes from flash.
+// Engine lock held for every access. Unmapped when that context is freed.
+MappedFile* bootScriptMap = nullptr;
 
 } // namespace
 
@@ -75,12 +89,27 @@ bool ScriptEngine::init() {
         return false;
     }
 
+    if (!createContext()) {
+        delete[] heapBuffer_;
+        heapBuffer_ = nullptr;
+        return false;
+    }
+
+    ESP_LOGI(TAG, "JavaScript API initialized with %zu bytes heap", heapSize_);
+
+    return true;
+}
+
+// Everything a fresh context needs. Used by init() and by restart(): the
+// context lives at the start of heapBuffer_, so all of its state (log
+// function, atoms, globals, GC ref list) starts empty again.
+bool ScriptEngine::createContext() {
+    deviceApiReady_ = false;
+
     // Create JSContext with our custom stdlib (includes standard library + LED bindings)
     ctx_ = JS_NewContext(heapBuffer_, heapSize_, &js_stdlib);
     if (!ctx_) {
         ESP_LOGE(TAG, "Failed to create JSContext");
-        delete[] heapBuffer_;
-        heapBuffer_ = nullptr;
         return false;
     }
 
@@ -93,9 +122,6 @@ bool ScriptEngine::init() {
 
     // The fb object tree is built later, by initDeviceApi(): it creates RAM
     // atoms, which would stop the user bytecode from loading.
-
-    ESP_LOGI(TAG, "JavaScript API initialized with %zu bytes heap", heapSize_);
-
     return true;
 }
 
@@ -105,6 +131,210 @@ void ScriptEngine::initDeviceApi() {
     }
     device_hw_init_fb(ctx_);
     deviceApiReady_ = true;
+}
+
+void ScriptEngine::setScriptError(const char* message) {
+    // The last byte only ever gets a 0: a reader on another task always
+    // finds a terminator.
+    strlcpy(scriptError_, message ? message : "", sizeof(scriptError_));
+}
+
+void ScriptEngine::copyScriptError(char* out, const size_t size) const {
+    if (!out || size == 0) return;
+    strlcpy(out, scriptError_, size);
+}
+
+void ScriptEngine::startUserScript() {
+    if (!ctx_) {
+        setScriptError("no engine");
+        return;
+    }
+    // The button task may call into the handlers this script registers
+    // while it is still running; the engine lock keeps them out.
+    const EngineLock lock;
+    if (deviceApiReady_) {
+        // fb exists: its RAM atoms stop JS_LoadBytecode(). Only restart()
+        // gives a context that can load again.
+        ESP_LOGE(TAG, "startUserScript: context already in use, not loading");
+        return;
+    }
+    runBootScript();
+    // No (loadable) user script: the REPL and later scripts still need fb.
+    initDeviceApi();
+}
+
+// Must load bytecode BEFORE executing any JavaScript to avoid RAM atom conflicts.
+void ScriptEngine::runBootScript() {
+    // Find bytecode in registry: the boot script, else the legacy name
+    // (BytecodeRegistry::bootScriptName). A found entry is pinned.
+    BytecodeEntry entry;
+    const char* bootName = BytecodeRegistry::bootScriptName(
+        [&entry](const char* name) { return bytecode_registry_find(name, &entry); });
+    if (bootName == nullptr) {
+        // Stored for another firmware build (the registry logged it), or nothing stored.
+        bool stale = false;
+        {
+            BytecodeRegistry::Lock registryLock;
+            auto& registry = BytecodeRegistry::instance();
+            stale = BytecodeRegistry::bootScriptName([&registry](const char* name) {
+                        return registry.find(name) != nullptr;
+                    }) != nullptr;
+        }
+        if (stale) {
+            setScriptError("other firmware build");
+        } else {
+            ESP_LOGI(TAG, "No user script found");
+            ESP_LOGI(TAG, "Upload %s via web interface to run custom code", kBootScriptName);
+            setScriptError("no script");
+        }
+        return;
+    }
+    ESP_LOGI(TAG, "Found user script '%s' in bytecode registry", entry.name);
+
+    // Memory map from flash. The partition is mapped once by the registry;
+    // this gives the same address and one small bookkeeping block.
+    MappedFile* mapped = file_hw_mmap("js_user", entry.offset, entry.size);
+    if (!mapped) {
+        ESP_LOGE(TAG, "Failed to memory map user script");
+        setScriptError("map failed");
+        return;
+    }
+
+    // Verify checksum
+    const uint32_t checksum = esp_crc32_le(0, mapped->data, mapped->size);
+    if (checksum != entry.checksum) {
+        ESP_LOGE(TAG, "Bytecode checksum mismatch");
+        file_hw_munmap(mapped);
+        setScriptError("checksum mismatch");
+        return;
+    }
+
+    // Verify bytecode relocation before loading
+    const auto* hdr = reinterpret_cast<const JSBytecodeHeader*>(mapped->data);
+    const uintptr_t expected_base = reinterpret_cast<uintptr_t>(hdr + 1);
+    ESP_LOGI(TAG, "Bytecode header: base_addr=0x%lx, expected=0x%lx",
+             (unsigned long)hdr->base_addr, (unsigned long)expected_base);
+    if (hdr->base_addr != expected_base) {
+        ESP_LOGE(TAG, "Bytecode relocation mismatch! Need to re-upload.");
+        file_hw_munmap(mapped);
+        setScriptError("relocation mismatch");
+        return;
+    }
+
+    // Load bytecode directly from flash (zero-copy, already relocated)
+    const JSValue userFunc = JS_LoadBytecode(ctx_, mapped->data);
+    if (JS_IsException(userFunc)) {
+        ESP_LOGE(TAG, "Failed to load bytecode");
+        const JSValue exception = JS_GetException(ctx_);
+        JSCStringBuf buf;
+        const char* err = JS_ToCString(ctx_, exception, &buf);
+        ESP_LOGE(TAG, "Error: %s", err ? err : "?");
+        setScriptError(err && *err ? err : "load failed");
+        file_hw_munmap(mapped);
+        return;
+    }
+    ESP_LOGI(TAG, "User bytecode loaded successfully");
+    // The context executes it in place: mapped until the context is freed.
+    bootScriptMap = mapped;
+
+    // fb only now: its RAM atoms would have blocked the load.
+    initDeviceApi();
+    scriptStarts_.fetch_add(1, std::memory_order_relaxed);
+    const JSValue result = JS_Run(ctx_, userFunc);
+
+    if (JS_IsException(result)) {
+        ESP_LOGE(TAG, "User script execution failed");
+        const JSValue exception = JS_GetException(ctx_);
+        JSCStringBuf buf;
+        const char* err = JS_ToCString(ctx_, exception, &buf);
+        if (err) {
+            ESP_LOGE(TAG, "Error: %s", err);
+        }
+        // Copied before the next engine call: an allocation may move the string.
+        setScriptError(err && *err ? err : "exception");
+
+        // Also try to get the stack trace
+        const JSValue stack = JS_GetPropertyStr(ctx_, exception, "stack");
+        if (!JS_IsUndefined(stack)) {
+            JSCStringBuf stack_buf;
+            const char* stack_str = JS_ToCString(ctx_, stack, &stack_buf);
+            if (stack_str) {
+                ESP_LOGE(TAG, "Stack: %s", stack_str);
+            }
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "User script executed successfully");
+    setScriptError("");
+
+    // Print the result
+    JSCStringBuf buf;
+    const char* result_str = JS_ToCString(ctx_, result, &buf);
+    if (result_str) {
+        ESP_LOGI(TAG, "Result: %s", result_str);
+    }
+}
+
+bool ScriptEngine::requestRestart() {
+    restartRequested_.store(true, std::memory_order_release);
+    return ctx_ != nullptr;
+}
+
+bool ScriptEngine::processRestartRequest() {
+    // Cleared BEFORE the restart: a request that arrives while it runs stays
+    // set and gives another restart on the next pass. Only the loop task
+    // gets here, so two restarts never run at once.
+    if (!restartRequested_.exchange(false, std::memory_order_acq_rel)) {
+        return false;
+    }
+    return restart();
+}
+
+bool ScriptEngine::restart() {
+    if (!ctx_ || !heapBuffer_) {
+        ESP_LOGE(TAG, "Restart: engine not initialized");
+        return false;
+    }
+
+    // Held to the end. The button task waits for it (up to 1 s, then the
+    // press takes its default action), heapUsage() on other tasks returns
+    // its last measurement. REPL lines, MQTT messages and timers are run by
+    // this task, so none of them runs in between: a REPL line that arrives
+    // now is parked and evaluated in the new context.
+    const EngineLock lock;
+    const uint32_t startMs = millis();
+
+    // Measured (with a GC) before the reset: after it the old context must
+    // not collect garbage any more (js_reset.h).
+    const HeapUsage before = measureHeap();
+
+    js_bindings_reset(ctx_);
+    JS_FreeContext(ctx_);
+
+    // Nothing executes the old bytecode now: its mapping and its flash
+    // regions are free. An upload in progress keeps its own reservation.
+    if (bootScriptMap) {
+        file_hw_munmap(bootScriptMap);
+        bootScriptMap = nullptr;
+    }
+    BytecodeRegistry::instance().unpinAll();
+
+    configManager.restoreConfigState();
+
+    // Same buffer: the general heap is too fragmented to give 16 KB again.
+    if (!createContext()) {
+        setScriptError("no engine");
+        return false;
+    }
+    startUserScript();
+
+    const HeapUsage after = measureHeap();
+    ESP_LOGI(TAG, "Script restarted in %lu ms (start %lu, error \"%s\"): JS heap free %zu -> %zu of %zu bytes",
+             static_cast<unsigned long>(millis() - startMs),
+             static_cast<unsigned long>(scriptStarts()), scriptError_,
+             before.free, after.free, after.size);
+    return true;
 }
 
 void ScriptEngine::shutdown() {
@@ -152,20 +382,6 @@ ScriptResult ScriptEngine::execute(std::string_view script, const char* filename
     lastResult_.error = "";
 
     return lastResult_;
-}
-
-bool ScriptEngine::evalLine(std::string_view line) {
-    auto result = execute(line, "<repl>");
-
-    if (result.success) {
-        if (!result.output.empty() && result.output != "undefined") {
-            ESP_LOGI("REPL", "%s", result.output.c_str());
-        }
-        return true;
-    } else {
-        ESP_LOGE("REPL", "Error: %s", result.error.c_str());
-        return false;
-    }
 }
 
 // Static callback for logging
@@ -236,32 +452,28 @@ std::string ScriptEngine::jsValueToString(const JSValue value) const {
     return "[object]";
 }
 
-void ScriptEngine::printException() const {
-    if (!ctx_) return;
-
-    JSValue exception = JS_GetException(ctx_);
-    std::string exceptionStr = jsValueToString(exception);
-    ESP_LOGE(TAG, "Exception: %s", exceptionStr.c_str());
+ScriptEngine::HeapUsage ScriptEngine::measureHeap() const {
+    JS_GC(ctx_);
+    size_t used = 0;
+    size_t free = 0;
+    JS_GetMemoryUsage(ctx_, &used, &free);
+    lastHeap_.used = used;
+    lastHeap_.free = free;
+    lastHeap_.size = heapSize_;
+    return lastHeap_;
 }
 
 ScriptEngine::HeapUsage ScriptEngine::heapUsage() const {
-    // Last measurement, for callers while the engine is busy. Written only
-    // under the engine lock; the fields are word-sized (a torn read between
-    // them only mixes two measurements).
-    static HeapUsage last;
+    // lastHeap_: the last measurement, for callers while the engine is busy.
+    // Written only under the engine lock; the fields are word-sized (a torn
+    // read between them only mixes two measurements).
     if (ctx_ != nullptr) {
         const EngineLock lock(pdMS_TO_TICKS(20));
         if (lock.owned()) {
-            JS_GC(ctx_);
-            size_t used = 0;
-            size_t free = 0;
-            JS_GetMemoryUsage(ctx_, &used, &free);
-            last.used = used;
-            last.free = free;
-            last.size = heapSize_;
+            return measureHeap();
         }
     }
-    return last;
+    return lastHeap_;
 }
 
 int64_t ScriptEngine::processTimers() const {

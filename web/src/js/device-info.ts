@@ -14,6 +14,7 @@
  */
 import { on, emit, type DeviceInfoData } from './app-state';
 import { setHardwareConnectors } from './device-config';
+import { oneAtATime } from './device-queue';
 
 /** Map a REPL ws(s):// base URL to the http(s):// origin serving the REST API. */
 export function httpBaseFromWs(wsUrl: string): string {
@@ -39,15 +40,19 @@ export function isDeviceInfoData(v: unknown): v is DeviceInfoData {
 }
 
 /**
- * Fetch device info from `${baseUrl}/api/device`.
+ * Fetch device info from `${baseUrl}/api/device`. The endpoint is anonymous
+ * (no signature); the request and its body go through the device queue like
+ * every other request of the IDE (device-queue.ts).
  * @param baseUrl http(s) origin, or "" for same-origin (default).
  */
 export async function fetchDeviceInfo(baseUrl = ''): Promise<DeviceInfoData> {
-  const response = await fetch(`${baseUrl}/api/device`);
-  if (!response.ok) {
-    throw new Error(`Failed to get device info: ${response.status} ${response.statusText}`);
-  }
-  const data = await response.json();
+  const data: unknown = await oneAtATime(async () => {
+    const response = await fetch(`${baseUrl}/api/device`);
+    if (!response.ok) {
+      throw new Error(`Failed to get device info: ${response.status} ${response.statusText}`);
+    }
+    return response.json();
+  });
   if (!isDeviceInfoData(data)) {
     throw new Error('Malformed /api/device payload (contract drift?)');
   }

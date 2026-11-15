@@ -6,6 +6,7 @@
 #ifndef BYTECODE_REGISTRY_H
 #define BYTECODE_REGISTRY_H
 
+#include <initializer_list>
 #include <vector>
 #include <string>
 #include <stdint.h>
@@ -43,19 +44,25 @@ struct BytecodeEntry {
     }
 };
 
+// The script that runs at start: the IDE's boot script, else the legacy name
+// (BytecodeRegistry::bootScriptName()).
+inline constexpr char kBootScriptName[] = "main.jsc";
+inline constexpr char kLegacyBootScriptName[] = "script.jsc";
+
 // One registry per device: it maps the js_user partition once (the mapping's
 // virtual address is baked into relocated bytecode) and is shared by the
-// uploader (async_tcp task), the boot loader and loadUserBytecode() (JS task).
+// uploader (async_tcp task) and the boot loader (JS task).
 // Every public method is serialised by a recursive mutex; callers that make
 // several calls in a row hold a BytecodeRegistry::Lock.
 //
 // Space management: an upload goes into the lowest free gap that does not
-// overlap an active entry, a pinned region (bytecode loaded since boot -
-// the JS engine executes it in place from flash, so it must not be
-// overwritten until the next reboot) or an upload in progress. Replacing a
-// name frees its old region once it is no longer pinned (i.e. after a
-// reboot), so repeated uploads of the same name alternate between two
-// regions instead of marching through the partition.
+// overlap an active entry, a pinned region (bytecode loaded into the current
+// JS context - the engine executes it in place from flash, so it must not
+// be overwritten while that context lives) or an upload in progress.
+// Replacing a name frees its old region once it is no longer pinned: after
+// a reboot, or after a script restart (ScriptEngine::restart() frees the
+// context and calls unpinAll()). So repeated uploads of the same name
+// alternate between two regions instead of marching through the partition.
 class BytecodeRegistry {
 public:
     static BytecodeRegistry& instance();
@@ -92,9 +99,6 @@ public:
     // Find bytecode by name. The pointer is valid while a Lock is held.
     const BytecodeEntry* find(const char* name) const;
 
-    // List all active bytecode entries
-    std::vector<BytecodeEntry> list() const;
-
     // Calls f(const BytecodeEntry&) for every active entry (holds the lock).
     template <class F>
     void forEachActive(F&& f) const {
@@ -104,9 +108,6 @@ public:
         }
     }
 
-    // Remove bytecode entry (marks as inactive)
-    bool remove(const char* name);
-
     // First free offset that fits `size` bytes (see class comment).
     bool allocate(size_t size, uint32_t* offset) const;
 
@@ -114,19 +115,42 @@ public:
     bool reserve(uint32_t offset, size_t size);
     void releaseReservation();
 
-    // Mark [offset, offset+size) as executing from flash until reboot.
+    // Mark [offset, offset+size) as executing from flash: kept until
+    // unpinAll() or a reboot.
     void pin(uint32_t offset, uint32_t size);
 
-    // Offset the next (small) upload would get, and the free gap there.
+    // Forget every pin (and the floor set when the pin table overflowed).
+    // Only when no JS context exists that could execute the pinned bytecode:
+    // ScriptEngine::restart() calls it between freeing the old context and
+    // creating the new one. Active entries and the reservation of an upload
+    // in progress are not touched.
+    void unpinAll();
+
+    // The boot script rule, in one place: the script that runs at start is
+    // kBootScriptName, else kLegacyBootScriptName. Asks present(name) for the
+    // names in that order and returns the first for which it is true,
+    // nullptr when it is true for none.
+    template <class Present>
+    static const char* bootScriptName(Present&& present) {
+        for (const char* name : {kBootScriptName, kLegacyBootScriptName}) {
+            if (present(name)) return name;
+        }
+        return nullptr;
+    }
+
+    // True when `name` is the script that runs at start: kBootScriptName, or
+    // kLegacyBootScriptName while there is no active kBootScriptName. Does
+    // not pin.
+    bool isBootScript(const char* name) const;
+
+    // Offset the next (small) upload would get.
     uint32_t getNextOffset() const;
-    size_t getFreeSpace() const;
 
     // Get partition base address (physical flash address)
     uint32_t getPartitionAddress() const;
 
-    // Get/set virtual memory base address (from mmap)
+    // Virtual memory base address of the partition (from mmap)
     uint32_t getVirtualBaseAddress() const;
-    void setVirtualBaseAddress(uint32_t addr);
 
 private:
     BytecodeRegistry();
@@ -188,6 +212,11 @@ uint32_t bytecode_current_app_id(void);
 // a CRC32 of the table with its references to itself taken as offsets, so
 // it is the same in every build with the same table, wherever it lies.
 uint32_t bytecode_stdlib_id(void);
+// Address of this build's stdlib ROM table (what BytecodeEntry::rom_base holds).
+uint32_t bytecode_stdlib_rom_base(void);
+// Identity of this build's ROM atoms (the engine's JS_StdlibAtomsId): the
+// IDE's compiler has the same value when it was built from the same stdlib.
+uint32_t bytecode_stdlib_atoms_id(void);
 
 #ifdef __cplusplus
 }
