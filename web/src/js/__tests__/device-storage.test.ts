@@ -294,6 +294,29 @@ describe('device-storage on the wire', () => {
     await expect(listObjects('')).rejects.toBeInstanceOf(StorageUnavailableError);
   });
 
+  it('asks for an object by the ETag of its listing, and fresh after a write', async () => {
+    const list = (bucketKeys: string) => `<ListBucketResult><KeyCount>2</KeyCount>${bucketKeys}<IsTruncated>false</IsTruncated></ListBucketResult>`;
+    respond(200, list('<Contents><Key>icons/sun.svg</Key><Size>5</Size><ETag>"d08-6af9cbd8"</ETag></Contents>'
+      + '<Contents><Key>config.json</Key><Size>5</Size><ETag>"10-6af9cbd9"</ETag></Contents>'));
+    await listObjects('http://10.0.0.5');
+    seen = [];
+    respond(200, 'x');
+    await getObjectBytes('http://10.0.0.5', 'icons/sun.svg');
+    expect(seen[0].query).toMatchObject({ v: 'd08-6af9cbd8' });
+    await getObject('http://10.0.0.5', 'config.json');          // edited in the IDE: always fresh
+    expect(seen[1].query.v).toBeUndefined();
+    await getObjectBytes('http://10.0.0.5', 'icons/moon.svg');  // not seen in a listing
+    expect(seen[2].query.v).toBeUndefined();
+    await getObjectBytes('http://10.0.0.6', 'icons/sun.svg');   // another device
+    expect(seen[3].query.v).toBeUndefined();
+    await putObject('http://10.0.0.5', 'icons/sun.svg', '<svg/>');
+    await getObjectBytes('http://10.0.0.5', 'icons/sun.svg');
+    expect(seen[5].query.v).toBeUndefined();
+    // Other requests carry no version.
+    await listObjects('http://10.0.0.5').catch(() => undefined);
+    expect(seen[6].query.v).toBeUndefined();
+  });
+
   it('encodes each key segment', async () => {
     respond(404, '<Error><Code>NoSuchKey</Code><Message>not found</Message></Error>');
     expect(await getObject('', 'scripts/my file#1.js')).toBeNull();

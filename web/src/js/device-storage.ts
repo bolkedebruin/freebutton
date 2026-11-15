@@ -48,7 +48,7 @@ import {
   type ListObjectsV2CommandOutput,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
-import { cacheModeFor } from './http-cache';
+import { cacheModeFor, versionFor } from './http-cache';
 import { addAuthRequiredMiddleware, credentialsProvider, deviceS3Signer, signedFetch } from './auth';
 
 /** The user's files (read/write). */
@@ -185,6 +185,36 @@ export function rebootHeaderMiddleware(next: DeserializeHandler): DeserializeHan
   };
 }
 
+const VERSION_PARAM = 'v';
+/** ETags of the objects seen in listings, by endpoint + bucket + key (http-cache.ts). */
+const knownEtags = new Map<string, string>();
+const etagKey = (baseUrl: string, bucket: string, key: string) => `${endpointFor(baseUrl)}|${bucket}|${key}`;
+/** The `v` of the request being sent; requests go one at a time (oneAtATime). */
+let sendingVersion: string | undefined;
+
+type BuildHandler = (args: { request?: { query?: Record<string, unknown> } }) => Promise<unknown>;
+function versionMiddleware(next: BuildHandler): BuildHandler {
+  return async (args) => {
+    if (sendingVersion && args.request) {
+      args.request.query = { ...(args.request.query ?? {}), [VERSION_PARAM]: sendingVersion };
+    }
+    return next(args);
+  };
+}
+
+/** Send a GetObject, as `?v=<etag>` from the browser's cache when the object's ETag is known. */
+async function sendGet<T>(baseUrl: string, bucket: string, key: string): Promise<T> {
+  sendingVersion = versionFor(bucket, key, knownEtags.get(etagKey(baseUrl, bucket, key)));
+  try {
+    return await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as T;
+  } finally {
+    sendingVersion = undefined;
+  }
+}
+
+/** Test hook. */
+export function _forgetEtags(): void { knownEtags.clear(); }
+
 /** @param overrides test hook (e.g. a fake requestHandler). */
 export function createS3Client(baseUrl: string, overrides: Partial<S3ClientConfig> = {}): S3Client {
   const client = new S3Client({
@@ -195,7 +225,8 @@ export function createS3Client(baseUrl: string, overrides: Partial<S3ClientConfi
     signer: deviceS3Signer(baseUrl),
     maxAttempts: 1,
     requestHandler: {
-      requestInit: (req) => ({ cache: cacheModeFor(req.method, req.path) }),
+      requestInit: (req: { method: string; query?: Record<string, unknown> }) =>
+        ({ cache: cacheModeFor(req.method, typeof req.query?.[VERSION_PARAM] === 'string') }),
     },
     ...overrides,
   });
@@ -203,6 +234,9 @@ export function createS3Client(baseUrl: string, overrides: Partial<S3ClientConfi
     rebootHeaderMiddleware as unknown as Parameters<typeof client.middlewareStack.add>[0],
     { step: 'deserialize', name: 'freebuttonRebootHeader', priority: 'high' },
   );
+  // Before signing: the version is part of the signed URL.
+  (client.middlewareStack as unknown as { add(mw: unknown, opts: { step: 'build'; name: string }): void })
+    .add(versionMiddleware, { step: 'build', name: 'freebuttonObjectVersion' });
   addAuthRequiredMiddleware(client, baseUrl);
   return client;
 }
@@ -293,6 +327,8 @@ export async function listObjects(
     usage = (out as unknown as Record<string, StorageUsage | undefined>)[USAGE_FIELD] ?? usage;
     for (const c of out.Contents ?? []) {
       if (!c.Key) continue;
+      const known = etagKey(baseUrl, opts.bucket ?? APP_BUCKET, c.Key);
+      if (c.ETag) knownEtags.set(known, c.ETag); else knownEtags.delete(known);
       objects.push({
         key: c.Key,
         size: c.Size ?? 0,
@@ -319,10 +355,10 @@ export async function getObject(
   try {
     // The body is read inside the queue's turn: the device is still sending it.
     return await oneAtATime(async () => {
-      const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as {
+      const out = await sendGet<{
         Body?: { transformToString(): Promise<string> };
         ETag?: string;
-      };
+      }>(baseUrl, bucket, key);
       const text = out.Body ? await out.Body.transformToString() : '';
       return { text, ...(out.ETag ? { etag: out.ETag } : {}) };
     });
@@ -343,10 +379,10 @@ export async function getObjectBytes(
 ): Promise<{ bytes: Uint8Array; etag?: string } | null> {
   try {
     return await oneAtATime(async () => {
-      const out = await clientFor(baseUrl).send(new GetObjectCommand({ Bucket: bucket, Key: key })) as {
+      const out = await sendGet<{
         Body?: { transformToByteArray(): Promise<Uint8Array> };
         ETag?: string;
-      };
+      }>(baseUrl, bucket, key);
       const bytes = out.Body ? await out.Body.transformToByteArray() : new Uint8Array(0);
       return { bytes, ...(out.ETag ? { etag: out.ETag } : {}) };
     });
@@ -399,6 +435,8 @@ export async function putObject(
       Body: body,
       ContentType: contentTypeFor(key),
     }))) as { ETag?: string; [REBOOT_FIELD]?: boolean };
+    // Read fresh until the next listing gives the new ETag.
+    knownEtags.delete(etagKey(baseUrl, bucket, key));
     return {
       ...(out?.ETag ? { etag: out.ETag } : {}),
       rebootRequired: out?.[REBOOT_FIELD] === true,
@@ -411,6 +449,7 @@ export async function putObject(
 export async function deleteObject(baseUrl: string, key: string, bucket: WritableBucket = APP_BUCKET): Promise<void> {
   try {
     await oneAtATime(() => clientFor(baseUrl).send(new DeleteObjectCommand({ Bucket: bucket, Key: key })));
+    knownEtags.delete(etagKey(baseUrl, bucket, key));
   } catch (err) {
     throw mapError(err);
   }

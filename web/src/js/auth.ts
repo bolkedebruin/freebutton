@@ -26,7 +26,6 @@
  */
 import { SignatureV4 } from '@smithy/signature-v4';
 import { oneAtATime } from './device-queue';
-import { cacheModeFor } from './http-cache';
 import { Sha256Js } from '@smithy/core/checksum';
 import { escapeUri } from '@smithy/core/protocols';
 import { toHex } from '@smithy/core/serde';
@@ -497,8 +496,8 @@ async function signedFetchNow(
     const sentAt = Date.now();
     const sig = await signatureHeaders(url, method, body, creds, creds ? signingDate(sentAt) : undefined);
     if (sig) for (const [k, v] of Object.entries(sig)) headers.set(k, v);
-    // Fresh, except media objects (see http-cache.ts).
-    const res = await fetchImpl(request ?? String(input), { cache: cacheModeFor(method, url.pathname), ...init, method, headers });
+    // Never from the browser's HTTP cache (see http-cache.ts).
+    const res = await fetchImpl(request ?? String(input), { cache: 'no-store', ...init, method, headers });
     return { res, sentAt };
   };
 
