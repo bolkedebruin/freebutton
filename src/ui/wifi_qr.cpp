@@ -39,7 +39,7 @@ static char* build_wifi_qr_string(const char* ssid, const char* password, const 
     snprintf(wifi_str, wifi_str_len + 1, "WIFI:T:%s;S:%s;P:%s;H:%s;;",
              security, ssid, password, hidden ? "true" : "false");
 
-    ESP_LOGI(TAG, "Generated WiFi QR string: %s", wifi_str);
+    // The string holds the password: do not log it.
     return wifi_str;
 }
 

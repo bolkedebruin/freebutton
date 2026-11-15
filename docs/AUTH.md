@@ -49,6 +49,39 @@ The rotation hold has to start on the credentials screen, so a single long
 hold from idle can never rotate. The QR code (~2.5 KB of LVGL memory) exists
 only while the screen is open.
 
+## WiFi setup access point
+
+A device without WiFi (no stored network, or the stored network not reached
+within 10 s at boot) opens the access point `FreeButton` with the
+configuration portal (`src/core/WifiManager.cpp`). Its password is separate
+from the API credentials above:
+
+- Form: `XXXXXX-XXXXXX`, 12 random characters from
+  `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (no `0`/`O`, no `1`/`I`/`l`; 60 bits)
+  with a `-` in the middle. The `-` is part of the password
+  (`src/utils/SetupPassword.h`, tested in `test/test_setup_password`).
+- Generated from the hardware RNG the first time the access point starts,
+  after WiFi has started (RF entropy source on). It does not depend on the
+  MAC address or the device name.
+- Stored in NVS namespace `wifi`, key `ap_pass`. It stays the same across
+  reboots and firmware and filesystem updates.
+- A new one is made when it is missing: after "reset WiFi"
+  (`POST /resetWifi`, which clears the `wifi` namespace) and after an NVS
+  erase (full flash erase).
+- Shown only on the device's main display while the access point is open,
+  and only inside the QR code `WIFI:T:WPA;S:FreeButton;P:<password>;H:false;;`
+  (not as text): join by scanning the code.
+  It is not written to the serial log and no HTTP endpoint returns it.
+
+Firmware before this change used `fb` + the last six hex digits of the MAC
+address, which anyone could compute from the device name. After the update:
+
+- A device that is connected to WiFi notices nothing: its stored network is
+  not touched. The first time it opens the access point again it makes its
+  random password.
+- A device that is in setup mode during the update shows the new password
+  and QR code at the next boot; the old password no longer works.
+
 ## Signing requests
 
 Header form (the IDE, the S3 SDK, aws-cli, boto3, rclone):
