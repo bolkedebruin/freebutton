@@ -1,0 +1,24 @@
+# gitleaks configuration: `gitleaks git --log-opts=--all .`
+#
+# The default rules, minus what is known not to be a secret here. A hit that
+# is not covered below is a real finding: look at it, do not add it here by
+# reflex.
+title = "freebutton"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Made-up device and AWS example keys in the signature tests"
+paths = [
+  '''^test/test_auth/''',
+  '''^web/src/(js|components)/__tests__/''',
+]
+
+[[allowlists]]
+description = "ESP-IDF's default OpenThread keys (00112233...); a C++ type name that looks like a key"
+regexTarget = "line"
+regexes = [
+  '''CONFIG_OPENTHREAD_NETWORK_(PSKC|MASTERKEY)=''',
+  '''struct McpI2cAccess''',
+]
