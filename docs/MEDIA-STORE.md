@@ -68,17 +68,35 @@ wear, the rest of the store shares the erases. Measured on a 5 MB store
 with 1.5 MB of fonts (`test_wear_*`): the busiest sector gets 1.06-1.08
 times the even share; before next-fit it was 3.7-30 times.
 
-RAM: a free-page bitmap (bits) and a small table of open files. Lookups scan
-the directory in mapped flash; no RAM index.
+RAM: a free map (two uint16 per page), a small table of open files and the
+directory index: one uint16 per live entry, the offset of its record in the
+active directory half, sorted by bucket and key (2 KB for the 1024 records a
+half can hold; no heap). The records themselves stay in flash: the active
+half is mapped and read in place. The store's static state is 4,932 bytes
+(2,872 before the index; see "Implementation and tools").
+
+Lookups (`media_open`, `media_stat`, the lookup of a put or delete): a
+binary search in the index, comparing keys in the mapped records, then one
+decode of the hit. `media_next` is the same search for the first entry
+after a key, so a listing costs one search per file. A lookup checks no
+CRC: mount checked every record, a snapshot checks the records it writes.
+Measured in the native test (56 files, a log of 300
+records): a lookup 6 key comparisons and 1 record decoded (before the index:
+246 records read, CRC-checked and decoded on average, 300 worst case); a
+listing of the 56 files 335 comparisons and 56 records (before: 17,100
+records).
 
 ## Directory: append-only log, two halves
 
 Every put/delete appends one record (bucket, key, size, mtime, MD5, page
 list / sector range, sequence number, CRC). A record counts only when it is
 complete and its CRC matches, so a power cut during an upload leaves the old
-version valid. When the active half is full, the live records are written as
-a compact snapshot into the other half (higher generation), then the old half
-is erased.
+version valid. When the active half is full, the live records are written
+as a compact snapshot into the other half (higher generation), then the old
+half is erased. The same happens when the store is idle and a snapshot
+pays: most records are dead, or the half is nearly full and a snapshot wins
+room back (not when the half is nearly full of live records: see "Idle
+snapshot").
 
 At boot the free map is rebuilt from the directory: every page or sector that
 no live record references is free. This also reclaims uploads cut short by a
@@ -117,7 +135,7 @@ Version 1. All numbers are little-endian. Offsets are relative to the start
 of the partition; a "page" is 64 KB, a "sector" 4 KB. Page numbers are one
 byte (a partition has at most 256 pages = 16 MB). The partition size is read
 from the partition table, never assumed: pages `0` and `1` are the directory
-halves, pages `2 .. n-1` hold data (78 pages = 76 data pages in 5 MB).
+halves, pages `2 .. n-1` hold data (80 pages = 78 data pages in 5 MB).
 
 ### Directory half (page 0 or 1)
 
@@ -180,16 +198,24 @@ DEL (0x7F); `/` and UTF-8 are allowed. Per bucket.
    (erase page 0, write a header with generation 1). Otherwise the valid
    half with the higher generation is active; the other one is stale and
    is verified blank or erased before it is reused (`media_maintain`).
-2. Scan the active half once, keeping one RAM bit per record (dead or not;
-   at most 1024 records per half = 128 bytes): every kill marks its target
-   dead, every DEL marks itself dead. A record must have a sane length and
-   type, a matching CRC, valid fields (page numbers inside the data area,
-   location matching the size, key length) and a kill that points to an
-   earlier live PUT.
-3. Second pass: every live PUT marks its sectors in use in the RAM map
-   (one uint16 per page: sectors in use; another: sectors known erased,
-   unknown = 0 after boot). Everything else is free: uploads cut short,
-   files replaced or deleted while they were open before the reboot.
+2. Map the active half and scan it once, keeping one RAM bit per record
+   (dead or not; at most 1024 records per half = 128 bytes): every kill
+   marks its target dead, every DEL marks itself dead. A record must have a
+   sane length and type, a matching CRC, valid fields (page numbers inside
+   the data area, location matching the size, key length) and a kill that
+   points to an earlier live PUT. This is the only pass that checks CRCs.
+3. A later record can kill an earlier one, so only now is it known what is
+   live: a walk over the record lengths (no CRC, no decode) puts every live
+   PUT into the index, and every index entry marks its sectors in use in
+   the RAM map (one uint16 per page: sectors in use; another: sectors known
+   erased, unknown = 0 after boot). Everything else is free: uploads cut
+   short, files replaced or deleted while they were open before the reboot.
+
+After mount the log is trusted. An append is compared, through the mapping,
+with the bytes that were written; it then updates the bit map and the index
+(a PUT is inserted at its place, the record it kills is removed). A kill
+needs the ordinal of its target, which the index does not hold: the write
+operations count the records before it by walking their lengths.
 
 **Torn record.** A write cut by a power loss leaves a record whose CRC (or
 length, or type) does not match. The scan stops there: that record and
@@ -197,8 +223,8 @@ anything after it do not count, so the operation it would have committed did
 not happen. Because the bytes after a torn record are not known to be
 erased, the half is marked dirty and the next append first writes a
 snapshot into the other half. In addition, every append reads its target
-bytes back and requires `0xFF` before programming; if not, it snapshots too.
-Flash is therefore never programmed over non-erased bytes.
+bytes (through the mapping) and requires `0xFF` before programming; if not,
+it snapshots too. Flash is therefore never programmed over non-erased bytes.
 
 ### Commit order of the operations
 
@@ -231,12 +257,86 @@ valid; it is erased later by `media_maintain`. The record that caused the
 rollover is appended to the new half afterwards (its kill translated to
 the new ordinal).
 
+The records of a snapshot become the log that is trusted, so they are
+checked before the header commits them: the new half is mapped once its
+records are written, and every record is read through the mapping (frame
+and CRC). A mismatch fails the snapshot (the old half stays active). After
+the header write the header is read back, whatever the write returned: when
+it is on flash the snapshot is committed and RAM switches to the new half
+(index rebuilt from it); when it is not, RAM stays on the old half; when it
+cannot be read, RAM stays on the old half and marks it dirty, so nothing is
+appended to it before the next snapshot (a reboot may take either half:
+they hold the same entries).
+
+**Idle snapshot.** A snapshot inside a put or delete costs that operation
+the time to program all live records, and dead records make mount and the
+ordinal walks longer. So `media_maintain` (not while an upload is in
+progress) writes one when it pays:
+
+- at least 64 records are dead and they are at least twice the live
+  entries (a replace leaves 1 dead record, a delete 2: the PUT and its DEL);
+- or the half is nearly full and a snapshot wins room back: fewer than 8
+  record slots left and at least 64 records dead, or less than 2 KB left
+  and at least 8 KB of dead records.
+
+With close to 1000 live entries a half has at most 24 record slots to win:
+the idle rule does not fire there, and the snapshot stays where it was
+before, in the put or delete that finds the half full.
+
+The store holds its lock for the whole snapshot: the time to program the
+live records plus 32 bytes of header (at most 48 KB; about 4 KB for 56
+files with short keys) and to read them back through the mapping. No erase
+happens in that call (the other half is blank by then); the old half is
+erased by the next call.
+
+How often a directory half is erased (the two halves alternate, so each one
+takes half of the erases):
+
+| Case | One 64 KB erase per |
+|---|---|
+| idle snapshot, up to 32 files | 64 dead records: 64 replaces or 32 deletes |
+| idle snapshot, more files | 2 dead records per file (56 files: 112 replaces) |
+| half full, in the put or delete (as before the idle rule) | the log left after the live records: 25 operations with close to 1000 entries, 16 KB of records with 48 KB of live records |
+
+Worst case: one erase per 25 operations with the store at its entry limit,
+one per 32 operations otherwise; 5 million operations for 100,000 erase
+cycles per half. A device that replaces 5 files a day erases a directory
+half once in 13 days (56 files: 22 days).
+
+An idle snapshot that fails is not tried again until the directory has
+changed (a put or delete went through): a flash that fails is not erased
+on every `media_maintain` call.
+
+### Failed writes (no power cut)
+
+A flash call can fail while the device keeps running. The rule is the same
+as for a power cut: an operation that reports an error did not happen, in
+RAM and after a reboot.
+
+- A directory record is compared with the flash after it is written. When
+  the write reports an error, or the record does not read back, the record
+  may still be complete on flash, where a reboot would count it. The store
+  writes a snapshot at once (from RAM, so without that record) and only
+  then gives the upload's space back.
+- When that snapshot fails too, the store is *unsettled*: the space of the
+  failed commit stays in use (a reboot that finds the record finds the
+  file's own bytes), nothing is allocated and `media_maintain` does
+  nothing. The next `media_put_begin`, commit or delete tries the snapshot
+  again and fails with `MEDIA_ERR_IO` until it succeeds; the snapshot then
+  rebuilds the free map from the live entries, the open files and the
+  uploads in progress.
+- The length walks (ordinals, snapshot, index) never leave the log: a
+  length that no record has (flash damaged after mount) stops them. The
+  operation fails with `MEDIA_ERR_IO` and the half is marked dirty; lookups
+  keep working; a reboot checks the CRCs again and keeps what precedes the
+  damage.
+
 Limits keep snapshots rare and always possible: the live records may use
 at most 48 KB (so at least 16 KB of log follow each snapshot) and there
 are at most 1000 live entries; `media_put_begin` returns
 `MEDIA_ERR_NO_SPACE` beyond that. With the longest keys (96 bytes) a
 record is at most 136 bytes plus its page list, and all page lists
-together are at most 76 bytes (a page belongs to one live file), so at
+together are at most 78 bytes (a page belongs to one live file), so at
 least 350 entries always fit; with short keys about 1000.
 
 ### Allocation details
@@ -260,7 +360,8 @@ format does not record it, so changing it needs no migration.
   its first byte, only when no sector of it is known erased: a sector is
   never erased twice for nothing) just before writing into it, only when
   RAM does not know it erased. `media_maintain` does one step per call:
-  erase the stale directory half, or one compaction step, or verify (read)
+  erase the stale directory half, or an idle directory snapshot (see
+  "Snapshot"), or one compaction step, or verify (read)
   and if needed erase the next free page from the cursor on (sector by
   sector if part of it is already erased), or a free sector of the fill
   page ahead of its next file. Holes in other shared pages are erased when
@@ -274,12 +375,20 @@ format does not record it, so changing it needs no migration.
 - Wear counters (RAM, since mount): sectors erased in total and on the
   busiest page, and the directory generation, in `media_usage()` and on the
   S3 HeadBucket (`x-fb-media-erase-sectors`, `x-fb-media-erase-page-max`,
-  `x-fb-media-dir-generation`). The directory pages are not leveled: a
-  64 KB half takes about 500 updates (worst case, 48 KB of live records,
-  about 125) before it is erased, so even an update every 5 minutes erases
-  each half about once a day.
-- Mapping: one mapping per open large file; small files in the same shared
-  page share one page mapping (IDF refuses to map a page twice). The ESP
+  `x-fb-media-dir-generation`). The directory pages are not leveled: the
+  two halves alternate, and one of them is erased per 32 updates at most
+  (25 with the store at its entry limit, see "Idle snapshot"), so an
+  update every 5 minutes erases each half at most 6 times a day.
+- Mapping: the active directory half (one page, from mount on; a snapshot
+  moves it to the other half); one mapping per open large file; small
+  files in the same shared page share one page mapping (IDF refuses to map
+  a page twice). The directory is written while it is mapped: on the device
+  the mapping shows the write, because `esp_flash_write` and
+  `esp_flash_erase_region` end in `flash_end_flush_cache`
+  (`spi_flash/esp_flash_api.c`) -> `spi_flash_check_and_flush_cache`
+  (`spi_flash/flash_mmap.c`), which invalidates the cache of every mapped
+  page in the written range. The host tool's mappings are copies: the core
+  sees that an append does not show, unmaps the half and maps it again. The ESP
   backend checks with `spi_flash_cache2phys` that a multi-block mapping
   came out contiguous (`spi_flash_mmap_pages` places each block first-fit
   and does not check) and fails the open otherwise (`MEDIA_ERR_IO`).
@@ -290,16 +399,20 @@ format does not record it, so changing it needs no migration.
 |---|---|
 | `src/media/media_store.h` | the API |
 | `src/media/media_core.{h,c}` | platform-independent store over `media_flash_t` (read, write, erase, map pages, unmap, lock) |
-| `src/media/media_esp.c` | ESP backend: partition `media` (data, subtype `0x42`), `esp_partition_*`, `spi_flash_mmap_pages` with absolute page numbers, one FreeRTOS mutex, `media_init()` (maps nothing) |
+| `src/media/media_esp.c` | ESP backend: partition `media` (data, subtype `0x42`), `esp_partition_*`, `spi_flash_mmap_pages` with absolute page numbers, one FreeRTOS mutex, `media_init()` (maps the active directory half) |
 | `test/test_media_store/` | native tests on a NOR RAM flash with power-cut injection: `pio test -e native -f test_media_store` |
 | `tools/media/mkmedia.cpp`, `build.sh` | host tool on the same core: `mkmedia out.bin --size 0x500000 fonts/medium.ttf=path ...`, `mkmedia --list out.bin` (lists and checks every MD5) |
 | `tools/scripts/flash_media.py` | builds mkmedia, packs `media/<bucket>/<key>`, verifies, flashes the image at the `media` offset from the partition CSV (`--no-flash`, `--dry-run`, `--port`) |
 
-Cost on the device (measured on the objects, 2026-11-10): about 13.4 KB of
-flash, 1.8 KB static RAM (tables, mutex) and 4 bytes of heap per page at
-mount (312 bytes for 78 pages); a directory scan uses about 1 KB of the
-caller's stack, a commit that rolls the directory over about 2 KB. Nothing
-is linked until something calls `media_init()`.
+Cost on the device (`media_core.c` compiled alone with
+`xtensa-esp32s3-elf-gcc -Os`, 2026-11-15): 10.5 KB of code and 4,932 bytes
+of static RAM (the store's state: index 2,048, open-file and mapping tables,
+upload slots, liveness bitmap); before the index 9.1 KB and 2,872 bytes.
+The ESP backend adds its mutex and the log strings. Heap: 6 bytes per page
+at mount (480 bytes for 80 pages). Stack (from the sizes of the locals, not
+measured): a lookup or listing step about 0.3 KB of the caller's stack, a
+commit that rolls the directory over about 1.3 KB. Nothing is linked until
+something calls `media_init()`.
 
 ## Fonts
 

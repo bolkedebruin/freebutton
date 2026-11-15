@@ -42,7 +42,6 @@ void test_delete_key_takes_any_extension() {
     TEST_ASSERT_TRUE(dk("scripts/main.js.tmp") == s3::KeyCheck::Invalid);
     TEST_ASSERT_TRUE(dk("../x.js") == s3::KeyCheck::Invalid);
     TEST_ASSERT_TRUE(dk("a b.js") == s3::KeyCheck::Invalid);
-    TEST_ASSERT_TRUE(dk("js_bytecode_meta.json") == s3::KeyCheck::Forbidden);
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("web"), "a.gz", 4, true) == s3::KeyCheck::ReadOnly);
     TEST_ASSERT_TRUE(s3::checkWriteKey(bucket("fonts"), "a.rgb565", 8, true) == s3::KeyCheck::Invalid);
     TEST_ASSERT_EQUAL(0, s3::writeRefusal(bucket("app"), "screenshot-main.rgb565", 22, true).status);
@@ -240,13 +239,11 @@ void test_write_key_extensions() {
     TEST_ASSERT_TRUE(wk("json") == s3::KeyCheck::Invalid);
 }
 
-void test_write_key_other_buckets_and_protected() {
+void test_write_key_other_buckets() {
     TEST_ASSERT_TRUE(wk("www/index.js") == s3::KeyCheck::OtherBucket);
     TEST_ASSERT_TRUE(wk("fonts/x.json") == s3::KeyCheck::Ok);  // fonts is not a LittleFS directory
     TEST_ASSERT_TRUE(wk("scripts/examples/x.js") == s3::KeyCheck::OtherBucket);
-    TEST_ASSERT_TRUE(wk("js_bytecode_meta.json") == s3::KeyCheck::Forbidden);
     TEST_ASSERT_TRUE(wk("wwwx/a.js") == s3::KeyCheck::Ok);
-    TEST_ASSERT_TRUE(wk("scripts/js_bytecode_meta.json") == s3::KeyCheck::Ok);
 }
 
 void test_write_key_lengths() {
@@ -266,7 +263,6 @@ void test_write_key_lengths() {
 void test_read_key() {
     TEST_ASSERT_TRUE(readable("web", "assets/index-abc.js.gz"));
     TEST_ASSERT_TRUE(readable("app", "config.json"));
-    TEST_ASSERT_TRUE(readable("app", "js_bytecode_meta.json"));
     TEST_ASSERT_TRUE(readable("examples", "button.js"));
     TEST_ASSERT_FALSE(readable("web", "../config.json"));
     TEST_ASSERT_FALSE(readable("app", "www/../config.json"));
@@ -700,8 +696,6 @@ void test_media_write_refusals() {
     e = s3::writeRefusal(bucket("web"), "a.js", 4);
     TEST_ASSERT_EQUAL(403, e.status);
     TEST_ASSERT_EQUAL_STRING("AccessDenied", e.code);
-    e = s3::writeRefusal(bucket("app"), "js_bytecode_meta.json", 21);
-    TEST_ASSERT_EQUAL(403, e.status);
     e = s3::writeRefusal(bucket("app"), "www/a.js", 8);
     TEST_ASSERT_EQUAL(400, e.status);
     TEST_ASSERT_EQUAL_STRING("InvalidArgument", e.code);
@@ -873,7 +867,7 @@ int main() {
     RUN_TEST(test_delete_key_takes_any_extension);
     RUN_TEST(test_write_key_rejects_traversal_and_shape);
     RUN_TEST(test_write_key_extensions);
-    RUN_TEST(test_write_key_other_buckets_and_protected);
+    RUN_TEST(test_write_key_other_buckets);
     RUN_TEST(test_write_key_lengths);
     RUN_TEST(test_read_key);
     RUN_TEST(test_content_types);

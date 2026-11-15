@@ -166,8 +166,8 @@ describe('device-storage with the S3 client mocked', () => {
   });
 
   it('surfaces device rule violations (403 / 413 / 400)', async () => {
-    s3.on(PutObjectCommand).rejects(sdkError('AccessDenied', 403, 'this path is read-only'));
-    await expect(putObject('', 'js_bytecode_meta.json', '')).rejects.toThrow('AccessDenied: this path is read-only');
+    s3.on(PutObjectCommand).rejects(sdkError('AccessDenied', 403, 'bucket is read-only'));
+    await expect(putObject('', 'a.txt', '')).rejects.toThrow('AccessDenied: bucket is read-only');
     s3.on(PutObjectCommand).rejects(sdkError('EntityTooLarge', 413, 'too big'));
     await expect(putObject('', 'a.txt', '')).rejects.toThrow('EntityTooLarge');
     s3.on(PutObjectCommand).rejects(sdkError('InvalidArgument', 400, 'invalid JSON at offset 3'));

@@ -47,7 +47,6 @@ constexpr size_t kTmpSuffixLen = 4;
 enum class KeyCheck : uint8_t {
     Ok,
     Invalid,      // 400 InvalidArgument / KeyTooLong
-    Forbidden,    // 403 AccessDenied (protected path)
     ReadOnly,     // 403 AccessDenied (read-only bucket)
     OtherBucket,  // 400 InvalidArgument (the key lies in another bucket's directory)
 };
@@ -109,7 +108,7 @@ struct Bucket {
 
 inline constexpr Bucket kBuckets[] = {
     // name       dir                 writable static  publicRead media
-    {"app", "", true, false, false},                         // user data: config.json (secrets), scripts/, bytecode index
+    {"app", "", true, false, false},                         // user data: config.json (secrets), scripts/
     {"web", "www", false, false, true},                      // the IDE bundle (gzipped)
     {"examples", "scripts/examples", false, false, true},    // example scripts
     {"fonts", "", true, true, true, MEDIA_BUCKET_FONTS},     // TrueType fonts (media store); the IDE loads /fonts/*.woff2 itself
@@ -245,11 +244,6 @@ inline bool keyReadable(const Bucket& b, const char* key, size_t len) {
     return keyWellFormed(key, len, kReadKeyMax) && !keyOwner(b, key, len);
 }
 
-// Internal metadata in bucket app: never written or deleted through the API.
-inline bool keyProtected(const Bucket& b, const char* key, size_t len) {
-    return b.dirLen == 0 && len == 21 && memcmp(key, "js_bytecode_meta.json", 21) == 0;
-}
-
 // PutObject / DeleteObject rules. kWriteKeyMax bounds the whole path below
 // the mount point, so writable buckets must be the root (static_assert in
 // S3Server).
@@ -286,7 +280,6 @@ inline KeyCheck checkWriteKey(const Bucket& b, const char* key, size_t len, bool
     if (b.isMedia()) return checkMediaKey(b, key, len);
     if (!keyWellFormed(key, len, kWriteKeyMax)) return KeyCheck::Invalid;
     if (keyOwner(b, key, len)) return KeyCheck::OtherBucket;
-    if (keyProtected(b, key, len)) return KeyCheck::Forbidden;
     for (size_t i = 0; i < len; ++i) {
         if (!keyCharOk(key[i]) && key[i] != '/') return KeyCheck::Invalid;
     }
@@ -332,8 +325,6 @@ inline HttpError writeRefusal(const Bucket& b, const char* key, size_t len, bool
             return {0, nullptr, nullptr};
         case KeyCheck::ReadOnly:
             return {403, "AccessDenied", "bucket is read-only"};
-        case KeyCheck::Forbidden:
-            return {403, "AccessDenied", "this path is read-only"};
         case KeyCheck::OtherBucket:
             return {400, "InvalidArgument", "key lies in another bucket's directory (see ListBuckets)"};
         case KeyCheck::Invalid:

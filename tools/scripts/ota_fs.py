@@ -2,9 +2,9 @@
 """Over-the-air update of a device's LittleFS image, keeping the user's files.
 
 The LittleFS `data` partition holds the web IDE bundle (www/), the examples
-and the user's files (config.json, scripts/, the bytecode registry index
-js_bytecode_meta.json, ...). A plain `uploadfs` or filesystem upload writes a
-whole new image and so wipes the user's files. This tool:
+and the user's files (config.json, scripts/, ...). A plain `uploadfs` or
+filesystem upload writes a whole new image and so wipes the user's files.
+This tool:
 
   1. downloads every object of the device's S3 bucket `app` (the user's
      files: the LittleFS root without the directories of the read-only
@@ -26,17 +26,14 @@ whole new image and so wipes the user's files. This tool:
   4. uploads it to POST /upload (updateType=filesystem) and applies it with
      POST /ota_update (reboot), then checks that the files are back.
 
-The js_user partition (the bytecode itself) is not touched, so the registry
-index restored from the device stays consistent with it.
+The compiled scripts are not part of this: they and their index are in the
+js_user partition (docs/SCRIPT-STORE.md), which a filesystem update does not
+touch.
 
 --restore DIR takes the user files from DIR (an earlier backup's app/
 directory) instead of from the device, e.g. after the full erase of a
-partition-table migration (docs/MIGRATION-PARTITIONS-V2.md). The erase also
-emptied js_user, so the backup's js_bytecode_meta.json would point at
-bytecode that is gone: it is left out (the device starts with an empty
-registry; deploy scripts/main.js again from the IDE). --keep-bytecode-index
-keeps it, for a device whose js_user was not erased. The device's current
-user files are still backed up first.
+partition-table migration (docs/MIGRATION-PARTITIONS-V2.md). The device's
+current user files are still backed up first.
 
 usage:
   python3 tools/scripts/ota_fs.py http://192.168.1.50
@@ -67,7 +64,9 @@ MKLITTLEFS = os.path.expanduser("~/.platformio/packages/tool-mklittlefs/mklittle
 S3NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 BUCKET = "app"  # the user's files; key = LittleFS path without the leading "/"
 MEDIA_BUCKETS = ("fonts",)  # media partition: backed up, never put into the image
-BYTECODE_INDEX = "js_bytecode_meta.json"
+# The bytecode index of firmware before the script store. A backup made then
+# still has it; it describes a js_user that is not restored with the files.
+OLD_BYTECODE_INDEX = "js_bytecode_meta.json"
 
 
 # Device access credentials (shown on the device display). Without them,
@@ -197,10 +196,7 @@ def main():
     ap.add_argument("--config", help="use this config.json instead of the device's")
     ap.add_argument("--dry-run", action="store_true", help="back up and build the image, do not upload")
     ap.add_argument("--restore", metavar="DIR",
-                    help="take the user files from DIR (a backup's app/ dir) instead of from the device; "
-                         f"leaves out {BYTECODE_INDEX} (see above)")
-    ap.add_argument("--keep-bytecode-index", action="store_true",
-                    help=f"with --restore: keep {BYTECODE_INDEX} (only if js_user was not erased)")
+                    help="take the user files from DIR (a backup's app/ dir) instead of from the device")
     ap.add_argument("--access-key", default=os.environ.get("FB_ACCESS_KEY_ID"),
                     help="device access key id (default $FB_ACCESS_KEY_ID; shown on the device display)")
     ap.add_argument("--secret-key", default=os.environ.get("FB_SECRET_ACCESS_KEY"),
@@ -246,9 +242,9 @@ def main():
         if os.path.isdir(os.path.join(source, BUCKET)) and not os.path.exists(os.path.join(source, "config.json")):
             sys.exit(f"--restore: {source} looks like a backup root; pass its {BUCKET}/ directory")
         keys = local_keys(source)
-        if BYTECODE_INDEX in keys and not args.keep_bytecode_index:
-            keys.remove(BYTECODE_INDEX)
-            print(f"[ota_fs] --restore: leaving out {BYTECODE_INDEX} (its bytecode is not in the backup)")
+        if OLD_BYTECODE_INDEX in keys:
+            keys.remove(OLD_BYTECODE_INDEX)
+            print(f"[ota_fs] --restore: {OLD_BYTECODE_INDEX} (old firmware's bytecode index) is not put into the image")
         print(f"[ota_fs] --restore: {len(keys)} user files from {source}")
 
     # 2. Staging dir: build contents, then the device's files on top.

@@ -1,6 +1,8 @@
 //
 // Bytecode Registry - Manages user-uploaded JavaScript bytecode
-// Metadata stored in LittleFS, bytecode stored in flash partition
+// Bytecode and its index are both in the js_user flash partition: every
+// image has a header in front of it (BytecodeStore.h, docs/SCRIPT-STORE.md)
+// and the index in RAM is rebuilt from those headers at boot.
 //
 
 #ifndef BYTECODE_REGISTRY_H
@@ -8,41 +10,16 @@
 
 #include <initializer_list>
 #include <vector>
-#include <string>
 #include <stdint.h>
 #include <esp_partition.h>
+#include "BytecodeStore.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-// Metadata for a single bytecode entry
-struct BytecodeEntry {
-    char name[32];              // Script identifier (filename)
-    uint32_t offset;            // Offset in js_user partition
-    uint32_t size;              // Bytecode size in bytes
-    uint32_t checksum;          // CRC32 for integrity verification
-    uint32_t flash_addr;        // Actual flash address (for relocation)
-    uint8_t version;            // Bytecode format version
-    bool active;                // Is this entry valid?
-    // App build the bytecode was relocated for: the first 4 bytes of the
-    // running app's ELF SHA-256 at upload time. Relocation writes absolute
-    // addresses of the stdlib's ROM atoms, which live in the APP's rodata,
-    // so the bytecode cannot run on another build as it is. 0 = unknown
-    // (uploaded before this field existed): treated as stale.
-    uint32_t app_id;
-    // Where that build's stdlib ROM table was, and which table it was
-    // (bytecode_stdlib_id()). After a firmware update with the same table
-    // the ROM atoms only moved: rebaseStale() moves the bytecode's pointers
-    // to them by the table's displacement, so no deploy is needed. 0 =
-    // unknown (uploaded before these fields existed): not rebased.
-    uint32_t rom_base;
-    uint32_t stdlib_id;
-
-    BytecodeEntry()
-        : offset(0), size(0), checksum(0), flash_addr(0), version(1), active(false), app_id(0),
-          rom_base(0), stdlib_id(0) {
-        name[0] = '\0';
-    }
-};
+// One script in js_user: name, region (sector offset of its header), size
+// and checksum of the image, sequence number, and the build it was relocated
+// for (app_id, rom_base, stdlib_id). The image starts at imageOffset().
+using BytecodeEntry = bcstore::Entry;
 
 // The script that runs at start: the IDE's boot script, else the legacy name
 // (BytecodeRegistry::bootScriptName()).
@@ -56,13 +33,24 @@ inline constexpr char kLegacyBootScriptName[] = "script.jsc";
 // several calls in a row hold a BytecodeRegistry::Lock.
 //
 // Space management: an upload goes into the lowest free gap that does not
-// overlap an active entry, a pinned region (bytecode loaded into the current
+// overlap an entry, a pinned region (bytecode loaded into the current
 // JS context - the engine executes it in place from flash, so it must not
 // be overwritten while that context lives) or an upload in progress.
 // Replacing a name frees its old region once it is no longer pinned: after
 // a reboot, or after a script restart (ScriptEngine::restart() frees the
 // context and calls unpinAll()). So repeated uploads of the same name
 // alternate between two regions instead of marching through the partition.
+//
+// Storing a script (upload, rebase, migration) is one sequence:
+//   1. allocate() + reserve() a free region,
+//   2. erase it (eraseRegion(): last sector first),
+//   3. write the image behind the place of the header and read it back,
+//   4. commit(): program the header. This is the commit point.
+// A power cut before 4 leaves a region without a header: free space, and
+// the previous entry of that name is untouched (its region is in use, so 1
+// never picks it). After 4 the new entry has the newer sequence number and
+// the previous one is free space; nothing is written to the previous entry
+// (its header stays until its region is erased for a later upload).
 class BytecodeRegistry {
 public:
     static BytecodeRegistry& instance();
@@ -75,55 +63,70 @@ public:
         Lock& operator=(const Lock&) = delete;
     };
 
-    // Load registry from LittleFS (/js_bytecode_meta.json)
+    // Rebuilds the index from the headers in the partition (read through
+    // the mapping, no flash writes). One entry per name: the one with the
+    // highest sequence number. Image checksums are checked where an image is
+    // used (ScriptEngine::runBootScript(), rebaseStale()), not here.
     bool load();
-
-    // Save registry to LittleFS
-    bool save();
 
     // Boot, before any bytecode is found or run: every entry relocated for
     // another firmware build whose stdlib ROM table is the same as this
     // build's (same bytecode_stdlib_id()) is rebased into a new region for
     // this build (JS_RebaseBytecodeWindow: no JS context, a 4 KB buffer).
-    // Entries with another or an unknown table stay stale ("deploy again").
+    // The new entry has a newer sequence number; the old one is free space.
+    // Entries with another table stay stale ("deploy again").
     // Also rebased: entries of this build whose js_user mapping moved (the
     // partition maps at another virtual address than at upload time).
     void rebaseStale();
 
-    // Add new bytecode entry (replaces an existing entry of the same name).
-    // The bytecode must be relocated for the running build: the entry is
-    // stamped with its app id, ROM table address and stdlib id.
-    bool add(const char* name, uint32_t offset, uint32_t size,
-             uint32_t checksum, uint32_t flash_addr);
+    // The commit point of storing a script: programs the header of the
+    // entry at `region`, whose image (`size` bytes at region +
+    // bcstore::kHeaderLen, CRC-32 `checksum`) is written and verified. The
+    // image must be relocated for the running build: the header is stamped
+    // with its app id, ROM table address and stdlib id, and the next
+    // sequence number. Replaces the entry of the same name in the index.
+    enum class CommitResult {
+        Ok,
+        Refused,  // not a valid entry (name, region, size): nothing written
+        Failed,   // the header did not land in flash
+    };
+    CommitResult commit(const char* name, uint32_t region, uint32_t size, uint32_t checksum);
+
+    // Step 2 of storing a script: erases the region reserved for an image
+    // of `size` bytes at `region`, last sector first, and with it the whole
+    // region of every superseded entry whose header lies there.
+    bool eraseRegion(uint32_t region, size_t size);
 
     // Find bytecode by name. The pointer is valid while a Lock is held.
     const BytecodeEntry* find(const char* name) const;
 
-    // Calls f(const BytecodeEntry&) for every active entry (holds the lock).
+    // Calls f(const BytecodeEntry&) for every entry (holds the lock).
     template <class F>
     void forEachActive(F&& f) const {
         Lock lock;
         for (const auto& entry : entries_) {
-            if (entry.active) f(entry);
+            f(entry);
         }
     }
 
-    // First free offset that fits `size` bytes (see class comment).
-    bool allocate(size_t size, uint32_t* offset) const;
+    // First free region (sector offset) for an image of `size` bytes and
+    // its header (see class comment).
+    bool allocate(size_t size, uint32_t* region) const;
 
-    // Mark [offset, offset+size) as being written by an upload. One at a time.
-    bool reserve(uint32_t offset, size_t size);
+    // Mark the region of an image of `size` bytes at `region` as being
+    // written by an upload. One at a time.
+    bool reserve(uint32_t region, size_t size);
     void releaseReservation();
 
-    // Mark [offset, offset+size) as executing from flash: kept until
-    // unpinAll() or a reboot.
+    // Mark [offset, offset+size) as executing from flash (the whole region
+    // of an entry, header included): kept until unpinAll() or a reboot.
     void pin(uint32_t offset, uint32_t size);
 
     // Forget every pin (and the floor set when the pin table overflowed).
     // Only when no JS context exists that could execute the pinned bytecode:
     // ScriptEngine::restart() calls it between freeing the old context and
-    // creating the new one. Active entries and the reservation of an upload
-    // in progress are not touched.
+    // creating the new one. Entries and the reservation of an upload in
+    // progress are not touched.
     void unpinAll();
 
     // The boot script rule, in one place: the script that runs at start is
@@ -139,15 +142,12 @@ public:
     }
 
     // True when `name` is the script that runs at start: kBootScriptName, or
-    // kLegacyBootScriptName while there is no active kBootScriptName. Does
+    // kLegacyBootScriptName while there is no kBootScriptName. Does
     // not pin.
     bool isBootScript(const char* name) const;
 
-    // Offset the next (small) upload would get.
-    uint32_t getNextOffset() const;
-
-    // Get partition base address (physical flash address)
-    uint32_t getPartitionAddress() const;
+    // Bytes of js_user the store uses (whole sectors).
+    uint32_t capacity() const { return usableSize(); }
 
     // Virtual memory base address of the partition (from mmap)
     uint32_t getVirtualBaseAddress() const;
@@ -161,6 +161,15 @@ private:
         uint32_t end;
     };
 
+    enum class MoveResult {
+        Done,     // stored as a new entry
+        Dropped,  // cannot be moved as it is (damaged, no room): the
+                  // migration gives it up; rebaseStale() leaves the entry
+                  // stale and tries again at the next boot
+        Retry,    // no memory, a flash error or an upload in the way: the
+                  // migration keeps the old index for the next boot
+    };
+
     std::vector<BytecodeEntry> entries_;
     const esp_partition_t* user_partition_;
     uint32_t virtual_base_addr_;  // Virtual address from mmap (stable across reboots)
@@ -172,18 +181,26 @@ private:
     uint32_t pin_floor_ = 0;  // when the pin table overflowed: allocate above this
     Range reservation_ = {};
     bool has_reservation_ = false;
+    uint32_t next_sequence_ = 1;  // for the next header
 
-    static constexpr const char* METADATA_PATH = "/js_bytecode_meta.json";
+    // Migration only: the images of the JSON index while they are moved
+    // (allocate() keeps off them). Points into migrateLegacyIndex()'s stack.
+    const Range* legacy_used_ = nullptr;
+    uint8_t legacy_used_count_ = 0;
+
     static constexpr size_t MAX_PARTITION_SIZE = 256 * 1024;  // 256KB
-    static constexpr uint32_t SECTOR_SIZE = 4096;
+    static constexpr uint32_t SECTOR_SIZE = bcstore::kSectorSize;
 
     uint32_t usableSize() const;
-    bool overlapsUsed(uint32_t start, uint32_t end) const;
-    uint32_t nextUsedStart(uint32_t from) const;
 
-    // Serialize/deserialize to JSON for LittleFS storage
-    bool loadFromFile(const char* path);
-    bool saveToFile(const char* path);
+    // visit(start, end) for every range that must not be written: entries,
+    // pins, the upload in progress, the old images during the migration.
+    template <class Visit>
+    void forEachUsed(Visit&& visit) const;
+
+    // Migration only: moves the scripts listed in /js_bytecode_meta.json
+    // (older firmware) into the store and deletes that file. From instance().
+    void migrateLegacyIndex();
 
     // Find partition on initialization
     bool initPartition();
@@ -191,8 +208,11 @@ private:
     // Map partition to virtual memory (called once at startup)
     bool initVirtualMapping();
 
-    // Rebases one stale entry (lock held); false leaves it as it was.
-    bool rebaseEntry(const BytecodeEntry& entry);
+    // Copies the image at partition offset `image` (`size` bytes, CRC-32
+    // `checksum`, relocated for a build whose stdlib table was at
+    // `romBase`) into a new entry `name`, rebased for this build and its
+    // new address (lock held). The source is not changed.
+    MoveResult moveImage(const char* name, uint32_t image, uint32_t size, uint32_t checksum, uint32_t romBase);
     bool mappingMoved(const BytecodeEntry& entry) const;
 };
 

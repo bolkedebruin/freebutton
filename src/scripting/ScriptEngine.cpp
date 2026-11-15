@@ -191,9 +191,10 @@ void ScriptEngine::runBootScript() {
     }
     ESP_LOGI(TAG, "Found user script '%s' in bytecode registry", entry.name);
 
-    // Memory map from flash. The partition is mapped once by the registry;
-    // this gives the same address and one small bookkeeping block.
-    MappedFile* mapped = file_hw_mmap("js_user", entry.offset, entry.size);
+    // Memory map from flash: the image, which lies behind the entry's header.
+    // The partition is mapped once by the registry; this gives the same
+    // address and one small bookkeeping block.
+    MappedFile* mapped = file_hw_mmap("js_user", entry.imageOffset(), entry.size);
     if (!mapped) {
         ESP_LOGE(TAG, "Failed to memory map user script");
         setScriptError("map failed");
