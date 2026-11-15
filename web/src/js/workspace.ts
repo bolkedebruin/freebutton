@@ -792,7 +792,7 @@ export class Workspace {
     if (hasFonts && this.mode === 'device' && !this.readOnly.fonts) await this.listReadOnly(FONTS_BUCKET);
     const listed = this.readOnly.fonts;
     const keys = hasFonts && this.mode === 'device' && listed ? new Set(listed.map(f => f.key)) : null;
-    for (const w of fontWarnings(cfg, keys)) emit('console-line', { text: `config.json: ${w}`, type: 'warn' });
+    for (const w of fontWarnings(cfg, keys)) emit('console-line', { to: 'device', text: `config.json: ${w}`, type: 'warn' });
   }
 
   private async runIconSync(cfgText: string | undefined): Promise<IconSyncResult | null> {
@@ -814,7 +814,7 @@ export class Workspace {
     }
     const base = this.base;
     const log = (t: string, type: 'info' | 'warn' | 'error' | 'result' | 'log' | 'input') => {
-      emit('console-line', { text: t, type });
+      emit('console-line', { to: 'device', text: t, type });
     };
     const result = await syncIcons(cfg, {
       readSvg: async (key) => (await getObject(base, key))?.text ?? null,
@@ -875,7 +875,7 @@ export class Workspace {
     } catch (err) {
       if (err instanceof StorageUnavailableError) {
         if (this.mode !== 'local') {
-          emit('console-line', { text: `No device storage (${err.message}); files are kept in browser memory only.`, type: 'warn' });
+          emit('console-line', { to: 'device', text: `No device storage (${err.message}); files are kept in browser memory only.`, type: 'warn' });
         }
         this.mode = 'local';
         this.message = LOCAL_MESSAGE;
@@ -886,7 +886,7 @@ export class Workspace {
         this.message = err instanceof S3Error && err.code === 'NoSuchBucket'
           ? 'File list failed: this firmware has no "app" storage bucket (update the device firmware)'
           : `File list failed: ${describeError(err)}`;
-        emit('console-line', { text: this.message, type: 'error' });
+        emit('console-line', { to: 'device', text: this.message, type: 'error' });
       }
     }
   }
@@ -993,7 +993,7 @@ export class Workspace {
    */
   private note(text: string, type: 'info' | 'warn' | 'error' | 'result'): void {
     this.message = type === 'error' || type === 'warn' ? text : (this.mode === 'local' ? LOCAL_MESSAGE : '');
-    emit('console-line', { text, type });
+    emit('console-line', { to: 'device', text, type });
     this.publish();
   }
 

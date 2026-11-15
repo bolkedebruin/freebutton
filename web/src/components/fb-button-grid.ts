@@ -1,5 +1,5 @@
 import { LitElement, html, svg } from 'lit';
-import { customElement, property } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import type { ButtonConfig, ConfigRef, ItemFont } from '../js/app-state.js';
 import { on, sameConfigRef } from '../js/app-state.js';
 import { nothing } from 'lit';
@@ -26,6 +26,15 @@ export class FbButtonGrid extends LitElement {
   @property({ attribute: false }) positions: number[] | null = null;
   /** The config.json entry under the editor cursor: outlined. */
   @property({ attribute: false }) selected: ConfigRef | null = null;
+  /**
+   * A script runs in the virtual device: a key is pressed while the pointer
+   * (or Space / Enter) holds it down, and reports `key-press` / `key-release`
+   * with its position. How long it is held decides click, long press and
+   * repeat, as on the device. False: a click shows the key in config.json.
+   */
+  @property({ type: Boolean }) pressable = false;
+  /** Positions held down now. */
+  @state() private _down: ReadonlySet<number> = new Set();
   private _offIcons?: () => void;
   private _offFonts?: () => void;
 
@@ -39,6 +48,35 @@ export class FbButtonGrid extends LitElement {
     super.disconnectedCallback();
     this._offIcons?.();
     this._offFonts?.();
+  }
+
+  protected willUpdate(changed: Map<PropertyKey, unknown>) {
+    // The script stopped while a key was held: nothing is down any more.
+    if (changed.has('pressable') && !this.pressable && this._down.size > 0) this._down = new Set();
+  }
+
+  private _press(position: number) {
+    if (!this.pressable || this._down.has(position)) return;
+    this._down = new Set([...this._down, position]);
+    this.dispatchEvent(new CustomEvent('key-press', { bubbles: true, detail: { position } }));
+  }
+
+  private _release(position: number) {
+    if (!this._down.has(position)) return;
+    this._down = new Set([...this._down].filter(p => p !== position));
+    this.dispatchEvent(new CustomEvent('key-release', { bubbles: true, detail: { position } }));
+  }
+
+  private _onKeyDown(e: KeyboardEvent, position: number) {
+    if (!this.pressable || (e.key !== ' ' && e.key !== 'Enter')) return;
+    e.preventDefault();          // no click, no page scroll
+    if (!e.repeat) this._press(position);
+  }
+
+  private _onKeyUp(e: KeyboardEvent, position: number) {
+    if (e.key !== ' ' && e.key !== 'Enter') return;
+    e.preventDefault();
+    this._release(position);
   }
 
   /** Odd positions are the left key of a connector (position = id*2+1). */
@@ -65,10 +103,16 @@ export class FbButtonGrid extends LitElement {
     const topFont: ItemFont = btn.topFont ?? styleFont(styles, StyleElement.KeyTopLabel);
 
     const isSelected = sameConfigRef(btn.ref, this.selected);
+    const down = this._down.has(btn.position);
+    const position = btn.position;
 
     return html`
       <div data-position=${btn.position} class="bg-[rgb(20,20,20)] h-[57.1px] flex items-center justify-center relative font-fira text-white
-        ${leftSide ? 'flex-row' : 'flex-row-reverse'}"
+        ${leftSide ? 'flex-row' : 'flex-row-reverse'} ${this.pressable ? 'select-none touch-none' : ''}"
+        ?data-pressed=${down}
+        @pointerdown=${(e: PointerEvent) => { if (e.button === 0) this._press(position); }}
+        @pointerup=${() => this._release(position)} @pointerleave=${() => this._release(position)}
+        @pointercancel=${() => this._release(position)}
         data-ref=${btn.ref ? `${btn.ref.list}:${btn.ref.index}` : nothing} data-ref-kind="button" ?data-selected=${isSelected}
         style=${isSelected ? 'outline: 2px solid #AF8BFF; outline-offset: -2px;' : ''}>
 
@@ -79,19 +123,26 @@ export class FbButtonGrid extends LitElement {
           ${this._dotsIcon(16)}
         </div>
 
-        <!-- LED indicator -->
+        <!-- LED at the back of the key (towards the wall): a glow at its outer edge, only while a script lights it -->
+        ${btn.backLedColor ? html`<div data-back-led class="absolute top-[3px] bottom-[3px] w-[3px] rounded-full ${leftSide ? 'left-0' : 'right-0'}"
+          style="background: ${btn.backLedColor}; box-shadow: 0 0 8px 1px ${btn.backLedColor};"></div>` : ''}
+
+        <!-- LED indicator: the colour the LED has (black = off) -->
         <div class="absolute top-1/2 -translate-y-1/2
           ${leftSide ? 'left-6' : 'right-6'}">
-          <div class="w-[11.75px] h-[11.75px] border-[3px] bg-transparent
-            ${btn.ledOn ? 'border-[rgb(255,0,0)]' : 'border-black'}">
+          <div class="w-[11.75px] h-[11.75px] border-[3px] bg-transparent" data-led ?data-led-on=${btn.ledOn}
+            style="border-color: ${btn.ledOn ? btn.ledColor : 'rgb(0,0,0)'};${btn.ledOn ? ` box-shadow: 0 0 6px ${btn.ledColor};` : ''}">
           </div>
         </div>
 
         <!-- Button label area -->
-        <button title=${btn.ref ? 'Show in config.json' : 'No key configured at this position'}
-          class="bg-[rgb(30,30,30)] border-0 text-white ${btn.ref ? 'cursor-pointer' : 'cursor-default'} flex flex-col items-center justify-center
+        <button title=${this.pressable ? 'Press the key (hold it for a long press)' : btn.ref ? 'Show in config.json' : 'No key configured at this position'}
+          aria-label=${`Key ${btn.position}${btn.name ? ' ' + btn.name : ''}`} aria-pressed=${this.pressable ? (down ? 'true' : 'false') : nothing}
+          @keydown=${(e: KeyboardEvent) => this._onKeyDown(e, position)} @keyup=${(e: KeyboardEvent) => this._onKeyUp(e, position)}
+          @blur=${() => this._release(position)}
+          class="${down ? 'bg-[rgb(70,70,70)]' : 'bg-[rgb(30,30,30)]'} border-0 text-white ${btn.ref || this.pressable ? 'cursor-pointer' : 'cursor-default'} flex flex-col items-center justify-center
           px-1.5 py-px w-[113px] h-[42px] font-fira text-[16.8px] font-normal text-center leading-[25.2px]
-          transition-colors duration-200 hover:bg-[rgba(255,255,255,0.1)]">
+          transition-colors duration-100 hover:bg-[rgba(255,255,255,0.1)] outline-none focus-visible:ring-2 focus-visible:ring-white">
           ${btn.topLabel ? html`
             <div class="text-center leading-[1.3] whitespace-nowrap" data-top-label
               style="${fontStyle(topFont, MINI_SCALE)} ${textStyleCss(styles[StyleElement.KeyTopLabel], MINI_SCALE)}">

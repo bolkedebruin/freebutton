@@ -6,9 +6,45 @@
 
 export type LogLevel = 'log' | 'info' | 'warn' | 'error' | 'result' | 'input';
 
+/**
+ * The two consoles. They share nothing: each has its own output, input and
+ * history.
+ *   device   the real device's REPL, and what the IDE reports about the
+ *            device and its files (saved, deployed, storage, images, fonts)
+ *   virtual  the script running in the virtual device (the emulator in the
+ *            page): its print() output, its errors, lines evaluated in it
+ */
+export type ConsoleId = 'device' | 'virtual';
+
 export interface ConsoleLine {
   text: string;
   type: LogLevel;
+  /** The console this line belongs to: stated by whoever emits it, never guessed. */
+  to: ConsoleId;
+}
+
+/** Where a typed line is evaluated: the console it was typed in. */
+export type ConsoleTarget = ConsoleId;
+
+/**
+ * The emulator of the virtual device (emulator-session.ts).
+ * idle: nothing runs; starting: the engine loads; running: a script runs;
+ * error: it stopped (or did not start) with `error`.
+ */
+export interface EmulatorSnapshot {
+  status: 'idle' | 'starting' | 'running' | 'error';
+  /** "virt_btn_" + 6 hex digits: what system.id() gives the script. Never a real device's id. */
+  identity: string;
+  /** Stage 1: the in-page broker only. */
+  mqtt: 'offline';
+  /** Why it stopped, or the last error of a script that still runs. */
+  error: string;
+  /** Errors since Run. */
+  errors: number;
+  /** config.json or the script changed since Run: what runs is the older text. */
+  stale: 'config' | 'script' | null;
+  /** Run was pressed at least once since the page loaded (the virtual console and the MQTT tab exist from then on). */
+  used: boolean;
 }
 
 export interface FileEntry {
@@ -74,6 +110,8 @@ export interface ButtonConfig {
   topLabel: string;
   ledOn: boolean;
   ledColor: string;
+  /** Colour of the LED at the back of the key (towards the wall) when it is on; set by a running script only. */
+  backLedColor?: string;
   page: number;
   /** Script name from config.json "name" (fb.key("name")). */
   name?: string;
@@ -271,8 +309,15 @@ declare global {
 
     // Console events
     'console-line': CustomEvent<ConsoleLine>;
-    'console-clear': CustomEvent<void>;
-    'console-eval': CustomEvent<{ code: string }>;
+    // console: the one to clear; absent = the one that is shown.
+    'console-clear': CustomEvent<{ console?: ConsoleId }>;
+    'console-eval': CustomEvent<{ code: string; target: ConsoleTarget }>;
+
+    // The emulator of the virtual device: its status, the device state a
+    // script changed (redraw), its MQTT log.
+    'emulator-change': CustomEvent<EmulatorSnapshot>;
+    'emulator-state': CustomEvent<void>;
+    'emulator-mqtt': CustomEvent<void>;
 
     // Device events
     // connectors: physical layout (empty = unknown, use the legacy layout).

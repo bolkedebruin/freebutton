@@ -250,7 +250,7 @@ export const fontLoader = new FontLoader({
   get: (base, key) => getObjectBytes(base, key, FONTS_BUCKET),
   cache: indexedDbFontCache(),
   register: registerFontFace,
-  log: (text) => emit('console-line', { text, type: 'warn' }),
+  log: (text) => emit('console-line', { to: 'device', text, type: 'warn' }),
 });
 
 /** Keys of the device's fonts bucket as last listed (null = unknown). For the config linter. */

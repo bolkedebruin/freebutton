@@ -22,6 +22,7 @@ const LONG_PRESS_MS = 550;
 /** Shift + arrow: this many units (display items and lists: %; images: px). */
 const BIG_STEP: Record<PlacedKind, number> = { displayitem: 5, list: 5, image: 10 };
 const ITEM_HINT = 'Click: show in config.json. Drag or arrow keys: move. Right-click: properties.';
+const RUNNING_HINT = 'The script is running: a press on the left or right half of the display is its left or right key.';
 
 /** A drawn entry with what a move needs: its values and its box in device px. */
 interface Placed {
@@ -85,6 +86,15 @@ export class FbTftDisplay extends LitElement {
    * from that element (_itemEl, _placed: the only places that ask the DOM).
    */
   @property({ attribute: false }) itemRects: Array<{ ref: ConfigRef; rect: Rect }> | null = null;
+  /**
+   * A script runs in the virtual device: the screen is the device's, not the
+   * editor's. A press on its left or right half is the main display's left or
+   * right key (`main-key-press` / `main-key-release` with side 0 or 1), held
+   * as long as the pointer is down; nothing is selected or moved.
+   */
+  @property({ type: Boolean }) running = false;
+  /** The half held down now (0 left, 1 right); null: none. */
+  @state() private _mainDown: 0 | 1 | null = null;
   @state() private timeStr = '';
   @state() private _moving: Moving | null = null;
   private _press: Press | null = null;
@@ -108,6 +118,7 @@ export class FbTftDisplay extends LitElement {
     super.disconnectedCallback();
     this.removeEventListener('click', this._onClickCapture, true);
     this._endPress();
+    this._releaseMain();
     if (this._timer) clearInterval(this._timer);
     this._offIcons?.();
     this._offFonts?.();
@@ -118,6 +129,11 @@ export class FbTftDisplay extends LitElement {
     if (this._moving && !this._moving.active
       && (changed.has('displayItems') || changed.has('lists') || changed.has('images'))) {
       this._moving = null;
+    }
+    if (changed.has('running')) {
+      this._endPress();
+      this._moving = null;
+      if (!this.running) this._releaseMain();
     }
   }
 
@@ -179,8 +195,30 @@ export class FbTftDisplay extends LitElement {
     return { el, ref: { kind, list, index: Number(index) } };
   }
 
+  private _releaseMain = () => {
+    window.removeEventListener('pointerup', this._releaseMain);
+    window.removeEventListener('pointercancel', this._releaseMain);
+    if (this._mainDown === null) return;
+    const side = this._mainDown;
+    this._mainDown = null;
+    this.dispatchEvent(new CustomEvent('main-key-release', { bubbles: true, detail: { side } }));
+    // Released outside the screen: no click came to swallow.
+    setTimeout(() => { this._swallowClick = false; }, 0);
+  };
+
   private _onPointerDown = (e: PointerEvent) => {
     if (e.button !== 0 || e.isPrimary === false) return;
+    if (this.running) {
+      const r = this._screen()?.getBoundingClientRect();
+      if (!r || this._mainDown !== null) return;
+      this._mainDown = e.clientX < r.left + r.width / 2 ? 0 : 1;
+      // The release may happen anywhere; the click that follows selects nothing.
+      this._swallowClick = true;
+      window.addEventListener('pointerup', this._releaseMain);
+      window.addEventListener('pointercancel', this._releaseMain);
+      this.dispatchEvent(new CustomEvent('main-key-press', { bubbles: true, detail: { side: this._mainDown } }));
+      return;
+    }
     const hit = this._itemEl(e.target, e);
     const item = hit ? this._placed(hit.ref, hit.el) : null;
     if (!hit || !item) return;
@@ -288,6 +326,11 @@ export class FbTftDisplay extends LitElement {
       hit.el.click();
       return;
     }
+    if (this.running && e.key.startsWith('Arrow')) {
+      e.preventDefault();
+      this.dispatchEvent(new CustomEvent('edit-blocked', { bubbles: true }));
+      return;
+    }
     const dir: Record<string, [number, number]> = {
       ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
     };
@@ -386,7 +429,7 @@ export class FbTftDisplay extends LitElement {
       return html`<div class="fb-item absolute flex cursor-pointer" data-image=${img.name}
         data-ref=${this._refAttr(img.ref)} data-ref-kind="image" ?data-selected=${sameConfigRef(img.ref, this.selected)}
         tabindex=${img.ref ? 0 : nothing} role="button" aria-label=${this._ariaLabel('Image', img.name, at.x, at.y)}
-        title=${ITEM_HINT} style="${box} ${this._outline(img.ref)}">
+        title=${this.running ? RUNNING_HINT : ITEM_HINT} style="${box} ${this._outline(img.ref)}">
         ${iconView(img.icon, img.width, img.height, img.color, SCREEN_SCALE)}
       </div>`;
     }
@@ -453,7 +496,7 @@ export class FbTftDisplay extends LitElement {
       <div class="fb-item absolute overflow-hidden cursor-pointer" data-list=${list.name}
         data-ref=${this._refAttr(list.ref)} data-ref-kind="list" ?data-selected=${sameConfigRef(list.ref, this.selected)}
         tabindex=${list.ref ? 0 : nothing} role="button" aria-label=${this._ariaLabel('List', list.name, at.x, at.y)}
-        title=${ITEM_HINT}
+        title=${this.running ? RUNNING_HINT : ITEM_HINT}
         style="left: ${at.x}%; top: ${at.y}%; width: ${list.width}%; height: ${px(list.rows * rowH)}; ${this._outline(list.ref)}
           ${fontStyle(font, SCREEN_SCALE)} line-height: ${px(rowH)};">
         <div class="absolute left-0 right-0 rounded-[6px]" data-list-focus
@@ -500,7 +543,7 @@ export class FbTftDisplay extends LitElement {
               data-ref=${this._refAttr(item.ref)} data-ref-kind="displayitem" ?data-selected=${sameConfigRef(item.ref, this.selected)}
               tabindex=${item.ref ? 0 : nothing} role="button"
               aria-label=${this._ariaLabel('Display item', item.name ?? item.label, this._at(item.ref, item.x, item.y).x, this._at(item.ref, item.x, item.y).y)}
-              title=${item.ref ? ITEM_HINT : 'Sample data: no config.json is loaded'}
+              title=${this.running ? RUNNING_HINT : item.ref ? ITEM_HINT : 'Sample data: no config.json is loaded'}
               style="${this._itemPosition(item)} width: ${item.width}%; border-bottom: 1px solid rgb(170, 170, 170); ${this._outline(item.ref)}">
               <div class="my-[2px] leading-[1.15]" data-caption style=${textStyleCss(caption, SCREEN_SCALE)}>
                 ${richText(item.label ?? '', this._labelFont(item, styles), SLOTS.caption, SCREEN_SCALE)}
@@ -518,6 +561,8 @@ export class FbTftDisplay extends LitElement {
           ${this.lists.map(list => this._renderList(list, styles))}
           ${this.images.map(img => this._renderImage(img))}
           ${this._renderMoveBadge()}
+          ${this._mainDown === null ? '' : html`<div class="absolute top-0 bottom-0 w-1/2 bg-white/10 pointer-events-none ${this._mainDown === 0 ? 'left-0' : 'right-0'}"
+            data-main-pressed=${this._mainDown}></div>`}
 
           <!-- Status bar -->
           <div class="absolute text-[11.2px] font-normal font-[Montserrat,sans-serif] text-white text-left leading-[11.2px]"

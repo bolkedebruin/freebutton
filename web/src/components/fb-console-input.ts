@@ -1,12 +1,18 @@
 import { LitElement, html } from 'lit';
-import { customElement } from 'lit/decorators.js';
-import { emit } from '../js/app-state';
+import { customElement, property } from 'lit/decorators.js';
+import { emit, type ConsoleTarget } from '../js/app-state';
 import { isIncompleteCode } from '../js/console';
 import { initConsoleAutocomplete, isAutocompleteVisible } from '../js/console-autocomplete';
 
 @customElement('fb-console-input')
 export class FbConsoleInput extends LitElement {
   createRenderRoot() { return this; }
+
+  /** The console this is the input of: a line is evaluated there and echoed there. */
+  @property() target: ConsoleTarget = 'device';
+  /** Nothing can be typed (the virtual device's script is stopped); `note` says why. */
+  @property({ type: Boolean }) disabled = false;
+  @property() note = '';
 
   private _history: string[] = [];
   private _historyIndex = -1;
@@ -88,8 +94,8 @@ export class FbConsoleInput extends LitElement {
     }
     this._historyIndex = -1;
 
-    emit('console-line', { text: code, type: 'input' });
-    emit('console-eval', { code });
+    emit('console-line', { text: code, type: 'input', to: this.target });
+    emit('console-eval', { code, target: this.target });
 
     const textarea = this._textarea;
     if (textarea) {
@@ -114,12 +120,14 @@ export class FbConsoleInput extends LitElement {
   render() {
     return html`
       <div class="flex items-start px-3 py-1 font-mono text-xs leading-5">
-        <span class="text-[#4fc3f7] select-none">&gt;&nbsp;</span>
+        <span class="${this.disabled ? 'text-gray-200' : 'text-[#4fc3f7]'} select-none" data-testid="console-prompt">&gt;&nbsp;</span>
         <textarea
           rows="1"
           class="flex-1 bg-transparent text-[#4fc3f7] font-mono text-xs leading-5 outline-none placeholder:text-gray-200 caret-[#4fc3f7] resize-none max-h-[150px]"
           style="field-sizing: content"
-          placeholder="Type JavaScript..."
+          aria-label=${this.target === 'virtual' ? 'JavaScript for the virtual device' : 'JavaScript for the device'}
+          ?disabled=${this.disabled}
+          placeholder=${this.disabled ? this.note : this.target === 'virtual' ? 'Type JavaScript for the virtual device...' : 'Type JavaScript...'}
           @keydown=${this._handleKeydown}
           @input=${() => this._autoResize()}
         ></textarea>

@@ -11,6 +11,7 @@ import '../fb-code-editor.js';
 import '../fb-status-bar.js';
 import '../fb-right-pane.js';
 import '../fb-virtual-device.js';
+import '../fb-device-info.js';
 import '../fb-tft-display.js';
 import '../fb-button-grid.js';
 import '../fb-console-pane.js';
@@ -185,7 +186,8 @@ describe('fb-app keyboard shortcuts', () => {
     await nextFrame();
 
     window.removeEventListener('console-clear', handler);
-    expect(events.length).toBe(1);
+    // The key asks for "the console that is shown"; the console pane names it.
+    expect(events.map(e => (e as CustomEvent).detail?.console).sort()).toEqual(['device', undefined]);
   });
 });
 
@@ -674,13 +676,14 @@ describe('fb-virtual-device', () => {
     expect(flipInner?.classList.contains('flipped')).toBe(true);
   });
 
+  // The device's own info: in the Device view (fb-device-info); the virtual device's back side shows the emulator.
   it('settings card shows device info fields', async () => {
-    const el = createElement('fb-virtual-device');
+    const el = createElement('fb-device-info');
     await nextFrame();
 
     // Flip to settings
     const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
-    gearBtn.click();
+    gearBtn?.click();
     await nextFrame();
 
     const fields = el.querySelectorAll('[data-field]');
@@ -691,12 +694,13 @@ describe('fb-virtual-device', () => {
     expect(fieldNames).toContain('Uptime');
   });
 
+  // The device's own info: in the Device view (fb-device-info); the virtual device's back side shows the emulator.
   it('shows placeholders (not fake values) when no device is connected', async () => {
-    const el = createElement('fb-virtual-device');
+    const el = createElement('fb-device-info');
     await nextFrame();
 
     const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
-    gearBtn.click();
+    gearBtn?.click();
     await nextFrame();
 
     const ipv4 = el.querySelector('[data-field="IPv4"]');
@@ -708,8 +712,9 @@ describe('fb-virtual-device', () => {
     expect(el.textContent).not.toContain('AA:BB:CC:DD:EE:FF');
   });
 
+  // The device's own info: in the Device view (fb-device-info); the virtual device's back side shows the emulator.
   it('renders real device info from a device-info event', async () => {
-    const el = createElement('fb-virtual-device');
+    const el = createElement('fb-device-info');
     await nextFrame();
 
     window.dispatchEvent(new CustomEvent('device-info', {
@@ -725,7 +730,7 @@ describe('fb-virtual-device', () => {
     await nextFrame();
 
     const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
-    gearBtn.click();
+    gearBtn?.click();
     await nextFrame();
 
     expect(el.querySelector('[data-field="IPv4"]')?.textContent?.trim()).toBe('10.0.0.7');
@@ -738,8 +743,9 @@ describe('fb-virtual-device', () => {
     expect(el.querySelector('[data-field="Uptime"]')?.textContent?.trim()).toBe('0d 1h 1m');
   });
 
+  // The device's own info: in the Device view (fb-device-info); the virtual device's back side shows the emulator.
   it('shows firmware with commit, the model and the heap low-water mark', async () => {
-    const el = createElement('fb-virtual-device');
+    const el = createElement('fb-device-info');
     await nextFrame();
 
     window.dispatchEvent(new CustomEvent('device-info', {
@@ -756,14 +762,15 @@ describe('fb-virtual-device', () => {
     await nextFrame();
     expect(el.querySelector('[data-testid="heap-min"]')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('min 35 KB');
 
-    (el.querySelector('[data-testid="gear-icon"]') as HTMLElement).click();
+    (el.querySelector('[data-testid="gear-icon"]') as HTMLElement | null)?.click();
     await nextFrame();
     expect(el.querySelector('[data-field="Firmware"]')?.textContent?.trim()).toBe('3.1.0-alpha.1 (30df729-dirty)');
     expect(el.querySelector('[data-field="Model"]')?.textContent?.trim()).toBe('Model 1 Version 9');
   });
 
+  // The device's own info: in the Device view (fb-device-info); the virtual device's back side shows the emulator.
   it('memory graph shows real KB values with a quantifier', async () => {
-    const el = createElement('fb-virtual-device');
+    const el = createElement('fb-device-info');
     await nextFrame();
 
     window.dispatchEvent(new CustomEvent('device-info', {
@@ -779,7 +786,7 @@ describe('fb-virtual-device', () => {
     await nextFrame();
 
     const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
-    gearBtn.click();
+    gearBtn?.click();
     await nextFrame();
 
     const graph = el.querySelector('[data-testid="memory-graph"]');
@@ -854,8 +861,9 @@ describe('fb-virtual-device', () => {
     clearPreviewConfig();
   });
 
+  // The device's own info: in the Device view (fb-device-info); the virtual device's back side shows the emulator.
   it('renders real (heap + lvgl) SVG polylines once device data arrives', async () => {
-    const el = createElement('fb-virtual-device');
+    const el = createElement('fb-device-info');
     await nextFrame();
 
     window.dispatchEvent(new CustomEvent('device-info', {
@@ -872,7 +880,7 @@ describe('fb-virtual-device', () => {
 
     // Flip to settings
     const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
-    gearBtn.click();
+    gearBtn?.click();
     await nextFrame();
 
     const graph = el.querySelector('[data-testid="memory-graph"]');
@@ -886,12 +894,13 @@ describe('fb-virtual-device', () => {
     expect(series).not.toContain('js');
   });
 
+  // The device's own info: in the Device view (fb-device-info); the virtual device's back side shows the emulator.
   it('memory graph shows a waiting placeholder before any device data', async () => {
-    const el = createElement('fb-virtual-device');
+    const el = createElement('fb-device-info');
     await nextFrame();
 
     const gearBtn = el.querySelector('[data-testid="gear-icon"]') as HTMLElement;
-    gearBtn.click();
+    gearBtn?.click();
     await nextFrame();
 
     const graph = el.querySelector('[data-testid="memory-graph"]');
@@ -1173,10 +1182,12 @@ describe('fb-button-grid', () => {
     el.buttons = testButtons;
     await nextFrame();
 
-    // LED on = red border, LED off = black border
-    const redLeds = el.querySelectorAll('.border-\\[rgb\\(255\\,0\\,0\\)\\]');
-    const blackLeds = el.querySelectorAll('.border-black');
-    expect(redLeds.length + blackLeds.length).toBe(4);
+    // LED on = its colour, LED off = black
+    const leds = Array.from(el.querySelectorAll('[data-led]')) as HTMLElement[];
+    expect(leds.length).toBe(4);
+    expect(leds.map(l => l.hasAttribute('data-led-on'))).toEqual([true, true, false, true]);
+    expect(leds[0].style.borderColor.replace(/\s/g, '')).toBe('rgb(255,0,0)');
+    expect(leds[2].style.borderColor.replace(/\s/g, '')).toBe('rgb(0,0,0)');
   });
 });
 
@@ -1213,7 +1224,8 @@ describe('fb-console-pane', () => {
     await nextFrame();
 
     window.removeEventListener('console-clear', handler);
-    expect(events.length).toBe(1);
+    // The button names its console.
+    expect(events.map(e => (e as CustomEvent).detail?.console)).toEqual(['device']);
   });
 });
 
@@ -1231,7 +1243,7 @@ describe('fb-console-output', () => {
     const el = createElement('fb-console-output');
     await nextFrame();
 
-    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: 'Hello world', type: 'log' } }));
+    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: 'Hello world', type: 'log', to: 'device' } }));
     await nextFrame();
 
     const lines = el.querySelectorAll('.p-3 > div');
@@ -1243,7 +1255,7 @@ describe('fb-console-output', () => {
     const el = createElement('fb-console-output');
     await nextFrame();
 
-    window.dispatchEvent(new CustomEvent('console-clear'));
+    window.dispatchEvent(new CustomEvent('console-clear', { detail: { console: 'device' } }));
     await nextFrame();
 
     const lines = el.querySelectorAll('.p-3 > div');
@@ -1263,7 +1275,7 @@ describe('fb-console-output', () => {
     const el = createElement('fb-console-output');
     await nextFrame();
 
-    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: '42', type: 'result' } }));
+    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: '42', type: 'result', to: 'device' } }));
     await nextFrame();
 
     const resultLines = el.querySelectorAll('.text-status-green');
@@ -1274,7 +1286,7 @@ describe('fb-console-output', () => {
     const el = createElement('fb-console-output');
     await nextFrame();
 
-    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: 'some log', type: 'log' } }));
+    window.dispatchEvent(new CustomEvent('console-line', { detail: { text: 'some log', type: 'log', to: 'device' } }));
     await nextFrame();
 
     const logLines = el.querySelectorAll('.text-gray-100');

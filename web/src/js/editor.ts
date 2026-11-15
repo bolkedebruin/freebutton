@@ -50,6 +50,27 @@ let currentKind: FileKind = 'js';
 // Set when the open file is config.json, so the JSON linter adds shape checks.
 let currentIsConfig = false;
 
+/** A run-time error of the script in the virtual device (1-based line and column). */
+export interface RuntimeError {
+    line: number;
+    column?: number;
+    message: string;
+}
+
+let runtimeError: RuntimeError | null = null;
+
+/**
+ * Mark (or with null: unmark) the line where the script running in the
+ * virtual device failed. Only shown while a script is the open file; it goes
+ * away when the text changes (the positions are those of the text that ran).
+ * It is not a validation error: Save and Deploy are not held back by it.
+ */
+export function showRuntimeError(error: RuntimeError | null): void {
+    if (error === runtimeError) return;
+    runtimeError = error;
+    if (editorView && currentKind === 'js') forceLinting(editorView);
+}
+
 /**
  * MQuickJS linter - validates code as you type
  */
@@ -125,6 +146,17 @@ const mquickjsLinter = linter((view) => {
             // Line number out of range, skip this error
             console.warn('Linter error:', e);
         }
+    }
+
+    // An error of the script running in the virtual device, until the text changes.
+    if (runtimeError) {
+        const lineNo = Math.min(Math.max(1, runtimeError.line), view.state.doc.lines);
+        const line = view.state.doc.line(lineNo);
+        const from = Math.min(line.to, line.from + Math.max(0, (runtimeError.column ?? 1) - 1));
+        diagnostics.push({
+            from: from === line.to && line.length > 0 ? line.from : from,
+            to: line.to, severity: 'error', message: runtimeError.message, source: 'virtual device',
+        });
     }
 
     return diagnostics;
@@ -337,7 +369,10 @@ function createState(doc: string, kind: FileKind): EditorState {
 /** Notify listeners (workspace dirty tracking) whenever the document changes. */
 function docChangeExtension() {
     return EditorView.updateListener.of((update: ViewUpdate) => {
-        if (update.docChanged) emit('editor-doc-change');
+        if (update.docChanged) {
+            runtimeError = null;
+            emit('editor-doc-change');
+        }
     });
 }
 
@@ -352,6 +387,7 @@ export function openDocument(content: string, kind: FileKind, opts: { isConfig?:
     }
     currentKind = kind;
     currentIsConfig = !!opts.isConfig;
+    runtimeError = null;
     editorView.setState(createState(content, kind));
     // setState is not a transaction, so update listeners don't see it.
     emit('editor-doc-change');

@@ -40,7 +40,7 @@ export async function uploadDropped(files: readonly Picked[]): Promise<{ images:
   const fonts = files.filter(isFontFile);
   const other = files.filter(f => !isSvgFile(f) && !isFontFile(f));
   if (other.length) {
-    emit('console-line', {
+    emit('console-line', { to: 'device',
       text: `Not uploaded (only .svg images and .ttf / .otf fonts can be dropped here): ${other.map(f => f.name).join(', ')}`,
       type: 'warn',
     });
