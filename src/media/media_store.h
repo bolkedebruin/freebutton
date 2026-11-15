@@ -28,7 +28,7 @@ typedef enum {
 
 typedef enum {
     MEDIA_OK = 0,
-    MEDIA_ERR_UNAVAILABLE, /* no media partition, or not initialised */
+    MEDIA_ERR_UNAVAILABLE, /* no media partition, or not initialised; media_put_begin: no memory for the index entry of a new key (nothing was written) */
     MEDIA_ERR_NOT_FOUND,
     MEDIA_ERR_NO_SPACE,    /* even after counting freeable space and evicting RENDER */
     MEDIA_ERR_INVALID,     /* bad key, size, bucket or state */
@@ -85,6 +85,9 @@ void media_close(media_file_t *file);
  * exactly `size` bytes, then commit (atomic: until then any previous version
  * stays the live one). Abort releases the reservation.
  *
+ * - A new key takes an entry of the store's index (2 bytes of heap, in
+ *   steps of 32): MEDIA_ERR_UNAVAILABLE from media_put_begin() when there
+ *   is no memory for it. Replacing a key never needs memory.
  * - size 0 is allowed (a 0-byte file); size > 4 MB is MEDIA_ERR_INVALID;
  *   MEDIA_ERR_NO_SPACE when it does not fit even after evicting RENDER
  *   entries (nothing is evicted then), MEDIA_ERR_BUSY with 2 uploads open.

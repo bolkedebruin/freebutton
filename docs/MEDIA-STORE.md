@@ -68,12 +68,35 @@ wear, the rest of the store shares the erases. Measured on a 5 MB store
 with 1.5 MB of fonts (`test_wear_*`): the busiest sector gets 1.06-1.08
 times the even share; before next-fit it was 3.7-30 times.
 
-RAM: a free map (two uint16 per page), a small table of open files and the
-directory index: one uint16 per live entry, the offset of its record in the
-active directory half, sorted by bucket and key (2 KB for the 1024 records a
-half can hold; no heap). The records themselves stay in flash: the active
-half is mapped and read in place. The store's static state is 4,932 bytes
-(2,872 before the index; see "Implementation and tools").
+RAM: a table of open files (static), a free map (heap, 6 bytes per page)
+and the directory index: one uint16 per live entry, the offset of its record
+in the active directory half, sorted by bucket and key. The records
+themselves stay in flash: the active half is mapped and read in place.
+
+The index is a heap block sized to what the store holds: the live entries
+rounded up to 16 (a step of 32 bytes).
+
+| Files | Index (heap) |
+|---|---|
+| 3 | 32 bytes |
+| 56 | 128 bytes |
+| 1000 (the limit) | 2,016 bytes |
+
+- It is sized at mount and grows by one step when a put needs an entry and
+  the block is full: allocate, copy, free. The step is 16 entries because a
+  block this small costs the allocator 4 to 8 bytes of header and rounding
+  anyway: a smaller step would grow more often to save less than that, a
+  larger one would keep more unused (here 30 bytes at most).
+- It grows in `media_put_begin`, before anything is written (evictions,
+  data): one entry for the new upload and one for every upload in progress.
+  Without memory `media_put_begin` returns `MEDIA_ERR_UNAVAILABLE` and
+  nothing has changed. The commit then has its entry and needs no memory.
+- A replace takes the entry of the version it ends, a delete and a
+  compaction move need none: they never fail for memory.
+- It shrinks at mount and after a snapshot (entries were deleted); when the
+  smaller block cannot be had, the larger one stays.
+- A mount without memory for the free map or the index fails with
+  `MEDIA_ERR_UNAVAILABLE`.
 
 Lookups (`media_open`, `media_stat`, the lookup of a put or delete): a
 binary search in the index, comparing keys in the mapped records, then one
@@ -198,22 +221,26 @@ DEL (0x7F); `/` and UTF-8 are allowed. Per bucket.
    (erase page 0, write a header with generation 1). Otherwise the valid
    half with the higher generation is active; the other one is stale and
    is verified blank or erased before it is reused (`media_maintain`).
-2. Map the active half and scan it once, keeping one RAM bit per record
-   (dead or not; at most 1024 records per half = 128 bytes): every kill
-   marks its target dead, every DEL marks itself dead. A record must have a
+2. Map the active half and scan it once, keeping one bit per record (dead
+   or not; at most 1024 records per half = 128 bytes, on the stack, during
+   mount only): every kill marks its target dead, every DEL marks itself
+   dead. A record must have a
    sane length and type, a matching CRC, valid fields (page numbers inside
    the data area, location matching the size, key length) and a kill that
    points to an earlier live PUT. This is the only pass that checks CRCs.
 3. A later record can kill an earlier one, so only now is it known what is
-   live: a walk over the record lengths (no CRC, no decode) puts every live
-   PUT into the index, and every index entry marks its sectors in use in
+   live: a walk over the record lengths (no CRC, no decode) counts the live
+   PUTs, the index is allocated for them, a second walk puts them in, and
+   every index entry marks its sectors in use in
    the RAM map (one uint16 per page: sectors in use; another: sectors known
    erased, unknown = 0 after boot). Everything else is free: uploads cut
    short, files replaced or deleted while they were open before the reboot.
 
 After mount the log is trusted. An append is compared, through the mapping,
-with the bytes that were written; it then updates the bit map and the index
-(a PUT is inserted at its place, the record it kills is removed). A kill
+with the bytes that were written; it then updates the index (a PUT is
+inserted at its place, the record it kills is removed). A record is live
+when the index holds its offset: the walks in log order (snapshot,
+compaction) ask the index. A kill
 needs the ordinal of its target, which the index does not hold: the write
 operations count the records before it by walking their lengths.
 
@@ -405,14 +432,24 @@ format does not record it, so changing it needs no migration.
 | `tools/scripts/flash_media.py` | builds mkmedia, packs `media/<bucket>/<key>`, verifies, flashes the image at the `media` offset from the partition CSV (`--no-flash`, `--dry-run`, `--port`) |
 
 Cost on the device (`media_core.c` compiled alone with
-`xtensa-esp32s3-elf-gcc -Os`, 2026-11-15): 10.5 KB of code and 4,932 bytes
-of static RAM (the store's state: index 2,048, open-file and mapping tables,
-upload slots, liveness bitmap); before the index 9.1 KB and 2,872 bytes.
-The ESP backend adds its mutex and the log strings. Heap: 6 bytes per page
-at mount (480 bytes for 80 pages). Stack (from the sizes of the locals, not
-measured): a lookup or listing step about 0.3 KB of the caller's stack, a
-commit that rolls the directory over about 1.3 KB. Nothing is linked until
-something calls `media_init()`.
+`xtensa-esp32s3-elf-gcc -Os`, 2026-11-15): 10.6 KB of code and 2,760 bytes
+of static RAM, the store's state. Before the index: 9.1 KB and 2,872 bytes
+(the 128-byte liveness bitmap was static; it is on the stack during mount
+now). The ESP backend adds its mutex and the log strings.
+
+| Static state | Bytes |
+|---|---|
+| open files: 32 x 60 (a page bitmap of 32 bytes each, to free a large file on its last close) | 1,920 |
+| mappings: 32 x 12 | 384 |
+| uploads in progress: 2 x 188 (key 96, page list 64) | 376 |
+| everything else (pointers, counters, flags) | 80 |
+
+Heap: 6 bytes per page at mount (480 bytes for 80 pages) and the index
+(32 bytes for 3 files, 128 for 56, 2,016 for 1000), each plus the
+allocator's block header. Stack (from the sizes of the locals, not
+measured): a lookup or listing step about 0.3 KB of the caller's stack,
+mount about 0.4 KB, a commit that rolls the directory over about 1.3 KB.
+Nothing is linked until something calls `media_init()`.
 
 ## Fonts
 

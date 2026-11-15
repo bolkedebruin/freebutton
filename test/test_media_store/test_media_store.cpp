@@ -21,10 +21,42 @@ static RamFlash &new_flash(uint32_t pages) {
     return *g_flashes.back();
 }
 
+// The store's allocator (media_core_impl.c): counts what is allocated and
+// fails on request.
+static std::map<void *, size_t> g_allocs;
+static bool g_alloc_fail = false;   // every allocation fails
+static long g_alloc_fail_in = -1;   // >= 0: that many succeed, the next one fails (once)
+static unsigned g_alloc_failed = 0; // allocations that were made to fail
+extern "C" void *media_test_alloc(size_t n) {
+    if (g_alloc_fail || g_alloc_fail_in == 0) {
+        g_alloc_fail_in = -1;
+        g_alloc_failed++;
+        return nullptr;
+    }
+    if (g_alloc_fail_in > 0) g_alloc_fail_in--;
+    void *p = malloc(n);
+    g_allocs[p] = n;
+    return p;
+}
+extern "C" void media_test_free(void *p) {
+    g_allocs.erase(p);
+    free(p);
+}
+static size_t alloc_bytes() {
+    size_t n = 0;
+    for (const auto &kv : g_allocs) n += kv.second;
+    return n;
+}
+// The heap the index uses: everything but the free map (6 bytes per page).
+static size_t index_bytes(const RamFlash &f) { return alloc_bytes() - 6 * (f.mem.size() / MEDIA_PAGE_SIZE); }
+
 void setUp() {}
 void tearDown() {
+    g_alloc_fail = false;
+    g_alloc_fail_in = -1;
     media_unmount();
     g_flashes.clear();
+    TEST_ASSERT_EQUAL_UINT(0, g_allocs.size()); // nothing leaks
 }
 
 static const uint32_t PAGE = MEDIA_PAGE_SIZE;
@@ -1580,6 +1612,214 @@ void test_powercut_idle_snapshot() {
     for (int by_bytes = 0; by_bytes < 2; by_bytes++) sweep(12, setup, [] { maintain_all(); }, false, by_bytes);
 }
 
+// ------------------------------------------------------- index memory
+//
+// The index is a heap block sized to the live entries, in steps of 16
+// entries (32 bytes). It grows before anything is written for the put that
+// needs the entry; when there is no memory the put fails and nothing else
+// has happened.
+
+static uint32_t used_now();
+
+void test_index_memory_follows_entries() {
+    RamFlash &f = new_flash(0x500000 / PAGE); // the device's partition
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    TEST_ASSERT_EQUAL_UINT(6 * 80 + 32, alloc_bytes());
+    Model model;
+    uint32_t t = 1;
+    auto key = [](int i) { return "font-" + std::to_string(100 + i * 11 % 56) + ".ttf"; };
+    for (int i = 0; i < 3; i++) TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 0, key(i), 100, t++));
+    TEST_ASSERT_EQUAL_UINT(32, index_bytes(f)); // 3 files
+    for (int i = 3; i < 56; i++) {
+        TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, i % 3, key(i), 100, t++));
+        // one more step whenever the last one is full
+        TEST_ASSERT_EQUAL_UINT(32 * ((i + 1 + 15) / 16), index_bytes(f));
+    }
+    TEST_ASSERT_EQUAL_UINT(128, index_bytes(f)); // 56 files
+    check_model(model);
+    // a replace takes no memory
+    for (int i = 0; i < 30; i++) TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, i % 3, key(i), 50, t++));
+    TEST_ASSERT_EQUAL_UINT(128, index_bytes(f));
+    reboot(f);
+    TEST_ASSERT_EQUAL_UINT(128, index_bytes(f));
+    check_model(model);
+    // deletes: the block shrinks with the next snapshot (here an idle one), and at mount
+    for (int i = 0; i < 50; i++) {
+        TEST_ASSERT_EQUAL(MEDIA_OK, media_delete((media_bucket_t)(i % 3), key(i).c_str()));
+        model.erase({i % 3, key(i)});
+    }
+    TEST_ASSERT_EQUAL_UINT(128, index_bytes(f));
+    const unsigned h0 = f.header_writes;
+    maintain_all();
+    TEST_ASSERT_EQUAL_UINT(h0 + 1, f.header_writes);
+    TEST_ASSERT_EQUAL_UINT(32, index_bytes(f)); // 6 files
+    check_model(model);
+    reboot(f);
+    TEST_ASSERT_EQUAL_UINT(32, index_bytes(f));
+    check_model(model);
+    check_no_leak(capture());
+    media_unmount();
+
+    // 1000 files (the entry limit), written and mounted
+    RamFlash &g = new_flash(8);
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&g.flash));
+    Model big;
+    char k[8];
+    for (int i = 0; i < 1000; i++) {
+        snprintf(k, sizeof k, "%04d", i * 619 % 1000);
+        TEST_ASSERT_EQUAL(MEDIA_OK, model_put(big, 1, k, 0, t++));
+    }
+    TEST_ASSERT_EQUAL_UINT(2016, index_bytes(g)); // 1008 entries
+    reboot(g);
+    TEST_ASSERT_EQUAL_UINT(2016, index_bytes(g));
+    check_model(big);
+}
+
+void test_index_alloc_failure_put() {
+    RamFlash &f = new_flash(8);
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    Model model;
+    uint32_t t = 1;
+    for (int i = 0; i < 16; i++) TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, i % 2, "k" + std::to_string(i), 3000, t++));
+    TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, MEDIA_BUCKET_RENDER, "r", 40000, t++)); // evictable
+    maintain_all();
+    TEST_ASSERT_EQUAL_UINT(64, index_bytes(f)); // 17 entries: the second step, 15 entries of room
+    for (int i = 17; i < 32; i++) TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 0, "k" + std::to_string(i), 0, t++));
+    TEST_ASSERT_EQUAL_UINT(64, index_bytes(f)); // full
+    const std::vector<uint8_t> mem = f.mem;
+    const unsigned w0 = f.writes, e0 = f.erases;
+    const uint32_t used0 = used_now();
+    g_alloc_fail = true;
+    // a new key needs an entry: refused before anything is written, also
+    // before the eviction that this upload would need
+    TEST_ASSERT_EQUAL(MEDIA_ERR_UNAVAILABLE, put(MEDIA_BUCKET_FONTS, "new", pattern(1, 3000)));
+    TEST_ASSERT_EQUAL(MEDIA_ERR_UNAVAILABLE, put(MEDIA_BUCKET_IMAGES, "k0", pattern(1, 10))); // k0 is in FONTS
+    TEST_ASSERT_EQUAL(MEDIA_ERR_UNAVAILABLE, put(MEDIA_BUCKET_IMAGES, "huge", pattern(1, 5 * PAGE + 30000)));
+    TEST_ASSERT_TRUE(g_alloc_failed >= 3);
+    TEST_ASSERT_EQUAL_UINT(w0, f.writes);
+    TEST_ASSERT_EQUAL_UINT(e0, f.erases);
+    TEST_ASSERT_TRUE(mem == f.mem);
+    TEST_ASSERT_EQUAL_UINT32(used0, used_now());
+    TEST_ASSERT_EQUAL_UINT(64, index_bytes(f));
+    check_model(model);
+    // a replace and a delete need no entry: they work without memory
+    TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 0, "k0", 5000, t++));
+    TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 1, "k1", 0, t++));
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_FONTS, "k2"));
+    model.erase({0, "k2"});
+    // and the delete made room for one new key
+    TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 0, "new", 3000, t++));
+    TEST_ASSERT_EQUAL(MEDIA_ERR_UNAVAILABLE, put(MEDIA_BUCKET_FONTS, "new2", pattern(1, 3000)));
+    check_model(model);
+    // two uploads in progress need an entry each
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_FONTS, "k4"));
+    model.erase({0, "k4"});
+    media_writer_t *w1 = nullptr, *w2 = nullptr;
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_begin(MEDIA_BUCKET_FONTS, "u1", 0, 1, &w1));
+    TEST_ASSERT_EQUAL(MEDIA_ERR_UNAVAILABLE, media_put_begin(MEDIA_BUCKET_FONTS, "u2", 0, 1, &w2));
+    g_alloc_fail = false;
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_begin(MEDIA_BUCKET_FONTS, "u2", 0, 1, &w2));
+    TEST_ASSERT_EQUAL_UINT(96, index_bytes(f));
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_commit(w2, md5_of(1).data()));
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_commit(w1, md5_of(1).data()));
+    model[{0, "u1"}] = {0, 1};
+    model[{0, "u2"}] = {0, 1};
+    check_model(model);
+    reboot(f);
+    check_model(model);
+    check_no_leak(capture());
+    TEST_ASSERT_EQUAL_UINT(0, f.violations);
+}
+
+// An upload that began as a replace (no entry needed, none could be had) and
+// whose key was deleted before the commit: the commit adds an entry after
+// all. The delete left it one, and no other upload can take that one (each
+// counts the uploads in progress), so the commit does not need memory.
+void test_index_replace_whose_key_was_deleted() {
+    RamFlash &f = new_flash(8);
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    Model model;
+    uint32_t t = 1;
+    for (int i = 0; i < 16; i++) TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 0, "k" + std::to_string(i), 0, t++));
+    maintain_all();
+    TEST_ASSERT_EQUAL_UINT(32, index_bytes(f)); // full
+    g_alloc_fail = true;
+    media_writer_t *w = nullptr;
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_begin(MEDIA_BUCKET_FONTS, "k5", 6000, 1, &w));
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_write(w, pattern(1, 6000).data(), 6000));
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_FONTS, "k5"));
+    model.erase({0, "k5"});
+    TEST_ASSERT_EQUAL(MEDIA_ERR_UNAVAILABLE, put(MEDIA_BUCKET_FONTS, "other", {})); // the entry k5 left is spoken for
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_commit(w, md5_of(1).data()));
+    model[{0, "k5"}] = {6000, 1};
+    TEST_ASSERT_EQUAL_UINT(32, index_bytes(f));
+    check_model(model);
+    g_alloc_fail = false;
+    reboot(f);
+    check_model(model);
+    check_no_leak(capture());
+}
+
+// A snapshot gives back unused steps of the index, but not the entry of an
+// upload in progress: its commit must not need memory.
+void test_index_keeps_entry_of_upload_across_snapshot() {
+    RamFlash &f = new_flash(8);
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    Model model;
+    uint32_t t = 1;
+    for (int i = 0; i < 16; i++) TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 0, "k" + std::to_string(i), 0, t++));
+    media_writer_t *w = nullptr;
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_begin(MEDIA_BUCKET_FONTS, "upload", 0, 1, &w));
+    TEST_ASSERT_EQUAL_UINT(64, index_bytes(f)); // the second step, for the upload
+    const unsigned h0 = f.header_writes;
+    while (f.header_writes == h0) TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 0, "k3", 0, t++)); // until a put snapshots
+    TEST_ASSERT_EQUAL_UINT(64, index_bytes(f));
+    g_alloc_fail = true;
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_put_commit(w, md5_of(1).data()));
+    model[{0, "upload"}] = {0, 1};
+    check_model(model);
+    g_alloc_fail = false;
+    reboot(f);
+    check_model(model);
+}
+
+void test_index_alloc_failure_mount_and_trim() {
+    RamFlash &f = new_flash(8);
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    Model model;
+    uint32_t t = 1;
+    for (int i = 0; i < 40; i++) TEST_ASSERT_EQUAL(MEDIA_OK, model_put(model, 1, "k" + std::to_string(i), 10, t++));
+    media_unmount();
+    TEST_ASSERT_EQUAL_UINT(0, g_allocs.size());
+    // mount: the free map, then the index
+    for (long n = 0; n < 2; n++) {
+        g_alloc_fail_in = n;
+        TEST_ASSERT_EQUAL(MEDIA_ERR_UNAVAILABLE, media_mount(&f.flash));
+        TEST_ASSERT_EQUAL_UINT(0, g_allocs.size());
+        TEST_ASSERT_EQUAL_UINT(0, f.dir_maps_live);
+        media_stat_t st;
+        TEST_ASSERT_EQUAL(MEDIA_ERR_UNAVAILABLE, media_stat(MEDIA_BUCKET_IMAGES, "k1", &st));
+    }
+    TEST_ASSERT_EQUAL(MEDIA_OK, media_mount(&f.flash));
+    TEST_ASSERT_EQUAL_UINT(96, index_bytes(f)); // 40 entries
+    check_model(model);
+    // a snapshot that cannot get the smaller block keeps the larger one
+    for (int i = 0; i < 36; i++) {
+        TEST_ASSERT_EQUAL(MEDIA_OK, media_delete(MEDIA_BUCKET_IMAGES, ("k" + std::to_string(i)).c_str()));
+        model.erase({1, "k" + std::to_string(i)});
+    }
+    g_alloc_fail = true;
+    const unsigned h0 = f.header_writes;
+    maintain_all();
+    TEST_ASSERT_EQUAL_UINT(h0 + 1, f.header_writes);
+    TEST_ASSERT_EQUAL_UINT(96, index_bytes(f));
+    check_model(model);
+    g_alloc_fail = false;
+    reboot(f);
+    TEST_ASSERT_EQUAL_UINT(32, index_bytes(f));
+    check_model(model);
+}
+
 // ---------------------------------------------------------- failed writes
 //
 // Transient flash errors (RamFlash::fault), no power cut: the store keeps
@@ -2301,6 +2541,9 @@ static void fuzz_run(unsigned seed, uint32_t pages, int nops, Fault mode, bool c
         const int op = (int)(rng() % 20);
         countdown = rng() % 3 == 0 ? (long)(rng() % 40) : -1;
         fired = false;
+        // and now and then an allocation of the store fails (the index growing)
+        g_alloc_fail_in = rng() % 5 == 0 ? (long)(rng() % 2) : -1;
+        const unsigned alloc_failed0 = g_alloc_failed;
         const char *name = "";
         media_err_t e = MEDIA_OK;
         bool unexpected = false;
@@ -2311,19 +2554,25 @@ static void fuzz_run(unsigned seed, uint32_t pages, int nops, Fault mode, bool c
             // (put() of this file ends a failed write with media_put_abort)
             e = put((media_bucket_t)b, key, pattern((uint32_t)i + 1, size), (uint32_t)i + 1);
             if (e == MEDIA_OK) m[{b, key}] = FuzzEnt{(uint32_t)i + 1, size, (uint32_t)i + 1};
-            else unexpected = !fired && e != MEDIA_ERR_NO_SPACE;
+            else unexpected = !fired && g_alloc_failed == alloc_failed0 && e != MEDIA_ERR_NO_SPACE;
         } else if (op < 16) {
             name = "delete";
             e = media_delete((media_bucket_t)b, key.c_str());
             if (e == MEDIA_OK) m.erase({b, key});
-            else unexpected = !fired && !(e == MEDIA_ERR_NOT_FOUND && !m.count({b, key}));
+            else unexpected = (!fired && !(e == MEDIA_ERR_NOT_FOUND && !m.count({b, key}))) || e == MEDIA_ERR_UNAVAILABLE;
         } else if (op < 19) {
             name = "maintain";
             for (int k = 0; k < 4; k++) media_maintain();
         } else {
             name = "reboot";
             countdown = -1;
+            g_alloc_fail_in = -1;
             reboot(f);
+        }
+        g_alloc_fail_in = -1;
+        if (g_alloc_failed != alloc_failed0) {
+            fired = true;
+            what = "alloc";
         }
         const bool was_fired = fired;
         countdown = -1;
@@ -2424,5 +2673,10 @@ int main(int, char **) {
     RUN_TEST(test_fault_fuzz_half_written);
     RUN_TEST(test_fault_fuzz_all_written);
     RUN_TEST(test_fault_fuzz_silent);
+    RUN_TEST(test_index_memory_follows_entries);
+    RUN_TEST(test_index_alloc_failure_put);
+    RUN_TEST(test_index_replace_whose_key_was_deleted);
+    RUN_TEST(test_index_keeps_entry_of_upload_across_snapshot);
+    RUN_TEST(test_index_alloc_failure_mount_and_trim);
     return UNITY_END();
 }

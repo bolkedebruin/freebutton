@@ -1,12 +1,12 @@
 // Media store core (see media_core.h). On-flash format and the reasoning
 // behind it: docs/MEDIA-STORE.md, "On-flash format".
 //
-// RAM: two uint16 masks per page (sector in use, sector known erased), a
-// liveness bitmap of the directory records, the index (one uint16 per
-// record slot: the offsets of the live entries, sorted by bucket and key),
-// the open-file and mapping tables and two upload slots: 4,932 bytes static
-// (xtensa-esp32s3-elf-gcc -Os) plus 6 bytes of heap per page. The records
-// themselves are read in place: the active directory half stays mapped.
+// RAM. Static (the state `g`): the open-file table, the mapping table and
+// two upload slots. Heap: 6 bytes per page (sectors in use, sectors known
+// erased, wear) and the index, one uint16 per live entry (its offset in the
+// active directory half, sorted by bucket and key) in a block that grows in
+// steps of 16 entries. The records themselves are read in place: the active
+// directory half stays mapped. Numbers: docs/MEDIA-STORE.md.
 #include "media_core.h"
 
 #include <stdlib.h>
@@ -48,6 +48,16 @@ static const char *TAG = "media";
 #define DIR_IDLE_TAIL_RECORDS 8u      /* or (with the minimum above) fewer record slots than this left */
 #define DIR_IDLE_TAIL (8u * REC_MAX)  /* or less log than this left (bytes) ... */
 #define DIR_IDLE_GAIN (8u * 1024u)    /* ... of which a snapshot wins back at least this much */
+
+/* The index block grows by this many entries (32 bytes): see idx_reserve(). */
+#define IDX_STEP 16u
+
+/* Heap: the free map (once, at mount) and the index. The native tests put a
+ * failing allocator here. */
+#ifndef MEDIA_ALLOC
+#define MEDIA_ALLOC(n) malloc(n)
+#define MEDIA_FREE(p) free(p)
+#endif
 
 #ifdef MEDIA_CORE_STATS
 media_core_stats_t media_core_stats;
@@ -121,16 +131,17 @@ static struct {
     uint16_t nrec;
     uint32_t live_bytes;
     uint32_t open_gen;
-    uint8_t dead[DIR_MAX_RECORDS / 8];
     /* The active half, mapped: every directory read after the headers goes
      * through it. */
     const uint8_t *dir;
     void *dir_handle;
     /* The index: byte offsets (in the active half) of the live PUT records,
      * sorted by (bucket, key). Built at mount and after a snapshot, updated
-     * by every append. */
+     * by every append. A heap block of idx_cap entries, sized to what the
+     * store holds (idx_reserve). */
     uint16_t nidx; /* live entries */
-    uint16_t idx[DIR_MAX_RECORDS];
+    uint16_t idx_cap;
+    uint16_t *idx;
     uint16_t *used;   /* per page: sectors in use (live, open, reserved) */
     uint16_t *erased; /* per page: sectors known to be 0xFF */
     /* Wear leveling (RAM only, see "Allocation" in docs/MEDIA-STORE.md):
@@ -205,8 +216,10 @@ static int fl_erase(uint32_t off, uint32_t len) {
     return e;
 }
 
-static bool is_dead(uint16_t o) { return (g.dead[o >> 3] >> (o & 7)) & 1; }
-static void set_dead(uint16_t o) { g.dead[o >> 3] |= (uint8_t)(1u << (o & 7)); }
+/* Mount only: one bit per record of the half, set when the record is dead
+ * (128 bytes on the stack). At run time the index says what is live. */
+static bool is_dead(const uint8_t *dead, uint16_t o) { return (dead[o >> 3] >> (o & 7)) & 1; }
+static void set_dead(uint8_t *dead, uint16_t o) { dead[o >> 3] |= (uint8_t)(1u << (o & 7)); }
 
 static bool key_ok(int bucket, const char *key, uint8_t *kl) {
     if (bucket < 0 || bucket >= MEDIA_BUCKET_COUNT || !key) return false;
@@ -463,17 +476,71 @@ static void idx_remove(uint32_t off) {
     }
 }
 
-/* The index of the active half from the liveness bitmap: a walk over the
- * record lengths and one binary insertion per live entry. 0 ok, -1 the log
- * is damaged (the index then holds the entries before the damage). */
-static int idx_build(void) {
-    g.nidx = 0;
-    g.live_bytes = 0;
+/* The record at off is in the index (it is a live PUT). A scan of the
+ * offsets: used by the walks in log order (snapshot, compaction). */
+static bool idx_has(uint32_t off) {
+    for (uint16_t i = 0; i < g.nidx; i++)
+        if (g.idx[i] == off) return true;
+    return false;
+}
+
+/* Give the index block `cap` entries (>= nidx): 0 ok, -1 no memory, and
+ * then nothing has changed. */
+static int idx_resize(unsigned cap) {
+    uint16_t *nu = (uint16_t *)MEDIA_ALLOC(cap * sizeof *nu);
+    if (!nu) return -1;
+    if (g.nidx) memcpy(nu, g.idx, g.nidx * sizeof *nu);
+    if (g.idx) MEDIA_FREE(g.idx);
+    g.idx = nu;
+    g.idx_cap = (uint16_t)cap;
+    return 0;
+}
+
+/* Room for n entries: 0 ok, -1 no memory (nothing has changed). The block
+ * is n rounded up to IDX_STEP entries. A step of 16 entries is 32 bytes:
+ * a grow is an allocate, copy, free of a block this small, once per 16 new
+ * files, and the unused tail is 30 bytes at most; a smaller step would pay
+ * the allocator's header and rounding (4 to 8 bytes per block) and a
+ * grow more often for less than that. Called before anything is written
+ * for the operation that needs the entry. */
+static int idx_reserve(unsigned n) {
+    if (n <= g.idx_cap) return 0;
+    if (n > DIR_MAX_RECORDS) return -1;
+    return idx_resize((n + IDX_STEP - 1u) / IDX_STEP * IDX_STEP); /* DIR_MAX_RECORDS is a multiple */
+}
+
+/* After a snapshot: give back the steps the index no longer needs (entries
+ * were deleted). Keeps an entry for every upload in progress. When there is
+ * no memory for the smaller block the larger one stays. */
+static void idx_trim(void) {
+    unsigned need = g.nidx ? g.nidx : 1u;
+    for (int i = 0; i < MEDIA_MAX_WRITERS; i++) need += g.writers[i].used != 0;
+    const unsigned cap = (need + IDX_STEP - 1u) / IDX_STEP * IDX_STEP;
+    if (cap < g.idx_cap) (void)idx_resize(cap);
+}
+
+/* The index of the active half: a walk over the record lengths and one
+ * binary insertion per live entry. `dead`: the liveness bitmap of mount;
+ * NULL after a snapshot, where every record is a live PUT. 0 ok, -1 the log
+ * is damaged (the index then holds the entries before the damage), -2 no
+ * memory for the index (mount only: a snapshot does not add entries). */
+static int idx_build(const uint8_t *dead) {
+    unsigned live = 0;
     uint32_t off = HDR_LEN;
     for (uint16_t o = 0; o < g.nrec; o++) {
         const uint32_t len = rec_len(off);
+        if (!len) break;
+        live += g.dir[off] == REC_PUT && !(dead && is_dead(dead, o));
+        off += len;
+    }
+    g.nidx = 0;
+    g.live_bytes = 0;
+    if (idx_reserve(live ? live : 1u)) return -2;
+    off = HDR_LEN;
+    for (uint16_t o = 0; o < g.nrec; o++) {
+        const uint32_t len = rec_len(off);
         if (!len) return -1;
-        if (g.dir[off] == REC_PUT && !is_dead(o)) idx_insert(off, len);
+        if (g.dir[off] == REC_PUT && !(dead && is_dead(dead, o))) idx_insert(off, len);
         off += len;
     }
     return 0;
@@ -617,7 +684,7 @@ static media_err_t dir_snapshot(uint32_t *kill_off) {
         const uint32_t at = off, rlen = rec_len(at);
         if (!rlen) return MEDIA_ERR_IO;
         off += rlen;
-        if (g.dir[at] != REC_PUT || is_dead(o)) continue;
+        if (g.dir[at] != REC_PUT || !idx_has(at)) continue;
         if (rec_decode(g.dir + at, rlen, &r)) return MEDIA_ERR_IO;
         r.kill = KILL_NONE;
         const uint16_t len = rec_encode(&r, buf);
@@ -655,14 +722,15 @@ static media_err_t dir_snapshot(uint32_t *kill_off) {
     g.nrec = n;
     g.dirty = false;
     g.idle_failed = false;
-    memset(g.dead, 0, sizeof g.dead);
     if (kill_off) *kill_off = newkill;
-    /* neither can fail on records that dir_verify() passed */
-    if (idx_build() || (g.unsettled && map_rebuild(&r))) {
+    /* neither can fail on records that dir_verify() passed (the index holds
+     * as many entries as before: no memory is needed) */
+    if (idx_build(NULL) || (g.unsettled && map_rebuild(&r))) {
         g.dirty = true;
         return MEDIA_ERR_IO;
     }
     g.unsettled = false;
+    idx_trim();
     return MEDIA_OK;
 }
 
@@ -694,11 +762,19 @@ static int dir_readback(uint32_t off, const uint8_t *buf, uint32_t len) {
  * may still be complete on flash, where a reboot would count it. A snapshot
  * is written at once: it is made from RAM, so it drops the record. When
  * that fails too the store is `unsettled` (see there) and the caller must
- * not free the space the record refers to. */
+ * not free the space the record refers to.
+ *
+ * A PUT that kills nothing adds an index entry: the room for it is made
+ * before anything is written (media_put_begin has done it already; here
+ * again for an upload whose key was deleted meanwhile). MEDIA_ERR_UNAVAILABLE
+ * when there is no memory: nothing was written. A replace, a move and a
+ * DEL need no entry. */
 static media_err_t dir_append(rec_t *r, uint32_t kill_off) {
     uint8_t buf[REC_MAX];
     const uint16_t len = r->type == REC_DEL ? (uint16_t)DEL_LEN : put_len(r->keylen, &r->loc);
     if (g.nidx >= DIR_MAX_RECORDS) return MEDIA_ERR_NO_SPACE; /* a snapshot would not make room */
+    const bool adds = r->type == REC_PUT && !kill_off;
+    if (adds && idx_reserve(g.nidx + 1u)) return MEDIA_ERR_UNAVAILABLE;
     for (int attempt = 0; attempt < 2; attempt++) {
         if (g.dirty || g.nrec >= DIR_MAX_RECORDS || g.end + len > HALF) {
             const media_err_t e = dir_snapshot(&kill_off);
@@ -712,6 +788,7 @@ static media_err_t dir_append(rec_t *r, uint32_t kill_off) {
             return MEDIA_ERR_IO;
         }
         if (r->type == REC_DEL && r->kill == KILL_NONE) return MEDIA_ERR_IO; /* cannot happen */
+        if (r->type == REC_PUT && !kill_off && idx_reserve(g.nidx + 1u)) return MEDIA_ERR_UNAVAILABLE; /* not `adds`: cannot happen */
         if (!dir_blank(g.end, len)) {
             LOGW("directory tail not blank at 0x%x, snapshot", (unsigned)g.end);
             g.dirty = true;
@@ -725,15 +802,10 @@ static media_err_t dir_append(rec_t *r, uint32_t kill_off) {
             return MEDIA_ERR_IO;
         }
         const uint32_t at = g.end;
-        const uint16_t ord = g.nrec;
         g.end += len;
         g.nrec++;
-        if (kill_off) {
-            idx_remove(kill_off);
-            set_dead(r->kill);
-        }
-        if (r->type == REC_DEL) set_dead(ord);
-        else idx_insert(at, len);
+        if (kill_off) idx_remove(kill_off);
+        if (r->type == REC_PUT) idx_insert(at, len);
         g.idle_failed = false;
         return MEDIA_OK;
     }
@@ -1046,6 +1118,8 @@ static media_err_t mount_locked(void) {
 
     /* The one pass that checks every record (CRC, fields, kill) and marks
      * the dead ones. */
+    uint8_t dead[DIR_MAX_RECORDS / 8];
+    memset(dead, 0, sizeof dead);
     rec_t r;
     uint16_t n = 0;
     uint32_t maxseq = 0, off = HDR_LEN;
@@ -1055,14 +1129,14 @@ static media_err_t mount_locked(void) {
         if (e == 0) break;
         bool ok = e == 1 && n < DIR_MAX_RECORDS && rec_crc_ok(g.dir + off, len) &&
                   rec_decode(g.dir + off, len, &r) == 0;
-        if (ok && r.kill != KILL_NONE) ok = r.kill < n && !is_dead(r.kill);
+        if (ok && r.kill != KILL_NONE) ok = r.kill < n && !is_dead(dead, r.kill);
         if (!ok) {
             LOGW("directory: torn or invalid record at 0x%x, ignored from there", (unsigned)off);
             g.dirty = true;
             break;
         }
-        if (r.kill != KILL_NONE) set_dead(r.kill);
-        if (r.type == REC_DEL) set_dead(n);
+        if (r.kill != KILL_NONE) set_dead(dead, r.kill);
+        if (r.type == REC_DEL) set_dead(dead, n);
         if (r.seq > maxseq) maxseq = r.seq;
         off += len;
         n++;
@@ -1072,8 +1146,10 @@ static media_err_t mount_locked(void) {
     if (maxseq + 1u > g.next_seq) g.next_seq = maxseq + 1u;
 
     /* A later record can kill an earlier one, so what is live is known only
-     * now: the index from the bitmap, the free map from the index. */
-    if (idx_build()) return MEDIA_ERR_IO;
+     * now: the index from the bitmap (its memory sized to the live entries),
+     * the free map from the index. */
+    const int b = idx_build(dead);
+    if (b) return b == -2 ? MEDIA_ERR_UNAVAILABLE : MEDIA_ERR_IO;
     for (uint16_t i = 0; i < g.nidx; i++) {
         if (rec_load(g.idx[i], &r)) return MEDIA_ERR_IO;
         if (!loc_free(&r.loc)) LOGE("directory: %.*s overlaps another entry", (int)r.keylen, r.key);
@@ -1090,11 +1166,12 @@ media_err_t media_mount(const media_flash_t *flash) {
     memset(&g, 0, sizeof g);
     g.f = flash;
     g.npages = (uint16_t)(flash->size / PAGE);
-    g.used = (uint16_t *)calloc(3u * g.npages, sizeof(uint16_t));
+    g.used = (uint16_t *)MEDIA_ALLOC(3u * g.npages * sizeof(uint16_t));
     if (!g.used) {
         g.f = NULL;
         return MEDIA_ERR_UNAVAILABLE;
     }
+    memset(g.used, 0, 3u * g.npages * sizeof(uint16_t));
     g.erased = g.used + g.npages;
     g.wear = g.erased + g.npages;
     g.fill = NO_PAGE;
@@ -1117,7 +1194,8 @@ media_err_t media_mount(const media_flash_t *flash) {
     unlock();
     if (e != MEDIA_OK) {
         dir_unmap();
-        free(g.used);
+        if (g.idx) MEDIA_FREE(g.idx);
+        MEDIA_FREE(g.used);
         memset(&g, 0, sizeof g);
     }
     return e;
@@ -1131,7 +1209,8 @@ void media_unmount(void) {
     dir_unmap();
     g.mounted = false;
     unlock();
-    free(g.used);
+    if (g.idx) MEDIA_FREE(g.idx);
+    MEDIA_FREE(g.used);
     memset(&g, 0, sizeof g);
 }
 
@@ -1227,7 +1306,15 @@ media_err_t media_put_begin(media_bucket_t bucket, const char *key, uint32_t siz
     else if (g.nidx + inflight_n + 1u > MEDIA_MAX_ENTRIES ||
              g.live_bytes + inflight_b + reclen > DIR_LIVE_MAX)
         err = MEDIA_ERR_NO_SPACE;
-    else err = reserve(&l);
+    else {
+        /* An index entry for this upload and for every other one in
+         * progress, before anything is written (evictions, data). A replace
+         * needs none: it does not fail for memory. */
+        bool exists = false;
+        (void)idx_search((uint8_t)bucket, key, kl, false, &exists);
+        if (idx_reserve(g.nidx + inflight_n + 1u) && !exists) err = MEDIA_ERR_UNAVAILABLE;
+        else err = reserve(&l);
+    }
     if (err == MEDIA_OK) {
         memset(w, 0, sizeof *w);
         w->used = 1;
@@ -1479,7 +1566,7 @@ static int compact_step(void) {
             const uint32_t at = walk, rlen = rec_len(at);
             if (!rlen) return -1;
             walk += rlen;
-            if (p[0] != REC_PUT || is_dead(o) || rlen < REC_FIXED + 8u || p[11] != LOC_SECTORS || p[36] != src) continue;
+            if (p[0] != REC_PUT || rlen < REC_FIXED + 8u || p[11] != LOC_SECTORS || p[36] != src || !idx_has(at)) continue;
             if (rec_decode(p, rlen, &r)) return -1;
             int bestscore = -1;
             for (unsigned q = MEDIA_DIR_PAGES; q < g.npages; q++) {
