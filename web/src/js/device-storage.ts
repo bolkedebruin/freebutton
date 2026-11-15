@@ -193,6 +193,10 @@ export function createS3Client(baseUrl: string, overrides: Partial<S3ClientConfi
     credentials: credentialsProvider(baseUrl),
     signer: deviceS3Signer(baseUrl),
     maxAttempts: 1,
+    // The device sends Last-Modified without Cache-Control: a browser may
+    // then answer a GET from its cache (heuristic freshness) and a file
+    // opens as it was before the last save. Never use the HTTP cache.
+    requestHandler: { cache: 'no-store' },
     ...overrides,
   });
   client.middlewareStack.add(

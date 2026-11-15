@@ -375,6 +375,39 @@ export function revealConfigItem(ref: Pick<ConfigRef, 'list' | 'index'>): boolea
     return true;
 }
 
+/** The editor's state while config.json is the open file; null otherwise. */
+export function configState(): EditorState | null {
+    return editorView && currentIsConfig ? editorView.state : null;
+}
+
+/**
+ * Apply text changes to the open config.json (an edit made on the virtual
+ * device, config-edit.ts) as one transaction: one step for undo, the file
+ * becomes dirty and the preview follows like after typing. The cursor goes
+ * to the first change (or `at`, a position in the text before the change)
+ * and the view scrolls only when that is not visible; the editor does not
+ * take the focus. False when config.json is not the open file.
+ */
+export function applyConfigChanges(
+    changes: Array<{ from: number; to: number; insert: string }>,
+    opts: { at?: number; userEvent?: string } = {},
+): boolean {
+    if (!editorView || !currentIsConfig) return false;
+    const set = editorView.state.changes(changes);
+    const at = changes.length > 0 ? changes[0].from : opts.at;
+    const pos = at === undefined ? undefined : set.mapPos(Math.min(at, editorView.state.doc.length), 1);
+    if (changes.length === 0 && pos === undefined) return true;
+    editorView.dispatch({
+        changes: set,
+        ...(pos === undefined ? {} : {
+            selection: EditorSelection.cursor(pos),
+            effects: EditorView.scrollIntoView(pos, { y: 'nearest', yMargin: 48 }),
+        }),
+        userEvent: opts.userEvent ?? 'input.device',
+    });
+    return true;
+}
+
 /** Move the cursor to the first problem the linter reports. False when there is none. */
 export function gotoFirstDiagnostic(): boolean {
     if (!editorView) return false;

@@ -8,6 +8,7 @@ import { emit, on, type WorkspaceSnapshot } from '../js/app-state.js';
 import { workspace } from '../js/workspace.js';
 import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
 import { askConfirm } from './fb-dialog.js';
+import { openPopover, type PopoverHandle } from '../js/popover.js';
 
 const MOD = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '') ? '⌘' : 'Ctrl+';
 
@@ -42,6 +43,7 @@ export class FbToolbar extends LitElement {
   @state() private _editing = true;
   private _unsubs: Array<() => void> = [];
   private _resultTimer?: ReturnType<typeof setTimeout>;
+  private _menu: PopoverHandle | null = null;
 
   connectedCallback() {
     super.connectedCallback();
@@ -54,9 +56,10 @@ export class FbToolbar extends LitElement {
           this._url = e.detail.url;
         }
       }),
-      on('workspace-change', (e) => { this._ws = e.detail; }),
+      on('workspace-change', (e) => { this._ws = e.detail; this._menu?.update(); }),
       on('layout-change', (e) => {
         this._editing = e.detail.view === 'editor';
+        if (!this._editing) this._menu?.close();
         this._images = e.detail.panel === 'images' || e.detail.view === 'image';
       }),
       on('deploy-request', () => { this._deploying = true; this._result = null; }),
@@ -67,18 +70,52 @@ export class FbToolbar extends LitElement {
           : e.detail.message);
       }),
     );
-    window.addEventListener('click', this._closeMenu);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._unsubs.forEach(fn => fn());
     this._unsubs = [];
-    window.removeEventListener('click', this._closeMenu);
+    this._menu?.close();
     if (this._resultTimer) clearTimeout(this._resultTimer);
   }
 
-  private _closeMenu = () => { this._menuOpen = false; };
+  /**
+   * The "more" menu, in the popover layer (popover.ts): inside the toolbar it
+   * was painted under the file header and the editor below it.
+   */
+  private _toggleMenu(button: HTMLElement) {
+    if (this._menu?.isOpen) { this._menu.close(); return; }
+    this._menuOpen = true;
+    this._menu = openPopover({
+      anchor: button,
+      placement: 'bottom-start',
+      role: 'menu',
+      label: 'More actions',
+      testid: 'toolbar-menu',
+      className: 'w-64 p-1 flex flex-col',
+      content: () => this._renderMenu(),
+      onClose: () => { this._menuOpen = false; this._menu = null; },
+    });
+  }
+
+  private _renderMenu() {
+    const isJs = this._ws.currentKey.endsWith('.js');
+    return html`
+      <button role="menuitem" class="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-text-default text-left hover:bg-white/10 focus-visible:bg-white/10 outline-none disabled:opacity-40 disabled:hover:bg-transparent"
+        ?disabled=${!isJs} data-testid="menu-download"
+        title="Compile the open script and save the bytecode on this computer (nothing is sent to the device)"
+        @click=${() => this._downloadBytecode()}>
+        <span class="w-4 h-4 flex items-center justify-center [&>svg]:w-4 [&>svg]:h-4">${DownloadIcon()}</span>
+        Download bytecode (.jsc)
+      </button>
+      <button role="menuitem" class="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-status-red text-left hover:bg-white/10 focus-visible:bg-white/10 outline-none"
+        data-testid="menu-clear" @click=${() => this._clearFile()}>
+        <span class="w-4 h-4 flex items-center justify-center [&>svg]:w-4 [&>svg]:h-4">${TrashIcon()}</span>
+        Clear file text…
+      </button>
+    `;
+  }
 
   /** Result next to the buttons; a success fades, a failure stays until the next action. */
   private _showResult(ok: boolean, text: string) {
@@ -110,7 +147,7 @@ export class FbToolbar extends LitElement {
 
   /** Compile the open script (position-independent) and save the bytecode to disk. */
   private async _downloadBytecode() {
-    this._menuOpen = false;
+    this._menu?.close();
     const code = getCode();
     if (!code.trim()) { this._showResult(false, 'Nothing to compile'); return; }
     const validation = validateCode(code);
@@ -136,7 +173,7 @@ export class FbToolbar extends LitElement {
   }
 
   private async _clearFile() {
-    this._menuOpen = false;
+    this._menu?.close();
     if (!getCode()) return;
     const ok = await askConfirm(`Clear the text of /${this._ws.currentKey}?\nThe stored file changes only when you save.`, 'Clear');
     if (ok) clearEditorContent();
@@ -150,7 +187,6 @@ export class FbToolbar extends LitElement {
 
   private _renderActions() {
     const ws = this._ws;
-    const isJs = ws.currentKey.endsWith('.js');
     const deployTitle = this._isMain
       ? `Deploy (${MOD}Enter): save, compile and upload as ${MAIN_BYTECODE_NAME}; the device runs it`
       : `Only /${MAIN_SCRIPT_KEY} is compiled and run by the device. Save stores this file.`;
@@ -189,26 +225,9 @@ export class FbToolbar extends LitElement {
           <button class="${plain} rounded-full w-10 h-10 flex items-center justify-center transition-colors duration-200"
             title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded=${this._menuOpen ? 'true' : 'false'}
             data-testid="toolbar-more"
-            @click=${(e: Event) => { e.stopPropagation(); this._menuOpen = !this._menuOpen; }}>
+            @click=${(e: Event) => this._toggleMenu(e.currentTarget as HTMLElement)}>
             <span class="w-5 h-5 flex items-center justify-center [&>svg]:w-5 [&>svg]:h-5">${MoreIcon()}</span>
           </button>
-          ${this._menuOpen ? html`
-            <div role="menu" class="absolute left-0 top-12 z-30 w-64 rounded-xl border border-border-default bg-bg-primary shadow-2xl p-1 flex flex-col"
-              data-testid="toolbar-menu" @click=${(e: Event) => e.stopPropagation()}>
-              <button role="menuitem" class="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-text-default text-left hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent"
-                ?disabled=${!isJs} data-testid="menu-download"
-                title="Compile the open script and save the bytecode on this computer (nothing is sent to the device)"
-                @click=${() => this._downloadBytecode()}>
-                <span class="w-4 h-4 flex items-center justify-center [&>svg]:w-4 [&>svg]:h-4">${DownloadIcon()}</span>
-                Download bytecode (.jsc)
-              </button>
-              <button role="menuitem" class="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-status-red text-left hover:bg-white/10"
-                data-testid="menu-clear" @click=${() => this._clearFile()}>
-                <span class="w-4 h-4 flex items-center justify-center [&>svg]:w-4 [&>svg]:h-4">${TrashIcon()}</span>
-                Clear file text…
-              </button>
-            </div>
-          ` : ''}
         </div>
         ` : ''}
         ${this._editing && !this._isMain ? html`

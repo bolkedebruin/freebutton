@@ -309,11 +309,25 @@ describe('fb-toolbar', () => {
   it('keeps Download and Clear in the more menu', async () => {
     const el = createElement('fb-toolbar');
     await nextFrame();
-    expect(el.querySelector('[data-testid="toolbar-menu"]')).toBeNull();
-    (el.querySelector('[data-testid="toolbar-more"]') as HTMLElement).click();
+    expect(document.querySelector('[data-testid="toolbar-menu"]')).toBeNull();
+    const more = el.querySelector('[data-testid="toolbar-more"]') as HTMLElement;
+    more.click();
     await nextFrame();
-    expect(el.querySelector('[data-testid="menu-download"]')).not.toBeNull();
-    expect(el.querySelector('[data-testid="menu-clear"]')).not.toBeNull();
+    const menu = document.querySelector('[data-testid="toolbar-menu"]') as HTMLElement;
+    expect(menu.querySelector('[data-testid="menu-download"]')).not.toBeNull();
+    expect(menu.querySelector('[data-testid="menu-clear"]')).not.toBeNull();
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    // Not inside the toolbar (where the panes below it covered it): in the popover layer of <body>.
+    expect(el.contains(menu)).toBe(false);
+    expect(menu.parentElement?.id).toBe('fb-popover-layer');
+    expect(menu.parentElement?.parentElement).toBe(document.body);
+
+    // Escape closes it and the focus is back on the button.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await nextFrame();
+    expect(document.querySelector('[data-testid="toolbar-menu"]')).toBeNull();
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(more);
   });
 
   it('connects on Enter and offers Disconnect when connected', async () => {
@@ -592,22 +606,21 @@ describe('fb-virtual-device layout from config.json', () => {
     expect(el.textContent).toContain('Open');
     expect(el.textContent).toContain('Dicht');
     // Only page 1 exists now.
-    const tabs = Array.from(el.querySelectorAll('button')).map(b => b.textContent?.trim()).filter(t => t?.startsWith('Page'));
-    expect(tabs).toEqual(['Page 1']);
+    expect(el.querySelector('[data-testid="page-label"]')?.textContent?.trim()).toBe('Page 1 of 1');
     // Restore the sample layout for later tests.
     loadDefaultConfig();
   });
 });
 
 describe('fb-virtual-device', () => {
-  it('renders page tabs', async () => {
+  it('renders the page stepper', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();
 
-    const tabs = el.querySelectorAll('button');
-    const tabTexts = Array.from(tabs).map(b => b.textContent?.trim());
-    expect(tabTexts).toContain('Page 1');
-    expect(tabTexts).toContain('Page 2');
+    const stepper = el.querySelector('[data-testid="page-stepper"]') as HTMLElement;
+    expect(stepper.querySelector('[data-testid="page-label"]')?.textContent?.trim()).toBe('Page 1 of 2');
+    expect((stepper.querySelector('[data-testid="page-prev"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((stepper.querySelector('[data-testid="page-next"]') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('renders TFT display', async () => {
@@ -626,19 +639,17 @@ describe('fb-virtual-device', () => {
     expect(grid).not.toBeNull();
   });
 
-  it('switches pages when tab is clicked', async () => {
+  it('switches pages with the stepper', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();
 
-    const tabs = el.querySelectorAll('button');
-    const page2Tab = Array.from(tabs).find(b => b.textContent?.trim() === 'Page 2');
-    expect(page2Tab).not.toBeUndefined();
-
-    page2Tab!.click();
+    const next = el.querySelector('[data-testid="page-next"]') as HTMLButtonElement;
+    next.click();
     await nextFrame();
 
-    // Page 2 tab should now have the active styling
-    expect(page2Tab!.classList.contains('bg-white/95')).toBe(true);
+    expect(el.querySelector('[data-testid="page-label"]')?.textContent?.trim()).toBe('Page 2 of 2');
+    expect(next.disabled).toBe(true);
+    expect((el.querySelector('fb-tft-display') as HTMLElement & { currentPage: number }).currentPage).toBe(2);
   });
 
   it('renders gear icon next to tabs', async () => {
@@ -776,10 +787,10 @@ describe('fb-virtual-device', () => {
     expect(graph?.textContent).toContain('40 KB');  // lvglFree in KB
   });
 
-  it('back side is read-only and hides the page tabs', async () => {
+  it('back side is read-only and hides the page stepper', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();
-    const tabs = el.querySelector('[data-testid="page-tabs"]') as HTMLElement;
+    const tabs = el.querySelector('[data-testid="page-stepper"]') as HTMLElement;
     expect(tabs.classList.contains('invisible')).toBe(false);
 
     (el.querySelector('[data-testid="gear-icon"]') as HTMLElement).click();
@@ -787,7 +798,7 @@ describe('fb-virtual-device', () => {
 
     // No fields that look editable but are never saved.
     expect(el.querySelector('.device-flip-back input')).toBeNull();
-    // The tabs belong to the front face.
+    // The stepper belongs to the front face.
     expect(tabs.classList.contains('invisible')).toBe(true);
     expect(Array.from(tabs.querySelectorAll('button')).every(b => (b as HTMLButtonElement).disabled)).toBe(true);
   });
@@ -1122,8 +1133,7 @@ describe('fb-virtual-device lists', () => {
     }));
     await nextFrame();
     expect(el.querySelector('[data-list="scenes"]')).toBeNull();
-    const tab2 = Array.from(el.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Page 2') as HTMLElement;
-    tab2.click();
+    (el.querySelector('[data-testid="page-next"]') as HTMLElement).click();
     await nextFrame();
     expect(el.querySelector('[data-list="scenes"] [data-selected]')?.textContent?.trim()).toBe('Evening');
     loadDefaultConfig();

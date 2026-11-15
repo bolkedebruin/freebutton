@@ -514,6 +514,9 @@ void formatStatHeaders(AsyncWebServerResponse* response, const struct stat& st) 
     char date[30];
     s3::formatHttpDate(static_cast<int64_t>(st.st_mtime), date);
     response->addHeader("Last-Modified", date);
+    // Without this a browser may reuse a stored copy for a while (heuristic
+    // freshness from Last-Modified) and show a file as it was before a PUT.
+    response->addHeader("Cache-Control", "no-cache");
 }
 
 // ---------------------------------------------------------------------------

@@ -177,6 +177,14 @@ export class Workspace {
     };
   }
 
+  /**
+   * Show the open config.json's text on the virtual device now, without the
+   * debounce of typing (after an edit made on the device itself).
+   */
+  flushConfigPreview(): void {
+    if (this.currentKey === CONFIG_KEY) this.preview.flush();
+  }
+
   /** The icon sync in flight (or null): tests and callers can await it. */
   get pendingIconSync(): Promise<IconSyncResult | null> | null {
     return this.iconSync;

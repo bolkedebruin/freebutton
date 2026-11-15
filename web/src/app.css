@@ -230,6 +230,25 @@
   overscroll-behavior: auto;
 }
 
+/* === Virtual device: items that can be moved ===
+   No text selection or touch scrolling while one is dragged; a focus ring
+   for the keyboard (arrow keys move the item). */
+.fb-item {
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+/* An icon inside an item is not picked up by the browser's own image drag. */
+.fb-item img, .fb-item svg {
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+.fb-item:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 1px;
+  z-index: 5;
+}
+
 /* === Device Card Flip === */
 .device-flip-container {
   perspective: 1000px;

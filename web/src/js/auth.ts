@@ -496,7 +496,10 @@ async function signedFetchNow(
     const sentAt = Date.now();
     const sig = await signatureHeaders(url, method, body, creds, creds ? signingDate(sentAt) : undefined);
     if (sig) for (const [k, v] of Object.entries(sig)) headers.set(k, v);
-    const res = await fetchImpl(request ?? String(input), { ...init, method, headers });
+    // The device sends Last-Modified without Cache-Control, so a browser may
+    // answer a GET from its cache (heuristic freshness) and show a file as it
+    // was before the last save. Device requests never use the HTTP cache.
+    const res = await fetchImpl(request ?? String(input), { cache: 'no-store', ...init, method, headers });
     return { res, sentAt };
   };
 
