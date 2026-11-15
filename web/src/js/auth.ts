@@ -26,6 +26,7 @@
  */
 import { SignatureV4 } from '@smithy/signature-v4';
 import { oneAtATime } from './device-queue';
+import { cacheModeFor } from './http-cache';
 import { Sha256Js } from '@smithy/core/checksum';
 import { escapeUri } from '@smithy/core/protocols';
 import { toHex } from '@smithy/core/serde';
@@ -496,10 +497,8 @@ async function signedFetchNow(
     const sentAt = Date.now();
     const sig = await signatureHeaders(url, method, body, creds, creds ? signingDate(sentAt) : undefined);
     if (sig) for (const [k, v] of Object.entries(sig)) headers.set(k, v);
-    // The device sends Last-Modified without Cache-Control, so a browser may
-    // answer a GET from its cache (heuristic freshness) and show a file as it
-    // was before the last save. Device requests never use the HTTP cache.
-    const res = await fetchImpl(request ?? String(input), { cache: 'no-store', ...init, method, headers });
+    // Fresh, except media objects (see http-cache.ts).
+    const res = await fetchImpl(request ?? String(input), { cache: cacheModeFor(method, url.pathname), ...init, method, headers });
     return { res, sentAt };
   };
 

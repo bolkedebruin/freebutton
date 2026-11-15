@@ -48,6 +48,7 @@ import {
   type ListObjectsV2CommandOutput,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
+import { cacheModeFor } from './http-cache';
 import { addAuthRequiredMiddleware, credentialsProvider, deviceS3Signer, signedFetch } from './auth';
 
 /** The user's files (read/write). */
@@ -193,10 +194,9 @@ export function createS3Client(baseUrl: string, overrides: Partial<S3ClientConfi
     credentials: credentialsProvider(baseUrl),
     signer: deviceS3Signer(baseUrl),
     maxAttempts: 1,
-    // The device sends Last-Modified without Cache-Control: a browser may
-    // then answer a GET from its cache (heuristic freshness) and a file
-    // opens as it was before the last save. Never use the HTTP cache.
-    requestHandler: { cache: 'no-store' },
+    requestHandler: {
+      requestInit: (req) => ({ cache: cacheModeFor(req.method, req.path) }),
+    },
     ...overrides,
   });
   client.middlewareStack.add(
