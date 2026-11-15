@@ -257,14 +257,8 @@ declare global {
   interface WindowEventMap {
     // Editor events
     'editor-ready': CustomEvent<void>;
-    'editor-content-change': CustomEvent<{ content: string }>;
     'cursor-position': CustomEvent<{ line: number; col: number }>;
     'validation-result': CustomEvent<{ valid: boolean; errors: string[]; errorCount: number }>;
-
-    // Compiler events
-    'compile-start': CustomEvent<void>;
-    'compile-result': CustomEvent<{ success: boolean; bytecode?: Uint8Array; error?: string; size?: number }>;
-    'compiler-ready': CustomEvent<void>;
 
     // Deploy events (compile-for-device + upload to the serving device, same-origin)
     'deploy-request': CustomEvent<void>;
@@ -300,16 +294,8 @@ declare global {
     // A device font got registered for the previews (font-loader.ts).
     'preview-fonts-change': CustomEvent<void>;
 
-    // File events
-    'files-change': CustomEvent<{ files: FileEntry[]; used: number; total: number }>;
-    'file-select': CustomEvent<{ name: string }>;
-    'file-delete': CustomEvent<{ name: string }>;
-    'file-upload': CustomEvent<{ file: File }>;
-
     // Navigation events
     'sidebar-panel': CustomEvent<{ panel: SidebarPanel; open?: boolean }>;
-    'load-example': CustomEvent<{ name: string }>;
-    'nav-select': CustomEvent<{ item: string }>;
     'open-settings': CustomEvent<void>;
     // Main pane: show a view (key = the file for 'image'; 'editor' = back to the code).
     'main-view': CustomEvent<{ view: MainView; key?: string }>;

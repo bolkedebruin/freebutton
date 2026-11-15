@@ -3,7 +3,7 @@
  * Loads and initializes the MicroQuickJS bytecode compiler
  */
 
-import type { MQuickJSCompiler, CompileOptions, CompilerVersion } from './types';
+import type { MQuickJSCompiler, CompileOptions } from './types';
 import { signedFetch } from './auth';
 
 let compilerInstance: MQuickJSCompiler | null = null;
@@ -83,10 +83,9 @@ export async function compile(sourceCode: string, options: CompileOptions = {}):
     }
 
     return await compilerInstance.compile(sourceCode, {
-        targetAddr: options.targetAddr || 0,
         use32Bit: options.use32Bit !== false,
-        romBase: (options as { romBase?: number }).romBase || 0,
-    } as CompileOptions);
+        romBase: options.romBase || 0,
+    });
 }
 
 /**
@@ -104,108 +103,44 @@ export function romBaseFor(info: { rom_base?: string; atoms_id?: string }, compi
 }
 
 /**
- * Validate JavaScript syntax
- * @param sourceCode - The JavaScript source code
- * @returns True if valid
- * @throws Validation error
- */
-export async function validate(sourceCode: string): Promise<boolean> {
-    if (!compilerInstance) {
-        await initCompiler();
-    }
-
-    if (!compilerInstance) {
-        throw new Error('Compiler not initialized');
-    }
-
-    return await compilerInstance.validate(sourceCode);
-}
-
-/**
- * Get compiler version information
- * @returns Version info
- */
-export function getVersion(): CompilerVersion {
-    if (!compilerInstance) {
-        return {
-            compiler: 'Not initialized',
-            features: [],
-            platform: 'WebAssembly'
-        };
-    }
-
-    return compilerInstance.getVersion();
-}
-
-/**
- * Check if compiler is ready
- */
-export function isReady(): boolean {
-    return compilerInstance !== null && compilerInstance.ready;
-}
-
-/**
- * Fetch the next available virtual address from the device
+ * Ask the device for its built-in (stdlib) table: where it is and which one
+ * it is (see romBaseFor()).
  * @param deviceUrl - The device base URL. Defaults to "" (same origin) so the
  *   IDE served from the device talks to that device without CORS.
- * @returns Virtual address information
  */
-export async function getDeviceVirtualAddress(deviceUrl: string = ''): Promise<{
-    offset: string;
-    virtual_addr: string;
-    free_space: number;
-    /** Firmware with the built-in table address: see romBaseFor(). */
+export async function getDeviceStdlibInfo(deviceUrl: string = ''): Promise<{
     rom_base?: string;
     atoms_id?: string;
 }> {
     const response = await signedFetch(`${deviceUrl}/api/bytecode/next_address`);
 
     if (!response.ok) {
-        throw new Error(`Failed to get virtual address: ${response.statusText}`);
+        throw new Error(`Failed to get the device's script library info: ${response.statusText}`);
     }
 
     return await response.json();
 }
 
 /**
- * Compile JavaScript for a specific device
- * Automatically queries the device for the correct virtual memory address
- * @param sourceCode - The JavaScript source code
- * @param deviceUrl - The device base URL. Defaults to "" (same origin).
- * @returns The compiled bytecode pre-relocated for the device
- */
-export async function compileForDevice(sourceCode: string, deviceUrl: string = ''): Promise<Uint8Array> {
-    return (await compileForDeviceEx(sourceCode, deviceUrl)).bytecode;
-}
-
-/**
- * compileForDevice(), plus `atomsId`: the device's "atoms_id" when the
- * compiler resolved the built-in names for it, else "". The upload passes it
- * on ("?atoms=<id>") so that the device needs no lookup memory.
+ * Compile JavaScript for the device at `deviceUrl` ("" = same origin). The
+ * bytecode is position-independent; the device is asked for its built-in
+ * table so that the compiler can resolve the built-in names for it.
+ * `atomsId` is the device's "atoms_id" when the compiler did that, else "".
+ * The upload passes it on ("?atoms=<id>") so that the device needs no lookup
+ * memory.
  */
 export async function compileForDeviceEx(sourceCode: string, deviceUrl: string = ''): Promise<{ bytecode: Uint8Array; atomsId: string }> {
-    // Get the target virtual address from the device
-    const addressInfo = await getDeviceVirtualAddress(deviceUrl);
-
-    // Parse hex address to number
-    const targetAddr = parseInt(addressInfo.virtual_addr, 16);
+    const stdlibInfo = await getDeviceStdlibInfo(deviceUrl);
 
     console.log(`Compiling for device at ${deviceUrl}`);
-    console.log(`Target virtual address: ${addressInfo.virtual_addr} (${targetAddr})`);
-    console.log(`Free space: ${addressInfo.free_space} bytes`);
 
-    // Compile with the correct target address, and for the device's own
-    // built-in table when it is this compiler's.
+    // Compile for the device's own built-in table when it is this compiler's.
     if (!compilerInstance) await initCompiler();
-    const stdlibId = (compilerInstance as unknown as { stdlibId?: () => number } | null)?.stdlibId?.() ?? 0;
-    const romBase = romBaseFor(addressInfo, stdlibId);
-    if (!romBase && addressInfo.atoms_id) {
+    const stdlibId = compilerInstance?.stdlibId?.() ?? 0;
+    const romBase = romBaseFor(stdlibInfo, stdlibId);
+    if (!romBase && stdlibInfo.atoms_id) {
         console.warn('The device firmware and this IDE were built from different script libraries: deploy may not run correctly. Update the device\'s IDE (filesystem) or firmware.');
     }
-    const bytecode = await compile(sourceCode, {
-        targetAddr,
-        use32Bit: true,
-        romBase,
-    } as CompileOptions);
-    return { bytecode, atomsId: romBase ? (addressInfo.atoms_id ?? '') : '' };
+    const bytecode = await compile(sourceCode, { use32Bit: true, romBase });
+    return { bytecode, atomsId: romBase ? (stdlibInfo.atoms_id ?? '') : '' };
 }

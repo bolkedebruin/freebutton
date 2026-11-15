@@ -100,19 +100,11 @@ TypeScript definitions and validation data are auto-generated from the C source 
 ```bash
 # Generate TypeScript type definitions
 npm run generate-types
-
-# Extract stdlib globals for validation (runs automatically before build)
-npm run extract-globals
 ```
 
 **Type Generation** parses JavaScript API comments in C files and generates `src/js/freebutton.d.ts`.
 
-**Globals Extraction** parses MQuickJS and FreeButton stdlib sources to generate `src/js/stdlib-globals.json`, which contains:
-- All available global identifiers (Object, Array, Math, etc.)
-- FreeButton API objects (led, button, sensor, mqtt)
-- API method lists for validation
-
-Run these whenever the stdlib is updated. The `extract-globals` script runs automatically before each build via the `prebuild` hook.
+Run it whenever the stdlib is updated; `npm run build` does so by itself (the `prebuild` hook).
 
 ## Build System
 

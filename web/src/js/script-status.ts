@@ -6,6 +6,8 @@
  * ("scriptStarts", with "scriptError": "" when the last start ran without
  * exception). Older firmware has neither: the new script runs after a reboot.
  */
+import { sleep as defaultSleep } from './sleep';
+
 export interface ScriptStatus {
   starts: number;
   error: string;
@@ -38,7 +40,7 @@ export async function waitForScriptStart(
 ): Promise<DeployOutcome> {
   const tries = opts.tries ?? 10;
   const delayMs = opts.delayMs ?? 500;
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const sleep = opts.sleep ?? defaultSleep;
   let last: ScriptStatus | null = null;
   for (let i = 0; i < tries; i++) {
     await sleep(delayMs);

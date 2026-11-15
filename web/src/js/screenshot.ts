@@ -11,6 +11,7 @@
  */
 import { signedFetch } from './auth';
 import { deleteObject, getObjectBytes, listObjects, type FsObject } from './device-storage';
+import { sleep as defaultSleep } from './sleep';
 
 export const SCREENSHOT_KEY = /^screenshot-([A-Za-z0-9_-]+)\.rgb565$/;
 const HEADER_BYTES = 8;
@@ -71,7 +72,7 @@ function signature(shots: FsObject[]): string {
  */
 export async function captureScreenshots(base: string, deps: CaptureDeps = {}): Promise<Screenshot[]> {
   const fetchImpl = deps.fetchImpl ?? signedFetch;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? (() => Date.now());
 
   // Files of an earlier run would make "complete" ambiguous: remove them first.

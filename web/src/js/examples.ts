@@ -38,7 +38,3 @@ export const examples: Example[] = [
     parseExample('mqtt_simple', mqttSimpleRaw),
     parseExample('mqtt_demo', mqttDemoRaw),
 ];
-
-export const exampleMap: Record<string, Example> = Object.fromEntries(
-    examples.map(e => [e.id, e])
-);

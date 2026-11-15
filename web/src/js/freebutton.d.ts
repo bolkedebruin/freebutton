@@ -387,9 +387,6 @@ declare global {
     function gc(): void;
     /** Loads and executes a JavaScript file */
     function load(filename: string): any;
-    /** Loads a memory-mapped bytecode file for efficient execution */
-    function loadMapped(filename: string, offset: number, size: number): any;
-    function loadUserBytecode(): any;
     /** Executes a function after a specified delay in milliseconds */
     function setTimeout(callback: Function, delay: number): number;
     /** Cancels a timeout previously established by setTimeout */
@@ -551,22 +548,17 @@ export interface FbRoot {
 // ============================================================================
 
 export interface CompileOptions {
-    targetAddr?: number;
     use32Bit?: boolean;
-}
-
-export interface CompilerVersion {
-    compiler: string;
-    features: string[];
-    platform: string;
+    /** Address of the device's built-in table (0: unknown). */
+    romBase?: number;
 }
 
 export interface MQuickJSCompiler {
     ready: boolean;
     init(): Promise<void>;
     compile(sourceCode: string, options?: CompileOptions): Promise<Uint8Array>;
-    validate(sourceCode: string): Promise<boolean>;
-    getVersion(): CompilerVersion;
+    /** Identity of the built-in table this compiler was built with (0: none). */
+    stdlibId(): number;
 }
 
 declare global {

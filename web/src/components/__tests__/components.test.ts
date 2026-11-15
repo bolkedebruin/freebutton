@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 
 // Import all components to register custom elements
 import '../fb-app.js';
@@ -77,7 +77,7 @@ describe('fb-navbar', () => {
     const onView = (e: Event) => got.push((e as CustomEvent).detail);
     window.addEventListener('main-view', onView);
     window.addEventListener('sidebar-panel', onView);
-    (Array.from(el.querySelectorAll('fb-nav-item')).find(i => i.getAttribute('label') === 'App') as HTMLElement).click();
+    (Array.from(el.querySelectorAll<HTMLElement>('fb-nav-item')).find(i => i.getAttribute('label') === 'App') as HTMLElement).click();
     window.removeEventListener('main-view', onView);
     window.removeEventListener('sidebar-panel', onView);
     expect(got).toEqual([{ view: 'editor' }, { panel: 'app', open: true }]);
@@ -91,7 +91,7 @@ describe('fb-navbar', () => {
     const onPanel = (e: Event) => got.push('panel:' + (e as CustomEvent).detail.panel);
     window.addEventListener('main-view', onView);
     window.addEventListener('sidebar-panel', onPanel);
-    const item = (label: string) => Array.from(el.querySelectorAll('fb-nav-item')).find(i => i.getAttribute('label') === label) as HTMLElement;
+    const item = (label: string) => Array.from(el.querySelectorAll<HTMLElement>('fb-nav-item')).find(i => i.getAttribute('label') === label) as HTMLElement;
     item('Docs').click();
     item('Fonts').click();
     window.removeEventListener('main-view', onView);
@@ -164,7 +164,7 @@ describe('fb-app keyboard shortcuts', () => {
   });
 
   it('prevents default on Ctrl+S', async () => {
-    const el = createElement('fb-app');
+    createElement('fb-app');
     await nextFrame();
 
     const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true });
@@ -174,7 +174,7 @@ describe('fb-app keyboard shortcuts', () => {
   });
 
   it('Ctrl+L dispatches console-clear', async () => {
-    const el = createElement('fb-app');
+    createElement('fb-app');
     await nextFrame();
 
     const events: Event[] = [];
@@ -195,10 +195,10 @@ describe('fb-navbar sidebar-panel events', () => {
     await nextFrame();
 
     const events: CustomEvent[] = [];
-    const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
+    const handler = (e: Event) => { events.push(e as CustomEvent); };
     window.addEventListener('sidebar-panel', handler);
 
-    const assetsItem = Array.from(el.querySelectorAll('fb-nav-item')).find(
+    const assetsItem = Array.from(el.querySelectorAll<HTMLElement>('fb-nav-item')).find(
       item => item.getAttribute('label') === 'App'
     );
     assetsItem!.click();
@@ -214,10 +214,10 @@ describe('fb-navbar sidebar-panel events', () => {
     await nextFrame();
 
     const events: CustomEvent[] = [];
-    const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
+    const handler = (e: Event) => { events.push(e as CustomEvent); };
     window.addEventListener('sidebar-panel', handler);
 
-    const examplesItem = Array.from(el.querySelectorAll('fb-nav-item')).find(
+    const examplesItem = Array.from(el.querySelectorAll<HTMLElement>('fb-nav-item')).find(
       item => item.getAttribute('label') === 'Examples'
     );
     examplesItem!.click();
@@ -1296,7 +1296,7 @@ describe('fb-console-input', () => {
     textarea.value = 'sensor.count()';
 
     const events: CustomEvent[] = [];
-    const handler = ((e: CustomEvent) => events.push(e)) as EventListener;
+    const handler = (e: Event) => { events.push(e as CustomEvent); };
     window.addEventListener('console-eval', handler);
 
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
@@ -1501,22 +1501,22 @@ describe('fb-editor-pane', () => {
     expect(sidebar.style.width).toBe('0px');
     expect(el.querySelector('[data-example]')).toBeNull();
     expect(el.querySelector('fb-example-view')).toBeNull();
-    expect(layouts.at(-1)).toEqual({ view: 'device', panel: null });
+    expect(layouts[layouts.length - 1]).toEqual({ view: 'device', panel: null });
 
     await go('main-view', { view: 'fonts' });
-    expect(layouts.at(-1)).toEqual({ view: 'fonts', panel: 'fonts' });
+    expect(layouts[layouts.length - 1]).toEqual({ view: 'fonts', panel: 'fonts' });
     await go('main-view', { view: 'docs' });
-    expect(layouts.at(-1)).toEqual({ view: 'docs', panel: null });
+    expect(layouts[layouts.length - 1]).toEqual({ view: 'docs', panel: null });
     // Back to the editor from any other view: the editor with the App list.
     await go('main-view', { view: 'editor' });
-    expect(layouts.at(-1)).toEqual({ view: 'editor', panel: 'app' });
+    expect(layouts[layouts.length - 1]).toEqual({ view: 'editor', panel: 'app' });
     await go('main-view', { view: 'fonts' });
     await go('main-view', { view: 'editor' });
-    expect(layouts.at(-1)).toEqual({ view: 'editor', panel: 'app' });
+    expect(layouts[layouts.length - 1]).toEqual({ view: 'editor', panel: 'app' });
     // In the editor the list can be folded, and stays folded.
     await go('sidebar-panel', { panel: 'app' });
     await go('main-view', { view: 'editor' });
-    expect(layouts.at(-1)).toEqual({ view: 'editor', panel: null });
+    expect(layouts[layouts.length - 1]).toEqual({ view: 'editor', panel: null });
     window.removeEventListener('layout-change', onLayout);
   });
 

@@ -42,7 +42,6 @@ class MQuickJSCompiler {
      *
      * @param {string} sourceCode - JavaScript source code
      * @param {object} options - Compilation options
-     * @param {number} options.targetAddr - Flash address for pre-relocation (0 = none)
      * @param {boolean} options.use32Bit - Generate 32-bit bytecode (default: true for ESP32)
      * @returns {Promise<Uint8Array>} - Compiled bytecode
      * @throws {Error} - Compilation error with message
@@ -52,7 +51,6 @@ class MQuickJSCompiler {
             await this.init();
         }
 
-        const targetAddr = options.targetAddr || 0;
         const use32Bit = options.use32Bit !== false; // Default true
         // Where the device's stdlib ROM table is (0: unknown). Only given for
         // a device built from this compiler's table (stdlibId()): the
@@ -77,7 +75,7 @@ class MQuickJSCompiler {
             const result = this.module._compile_js_to_bytecode(
                 sourcePtr,
                 sourceLen,
-                targetAddr,
+                0, // target_addr: the compiler ignores it (bytecode is position-independent)
                 use32Bit ? 1 : 0
             );
 
@@ -106,38 +104,11 @@ class MQuickJSCompiler {
 
     /**
      * Identity of the stdlib table this compiler was built with (the device
-     * reports its own as "stdlib_id"); 0 for a compiler build without it.
+     * reports its own as "atoms_id"); 0 for a compiler build without it.
      * @returns {number}
      */
     stdlibId() {
         return this.ready && this.module._get_stdlib_id ? (this.module._get_stdlib_id() >>> 0) : 0;
-    }
-
-    /**
-     * Validate JavaScript syntax without generating full bytecode
-     *
-     * @param {string} sourceCode - JavaScript source code
-     * @returns {Promise<boolean>} - true if valid
-     * @throws {Error} - Compilation error with message
-     */
-    async validate(sourceCode) {
-        try {
-            await this.compile(sourceCode);
-            return true;
-        } catch (err) {
-            throw err;
-        }
-    }
-
-    /**
-     * Get version information
-     */
-    getVersion() {
-        return {
-            compiler: 'MicroQuickJS with FreeButton stdlib',
-            features: ['LED', 'Button', 'Sensor', 'MQTT'],
-            platform: 'WebAssembly'
-        };
     }
 }
 

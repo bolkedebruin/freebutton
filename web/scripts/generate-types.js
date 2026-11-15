@@ -269,22 +269,17 @@ function generateTypes() {
 // ============================================================================
 
 export interface CompileOptions {
-    targetAddr?: number;
     use32Bit?: boolean;
-}
-
-export interface CompilerVersion {
-    compiler: string;
-    features: string[];
-    platform: string;
+    /** Address of the device's built-in table (0: unknown). */
+    romBase?: number;
 }
 
 export interface MQuickJSCompiler {
     ready: boolean;
     init(): Promise<void>;
     compile(sourceCode: string, options?: CompileOptions): Promise<Uint8Array>;
-    validate(sourceCode: string): Promise<boolean>;
-    getVersion(): CompilerVersion;
+    /** Identity of the built-in table this compiler was built with (0: none). */
+    stdlibId(): number;
 }
 
 declare global {

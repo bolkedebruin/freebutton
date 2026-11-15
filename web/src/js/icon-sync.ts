@@ -268,10 +268,12 @@ export async function syncIcons(cfg: unknown, deps: IconSyncDeps): Promise<IconS
     }
   }
 
+  const rasterEntry = (key: string) => ({ src: sources.get(key)!, size: bytesByKey.get(key)!.length });
+
   const diff = diffRasters(rendered, existing, keep);
   result.unchanged = [...result.sameSource, ...diff.unchanged];
   for (const key of diff.unchanged) {
-    next.rasters[key] = { src: sources.get(key)!, size: bytesByKey.get(key)!.length };
+    next.rasters[key] = rasterEntry(key);
   }
   if (diff.upload.length > 0 || diff.remove.length > 0) {
     deps.log(`Syncing icons: ${diff.upload.length} to upload, ${diff.remove.length} to delete...`, 'info');
@@ -280,7 +282,7 @@ export async function syncIcons(cfg: unknown, deps: IconSyncDeps): Promise<IconS
     try {
       await deps.putImage(key, bytesByKey.get(key)!);
       result.uploaded.push(key);
-      next.rasters[key] = { src: sources.get(key)!, size: bytesByKey.get(key)!.length };
+      next.rasters[key] = rasterEntry(key);
     } catch (err) {
       deps.log(`Upload of images/${key} failed: ${errorText(err)}`, 'error');
       result.failed.push(key);

@@ -384,10 +384,6 @@ export function gotoFirstDiagnostic(): boolean {
     return found;
 }
 
-export function getDocumentKind(): FileKind {
-    return currentKind;
-}
-
 /**
  * Get the current code from the editor
  * @returns The editor content

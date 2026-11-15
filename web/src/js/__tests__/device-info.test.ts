@@ -70,7 +70,7 @@ describe('initDeviceInfoPolling', () => {
   /** Collect `device-info` payloads, remembering the listener so it can be removed. */
   function collectEvents(): (DeviceInfoData | null)[] {
     const events: (DeviceInfoData | null)[] = [];
-    const fn = ((e: CustomEvent) => events.push(e.detail.data)) as EventListener;
+    const fn = (e: Event) => { events.push((e as CustomEvent<{ data: DeviceInfoData | null }>).detail.data); };
     window.addEventListener('device-info', fn);
     listeners.push(fn);
     return events;

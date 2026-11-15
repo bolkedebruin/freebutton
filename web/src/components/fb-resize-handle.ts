@@ -5,6 +5,11 @@ import { pillGeometry, scrollTopAfterDrag, type PillGeometry } from '../js/pill-
 /** A drag has to move this far before it is taken as sideways or up / down. */
 const DRAG_SLOP_PX = 4;
 
+/** The pill's classes: shape, then the colours at rest or as a scrollbar. */
+const PILL_BASE = 'absolute z-10 rounded-full transition-colors duration-200';
+const PILL_IDLE = 'bg-[#3A3A4C] group-hover:bg-[#606068]';
+const PILL_SCROLLS = 'bg-[#606068] group-hover:bg-[#8A8A94] cursor-grab';
+
 /**
  * Divider between two panes. A drag across it resizes (the `resize` event
  * carries the delta in px).
@@ -169,8 +174,8 @@ export class FbResizeHandle extends LitElement {
       // Without a pane to scroll the pill is centred by the flex container.
       const place = pill ? `top: ${pill.top}px; height: ${pill.len}px;` : '';
       const pillClass = pill
-        ? `absolute z-10 w-[8px] rounded-full ${pill.scrolls ? 'bg-[#606068] group-hover:bg-[#8A8A94] cursor-grab' : 'bg-[#3A3A4C] group-hover:bg-[#606068]'} transition-colors duration-200`
-        : 'absolute z-10 w-[8px] h-[64px] rounded-full bg-[#3A3A4C] group-hover:bg-[#606068] transition-colors duration-200';
+        ? `${PILL_BASE} w-[8px] ${pill.scrolls ? PILL_SCROLLS : PILL_IDLE}`
+        : `${PILL_BASE} w-[8px] h-[64px] ${PILL_IDLE}`;
       return html`
         <div class="w-full h-full flex items-center justify-center relative group">
           <div class="w-px h-full bg-[linear-gradient(to_bottom,transparent_0%,#3A3A4C_20%,#3A3A4C_80%,transparent_100%)] group-hover:bg-[linear-gradient(to_bottom,transparent_0%,#606068_20%,#606068_80%,transparent_100%)] transition-colors duration-200"></div>
@@ -184,7 +189,7 @@ export class FbResizeHandle extends LitElement {
     return html`
       <div class="w-full h-full flex items-center justify-center relative group">
         <div class="h-[0.5px] w-full bg-[linear-gradient(to_right,transparent_0%,#3A3A4C_20%,#3A3A4C_80%,transparent_100%)] group-hover:bg-[linear-gradient(to_right,transparent_0%,#606068_20%,#606068_80%,transparent_100%)] transition-colors duration-200"></div>
-        <div class="absolute z-10 h-[8px] w-[64px] rounded-full bg-[#3A3A4C] group-hover:bg-[#606068] transition-colors duration-200"></div>
+        <div class="${PILL_BASE} h-[8px] w-[64px] ${PILL_IDLE}"></div>
       </div>
     `;
   }

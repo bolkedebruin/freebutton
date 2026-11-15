@@ -1127,20 +1127,6 @@ export const globalCompletions: CompletionItem[] = [
     "apply": "load(${1:filename})"
   },
   {
-    "label": "loadMapped",
-    "type": "function",
-    "detail": "(filename: string, offset: number, size: number) → any",
-    "info": "Loads a memory-mapped bytecode file for efficient execution",
-    "apply": "loadMapped(${1:filename}, ${2:offset}, ${3:size})"
-  },
-  {
-    "label": "loadUserBytecode",
-    "type": "function",
-    "detail": "() → any",
-    "info": "",
-    "apply": "loadUserBytecode()"
-  },
-  {
     "label": "setTimeout",
     "type": "function",
     "detail": "(callback: Function, delay: number) → number",

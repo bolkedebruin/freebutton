@@ -2187,34 +2187,6 @@
       "returns": "any"
     },
     {
-      "description": "Loads a memory-mapped bytecode file for efficient execution",
-      "name": "loadMapped",
-      "params": [
-        {
-          "description": "Path to the bytecode file",
-          "name": "filename",
-          "type": "string"
-        },
-        {
-          "description": "Offset in the file",
-          "name": "offset",
-          "type": "number"
-        },
-        {
-          "description": "Size to read",
-          "name": "size",
-          "type": "number"
-        }
-      ],
-      "returns": "any"
-    },
-    {
-      "description": "",
-      "name": "loadUserBytecode",
-      "params": [],
-      "returns": "any"
-    },
-    {
       "description": "Executes a function after a specified delay in milliseconds",
       "name": "setTimeout",
       "params": [

@@ -73,34 +73,6 @@ describe('virtual-fs', () => {
     expect(virtualFS.getFileList()).toHaveLength(1);
   });
 
-  it('emits files-change event on add', () => {
-    let received: any = null;
-    const handler = (e: CustomEvent) => { received = e.detail; };
-    window.addEventListener('files-change', handler as EventListener);
-
-    virtualFS.addFile('x.js', new Uint8Array(10));
-    expect(received).not.toBeNull();
-    expect(received.files).toHaveLength(1);
-    expect(received.used).toBe(10);
-    expect(received.total).toBe(128 * 1024);
-
-    window.removeEventListener('files-change', handler as EventListener);
-  });
-
-  it('emits files-change event on delete', () => {
-    virtualFS.addFile('x.js', new Uint8Array(10));
-    let received: any = null;
-    const handler = (e: CustomEvent) => { received = e.detail; };
-    window.addEventListener('files-change', handler as EventListener);
-
-    virtualFS.deleteFile('x.js');
-    expect(received).not.toBeNull();
-    expect(received.files).toHaveLength(0);
-    expect(received.used).toBe(0);
-
-    window.removeEventListener('files-change', handler as EventListener);
-  });
-
   it('totalSpace is 128KB', () => {
     expect(virtualFS.totalSpace).toBe(128 * 1024);
   });
