@@ -76,6 +76,7 @@ enum class Status : uint8_t {
     AccessDenied,           // malformed / wrong key id / scope / expired / payload mode
     SignatureDoesNotMatch,  // well-formed, but the signature (or body hash) is wrong
     RequestTimeTooSkewed,   // valid signature, x-amz-date outside +-15 min
+    RequestReplayed,        // valid signature that was used before
 };
 
 inline const char* statusCode(Status s) {
@@ -85,6 +86,7 @@ inline const char* statusCode(Status s) {
         case Status::AccessDenied: return "AccessDenied";
         case Status::SignatureDoesNotMatch: return "SignatureDoesNotMatch";
         case Status::RequestTimeTooSkewed: return "RequestTimeTooSkewed";
+        case Status::RequestReplayed: return "RequestReplayed";
     }
     return "AccessDenied";
 }
@@ -110,6 +112,8 @@ struct Result {
     uint8_t payloadSha256[32] = {};  // claimed body hash when payload == Sha256
     uint8_t signature[32] = {};      // the request signature (aws-chunked seed)
     char amzDate[17] = {};           // yyyymmddThhmmssZ ("" if not parsed)
+    int64_t signedAt = 0;            // x-amz-date as Unix seconds
+    uint32_t expires = 0;            // X-Amz-Expires of a presigned request
     const char* message = "";        // static, human readable
 };
 
@@ -822,6 +826,8 @@ inline Status verify(const Req& req, const VerifyConfig& cfg, KeyFn&& keyFor, Re
         return fail(Status::SignatureDoesNotMatch, "the request signature does not match");
     }
     memcpy(r.signature, claimed, 32);
+    r.signedAt = signedAt;
+    r.expires = f.presigned ? static_cast<uint32_t>(f.expires) : 0;
 
     if (cfg.now > 0) {
         if (f.presigned) {
@@ -841,6 +847,60 @@ inline Status verify(const Req& req, const VerifyConfig& cfg, KeyFn&& keyFor, Re
     r.message = "";
     return Status::Ok;
 }
+
+// ---------------------------------------------------------------------------
+// Replay
+// ---------------------------------------------------------------------------
+//
+// A signature is valid for 15 minutes (a presigned one for its Expires), and
+// the connection is not encrypted: whoever saw a signed request could send
+// it again. So a signature that changes something is accepted once.
+//
+// The cache holds the newest kEntries signatures (their first 8 bytes) with
+// their x-amz-date. When it is full the entry with the oldest date goes, and
+// that date becomes the floor: a request signed at or before the floor is
+// refused as well, so a signature that left the cache cannot come back.
+// Requests arrive roughly in the order they were signed, so this costs a
+// legitimate client nothing; no clock is needed.
+
+class ReplayCache {
+public:
+    static constexpr size_t kEntries = 32;
+
+    enum class Verdict : uint8_t { Fresh, Replayed, Stale };
+
+    // Fresh: not seen before, and now recorded.
+    Verdict check(const uint8_t signature[32], int64_t signedAt) {
+        const uint32_t at = signedAt <= 0 ? 0 : signedAt > 0xFFFFFFFFLL ? 0xFFFFFFFFu : static_cast<uint32_t>(signedAt);
+        if (haveFloor_ && at <= floor_) return Verdict::Stale;
+        size_t slot = kEntries, oldest = 0;
+        for (size_t i = 0; i < kEntries; ++i) {
+            if (!used_[i]) {
+                if (slot == kEntries) slot = i;
+                continue;
+            }
+            if (memcmp(sig_[i], signature, sizeof sig_[i]) == 0) return Verdict::Replayed;
+            if (!used_[oldest] || at_[i] < at_[oldest]) oldest = i;
+        }
+        if (slot == kEntries) {
+            slot = oldest;
+            floor_ = at_[oldest];
+            haveFloor_ = true;
+            if (at <= floor_) return Verdict::Stale;  // older than everything remembered
+        }
+        memcpy(sig_[slot], signature, sizeof sig_[slot]);
+        at_[slot] = at;
+        used_[slot] = true;
+        return Verdict::Fresh;
+    }
+
+private:
+    uint8_t sig_[kEntries][8] = {};
+    uint32_t at_[kEntries] = {};
+    bool used_[kEntries] = {};
+    uint32_t floor_ = 0;
+    bool haveFloor_ = false;
+};
 
 // ---------------------------------------------------------------------------
 // Credentials

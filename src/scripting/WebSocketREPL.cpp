@@ -2,7 +2,6 @@
 // WebSocketREPL - WebSocket-based JavaScript REPL implementation
 //
 
-#include "core/ConnectionGuard.h"
 #include "WebSocketREPL.h"
 #include "ScriptEngine.h"
 #include "../json/JsonEscape.h"
@@ -98,7 +97,6 @@ void WebSocketREPL::onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client
         case WS_EVT_CONNECT:
             ESP_LOGI(TAG, "Client #%u connected from %s",
                      client->id(), client->remoteIP().toString().c_str());
-            guard::release(client->client());  // stays open: not a request in progress
             // Send connected message
             client->text(R"({"type":"connected"})");
             break;
@@ -341,9 +339,17 @@ size_t WebSocketREPL::clientCount() const noexcept {
 }
 
 void WebSocketREPL::cleanupClients() {
-    if (ws_) {
-        ws_->cleanupClients();
+    if (!ws_) return;
+    // New API keys: a console that was opened with the old ones must not
+    // stay (it can run code). Asked from the LVGL task, done here.
+    if (closeAllRequested_.exchange(false)) {
+        ws_->closeAll(1008, "credentials changed");
     }
+    ws_->cleanupClients();
+}
+
+void WebSocketREPL::requestCloseAll() {
+    closeAllRequested_.store(true);
 }
 
 // Free function for easy access from main loop without include issues

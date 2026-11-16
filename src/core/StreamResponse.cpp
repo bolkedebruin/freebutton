@@ -11,7 +11,6 @@
 #include <string>
 #include <utility>
 
-#include "ConnectionGuard.h"
 #include "StreamLogic.h"
 #include "StreamStats.h"
 
@@ -108,9 +107,6 @@ public:
         _frames = _chunked && request->version() != 0;  // HTTP/1.0: the close ends the body
         if (AsyncClient* c = request->client()) _fullRoom = c->space();
         if (_fullRoom == 0) _fullRoom = CONFIG_LWIP_TCP_SND_BUF_DEFAULT;
-        // From here on the slot rule decides when this one sends: it no
-        // longer counts as a connection in progress.
-        if (needsSlot()) guard::release(request->client());
         if (needsSlot() && (s_waitHead || !stream::mayStart(s_active, freeHeap()))) {
             joinQueue();
             return;

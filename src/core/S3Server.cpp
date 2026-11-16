@@ -407,7 +407,16 @@ void copyMediaKey(const s3::UrlTarget& t, char out[MEDIA_KEY_MAX + 1]) {
     out[n] = '\0';
 }
 
+// A signature that was used before: an S3 client that repeats a request
+// within the same second signs it identically. 503 SlowDown makes it wait
+// and sign again; someone replaying a captured request gains nothing by it.
+bool isReplay(const fbauth::Result& r) { return r.status == fbauth::Status::RequestReplayed; }
+
 void sendAuthError(AsyncWebServerRequest* request, const fbauth::Result& r) {
+    if (isReplay(r)) {
+        sendXmlError(request, 503, "SlowDown", r.message);
+        return;
+    }
     sendXmlError(request, 403, fbauth::statusCode(r.status), r.message, true);
 }
 
@@ -1153,7 +1162,11 @@ PutState* putBegin(AsyncWebServerRequest* request) {
     {
         fbauth::Result auth;
         if (!fbauth::verifyRequest(request, auth)) {
-            st->fail(403, fbauth::statusCode(auth.status), auth.message);
+            if (isReplay(auth)) {
+                st->fail(503, "SlowDown", auth.message);
+            } else {
+                st->fail(403, fbauth::statusCode(auth.status), auth.message);
+            }
             st->authFailed = true;
             return st;
         }

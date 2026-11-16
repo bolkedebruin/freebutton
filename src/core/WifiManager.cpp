@@ -10,6 +10,7 @@
 #include <esp_mac.h>
 #include <esp_random.h>
 
+#include "json/JsonEscape.h"
 #include "mdns.h"
 #include "../ui/wifi_qr_modal.h"
 #include "../utils/SetupPassword.h"
@@ -168,10 +169,14 @@ static auto wifiConfigHTML = R"rawliteral(
             topNetworks.forEach(network => {
                 const div = document.createElement('div');
                 div.className = 'network-item';
-                div.innerHTML = `
-                    <span class="network-ssid">${network.ssid}</span>
-                    <div class="signal-strength">${getSignalBars(network.rssi)}</div>
-                `;
+                // The name comes from the air: as text, never as markup.
+                const name = document.createElement('span');
+                name.className = 'network-ssid';
+                name.textContent = network.ssid;
+                const bars = document.createElement('div');
+                bars.className = 'signal-strength';
+                bars.innerHTML = getSignalBars(network.rssi);
+                div.append(name, bars);
                 div.onclick = () => document.getElementById('ssid').value = network.ssid;
                 networkList.appendChild(div);
             });
@@ -348,7 +353,9 @@ void start_wifimanager_portal() {
         String json = "{\"networks\":[";
         for (int i = 0; i < n; ++i) {
             if (i > 0) json += ",";
-            json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + String(WiFi.RSSI(i)) + "}";
+            json += "{\"ssid\":\"";
+            json += FreeButton::escapeJsonString(WiFi.SSID(i).c_str()).c_str();  // any bytes can be in a name
+            json += "\",\"rssi\":" + String(WiFi.RSSI(i)) + "}";
         }
         json += "]}";
         request->send(200, "application/json", json);

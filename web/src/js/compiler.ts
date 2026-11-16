@@ -126,10 +126,13 @@ export async function getDeviceStdlibInfo(deviceUrl: string = ''): Promise<{
  * "size" is the image's own length in bytes: the device takes room for
  * exactly that (the request is longer by the multipart framing) and refuses
  * an upload that brings another number of bytes. "atoms" as returned by
- * compileForDeviceEx ("" = not resolved: left out).
+ * compileForDeviceEx ("" = not resolved: left out). "sha256" is the SHA-256
+ * of the image (hex): the request's signature covers this URL, not the
+ * multipart body, and the device only accepts an image with that hash.
  */
-export function bytecodeUploadUrl(deviceUrl: string, imageSize: number, atomsId: string = ''): string {
-    return `${deviceUrl}/api/bytecode/upload?size=${imageSize}` + (atomsId ? `&atoms=${encodeURIComponent(atomsId)}` : '');
+export function bytecodeUploadUrl(deviceUrl: string, imageSize: number, atomsId: string = '', sha256: string = ''): string {
+    return `${deviceUrl}/api/bytecode/upload?size=${imageSize}` + (atomsId ? `&atoms=${encodeURIComponent(atomsId)}` : '') +
+        (sha256 ? `&sha256=${sha256}` : '');
 }
 
 /**

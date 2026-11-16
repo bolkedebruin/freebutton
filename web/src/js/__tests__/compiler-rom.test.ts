@@ -28,6 +28,10 @@ describe('bytecodeUploadUrl', () => {
     expect(bytecodeUploadUrl('', 512, '0x1b542472')).toBe('/api/bytecode/upload?size=512&atoms=0x1b542472');
     expect(bytecodeUploadUrl('', 512, '')).toBe('/api/bytecode/upload?size=512');
   });
+  it('adds the hash of the image, which the signature of the URL then covers', () => {
+    expect(bytecodeUploadUrl('', 512, '0x1b', 'ab12')).toBe('/api/bytecode/upload?size=512&atoms=0x1b&sha256=ab12');
+    expect(bytecodeUploadUrl('', 512, '', 'ab12')).toBe('/api/bytecode/upload?size=512&sha256=ab12');
+  });
   it('is a query the device parses: plain decimal size, escaped atoms id', () => {
     const url = new URL(bytecodeUploadUrl('http://device', 262064, 'a b&c'));
     expect(url.searchParams.get('size')).toBe('262064');

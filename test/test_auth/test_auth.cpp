@@ -534,6 +534,51 @@ void test_credentials_format() {
     TEST_ASSERT_FALSE(formatQrUrl("10.0.0.1", kBotoAkid, kBotoSecret, url, sizeof url - 1));
 }
 
+static void replaySig(uint8_t out[32], uint32_t n) {
+    memset(out, 0, 32);
+    memcpy(out, &n, sizeof n);
+}
+
+void test_replay_cache() {
+    using fbauth::ReplayCache;
+    ReplayCache c;
+    uint8_t sig[32];
+    replaySig(sig, 1);
+    TEST_ASSERT_TRUE(c.check(sig, 1000) == ReplayCache::Verdict::Fresh);
+    TEST_ASSERT_TRUE(c.check(sig, 1000) == ReplayCache::Verdict::Replayed);
+    // out of order is fine while nothing was dropped
+    replaySig(sig, 2);
+    TEST_ASSERT_TRUE(c.check(sig, 900) == ReplayCache::Verdict::Fresh);
+    // fill the cache: the oldest date (900) goes and becomes the floor
+    for (uint32_t i = 0; i < ReplayCache::kEntries - 1; ++i) {
+        replaySig(sig, 100 + i);
+        TEST_ASSERT_TRUE(c.check(sig, 1001 + i) == ReplayCache::Verdict::Fresh);
+    }
+    replaySig(sig, 2);
+    TEST_ASSERT_TRUE(c.check(sig, 900) == ReplayCache::Verdict::Stale);   // the dropped one cannot come back
+    replaySig(sig, 3);
+    TEST_ASSERT_TRUE(c.check(sig, 899) == ReplayCache::Verdict::Stale);   // nor anything older
+    replaySig(sig, 1);
+    TEST_ASSERT_TRUE(c.check(sig, 1000) == ReplayCache::Verdict::Replayed);  // still remembered
+    replaySig(sig, 4);
+    TEST_ASSERT_TRUE(c.check(sig, 5000) == ReplayCache::Verdict::Fresh);
+}
+
+void test_replay_cache_same_second() {
+    using fbauth::ReplayCache;
+    ReplayCache c;
+    uint8_t sig[32];
+    // more than a cache full signed in one second: the overflow is refused, never replayable
+    int fresh = 0;
+    for (uint32_t i = 0; i < ReplayCache::kEntries + 4; ++i) {
+        replaySig(sig, i);
+        if (c.check(sig, 7000) == ReplayCache::Verdict::Fresh) ++fresh;
+    }
+    TEST_ASSERT_EQUAL(static_cast<int>(ReplayCache::kEntries), fresh);
+    replaySig(sig, 0);
+    TEST_ASSERT_FALSE(c.check(sig, 7000) == ReplayCache::Verdict::Fresh);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_sha256_and_hmac_known_answers);
@@ -551,5 +596,7 @@ int main(int, char**) {
     RUN_TEST(test_error_paths);
     RUN_TEST(test_plus_in_path);
     RUN_TEST(test_credentials_format);
+    RUN_TEST(test_replay_cache);
+    RUN_TEST(test_replay_cache_same_second);
     return UNITY_END();
 }

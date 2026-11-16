@@ -36,7 +36,8 @@ describe('updateDevice', () => {
     const r = run({ states: [900, null, 12] });
     const last = await r.result;
     expect(r.order).toEqual(['updateType=firmware', 'updateFile']);
-    expect(r.upload.mock.calls[0][0]).toBe('http://dev/upload');
+    // the URL carries the SHA-256 of the file, so the signature covers the file
+    expect(r.upload.mock.calls[0][0]).toMatch(/^http:\/\/dev\/upload\?sha256=[0-9a-f]{64}$/);
     expect(r.upload.mock.calls[0][2]).toEqual({ Authorization: 'sig' });
     expect(r.posts).toEqual(['http://dev/ota_update']);
     expect(r.seen.map(p => p.phase + (p.percent !== undefined ? ':' + p.percent : ''))).toEqual(

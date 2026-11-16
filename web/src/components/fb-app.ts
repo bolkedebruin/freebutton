@@ -7,7 +7,7 @@ import { bytecodeUploadUrl, compileForDeviceEx } from '../js/compiler.js';
 import { validateCode, formatValidationErrors } from '../js/validator.js';
 import { workspace } from '../js/workspace.js';
 import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
-import { signedFetch } from '../js/auth.js';
+import { sha256Hex, signedFetch } from '../js/auth.js';
 import { askConfirm } from './fb-dialog.js';
 import { scriptStatusOf, waitForScriptStart, type ScriptStatus } from '../js/script-status.js';
 
@@ -142,7 +142,7 @@ export class FbApp extends LitElement {
       formData.append('file', blob, MAIN_BYTECODE_NAME);
 
       // Multipart body: signed with x-amz-content-sha256 UNSIGNED-PAYLOAD.
-      const uploadUrl = bytecodeUploadUrl(base, bytecode.length, atomsId);
+      const uploadUrl = bytecodeUploadUrl(base, bytecode.length, atomsId, await sha256Hex(bytecode));
       const response = await signedFetch(uploadUrl, {
         method: 'POST',
         body: formData

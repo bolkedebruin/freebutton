@@ -35,6 +35,9 @@ public:
     // Clean up stale/disconnected clients - call periodically from main loop
     void cleanupClients();
 
+    // Closes every console connection at the next cleanup (any task).
+    void requestCloseAll();
+
     // Loop task: run a parked eval request and send its result. The
     // WebSocket handler (async_tcp task) never runs script code itself.
     void processPending();
@@ -58,6 +61,7 @@ private:
 
     // WebSocket instance (lazy initialized)
     AsyncWebSocket* ws_{nullptr};
+    std::atomic<bool> closeAllRequested_{false};
     uint32_t consoleDropped_{0};  // console lines not sent for a full queue (broadcastConsole)
 
     // One parked eval request, handed from the async_tcp task to the loop

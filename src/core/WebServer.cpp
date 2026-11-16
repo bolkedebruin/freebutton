@@ -18,7 +18,7 @@
 #include "StaticFiles.h"
 #include "StreamResponse.h"
 #include "Auth.h"
-#include "ConnectionGuard.h"
+#include "RequestGuard.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -174,6 +174,17 @@ void handleUpgradePage(AsyncWebServerRequest *request) {
 static AsyncWebServerRequest* s_uploadOwner = nullptr;
 static bool s_updaterOpen = false;           // Update.begin() succeeded, end() not yet called
 static const char* s_uploadError = nullptr;  // refused before anything was written
+// The signature covers the URL, not the multipart body. So the URL carries
+// the SHA-256 of the file ("?sha256=<64 hex>"), and the file is only
+// accepted when what arrived has that hash.
+static fbauth::Sha256 s_uploadSha;
+static uint8_t s_uploadWant[32];
+
+// The hash a signed upload URL announces. False when it has none.
+static bool announcedSha256(AsyncWebServerRequest *request, uint8_t out[32]) {
+    const AsyncWebParameter* p = request->getParam("sha256");
+    return p && fbauth::fromHex(fbauth::sv(p->value().c_str(), p->value().length()), out, 32);
+}
 static bool s_fsUnmounted = false;           // LittleFS unmounted for a filesystem OTA
 
 // The updater holds a 4 KB buffer from begin() to end()/abort(), and refuses
@@ -213,7 +224,6 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
             return;  // another upload is being written: this one is drained and refused
         }
         ESP_LOGI(TAG, "Upload start for: %s", filename.c_str());
-        guard::release(request->client());  // long: must not keep other requests out
         s_uploadOwner = request;
         s_uploadError = nullptr;
         // A client that goes away mid-upload must not leave the updater
@@ -227,7 +237,9 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
         });
 
         const String& updateType = request->arg("updateType");
-        if (updateType == "firmware") {
+        if (!announcedSha256(request, s_uploadWant)) {
+            s_uploadError = "the upload URL needs ?sha256=<SHA-256 of the file>";
+        } else if (updateType == "firmware") {
             ESP_LOGI(TAG, "Starting firmware update");
             beginUpdate(U_FLASH);
         } else if (updateType == "filesystem") {
@@ -248,18 +260,30 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
         if (s_uploadError) {
             ESP_LOGE(TAG, "Upload refused: %s", s_uploadError);
         }
+        s_uploadSha.init();
     }
 
     if (s_uploadOwner != request || s_uploadError || !s_updaterOpen) {
         return;  // refused or failed: drain the body, write nothing
     }
 
+    s_uploadSha.update(data, len);
     if (Update.write(data, len) != len) {
         Update.printError(Serial);
         ESP_LOGE(TAG, "Update.write() failed");
     }
 
     if (final) {
+        uint8_t got[32];
+        s_uploadSha.finish(got);
+        if (!fbauth::digestEqual(got, s_uploadWant, 32)) {
+            // Not what was signed: a firmware image is not made bootable. A
+            // filesystem is already overwritten and must be uploaded again.
+            closeUpdater();
+            s_uploadError = "the file does not have the announced SHA-256";
+            ESP_LOGE(TAG, "Upload refused: %s", s_uploadError);
+            return;
+        }
         s_updaterOpen = false;  // end() closes the session, whatever it returns
         if (Update.end(true)) {
             ESP_LOGI(TAG, "Update success: %u bytes", index + len);
@@ -323,11 +347,18 @@ void handleRemoteFirmwareUpdate(AsyncWebServerRequest *request) {
 // its relocation context and the registry's upload reservation would leak).
 struct BytecodeUpload {
     BytecodeWriter* writer;
+    fbauth::Sha256* sha;     // of the file as it arrives (see announcedSha256)
+    uint8_t want[32];
     esp_err_t error;
     bool restart;  // the boot script was stored: the engine restarts with it
 };
 
 static void destroyWriter(BytecodeUpload* upload) {
+    if (upload && upload->sha) {
+        upload->sha->~Sha256();
+        free(upload->sha);
+        upload->sha = nullptr;
+    }
     if (upload && upload->writer) {
         upload->writer->~BytecodeWriter();
         free(upload->writer);
@@ -346,6 +377,7 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         upload = static_cast<BytecodeUpload*>(malloc(sizeof(BytecodeUpload)));
         if (!upload) return;  // handleBytecodeUpload answers 500
         upload->writer = nullptr;
+        upload->sha = nullptr;
         upload->error = ESP_OK;
         upload->restart = false;
         request->_tempObject = upload;
@@ -369,6 +401,19 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
             image_size = announced;
             exactSize = true;
         }
+
+        if (!announcedSha256(request, upload->want)) {
+            ESP_LOGE(TAG, "Bytecode upload refused: the URL needs ?sha256=<SHA-256 of the file>");
+            upload->error = ESP_ERR_INVALID_ARG;
+            return;
+        }
+        void* shaMem = malloc(sizeof(fbauth::Sha256));
+        if (!shaMem) {
+            upload->error = ESP_ERR_NO_MEM;
+            return;
+        }
+        upload->sha = new (shaMem) fbauth::Sha256();
+        upload->sha->init();
 
         void* mem = malloc(sizeof(BytecodeWriter));
         if (!mem) {
@@ -397,6 +442,20 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
 
     if (!upload || !upload->writer) {
         return;
+    }
+
+    // The last chunk is only written (which makes the script valid) when
+    // the whole file has the hash the signed URL announced.
+    upload->sha->update(data, len);
+    if (final) {
+        uint8_t got[32];
+        upload->sha->finish(got);
+        if (!fbauth::digestEqual(got, upload->want, 32)) {
+            ESP_LOGE(TAG, "Bytecode upload refused: the file does not have the announced SHA-256");
+            upload->error = ESP_ERR_INVALID_CRC;
+            destroyWriter(upload);  // drops what was written
+            return;
+        }
     }
 
     // Write chunk directly to flash with inline relocation
@@ -519,8 +578,7 @@ void webserver_start() {
     // post now gets 403), static www, captive portal, OPTIONS.
     fbauth::init();
     fbauth::installGate(server);
-    // Connections in progress follow the free heap; bodies nobody consumes
-    // are refused (ConnectionGuard.h).
+    // Bodies nobody consumes are refused (RequestGuard.h).
     guard::install(server);
 
     // No route and no static file: 404. (OPTIONS and the captive portal are
