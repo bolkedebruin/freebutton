@@ -162,7 +162,8 @@ interface BrokerConfig {
 
 export const MQTT_LOG_MAX = 200;
 /** The websockets listener of a broker is usually here (Mosquitto's examples use it). */
-export const DEFAULT_WS_PORT = 9001;
+/** 1884: the port Home Assistant's Mosquitto add-on uses for websockets. */
+export const DEFAULT_WS_PORT = 1884;
 const URL_KEY = 'fb-mqtt-ws:';
 
 type Obj = Record<string, unknown>;
@@ -339,7 +340,7 @@ export class MqttSession {
     return '';
   }
 
-  /** The WebSocket address of broker `index`: what the user set for its host, else ws://host:9001. */
+  /** The WebSocket address of broker `index`: what the user set for its host, else ws://host:1884. */
   wsUrl(index: number): string {
     const b = this.configs[index];
     if (!b) return '';

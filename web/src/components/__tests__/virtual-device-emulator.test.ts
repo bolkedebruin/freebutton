@@ -985,7 +985,7 @@ describe('MQTT tab: live modes', () => {
     const error = panel.querySelector('[data-testid="mqtt-link-error"]') as HTMLElement;
     expect(error.getAttribute('data-error')).toBe('unreachable');
     expect(error.getAttribute('role')).toBe('alert');
-    expect(panel.querySelector('[data-testid="mqtt-listener-help"]')?.textContent).toBe('listener 9001\nprotocol websockets');
+    expect(panel.querySelector('[data-testid="mqtt-listener-help"]')?.textContent).toBe('listener 1884\nprotocol websockets');
     expect(panel.querySelector('[data-testid="mqtt-link-state"]')?.textContent?.trim()).toBe('not connected');
 
     const input = panel.querySelector('[data-testid="mqtt-ws-url"]') as HTMLInputElement;

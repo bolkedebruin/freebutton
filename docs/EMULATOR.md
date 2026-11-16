@@ -312,13 +312,14 @@ chosen, not with the emulator.
 
 The broker needs a websockets listener. Mosquitto (`mosquitto.conf`):
 
-    listener 9001
+    listener 1884
     protocol websockets
 
 The address is a setting per broker in the MQTT tab, by default
-`ws://<host of the broker url>:9001`; the browser keeps it per broker host.
+`ws://<host of the broker url>:1884` (the port Home Assistant's Mosquitto
+add-on uses); the browser keeps it per broker host.
 A broker in Docker needs a fixed port mapping for the listener (for example
-`-p 9001:9001`): with a dynamic mapping the host port changes at every
+`-p 1884:1884`): with a dynamic mapping the host port changes at every
 restart of the container and the address has to be set again. The IDE
 served over http can use `ws://`; from an https page the browser blocks
 `ws://` (the tab says so; use `wss://`).

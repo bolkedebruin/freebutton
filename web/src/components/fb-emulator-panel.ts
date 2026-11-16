@@ -130,7 +130,7 @@ export class FbEmulatorPanel extends LitElement {
         ${e.message}
         ${e.kind === 'unreachable' || e.kind === 'not-mqtt' ? html`
           <span class="block mt-1 text-gray-100">Mosquitto needs a websockets listener (mosquitto.conf), and the address above its port as this computer reaches it:</span>
-          <pre class="mt-1 px-2 py-1 rounded bg-white/5 font-mono text-[11px] text-text-default" data-testid="mqtt-listener-help">listener 9001
+          <pre class="mt-1 px-2 py-1 rounded bg-white/5 font-mono text-[11px] text-text-default" data-testid="mqtt-listener-help">listener 1884
 protocol websockets</pre>` : ''}
         ${e.kind === 'taken-over' ? html`<span class="block mt-1 text-gray-100">Stop the virtual device in the other tab or window.</span>` : ''}
       </div>`;
@@ -178,7 +178,7 @@ protocol websockets</pre>` : ''}
               <span class="font-mono shrink-0 max-w-[96px] truncate" title="config.json broker ${b.name} (${b.host})">${b.name}</span>
               <input class="${INPUT} flex-1" spellcheck="false" autocomplete="off" data-testid="mqtt-ws-url" aria-label="WebSocket address of broker ${b.name}"
                 title="The broker's WebSocket (websockets listener) address. Kept by this browser for ${b.host}."
-                placeholder="ws://host:9001" .value=${b.wsUrl}
+                placeholder="ws://host:1884" .value=${b.wsUrl}
                 @change=${(e: Event) => emulatorSession.setBrokerUrl(b.index, (e.target as HTMLInputElement).value)} />
               <span class="shrink-0" data-testid="mqtt-link-state" data-state=${mode === 'offline' ? 'offline' : b.state}>${chip(b)}</span>
             </label>

@@ -96,10 +96,10 @@ describe('broker settings', () => {
     expect(brokerConfigs('not json')).toEqual([]);
   });
 
-  it('the WebSocket address: ws://<host>:9001 by default, what the user set for that host after that (kept by the browser)', async () => {
+  it('the WebSocket address: ws://<host>:1884 by default, what the user set for that host after that (kept by the browser)', async () => {
     localStorage.clear();
     await start();
-    expect(session.mqttStatus()!.brokers[0]).toMatchObject({ name: 'local', host: 'broker.test', wsUrl: 'ws://broker.test:9001', state: 'disconnected' });
+    expect(session.mqttStatus()!.brokers[0]).toMatchObject({ name: 'local', host: 'broker.test', wsUrl: 'ws://broker.test:1884', state: 'disconnected' });
     session.setBrokerUrl(0, ' ws://broker.test:32768 ');
     expect(session.mqttStatus()!.brokers[0]!.wsUrl).toBe('ws://broker.test:32768');
     expect(localStorage.getItem('fb-mqtt-ws:broker.test')).toBe('ws://broker.test:32768');
