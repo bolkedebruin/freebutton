@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  alignAnchor, boxOrigin, clampUnits, dragTo, hitTest, itemRect, realign, unitPx, unitRange, unitsAt,
+  alignAnchor, boxOrigin, clampUnits, dragTo, realign, unitPx, unitRange, unitsAt,
 } from '../display-geometry';
 
 // The preview draws the 320 x 240 screen 283 px wide.
@@ -122,14 +122,5 @@ describe('display-geometry: boxes', () => {
   it('unitsAt: a point of the screen in %, inside the screen', () => {
     expect(unitsAt('displayitem', { x: 160, y: 120 })).toEqual({ x: 50, y: 50 });
     expect(unitsAt('displayitem', { x: -5, y: 900 })).toEqual({ x: 0, y: 99 });
-  });
-
-  it('hitTest: the topmost box at a point, from boxes alone', () => {
-    const a = { id: 'a', rect: itemRect('displayitem', 1, { x: 0, y: 0 }, { width: 160, height: 60 }) };
-    const b = { id: 'b', rect: itemRect('image', undefined, { x: 100, y: 20 }, { width: 48, height: 48 }) };
-    expect(hitTest([a, b], { x: 10, y: 10 })?.id).toBe('a');
-    expect(hitTest([a, b], { x: 110, y: 30 })?.id).toBe('b');     // drawn later: on top
-    expect(hitTest([b, a], { x: 110, y: 30 })?.id).toBe('a');
-    expect(hitTest([a, b], { x: 300, y: 200 })).toBeNull();
   });
 });

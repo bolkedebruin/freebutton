@@ -938,7 +938,7 @@ describe('fb-tft-display', () => {
 });
 
 describe('fb-tft-display fonts', () => {
-  const scale = 283 / 320;
+  const scale = 1;   // a CSS px per device pixel
   const fontPx = (el: Element | null) => parseFloat((el as HTMLElement).style.fontSize);
 
   it('draws value and caption at the configured sizes, markup as spans', async () => {
@@ -981,7 +981,7 @@ describe('fb-tft-display fonts', () => {
 });
 
 describe('previews follow config.json "style"', () => {
-  const scale = 283 / 320;
+  const scale = 1;   // a CSS px per device pixel
   const fontPx = (el: Element | null) => parseFloat((el as HTMLElement).style.fontSize);
   const rgb = (el: Element | null) => (el as HTMLElement).style.color;
 
@@ -1023,7 +1023,7 @@ describe('previews follow config.json "style"', () => {
     tft.displayItems = model.pages[0]!.displayItems.map(i => ({ ...i, value: '21' }));
     tft.lists = model.pages[0]!.lists;
     await nextFrame();
-    const mini = Math.min(113 / 160, 42 / 80);
+    const mini = 1;   // a CSS px per device pixel
     expect(fontPx(grid.querySelector('[data-position="1"] [data-label]'))).toBeCloseTo(40 * mini, 1);
     expect(fontPx(grid.querySelector('[data-position="2"] [data-label]'))).toBeCloseTo(24 * mini, 1); // local wins
     expect(rgb(grid.querySelector('[data-position="1"] [data-label]'))).toMatch(/#ff0000|255, 0, 0/);
@@ -1044,7 +1044,7 @@ describe('previews follow config.json "style"', () => {
 
 describe('fb-button-grid fonts', () => {
   it('label medium 32 / top semibold 18 by default, scaled; configured fonts otherwise', async () => {
-    const scale = Math.min(113 / 160, 42 / 80);
+    const scale = 1;   // a CSS px per device pixel
     const model = configToModel({ buttons: [
       { position: 1, label: 'A', toplabel: 'T' },
       { position: 2, label: 'B', toplabel: 'U', fontsize: 24, topfontsize: 12 },
@@ -1067,8 +1067,8 @@ describe('fb-tft-display lists', () => {
     items: ['Bed Time', 'Evening', 'Movie'], selected: 1,
     color: '808080', focuscolor: 'ffd45f', focustextcolor: '000000', ...over,
   })!;
-  // fontsize 3 = 32 px on the 320 px screen; the preview screen is 283 px wide.
-  const rowH = 32 * 1.25 * 283 / 320;
+  // fontsize 3 = 32 px on the 320 px screen, drawn a CSS px per device pixel.
+  const rowH = 32 * 1.25;
 
   it('renders a roller: rows tall, the selected item in the middle row on the focus bar', async () => {
     const el = createElement('fb-tft-display') as any;
@@ -1105,7 +1105,7 @@ describe('fb-tft-display lists', () => {
 });
 
 describe('fb-tft-display images', () => {
-  const scale = 283 / 320;
+  const scale = 1;   // a CSS px per device pixel
 
   it('places an image at device pixels: placeholder until the SVG is known, then the icon', async () => {
     _clearIconSources();

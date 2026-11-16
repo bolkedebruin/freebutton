@@ -167,6 +167,7 @@ describe('emulator session: info (the virtual device\'s info side)', () => {
     expect(session.info()).toEqual({
       identity: virtualDeviceId(), status: 'idle', error: '', mqtt: 'offline', mqttLink: 'none', uptimeSeconds: null, heap: null, bytecode: null,
       timers: null, subscriptions: null, mqttDropped: null, brokers: null, sensors: null, firmware: null, model: null, timezone: null, connectors: null,
+      lvgl: null, textCollapsed: 0, textSkipped: 0,
     });
   });
 

@@ -12,7 +12,7 @@ import { configToModel, parseConfigText } from '../../js/config-model.js';
 import { clearPreviewConfig, loadDefaultConfig, markPreviewStale, setPreviewConfig } from '../../js/device-config.js';
 import { currentPopover } from '../../js/popover.js';
 
-const SCALE = 283 / 320;
+const SCALE = 1;   // the screen is drawn a CSS px per device pixel
 /** Pointer movement (CSS px on the preview) for a number of % units. */
 const move = (ux: number, uy: number) => ({ dx: ux * 3.2 * SCALE, dy: uy * 2.4 * SCALE });
 

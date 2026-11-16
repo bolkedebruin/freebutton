@@ -88,6 +88,16 @@ export class FontLoader {
     return this.listing ? new Set(this.listing.keys()) : null;
   }
 
+  /**
+   * Keys of bucket `fonts`, listed now when they were not yet (the one
+   * listing this loader makes; resolves after the faces it is loading).
+   * Null: no device, or it could not be listed.
+   */
+  async listedKeys(): Promise<ReadonlySet<string> | null> {
+    await this.refresh();
+    return this.bucketKeys();
+  }
+
   /** Whether "fb-<face>" is registered (with the file the table names). */
   isLoaded(face: string, src?: string): boolean {
     const l = this.loaded.get(face);

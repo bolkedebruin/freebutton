@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { configToModel } from '../config-model';
 import { DeviceState, frontLedIndex, overlayPages, type StateChange } from '../emulator';
 import { BASIC_CONFIG, makeEmulator } from './emulator-helpers';
+import { repoMedia, testRaster } from './emulator-pixels';
 
 describe('DeviceState, as the firmware reports the device', () => {
   it('has the items, keys, lists, images, brokers and modules the firmware made of config.json', async () => {
@@ -165,7 +166,9 @@ describe('a script changes the state through the firmware bindings', () => {
       { kind: 'item-removed', id: 9 },
     ]);
     emu.eval('fb.main.display.create(0, 0, 10, 0, 1, 0, "Kept", "", 0, 1)');
-    expect(rec.changes[rec.changes.length - 1]).toEqual({ kind: 'item-added', id: 11 });
+    // (Then the layout: the new box has its place on the display.)
+    expect(rec.changes.filter(c => c.kind !== 'layout').pop()).toEqual({ kind: 'item-added', id: 11 });
+    expect(emu.layout('main').find(r => r.id === 11)).toMatchObject({ kind: 'displayitem', x: 0, y: 0, width: 32, visible: true });
     expect(emu.state.item(11)).toMatchObject({ label: 'Kept', page: 1 });
     expect(emu.state.item(11)!.ref).toBeUndefined();
   });
@@ -249,10 +252,15 @@ describe('a script changes the state through the firmware bindings', () => {
   });
 
   it('images: an icon or a key of the images bucket', async () => {
-    const { emu, rec } = await makeEmulator();
+    const media = repoMedia({ 'images/radar.bin': testRaster(40, 30, 'rgb565a8') });
+    const { emu, rec } = await makeEmulator({ media });
     rec.changes.length = 0;
     emu.run('fb.main.image.setSrc("weather", "radar.bin");');
-    expect(emu.state.image('weather')).toMatchObject({ kind: 'src', value: 'radar.bin', raster: { key: 'radar.bin' } });
+    // The raster's own size, read from the file by the firmware.
+    expect(emu.state.image('weather')).toMatchObject({
+      kind: 'src', value: 'radar.bin', raster: { key: 'radar.bin', width: 40, height: 30 },
+    });
+    expect(emu.layout('main').find(r => r.kind === 'image')).toMatchObject({ width: 40, height: 30, visible: true });
     emu.eval('fb.main.image.setIcon("weather", "")');
     expect(emu.state.image('weather')).toMatchObject({ kind: 'none', value: '', raster: null });
     expect(rec.changes.filter(c => c.kind === 'image')).toHaveLength(2);
@@ -301,14 +309,6 @@ describe('overlayPages: the running device in the preview model', () => {
     expect(pages[0]!.buttons.map(b => [b.position, b.label, b.topLabel])).toEqual(model.pages[0]!.buttons.map(b => [b.position, b.label, b.topLabel]));
     expect(pages[0]!.lists![0]).toMatchObject({ name: 'scenes', items: ['Morning', 'Evening', 'Night'], selected: 1 });
     expect(pages[0]!.images![0]).toMatchObject({ name: 'weather', icon: 'sun' });
-    // And what the firmware resolved, for a renderer that draws it as it is.
-    expect(pages[0]!.displayItems[0]!.box).toMatchObject({ x: 32, y: 48, width: 128, value: { font: { font: 'montserrat', px: 32 } } });
-    expect(pages[0]!.buttons.find(b => b.position === 3)!.display!.label.runs).toEqual([
-      { text: 'Light', font: 'montserrat', face: 0, px: 32, color: '#ffffff' },
-    ]);
-    expect(pages[0]!.buttons.find(b => b.position === 1)!.display).toBeUndefined();
-    expect(pages[0]!.lists![0]!.roller).toMatchObject({ rows: 3, selected: 1 });
-    expect(pages[0]!.images![0]!.raster).toMatchObject({ key: 'ico-sun-48x48.bin' });
   });
 
   it('carries what a script changed, and leaves the model alone', async () => {
@@ -339,7 +339,6 @@ describe('overlayPages: the running device in the preview model', () => {
     expect(pages[2]!.displayItems).toMatchObject([
       { x: 5, y: 6, width: 30, height: 0, type: 'text', fontSize: 2, align: 1, id: '10', label: 'Made', value: '', unit: 'kW' },
     ]);
-    expect(pages[2]!.displayItems[0]!.box).toMatchObject({ x: 16, y: 14, width: 96 });
     const light = pages[0]!.buttons.find(b => b.position === 3)!;
     expect(light).toMatchObject({ label: 'On', topLabel: 'Room', icon: 'moon', ledOn: true, ledColor: 'rgb(255,128,0)' });
     expect(light.backLedColor).toBeUndefined();
@@ -369,15 +368,6 @@ describe('overlayPages: the running device in the preview model', () => {
     expect(page.lists![0]!.font).toEqual({ face: 1, px: 20, configured: true });
     emu.eval('fb.main.display.setFont("temp", "")');
     expect(overlayPages(model.pages, emu.state)[0]!.displayItems[0]!.valueFont).toEqual({ face: 0, px: 32, configured: true });
-  });
-
-  it('the clock of the shown page is on that page', async () => {
-    const config = { ...BASIC_CONFIG, clocks: [{ x: 0, y: 0, width: 100, height: 100, page: 2 }] };
-    const { emu } = await makeEmulator({ config });
-    const model = configToModel(config);
-    expect(overlayPages(model.pages, emu.state).map(p => p.clocks?.length ?? 0)).toEqual([0, 0]);
-    emu.eval('fb.main.display.showPage(2)');
-    expect(overlayPages(model.pages, emu.state)[1]!.clocks).toMatchObject([{ x: 0, y: 0, width: 100, height: 100, shown: true }]);
   });
 
   it('maps a key to its front LED: four LEDs per bar, in bar order', () => {

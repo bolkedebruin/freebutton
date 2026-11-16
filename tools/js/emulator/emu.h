@@ -4,6 +4,7 @@
 #ifndef FB_EMULATOR_EMU_H
 #define FB_EMULATOR_EMU_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -50,6 +51,25 @@ uint32_t fbe_mqtt_dropped(void);
 uint32_t fbe_mqtt_queue_used(void);
 uint32_t fbe_mqtt_queue_bytes(void);
 
+// --- display.cpp --------------------------------------------------------------------
+// Draws what is pending on every display now and reports the frames.
+void fbe_display_refresh_now(void);
+// --- media_emu.c -------------------------------------------------------------------
+// The key of the media file that holds `data`, NULL when it is not media.
+const char* fbe_media_key_of(const uint8_t* data);
+uint32_t fbe_media_bytes(void);
+// The host's files of a bucket changed (-1: of every bucket).
+void fbe_media_forget(int bucket);
+// One file changed: the next open asks the host again.
+void fbe_media_forget_key(int bucket, const char* key);
+// --- seam_fonts.c, seam_clock.c -------------------------------------------------------
+// (fbe_font_info and fbe_clock_container, which take LVGL types: emu_ui.h)
+size_t fbe_font_face_count(void);
+bool fbe_font_face(size_t index, const char** name, const char** key, int32_t* id, int* fallback,
+                   int* lineheight_x100, bool* usable);
+size_t fbe_font_instance_count(void);
+// The font reload poll runs only while a reload was asked for.
+void fbe_fonts_poll_sleep(void);
 // --- seam_discovery.cpp ---------------------------------------------------------------
 // HomeAssistantDiscovery::poll(); nonzero while a discovery round is pending.
 int fbe_discovery_poll(void);

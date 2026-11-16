@@ -9,10 +9,9 @@
 //
 // It also tells the host what the device shows: after every pass, one JSON
 // record per display item, key, list, image and clock that changed
-// (fbh_state), read from the firmware's components and from the virtual
-// widgets they drew (ui_shim.cpp). The records carry what the firmware
-// decided: texts cut to their slots, resolved runs with font and colour,
-// positions in pixels.
+// (fbh_state), read from the firmware's components and from the LVGL
+// objects they made (records.cpp), plus where LVGL laid each widget out.
+// The pixels themselves are display.cpp's.
 //
 #include <algorithm>
 #include <array>
@@ -34,9 +33,11 @@
 #include <ArduinoJson.h>
 #include <rapidjson/writer.h>
 
-// The components keep what they show in private members (the widget, the
-// text slots). The emulator only reads them, here, to report the state; the
-// firmware sources stay as they are.
+// The components keep in private members which LVGL object is theirs and
+// what they hold while no widget exists (the text slots of an item whose
+// page is not shown, a list's rows, page numbers). LVGL does not know these,
+// so the emulator reads them, here only, to report the state; what a widget
+// shows is read from LVGL. The firmware sources stay as they are.
 #define private public
 #define protected public
 #include "components/ConfigManager.h"
@@ -57,17 +58,17 @@
 #include "pins.h"
 #include "ui/MainPage.h"
 #include "ui/PendingRender.h"
-#include "ui_shim.h"
+#include "emu_ui.h"
+#include "records.h"
+#include "ui/ui_button.h"
+#include "media/media_store.h"
+#include "ui/MediaImage.h"
 
 extern "C" {
 #include "../../lib/vendored/sts3x/sts3x.h"
 #include "../../lib/vendored/stscommon/sensirion_i2c.h"
 #include "ui/fonts/fonts.h"
 #include "ui/ui_style.h"
-}
-
-namespace emu {
-bool clockBuilt(int& x, int& y, int& width, int& height, int& align);
 }
 
 static const char* TAG = "Emulator";
@@ -237,25 +238,41 @@ void sendItem(freebutton::DisplayItem& item) {
     if (const auto* icon = item.icon_.get()) json.value(slotText(icon->name, std::string())); else json.value("");
     json.endObject();
     json.key("box");
-    if (const lv_obj_t* box = item.box) {
+    if (lv_obj_t* box = item.box) {
+        lv_obj_t* caption = fbe_box_part(box, FBE_BOX_CAPTION);
+        lv_obj_t* value = fbe_box_part(box, FBE_BOX_VALUE);
+        lv_obj_t* unit = fbe_box_part(box, FBE_BOX_UNIT);
         json.beginObject();
-        json.key("x").value(box->x);
-        json.key("y").value(box->y);
-        json.key("width").value(box->width);
-        json.key("align").value(box->align);
-        json.key("underline").value(box->underline);
+        // As the firmware placed it (ui_box_update): position and width in
+        // pixels, with the alignment they are relative to.
+        json.key("x").value(static_cast<int>(lv_obj_get_style_x(box, LV_PART_MAIN)));
+        json.key("y").value(static_cast<int>(lv_obj_get_style_y(box, LV_PART_MAIN)));
+        json.key("width").value(static_cast<int>(lv_obj_get_style_width(box, LV_PART_MAIN)));
+        json.key("align").value(static_cast<int>(lv_obj_get_style_align(box, LV_PART_MAIN)));
+        json.key("underline").value(lv_obj_get_style_border_width(box, LV_PART_MAIN) > 0);
+        lv_style_value_t pad;
         json.key("captionPad");
-        if (box->hasPadding) json.value(box->captionPad); else json.null();
+        if (caption && lv_obj_get_local_style_prop(caption, LV_STYLE_PAD_BOTTOM, &pad, 0) == LV_STYLE_RES_FOUND) {
+            json.value(static_cast<int>(pad.num));
+        } else {
+            json.null();
+        }
         json.key("boxPad");
-        if (box->hasPadding) json.value(box->boxPad); else json.null();
+        if (lv_obj_get_local_style_prop(box, LV_STYLE_PAD_BOTTOM, &pad, 0) == LV_STYLE_RES_FOUND) {
+            json.value(static_cast<int>(pad.num));
+        } else {
+            json.null();
+        }
         json.key("caption");
-        emu::writeText(json, box->caption);
+        emu::writeText(json, caption, slotText(item.captionSlot_, item.label), false,
+                       fbe_box_part_font(box, FBE_BOX_CAPTION));
         json.key("value");
-        emu::writeText(json, box->value);
+        emu::writeText(json, value, slotText(item.valueSlot_, std::string()), false,
+                       fbe_box_part_font(box, FBE_BOX_VALUE));
         json.key("unit");
-        emu::writeText(json, box->unit);
+        emu::writeText(json, unit, slotText(item.unitSlot_, item.unit), false, fbe_box_part_font(box, FBE_BOX_UNIT));
         json.key("icon");
-        emu::writeIcon(json, box->icon);
+        emu::writeIcon(json, fbe_box_part(box, FBE_BOX_ICON));
         json.endObject();
     } else {
         json.null();
@@ -277,13 +294,21 @@ void sendKey(freebutton::Button& button, const int order) {
     json.key("label").value(button.label);
     json.key("topLabel").value(button.topLabel);
     json.key("display");
-    if (const lv_obj_t* b = button.button) {
+    const auto* b = button.button ? static_cast<const button_dsc_t*>(lv_obj_get_user_data(button.button)) : nullptr;
+    if (b) {
         json.beginObject();
-        json.key("index").value(b->display);
+        json.key("index").value(static_cast<int>(
+            reinterpret_cast<intptr_t>(lv_display_get_user_data(lv_obj_get_display(button.button)))));
+        // A text in one format is its label; one in several formats a row of
+        // labels beside it (ui_button.c set_markup).
         json.key("label");
-        emu::writeText(json, b->text);
+        // The text's own font: the one a script set (ui_button_set_fonts), else the style's.
+        emu::writeText(json, b->rich_text ? b->rich_text : b->text, slotText(button.labelSlot_, button.label),
+                       b->rich_text != nullptr, b->text_font ? b->text_font : fonts_get(b->text_face, b->text_px));
         json.key("topLabel");
-        emu::writeText(json, b->title);
+        emu::writeText(json, b->rich_title ? b->rich_title : b->title,
+                       slotText(button.topLabelSlot_, button.topLabel), b->rich_title != nullptr,
+                       b->title_font ? b->title_font : fonts_get(b->title_face, b->title_px));
         json.key("icon");
         emu::writeIcon(json, b->icon);
         json.endObject();
@@ -314,22 +339,20 @@ void sendList(freebutton::List& list, const int index) {
     }
     json.endArray();
     json.key("roller");
-    if (const lv_obj_t* r = list.roller_) {
-        const style_props_t* style = ui_style_resolved(STYLE_EL_LIST);
-        const style_props_t* selected = ui_style_resolved(STYLE_EL_LIST_SELECTED);
+    if (lv_obj_t* r = list.roller_) {
+        const lv_font_t* font = lv_obj_get_style_text_font(r, LV_PART_MAIN);
         json.beginObject();
-        json.key("x").value(r->x);
-        json.key("y").value(r->y);
-        json.key("width").value(r->width);
-        json.key("rows").value(r->rows);
-        json.key("selected").value(r->selected);
+        json.key("x").value(static_cast<int>(lv_obj_get_style_x(r, LV_PART_MAIN)));
+        json.key("y").value(static_cast<int>(lv_obj_get_style_y(r, LV_PART_MAIN)));
+        json.key("width").value(static_cast<int>(lv_obj_get_style_width(r, LV_PART_MAIN)));
+        json.key("rows").value(static_cast<int>(list.rows_));
+        json.key("selected").value(static_cast<int>(lv_roller_get_selected(r)));
         json.key("font");
-        emu::writeFont(json, emu::rollerFont(r));
-        json.key("lineSpace");
-        if (r->hasLineSpace) json.value(r->lineSpace); else json.value(static_cast<int>(style->line_space));
-        json.key("color").value(emu::hexColor(r->hasTextColor ? r->textColor : style->color));
-        json.key("selectedBg").value(emu::hexColor(r->hasSelectedBg ? r->selectedBg : selected->bg_color));
-        json.key("selectedColor").value(emu::hexColor(r->hasSelectedText ? r->selectedText : selected->color));
+        emu::writeFont(json, font);
+        json.key("lineSpace").value(static_cast<int>(lv_obj_get_style_text_line_space(r, LV_PART_MAIN)));
+        json.key("color").value(emu::hexColor(lv_obj_get_style_text_color(r, LV_PART_MAIN)));
+        json.key("selectedBg").value(emu::hexColor(lv_obj_get_style_bg_color(r, LV_PART_SELECTED)));
+        json.key("selectedColor").value(emu::hexColor(lv_obj_get_style_text_color(r, LV_PART_SELECTED)));
         json.endObject();
     } else {
         json.null();
@@ -356,11 +379,7 @@ void sendImage(freebutton::ImageItem& image, const int index) {
     json.key("kind").value(!has ? "none" : want[0] == freebutton::icon::kWantIcon ? "icon" : "src");
     json.key("value").value(has ? want + 1 : "");
     json.key("raster");
-    if (image.image_ && !image.image_->hidden) {
-        emu::writeIcon(json, image.image_->icon);
-    } else {
-        json.null();
-    }
+    emu::writeIcon(json, image.image_);
     json.endObject();
     send(FBH_STATE_IMAGE, "image" + std::to_string(index), json.str());
 }
@@ -368,8 +387,7 @@ void sendImage(freebutton::ImageItem& image, const int index) {
 // The analog clock: "shown" while its page is shown (only the first clock of
 // a config is drawn). Its hands are the device's local time.
 void sendClock(freebutton::Clock& clock, const int index) {
-    int x, y, width, height, align;
-    const bool drawn = clock.built_ && emu::clockBuilt(x, y, width, height, align);
+    const bool drawn = clock.built_ && fbe_clock_container() != nullptr;
     Json json;
     json.beginObject();
     json.key("index").value(index);
@@ -459,6 +477,73 @@ void sendDevice() {
     send(FBH_STATE_DEVICE, "device", json.str());
 }
 
+// Where the widgets of one display are, as LVGL laid them out (display: 0 =
+// the main display, 1 + i = key display i). "kind" and the id fields are
+// those of the widget's own record; "visible": drawn now (not hidden itself
+// or by a parent).
+void layoutEntry(Json& json, const char* kind, const char* idKey, const int id, lv_obj_t* obj, const int page) {
+    json.beginObject();
+    json.key("kind").value(kind);
+    json.key(idKey).value(id);
+    emu::writeCoords(json, obj);
+    json.key("page").value(page);
+    json.key("visible").value(lv_obj_is_visible(obj));
+    json.endObject();
+}
+
+void sendLayout() {
+    auto& lvgl = FreeButton::getLvglDisplay();
+    if (!lvgl.isInitialized()) return;
+    {
+        lv_obj_update_layout(lvgl.getMainScreen());
+        Json json;
+        json.beginObject();
+        json.key("display").value(0);
+        json.key("rects").beginArray();
+        configManager.forEachDisplayItem([&json](freebutton::DisplayItem& item) {
+            if (item.box) layoutEntry(json, "item", "id", static_cast<int>(item.id), item.box, item.page);
+        });
+        for (size_t i = 0;; ++i) {
+            freebutton::List* list = configManager.findList(i);
+            if (!list) break;
+            if (list->roller_) layoutEntry(json, "list", "index", static_cast<int>(i), list->roller_, list->page_);
+        }
+        for (size_t i = 0;; ++i) {
+            freebutton::ImageItem* image = configManager.findImage(i);
+            if (!image) break;
+            if (image->image_) layoutEntry(json, "image", "index", static_cast<int>(i), image->image_, image->page_);
+        }
+        int clock = 0;
+        configManager.forEachClock([&json, &clock](freebutton::Clock& c) {
+            // Only the first clock of a config is drawn (ui_clock.c has one).
+            if (c.built_ && fbe_clock_container()) layoutEntry(json, "clock", "index", clock, fbe_clock_container(), c.page);
+            ++clock;
+        });
+        json.endArray();
+        json.endObject();
+        send(FBH_STATE_LAYOUT, "layout0", json.str());
+    }
+    const size_t smalls = lvgl.getSmallDisplayCount();
+    for (size_t d = 0; d < smalls; ++d) {
+        lv_display_t* display = lvgl.getSmallDisplay(static_cast<int>(d));
+        Json json;
+        json.beginObject();
+        json.key("display").value(static_cast<int>(d + 1));
+        json.key("rects").beginArray();
+        int order = 0;
+        configManager.forEachButton([&](freebutton::Button& button) {
+            if (button.button && lv_obj_get_display(button.button) == display) {
+                lv_obj_update_layout(button.button);
+                layoutEntry(json, "key", "order", order, button.button, static_cast<int>(button.page_));
+            }
+            ++order;
+        });
+        json.endArray();
+        json.endObject();
+        send(FBH_STATE_LAYOUT, "layout" + std::to_string(d + 1), json.str());
+    }
+}
+
 void syncState() {
     sendDevice();
 
@@ -501,6 +586,7 @@ void syncState() {
     }
     int clock = 0;
     configManager.forEachClock([&clock](freebutton::Clock& c) { sendClock(c, clock++); });
+    sendLayout();
 }
 
 FreeButton::ButtonManager& buttons() {
@@ -524,8 +610,9 @@ void fbe_device_after_entry(void) {
     if (!g_booted) return;
     // The MQTT task: what the script's subscribe / unsubscribe asked for.
     fbe_mqtt_pump();
-    // The LVGL task: draw what changed.
-    freebutton::ui::applyPendingRenders();
+    // The LVGL task (LvglDisplay::task): the pending renders, then LVGL's
+    // timers (refresh, animations, the clock, the font reload poll).
+    FreeButton::getLvglDisplay().task();
     FastLED.show();
     syncState();
 }
@@ -544,6 +631,32 @@ int fbe_device_pass(void) {
 // For the host
 // ---------------------------------------------------------------------------
 
+// One turn of the firmware's LVGL task (every 10 ms on the device; here when
+// fbe_display_wait() says a timer is due), then the records.
+FBE_EXPORT(fbe_display_task) void fbe_display_task(void) {
+    if (!g_booted) return;
+    FreeButton::getLvglDisplay().task();
+    syncState();
+}
+
+// Draws what is pending now (the firmware's screenshot path), then the records.
+FBE_EXPORT(fbe_display_render) void fbe_display_render(void) {
+    if (!g_booted) return;
+    fbe_display_refresh_now();
+    syncState();
+}
+
+// A file of the media store changed on the host (bucket 0 fonts, 1 images):
+// what the firmware does after an upload or a delete (core/S3Server.cpp). The
+// fonts are read again 1.5 s after the last change; the images at the next
+// turn of the LVGL task.
+FBE_EXPORT(fbe_media_changed) void fbe_media_changed(const int bucket, const char* key) {
+    fbe_media_forget_key(bucket, key);
+    if (!g_booted) return;
+    if (bucket == MEDIA_BUCKET_FONTS) fonts_request_reload();
+    else if (bucket == MEDIA_BUCKET_IMAGES) freebutton::ui::mediaImageNotifyChanged();
+}
+
 // setup() of src/main.cpp, up to the script engine: the hardware scan, the
 // configuration ("/config.json" of the host's files), the brokers and the
 // Home Assistant discovery sources. Once per instance. 0 = ok.
@@ -556,6 +669,13 @@ FBE_EXPORT(fbe_device_boot) int fbe_device_boot(void) {
     if (!FreeButton::initializeAllHardware()) {
         // As on the device: without a module there is nothing to run on.
         ESP_LOGE(TAG, "Hardware initialization failed!");
+    }
+
+    // setup(): LVGL before the configuration (the fonts are open when the
+    // config names its faces; the widgets are made on the screens).
+    if (!FreeButton::initializeLvgl(FreeButton::getDisplayManager())) {
+        ESP_LOGE(TAG, "LVGL initialization failed!");
+        return -2;
     }
 
     configManager.loadFromFile("/config.json");

@@ -52,6 +52,7 @@ export class FbVirtualInfo extends LitElement {
     super.connectedCallback();
     this._offs.push(
       on('emulator-change', () => { if (this.active) this._measure(); }),
+      on('emulator-face', () => { if (this.active) this._measure(); }),
       on('workspace-change', () => { if (this.active) this.requestUpdate(); }),
     );
   }
@@ -114,6 +115,26 @@ export class FbVirtualInfo extends LitElement {
       </div>`;
   }
 
+  /**
+   * Does what is shown fit the device: LVGL's memory pool (the device's
+   * size) as the firmware in the page has it, and the texts it could not
+   * draw in full because that pool was low. Shown whenever the firmware
+   * draws the displays, running or not.
+   */
+  private _renderFit(i: VirtualInfo) {
+    if (!i.lvgl) return '';
+    const dropped = i.textSkipped + i.textCollapsed > 0;
+    return html`
+      ${this._meter('Display memory free', `${kbNumber(i.lvgl.free)} / ${kb(i.lvgl.total)} · lowest ${kb(i.lvgl.lowest)}`,
+        i.lvgl.total - i.lvgl.free, i.lvgl.total, 'lvgl',
+        'LVGL\'s memory pool, the size the device has: what the displays shown here leave free, and the least that was free. The bar is what is used.')}
+      ${this._row('Texts not drawn in full', html`<span class=${dropped ? 'text-status-orange' : ''} data-field="text-dropped"
+        >${i.textSkipped} skipped · ${i.textCollapsed} without formats</span>`,
+        'Texts the firmware left out, or drew in one format, because the display memory was too low')}
+      ${dropped ? html`<p class="text-[10px] leading-snug text-status-orange" data-field="text-dropped-note">The device would drop text here: its display memory is too low for this page.</p>` : ''}
+    `;
+  }
+
   render() {
     const i = this._info;
     const running = i.status === 'running';
@@ -149,6 +170,7 @@ export class FbVirtualInfo extends LitElement {
           ${this._row(`/${CONFIG_KEY}`, html`<span data-field="source-config">${this._source(CONFIG_KEY)}</span>`)}
         `}
 
+        ${this._renderFit(i)}
         <div class="border-t border-white/10"></div>
         ${this._row('MQTT', html`<span data-field="mqtt" class=${i.mqtt === 'live-publish' ? 'text-status-orange' : ''}>${MQTT_WORDS[i.mqtt]}${i.mqtt === 'offline' ? '' : ` (${LINK_WORDS[i.mqttLink]})`}</span>${brokers
           ? html`<span class="text-gray-200"> · </span><span data-field="brokers">${brokers}</span>` : ''}`,

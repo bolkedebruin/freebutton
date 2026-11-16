@@ -11,15 +11,22 @@
  *   emu.broker(0).inject('home/temp', '21.5');   // a message from the broker
  *   emu.stop();
  *
- * Nothing here draws: a renderer follows emu.state. Nothing leaves the page:
- * stage 1 has only the in-page MockBroker. See docs/EMULATOR.md.
+ * The displays are drawn by the firmware's own LVGL in the wasm:
+ *
+ *   const emu = await Emulator.create({ config, files, media });   // fonts, images
+ *   attachCanvas(emu, 'main', canvas);           // the device's pixels, 1:1 (canvas.ts)
+ *   emu.layout('main');                          // where each config entry is, in pixels
+ *
+ * Without run() it shows the configured state (the design-time preview).
+ * See docs/EMULATOR.md.
  *
  * The wasm is loaded by create(), on first use; importing this module costs
  * nothing.
  */
 import { RealClock, type Clock, type TimerHandle } from './clock';
-import { DeviceState, type ConnectorKind, type SensorSpec, type StateChange } from './device-state';
-import type { EmulatorHost, KeyEventName, LogLevel, PublishKind, PublishOrigin, ScriptErrorWhere } from './host';
+import { DeviceState, type ConnectorKind, type LayoutRect, type SensorSpec, type StateChange } from './device-state';
+import { MEDIA_BUCKETS, type EmulatorHost, type KeyEventName, type LogLevel, type MediaBucket, type PublishKind, type PublishOrigin, type ScriptErrorWhere } from './host';
+import { MediaCache, placeholderMedia, type MediaSource } from './media';
 import { LIMIT } from './layout';
 import { MockBroker, type MqttTransport, type TransportState } from './mqtt';
 import {
@@ -34,8 +41,9 @@ export * from './host';
 export * from './mqtt';
 export * from './publish-policy';
 export { frontLedIndex, overlayPages } from './preview-overlay';
-export type { OverlayButton, OverlayImage, OverlayItem, OverlayList, OverlayPage } from './preview-overlay';
 export { LIMIT } from './layout';
+export { MediaCache, placeholderMedia, type MediaListener, type MediaSource } from './media';
+export { attachCanvas, type CanvasContextLike, type CanvasLike, type FrameRect, type FrameSource } from './canvas';
 export { DEFAULT_WASM_URL, EngineInstance, loadEmulatorModule, type WasmSource } from './wasm';
 
 /** The device's JS heap (src/main.cpp). */
@@ -98,6 +106,54 @@ export interface EmulatorStats {
   mqttQueueUsed: number;
   mqttQueueBytes: number;
   running: boolean;
+  /**
+   * LVGL's memory pool (the device's: LV_MEM_SIZE of src/lv_conf.h), as
+   * /api/device "lvglFree": free now, its size, and the least that was free.
+   */
+  lvglFree: number;
+  lvglTotal: number;
+  lvglLowest: number;
+  /** Texts the firmware drew in one format, or not at all, because the pool was low (/api/device "textCollapsed", "textSkipped"). */
+  textCollapsed: number;
+  textSkipped: number;
+  /** Bands LVGL flushed and their pixels, since boot. */
+  flushes: number;
+  flushedPixels: number;
+  /** Bytes of fonts and images the wasm holds; font sizes made so far. */
+  mediaBytes: number;
+  fontInstances: number;
+  /** LVGL animations running now (a list moving to its selection). */
+  animations: number;
+  /** Size of the wasm memory now (it only grows): the emulator's footprint in the page. */
+  wasmMemoryBytes: number;
+}
+
+/** A display of the virtual device. */
+export interface DisplayInfo {
+  /** "main", or "key<position>" for the display of a bar key (position 1..8). */
+  id: string;
+  /** 0 = the main display, 1 + i = key display i (the firmware's order). */
+  index: number;
+  kind: 'main' | 'key';
+  /** Device pixels. */
+  width: number;
+  height: number;
+  /** For a key display: the key's position. */
+  position?: number;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Screenshot {
+  width: number;
+  height: number;
+  /** RGBA, rows top to bottom; every colour is one the 16-bit panel has. */
+  data: Uint8ClampedArray;
 }
 
 export interface EmulatorEvents {
@@ -115,6 +171,10 @@ export interface EmulatorEvents {
   key: (event: { position: number; event: KeyEventName; defaultPrevented: boolean }) => void;
   /** The script no longer runs. */
   exit: (event: { reason: 'stopped' | 'restart' | 'interrupted' | 'panic' }) => void;
+  /** LVGL drew: this rectangle of a display changed (readPixels has the pixels). */
+  frame: (frame: { display: string } & Rect) => void;
+  /** Widgets of a display moved, came or went (layout(display) has them). */
+  layout: (event: { display: string; rects: readonly LayoutRect[] }) => void;
 }
 
 export interface TransportContext {
@@ -173,9 +233,21 @@ export interface EmulatorOptions {
    */
   sampleSensors?: boolean;
   /**
-   * Which keys of the device's images bucket exist (icon rasters
-   * "ico-<name>-<w>x<h>.bin", user files). Default: every key, as after the IDE
-   * saved the config with its rasters.
+   * The device's media store: fonts (bucket "fonts": "medium.ttf",
+   * "semibold.ttf", the files of config.json "style.fonts") and image rasters
+   * (bucket "images": "ico-<name>-<w>x<h>.bin", user files), as the firmware
+   * reads them. A source may answer with a promise: create() waits for the
+   * files the config uses. Pass one MediaCache to every emulator of a page so
+   * a file is fetched once.
+   *
+   * Without it the device has no font files (text is drawn in the firmware's
+   * built-in 12 px font, as on a device whose fonts bucket is empty) and
+   * icons take their room but are not drawn (placeholderMedia).
+   */
+  media?: MediaSource | MediaCache;
+  /**
+   * Only without `media`: which icon rasters of the images bucket exist.
+   * Default: every key.
    */
   mediaExists?: (key: string) => boolean;
   /** What system.freeHeap() reports. Default 40000. */
@@ -206,8 +278,14 @@ export class Emulator {
   private readonly host: EmulatorHost;
   private readonly listeners: Listeners = {
     console: new Set(), log: new Set(), error: new Set(), publish: new Set(), subscribe: new Set(),
-    unsubscribe: new Set(), state: new Set(), key: new Set(), exit: new Set(),
+    unsubscribe: new Set(), state: new Set(), key: new Set(), exit: new Set(), frame: new Set(), layout: new Set(),
   };
+  /** The fonts and images the firmware reads. */
+  readonly media: MediaCache;
+  private displayList: Array<DisplayInfo & { pixels: number }> = [];
+  private displayTimer: TimerHandle | null = null;
+  private displayDue = 0;
+  private stopMedia: (() => void) | null = null;
   private readonly files = new Map<string, Uint8Array>();
   private readonly wall: () => number;
   private readonly budgetMs: number;
@@ -242,28 +320,32 @@ export class Emulator {
       throw new Error(`emulator identity must look like virt_btn_xxxxxx (6 hex digits), not "${identity}"`);
     }
     const module = await loadEmulatorModule(options.wasm);
-    return new Emulator(module, options, identity);
+    const media = options.media instanceof MediaCache
+      ? options.media
+      : new MediaCache(options.media ?? placeholderMedia(options.mediaExists));
+    await askAhead(module, options, identity, media);
+    return new Emulator(module, options, identity, media);
   }
 
-  private constructor(module: WebAssembly.Module, options: EmulatorOptions, identity: string) {
+  private constructor(module: WebAssembly.Module, options: EmulatorOptions, identity: string, media: MediaCache) {
     this.module = module;
+    this.media = media;
     this.options = options;
     this.identity = identity;
     this.clock = options.clock ?? new RealClock();
     this.wall = options.wallClock ?? (() => performance.now());
     this.budgetMs = options.interruptBudgetMs ?? 2000;
-    for (const [path, content] of Object.entries(options.files ?? {})) {
-      this.files.set(normalizePath(path), typeof content === 'string' ? new TextEncoder().encode(content) : content);
-    }
+    for (const [path, content] of deviceFiles(options)) this.files.set(path, content);
 
     const config = typeof options.config === 'string' ? safeParse(options.config) : options.config;
-    // The firmware reads the configuration itself, as the file it is on the device.
-    this.files.set('/config.json', new TextEncoder().encode(
-      typeof options.config === 'string' ? options.config : JSON.stringify(options.config ?? {})));
-    this.state = new DeviceState(config, {
-      connectors: options.connectors, sensors: options.sensors, mediaExists: options.mediaExists,
+    this.state = new DeviceState(config, { connectors: options.connectors, sensors: options.sensors });
+    this.state.subscribe(change => {
+      this.emit('state', change);
+      if (change.kind === 'layout') {
+        const display = this.displayList[change.display];
+        if (display) this.emit('layout', { display: display.id, rects: this.state.layout(change.display) });
+      }
     });
-    this.state.subscribe(change => this.emit('state', change));
     this.host = this.makeHost();
 
     const engine = this.boot();
@@ -287,6 +369,118 @@ export class Emulator {
     });
     if ((options.boot ?? 'restart') === 'restart') this.connectTransports();
     this.startSensors();
+    // A file that arrives or changes later: as an upload to the device.
+    this.stopMedia = media.subscribe((bucket, key) => this.mediaChanged(bucket, key));
+    // The configured state is on the displays when create() resolves.
+    this.enter(() => engine.exports.fbe_display_render());
+    this.scheduleDisplay();
+  }
+
+  // --- displays -------------------------------------------------------------------
+
+  /** The displays of the device: the main display first, then the key displays. */
+  displays(): DisplayInfo[] {
+    return this.displayList.map(({ pixels: _pixels, ...info }) => info);
+  }
+
+  private displayOf(display: string | number): DisplayInfo & { pixels: number } {
+    const found = typeof display === 'number' ? this.displayList[display] : this.displayList.find(d => d.id === display);
+    if (!found) throw new Error(`the virtual device has no display "${display}"`);
+    return found;
+  }
+
+  /**
+   * The pixels of a display as LVGL last drew them: RGBA, rows top to
+   * bottom, of the whole display or of `rect` (clipped to the display). A
+   * copy; reading does not draw. May be called from a 'frame' listener.
+   */
+  readPixels(display: string | number, rect?: Rect): Uint8ClampedArray {
+    const d = this.displayOf(display);
+    const engine = this.engine;
+    const x0 = Math.max(0, Math.min(d.width, Math.floor(rect?.x ?? 0)));
+    const y0 = Math.max(0, Math.min(d.height, Math.floor(rect?.y ?? 0)));
+    const w = Math.max(0, Math.min(d.width - x0, Math.floor(rect?.width ?? d.width)));
+    const h = Math.max(0, Math.min(d.height - y0, Math.floor(rect?.height ?? d.height)));
+    const out = new Uint8ClampedArray(w * h * 4);
+    if (!engine || d.pixels === 0) return out;
+    const memory = engine.bytes();
+    if (w === d.width) {
+      out.set(memory.subarray(d.pixels + y0 * d.width * 4, d.pixels + (y0 + h) * d.width * 4));
+      return out;
+    }
+    for (let row = 0; row < h; row++) {
+      const from = d.pixels + ((y0 + row) * d.width + x0) * 4;
+      out.set(memory.subarray(from, from + w * 4), row * w * 4);
+    }
+    return out;
+  }
+
+  /**
+   * Draws what is pending now, without waiting for LVGL's refresh period
+   * (33 ms), as the firmware does before it takes a screenshot.
+   */
+  render(): void {
+    this.assertNotInEngine('render');
+    const engine = this.requireEngine();
+    this.enter(() => engine.exports.fbe_display_render());
+    this.afterEntry();
+  }
+
+  /** A display as it is after everything pending is drawn (render()). */
+  screenshot(display: string | number): Screenshot {
+    this.render();
+    const d = this.displayOf(display);
+    return { width: d.width, height: d.height, data: this.readPixels(d.index) };
+  }
+
+  /**
+   * Where the widgets of a display are, in device pixels, each with the
+   * `ref` of its config.json entry: for outlines, hit tests and drag
+   * handles over the canvas. From LVGL's own layout (lv_obj_get_coords).
+   */
+  layout(display: string | number): readonly LayoutRect[] {
+    return this.state.layout(this.displayOf(display).index);
+  }
+
+  /** @internal For tests of the firmware's low-memory paths: takes bytes out of LVGL's pool (0 gives them back). Returns what is free. */
+  holdLvglMemory(bytes: number): number {
+    this.assertNotInEngine('holdLvglMemory');
+    const engine = this.requireEngine();
+    return this.enter(() => engine.exports.fbe_lvgl_hold(bytes)) ?? 0;
+  }
+
+  private mediaChanged(bucket: MediaBucket, key: string): void {
+    if (this.disposed) return;
+    if (this.depth > 0) {
+      queueMicrotask(() => this.mediaChanged(bucket, key));
+      return;
+    }
+    const engine = this.engine;
+    if (!engine) return;
+    engine.withString(key, ptr => this.enter(() => engine.exports.fbe_media_changed(MEDIA_BUCKETS.indexOf(bucket), ptr)));
+    this.afterEntry();
+  }
+
+  /** The LVGL task: runs when LVGL has a timer due (a refresh, an animation step, the clock). */
+  private scheduleDisplay(): void {
+    const engine = this.engine;
+    if (!engine || this.disposed) return;
+    const wait = engine.exports.fbe_display_wait() >>> 0;
+    if (wait === 0xffffffff) {
+      this.cancel('displayTimer');
+      return;
+    }
+    const due = this.clock.now() + wait;
+    if (this.displayTimer !== null && this.displayDue <= due) return;
+    this.cancel('displayTimer');
+    this.displayDue = due;
+    this.displayTimer = this.clock.setTimer(() => {
+      this.displayTimer = null;
+      const now = this.engine;
+      if (!now || this.disposed) return;
+      this.enter(() => now.exports.fbe_display_task());
+      this.scheduleDisplay();
+    }, wait);
   }
 
   // --- events --------------------------------------------------------------------
@@ -502,16 +696,22 @@ export class Emulator {
         jsHeapUsed: 0, jsHeapFree: 0, jsHeapSize: this.options.heapBytes ?? DEVICE_HEAP_BYTES, timers: 0,
         timerSlots: this.limits.timers, subscriptions: 0, mqttDropped: 0, mqttQueueUsed: 0,
         mqttQueueBytes: this.limits.mqttQueueBytes, running: false,
+        lvglFree: 0, lvglTotal: 0, lvglLowest: 0, textCollapsed: 0, textSkipped: 0, flushes: 0, flushedPixels: 0,
+        mediaBytes: 0, fontInstances: 0, animations: 0, wasmMemoryBytes: 0,
       };
     }
     if (this.depth > 0 && this.lastStats) return this.lastStats;
-    const ptr = engine.exports.fbe_alloc(40);
+    const ptr = engine.exports.fbe_alloc(80);
     engine.exports.fbe_stats(ptr);
-    const v = new Uint32Array(engine.exports.memory.buffer.slice(ptr, ptr + 40));
+    engine.exports.fbe_lvgl_stats(ptr + 40);
+    const v = new Uint32Array(engine.exports.memory.buffer.slice(ptr, ptr + 80));
     engine.exports.fbe_free(ptr);
     return this.lastStats = {
       jsHeapUsed: v[0]!, jsHeapFree: v[1]!, jsHeapSize: v[2]!, timers: v[3]!, timerSlots: v[4]!,
       mqttDropped: v[5]!, mqttQueueUsed: v[6]!, mqttQueueBytes: v[7]!, subscriptions: v[8]!, running: v[9] !== 0,
+      lvglFree: v[10]!, lvglTotal: v[11]!, lvglLowest: v[12]!, flushes: v[13]!, flushedPixels: v[14]!,
+      textCollapsed: v[15]!, textSkipped: v[16]!, mediaBytes: v[17]!, fontInstances: v[18]!, animations: v[19]!,
+      wasmMemoryBytes: engine.exports.memory.buffer.byteLength,
     };
   }
 
@@ -563,6 +763,9 @@ export class Emulator {
     for (const transport of this.transports) transport.disconnect();
     this.cancel('keyTimer');
     this.cancel('coldConnectTimer');
+    this.cancel('displayTimer');
+    this.stopMedia?.();
+    this.stopMedia = null;
     this.engine = null;
     for (const set of Object.values(this.listeners)) set.clear();
   }
@@ -585,6 +788,7 @@ export class Emulator {
     // setup(): hardware scan, config.json, brokers, discovery sources.
     this.enter(() => x.fbe_device_boot());
     if (!this.engine) throw new Error('emulator: the firmware did not start');
+    this.displayList = readDisplays(engine);
     return engine;
   }
 
@@ -625,6 +829,7 @@ export class Emulator {
   private afterEntry(): void {
     if (this.depth > 0) return;
     this.flushConsole();
+    this.scheduleDisplay();
     if (this.interrupted) {
       this.interrupted = false;
       this.emit('error', {
@@ -710,7 +915,7 @@ export class Emulator {
 
   // --- timers -----------------------------------------------------------------------------
 
-  private cancel(which: 'keyTimer' | 'loopTimer' | 'sensorTimer' | 'coldConnectTimer'): void {
+  private cancel(which: 'keyTimer' | 'loopTimer' | 'sensorTimer' | 'coldConnectTimer' | 'displayTimer'): void {
     const handle = this[which];
     if (handle !== null) this.clock.clearTimer(handle);
     this[which] = null;
@@ -721,6 +926,7 @@ export class Emulator {
     this.cancel('loopTimer');
     this.cancel('sensorTimer');
     this.cancel('coldConnectTimer');
+    this.cancel('displayTimer');
   }
 
   /** One timer for the next loop pass, at the earliest time anything asked for. */
@@ -751,6 +957,7 @@ export class Emulator {
     }
     // afterEntry would ask for another pass; this pass already knows when.
     this.flushConsole();
+    this.scheduleDisplay();
     if (this.interrupted || this.pendingStop) {
       this.inbox = [];
       this.afterEntry();
@@ -827,6 +1034,7 @@ export class Emulator {
     if (this.depth > 0) tell();
     else this.enter(tell);
     this.scheduleLoop(0);
+    if (this.depth === 0) this.scheduleDisplay();
   }
 
   // --- the host the wasm calls ----------------------------------------------------------------
@@ -846,7 +1054,14 @@ export class Emulator {
   private makeHost(): EmulatorHost {
     return {
       hardware: this.state.hardware,
-      display: this.state.display,
+      media: { read: (bucket, key) => this.media.get(bucket, key) ?? null },
+      display: {
+        state: this.state.display.state,
+        frame: (display, x, y, width, height) => {
+          const info = this.displayList[display];
+          if (info) this.emit('frame', { display: info.id, x, y, width, height });
+        },
+      },
       mqtt: {
         // The transports connect by the emulator's boot mode (connectTransports);
         // what the firmware's client asked for is kept for them (lastWill).
@@ -913,6 +1128,79 @@ export class Emulator {
       keyEvent: (position, event, defaultPrevented) => this.emit('key', { position, event, defaultPrevented }),
     };
   }
+}
+
+/** The device's files: what the options give, and config.json as the firmware reads it. */
+function deviceFiles(options: EmulatorOptions): Map<string, Uint8Array> {
+  const files = new Map<string, Uint8Array>();
+  for (const [path, content] of Object.entries(options.files ?? {})) {
+    files.set(normalizePath(path), typeof content === 'string' ? new TextEncoder().encode(content) : content);
+  }
+  files.set('/config.json', new TextEncoder().encode(configText(options)));
+  return files;
+}
+
+function configText(options: EmulatorOptions): string {
+  return typeof options.config === 'string' ? options.config : JSON.stringify(options.config ?? {});
+}
+
+function readDisplays(engine: EngineInstance): Array<DisplayInfo & { pixels: number }> {
+  const x = engine.exports;
+  const out: Array<DisplayInfo & { pixels: number }> = [];
+  const ptr = x.fbe_alloc(16);
+  const count = x.fbe_display_count();
+  for (let index = 0; index < count; index++) {
+    if (!x.fbe_display_info(index, ptr)) continue;
+    const v = new Int32Array(x.memory.buffer.slice(ptr, ptr + 16));
+    const position = v[2]! * 2 + 1 + v[3]!;
+    out.push(v[2]! < 0
+      ? { id: 'main', index, kind: 'main', width: v[0]!, height: v[1]!, pixels: x.fbe_display_pixels(index) }
+      : { id: `key${position}`, index, kind: 'key', width: v[0]!, height: v[1]!, position, pixels: x.fbe_display_pixels(index) });
+  }
+  x.fbe_free(ptr);
+  return out;
+}
+
+/**
+ * Which fonts and images does this config make the firmware open? The
+ * firmware answers: it is started once on the side (no broker, no listener
+ * hears of it), and what it asked the media source for is awaited. Again
+ * while that brought new requests (a font's fallback). Only for a source
+ * that answers later; a cache that already has the config's files skips it.
+ */
+async function askAhead(module: WebAssembly.Module, options: EmulatorOptions, identity: string, media: MediaCache): Promise<void> {
+  const text = configText(options);
+  if (!media.needsAsking(text)) return;
+  const files = deviceFiles(options);
+  const config = typeof options.config === 'string' ? safeParse(options.config) : options.config;
+  const now = (): number => options.clock?.now() ?? Date.now();
+  for (let round = 0; round < 4; round++) {
+    const state = new DeviceState(config, { connectors: options.connectors, sensors: options.sensors });
+    const host: EmulatorHost = {
+      hardware: state.hardware,
+      media: { read: (bucket, key) => media.get(bucket, key) ?? null },
+      display: { state: () => undefined, frame: () => undefined },
+      mqtt: { start: () => undefined, publish: () => true, subscribe: () => undefined, unsubscribe: () => undefined },
+      system: { deviceId: () => identity, freeHeap: () => options.freeHeapBytes ?? 40000, nowMs: now, shouldInterrupt: () => false },
+      files: { read: path => files.get(normalizePath(path)) ?? null },
+      console: { write: () => undefined, log: () => undefined, scriptError: () => undefined },
+      keyEvent: () => undefined,
+    };
+    try {
+      const engine = new EngineInstance(module, host);
+      if (engine.exports.fbe_init(options.heapBytes ?? DEVICE_HEAP_BYTES) !== 0) return;
+      state.setSwitchPins(engine.exports.fbe_switch_pin(0), engine.exports.fbe_switch_pin(1));
+      engine.exports.fbe_device_boot();
+      engine.exports.fbe_display_render();
+    } catch (error) {
+      // The real start reports what is wrong.
+      if (!(error instanceof WebAssembly.RuntimeError)) throw error;
+      return;
+    }
+    if (media.pending === 0) break;
+    await media.settle();
+  }
+  media.noteSettled(text);
 }
 
 function normalizePath(path: string): string {

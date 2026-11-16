@@ -47,6 +47,7 @@ import {
 import { checkTtf, MAX_FONT_BYTES } from './ttf-check';
 import { fontWarnings, hasFontTable, isSystemFontSrc, SYSTEM_FONTS, validFontSrc } from './font-config';
 import { fontLoader, wireFontLoader } from './font-loader';
+import { virtualMedia } from './virtual-media';
 import { iconSizeSlots, iconTable } from './icon-raster';
 import { ICON_MANIFEST_KEY, readIconSources, setIconSources, syncIcons, type IconSyncDeps, type IconSyncResult } from './icon-sync';
 import { prepareSvg, rasterizeSvg, SvgError } from './icon-render';
@@ -160,7 +161,20 @@ export class Workspace {
   private preview = new ConfigPreview(() =>
     this.currentKey === CONFIG_KEY && this.deps?.editor.isReady() ? this.deps.editor.getCode() : null);
 
+  /** The stored config.json as last read or written; null: there is none. */
+  private storedConfig: string | null = null;
+
   // ---- public API --------------------------------------------------------
+
+  /**
+   * config.json as the virtual device shows it: the editor's text while it
+   * is the open file (unsaved edits included), else the stored text. Null:
+   * no config.json is loaded. Nothing is asked of the device for this.
+   */
+  configText(): string | null {
+    const draft = this.currentKey === CONFIG_KEY && this.deps?.editor.isReady() ? this.deps.editor.getCode() : null;
+    return draft ?? this.storedConfig;
+  }
 
   snapshot(): WorkspaceSnapshot {
     return {
@@ -271,6 +285,15 @@ export class Workspace {
       return await this.backend().read(normalizeKey(rawKey));
     } catch (err) {
       this.note(`Could not read ${displayPath(normalizeKey(rawKey))}: ${describeError(err)}`, 'error');
+      return null;
+    }
+  }
+
+  /** As readText, but a file that cannot be read is null without a word (the virtual device looks for an icon's SVG). */
+  async readQuietly(rawKey: string): Promise<string | null> {
+    try {
+      return await this.backend().read(normalizeKey(rawKey));
+    } catch {
       return null;
     }
   }
@@ -422,6 +445,7 @@ export class Workspace {
       await this.listQuietly();
       return true;
     });
+    if (removed && key.endsWith('.svg')) virtualMedia.iconsChanged();
     if (removed && key.endsWith('.svg') && this.mode === 'device' && this.storedUsesIcons) void this.syncIcons();
     if (removed && key === this.currentKey) {
       // The open file is gone: drop its buffer and go back to the boot script.
@@ -473,6 +497,7 @@ export class Workspace {
       }
       this.note(`Uploaded ${displayPath(key)} (${bytes} bytes). Use it in config.json: "icons": {"<name>": "${displayPath(key)}"}`, 'result');
       await this.listQuietly();
+      virtualMedia.iconsChanged();
       // A replaced SVG that config.json already uses: the device needs new rasters.
       if (this.mode === 'device' && this.storedUsesIcons) void this.syncIcons();
       return key;
@@ -586,6 +611,7 @@ export class Workspace {
         return null;
       }
       this.note(`Uploaded fonts/${key} (${bytes.length} bytes); the device reloads its fonts`, 'result');
+      virtualMedia.changed(FONTS_BUCKET, key, bytes);
       for (const w of check.warnings) this.note(`fonts/${key}: ${w}`, 'warn');
       await this.listReadOnly(FONTS_BUCKET);
       return key;
@@ -609,6 +635,7 @@ export class Workspace {
         return false;
       }
       this.note(`Deleted fonts/${key}`, 'info');
+      virtualMedia.changed(FONTS_BUCKET, key, null);
       await this.listReadOnly(FONTS_BUCKET);
       return true;
     });
@@ -819,8 +846,15 @@ export class Workspace {
     const result = await syncIcons(cfg, {
       readSvg: async (key) => (await getObject(base, key))?.text ?? null,
       listImages: async () => (await listObjects(base, { bucket: IMAGES_BUCKET })).objects,
-      putImage: async (key, bytes) => { await putObject(base, key, bytes, IMAGES_BUCKET); },
-      deleteImage: (key) => deleteObject(base, key, IMAGES_BUCKET),
+      // The virtual device follows each raster as the real one does.
+      putImage: async (key, bytes) => {
+        await putObject(base, key, bytes, IMAGES_BUCKET);
+        virtualMedia.changed(IMAGES_BUCKET, key, bytes);
+      },
+      deleteImage: async (key) => {
+        await deleteObject(base, key, IMAGES_BUCKET);
+        virtualMedia.changed(IMAGES_BUCKET, key, null);
+      },
       rasterize: this.deps?.rasterize ?? rasterizeSvg,
       log,
       readManifest: async () => (await getObject(base, ICON_MANIFEST_KEY))?.text ?? null,
@@ -842,6 +876,8 @@ export class Workspace {
       // Previews draw with the device's fonts (when the browser can).
       wireFontLoader();
       void fontLoader.setDevice(this.mode === 'device' ? this.base : null);
+      virtualMedia.setDevice(this.mode === 'device' ? this.base : null);
+      this.storedConfig = null;
       if (this.files.some(f => f.key === CONFIG_KEY)) {
         try {
           const text = await this.backend().read(CONFIG_KEY);
@@ -966,6 +1002,7 @@ export class Workspace {
 
   /** Show a config.json text on the virtual device; returns it parsed (null if invalid). */
   private applyConfig(text: string): unknown {
+    this.storedConfig = text;
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);

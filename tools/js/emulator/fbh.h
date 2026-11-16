@@ -1,7 +1,7 @@
 //
 // fbh.h - what fb-emulator.wasm imports from its host (wasm module "env").
 //
-// Since stage 2 the device above this line is the firmware's own code: the
+// The device above this line is the firmware's own code: the
 // script bindings, ConfigManager and the components, the MQTT brokers, Home
 // Assistant discovery, the hardware scan. What is left for the host is the
 // outside world:
@@ -10,8 +10,11 @@
 //   - the virtual hardware: which I2C addresses answer, the port expanders'
 //     pins (module signature, key switches), sensor readings, the LED strip
 //   - the MQTT transport of each broker
-//   - the display: one record per widget, with what the firmware decided to
-//     show (fbh_state, JSON; tools/js/emulator/ui_shim.cpp writes them)
+//   - the media store's files (fonts, image rasters)
+//   - the displays: LVGL draws them in the wasm (display.cpp); the host is
+//     told which part of a frame buffer changed (fbh_frame) and gets one
+//     record per widget with what it shows and where (fbh_state, JSON;
+//     records.cpp writes them)
 //
 // The host is web/src/js/emulator/wasm.ts. Strings are pointer + length into
 // the wasm memory unless the name says otherwise; the host copies what it
@@ -50,10 +53,11 @@ FBH_IMPORT(fbh_free_heap) uint32_t fbh_free_heap(void);
 // block from fbe_alloc() with its bytes, *len set; 0 when there is no such
 // file. The caller frees the block.
 FBH_IMPORT(fbh_file_read) uint8_t* fbh_file_read(const char* path, size_t path_len, uint32_t* len);
-// Whether the images bucket has that key (an icon raster "ico-<name>-<w>x<h>.bin"
-// or a user file). 0: the item shows nothing, as on the device.
-FBH_IMPORT(fbh_media_exists) int fbh_media_exists(const char* key, size_t len);
-
+// The media store (fonts, images; src/media/media_store.h buckets 0 fonts,
+// 1 images, 2 render). The size of a file in bytes, -1 when the bucket has no
+// such key; then its bytes, copied to dst (1 = done). The wasm keeps the copy.
+FBH_IMPORT(fbh_media_size) int32_t fbh_media_size(int bucket, const char* key, size_t key_len);
+FBH_IMPORT(fbh_media_read) int fbh_media_read(int bucket, const char* key, size_t key_len, uint8_t* dst, uint32_t size);
 // --- the virtual hardware --------------------------------------------------------
 // Does a device acknowledge `address` on I2C bus `bus` (0 = sensors, 1 = the
 // connectors' port expanders, 0x20 + connector)?
@@ -69,7 +73,10 @@ FBH_IMPORT(fbh_sensor_read) float fbh_sensor_read(int what);
 FBH_IMPORT(fbh_led) void fbh_led(int index, int r, int g, int b);
 
 // --- the display -------------------------------------------------------------------
-// One record of what the device shows, as JSON (ui_shim.cpp documents each).
+// A display's frame buffer changed in this rectangle (display: 0 = the main
+// display, 1 + i = key display i; fbe_display_pixels has the pixels).
+FBH_IMPORT(fbh_frame) void fbh_frame(int display, int x, int y, int width, int height);
+// One record of what the device shows, as JSON (records.cpp documents each).
 enum {
     FBH_STATE_DEVICE = 0,     // name, timezone, brokers, fonts, the resolved styles
     FBH_STATE_ITEM = 1,       // a display item
@@ -80,6 +87,7 @@ enum {
     FBH_STATE_CLOCK = 6,
     FBH_STATE_PAGE = 7,       // {"page": n}: the shown page of the main display
     FBH_STATE_SENSOR = 8,     // a sensor of the device
+    FBH_STATE_LAYOUT = 9,     // where the widgets of one display are (lv_obj_get_coords)
 };
 FBH_IMPORT(fbh_state) void fbh_state(int kind, const char* json, size_t len);
 

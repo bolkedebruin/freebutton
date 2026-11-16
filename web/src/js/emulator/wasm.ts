@@ -6,12 +6,12 @@
  * Emscripten loader script. It is fetched and compiled on first use, never
  * at IDE start, and the compiled module is kept for later instances.
  *
- * Imports ("env", tools/js/emulator/fbh.h): time, console, files, the
- * virtual hardware, the MQTT transport, and fbh_state: the device's display
- * as JSON records. tools/js/emulator/imports.txt lists them all;
+ * Imports ("env", tools/js/emulator/fbh.h): time, console, files, media, the
+ * virtual hardware, the MQTT transport, fbh_frame (LVGL drew into a display's
+ * frame buffer) and fbh_state (the widgets as JSON records). tools/js/emulator/imports.txt lists them all;
  * emulator-seam.test.ts checks that this file provides exactly that list.
  */
-import { STATE_KIND, type EmulatorHost, type KeyEventName, type LogLevel, type PublishKind, type ScriptErrorWhere } from './host';
+import { MEDIA_BUCKETS, STATE_KIND, type EmulatorHost, type KeyEventName, type LogLevel, type PublishKind, type ScriptErrorWhere } from './host';
 
 /** Where the wasm comes from: bytes, a compiled module, or a URL to fetch. */
 export type WasmSource = ArrayBuffer | Uint8Array | WebAssembly.Module | string;
@@ -67,6 +67,23 @@ export interface EngineExports {
   fbe_mqtt_connected(broker: number, connected: number): void;
   fbe_mqtt_message(broker: number, topic: number, topicLen: number, payload: number, payloadLen: number): number;
   fbe_utc_offset(utcSeconds: number): number;
+  // The displays (tools/js/emulator/display.cpp): 0 = the main display, 1 + i = key display i.
+  fbe_display_count(): number;
+  /** out: int32[4] = width, height, connector (-1: the main display), side. */
+  fbe_display_info(display: number, out: number): number;
+  /** RGBA, width * height * 4 bytes; it never moves. */
+  fbe_display_pixels(display: number): number;
+  fbe_display_invalidate(display: number): void;
+  /** One turn of the firmware's LVGL task. */
+  fbe_display_task(): void;
+  /** ms until LVGL has a timer to run; 0xFFFFFFFF = none. */
+  fbe_display_wait(): number;
+  /** Draws what is pending now. */
+  fbe_display_render(): void;
+  /** out: uint32[10] (display.cpp fbe_lvgl_stats). */
+  fbe_lvgl_stats(out: number): void;
+  fbe_lvgl_hold(bytes: number): number;
+  fbe_media_changed(bucket: number, key: number): void;
 }
 
 const SCRIPT_ERROR_WHERE: readonly ScriptErrorWhere[] = ['compile', 'load', 'run', 'callback', 'key', 'eval'];
@@ -182,7 +199,19 @@ export class EngineInstance {
         this.view().setUint32(lenOut, data.length, true);
         return ptr;
       },
-      fbh_media_exists: (key, len) => bool(h().hardware.mediaExists(str(key, len))),
+      // The media store: the size (-1 = no such file), then the bytes into the wasm's own block.
+      fbh_media_size: (bucket, key, len) => {
+        const name = MEDIA_BUCKETS[bucket];
+        const data = name ? h().media.read(name, str(key, len)) : null;
+        return data ? data.length : -1;
+      },
+      fbh_media_read: (bucket, key, len, dst, size) => {
+        const name = MEDIA_BUCKETS[bucket];
+        const data = name ? h().media.read(name, str(key, len)) : null;
+        if (!data || data.length !== size) return 0;
+        this.bytes().set(data, dst);
+        return 1;
+      },
 
       // --- the virtual hardware ---
       fbh_i2c_probe: (bus, address) => bool(h().hardware.i2cProbe(bus, address)),
@@ -190,7 +219,8 @@ export class EngineInstance {
       fbh_sensor_read: input => h().hardware.sensorRead(input),
       fbh_led: (index, r, g, b) => h().hardware.led(index, r & 0xff, g & 0xff, b & 0xff),
 
-      // --- the display ---
+      // --- the displays ---
+      fbh_frame: (display, x, y, width, height) => h().display.frame(display, x, y, width, height),
       fbh_state: (kind, json, len) => {
         const name = STATE_KIND[kind];
         if (name) h().display.state(name, JSON.parse(str(json, len)) as unknown);

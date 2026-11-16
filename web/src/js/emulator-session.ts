@@ -18,6 +18,17 @@
  * in-page broker at every start ("offline"); the live modes and what they
  * may publish are emulator/live-session.ts (loaded with the engine).
  *
+ * The face. The virtual device's displays are drawn by the firmware in the
+ * page (emulator/: LVGL in the wasm), also while nothing runs: showPreview()
+ * (the virtual device is on screen) makes an emulator from config.json
+ * without a script, what the device shows at boot, and makes a new one when
+ * config.json changes. face() is the emulator whose displays are shown: the
+ * running one, else that idle one; null while there is none (the page then
+ * draws its own approximation from the config model). The engine and the
+ * media are fetched then, not when the IDE loads.
+ *
+ *   emulator-face     face() or faceInfo() changed
+ *
  * What the script changes is runtime state for drawing. It is never written
  * to config.json: edits of config.json go through config-edit.ts, from the
  * config model, and the virtual device does not offer them while this runs.
@@ -28,7 +39,8 @@ import { getConnectors } from './device-config';
 import { getCode, getEditorView, showRuntimeError } from './editor';
 import { CONFIG_KEY, MAIN_SCRIPT_KEY } from './fs-rules';
 import { workspace } from './workspace';
-import type { Emulator, ScriptError, SensorState } from './emulator';
+import { virtualMedia } from './virtual-media';
+import type { Emulator, MediaCache, MediaSource, ScriptError, SensorState } from './emulator';
 import type { AskRequest, BrokerView, MqttLogEntry, MqttSession, MqttStatus, SessionFile } from './emulator/live-session';
 import type { SocketFactory } from './emulator/mqtt-live';
 
@@ -85,6 +97,29 @@ export interface VirtualInfo {
   timezone: string | null;
   /** Module per connector 0..3: 0 none, 1 bar (two keys), 2 main display. */
   connectors: Array<0 | 1 | 2> | null;
+  /**
+   * LVGL's memory pool as the shown device has it (the device's size): free
+   * now, its size, the least that was free. Null: no display is drawn by the
+   * firmware.
+   */
+  lvgl: { free: number; total: number; lowest: number } | null;
+  /** Texts the firmware drew without their formats (collapsed) or not at all (skipped) because that pool was low. */
+  textCollapsed: number;
+  textSkipped: number;
+}
+
+/** What draws the face of the virtual device. */
+export interface FaceInfo {
+  /**
+   * none     no config.json to draw (the page shows its sample)
+   * loading  the engine or the media are on their way
+   * engine   the firmware's own pixels
+   * failed   the engine could not start: `note` says why
+   */
+  state: 'none' | 'loading' | 'engine' | 'failed';
+  note: string;
+  /** Something to know that is not an error (no font files). */
+  hint: string;
 }
 /** The shortest press given to the firmware's key scan (three scans of 20 ms and a margin). */
 export const MIN_PRESS_MS = 70;
@@ -120,6 +155,10 @@ export class EmulatorSession {
   socket: SocketFactory | undefined;
   securePage: boolean | undefined;
   liveTiming: { backoffMs?: number; keepAliveSec?: number } = {};
+  /** For tests: config.json for the idle preview, instead of the workspace's. */
+  readConfig: (() => string | null) | null = null;
+  /** For tests: where the media comes from, instead of the device or the workspace (virtual-media.ts). */
+  mediaSource: MediaSource | null = null;
 
   private emu: Emulator | null = null;
   private mqtt: MqttSession | null = null;
@@ -137,6 +176,17 @@ export class EmulatorSession {
   private runToken = 0;
   private offs: Array<() => void> = [];
   private unlisten: Array<() => void> | null = null;
+  /** The device as config.json makes it, no script: shown while nothing runs. */
+  private idle: Emulator | null = null;
+  private idleKey = '';
+  private media: MediaCache | null = null;
+  private previewOn = false;
+  private previewQueued = false;
+  private previewToken = 0;
+  private faceState: FaceInfo['state'] = 'none';
+  private faceNote = '';
+  /** The page the idle device shows (the stepper's). */
+  private page = 1;
   private pressedAt = new Map<number, number>();
   private releases = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -151,6 +201,143 @@ export class EmulatorSession {
   /** A script context exists: keys, MQTT and the console reach it. */
   get running(): boolean {
     return this.status === 'running' && !!this.emu;
+  }
+
+  // ---- the face ---------------------------------------------------------------
+
+  /** The emulator whose displays the virtual device shows; null: none (the page draws its approximation). */
+  face(): Emulator | null {
+    if (this.status === 'running' && this.emu && canDraw()) return this.emu;
+    return this.idle;
+  }
+
+  faceInfo(): FaceInfo {
+    const engine = this.face() !== null;
+    return {
+      state: engine ? 'engine' : this.faceState === 'engine' ? 'none' : this.faceState,
+      note: engine ? '' : this.faceNote,
+      hint: engine ? virtualMedia.hint() : '',
+    };
+  }
+
+  /** The virtual device is on screen: draw config.json with the firmware, now and after every change of it. */
+  showPreview(): void {
+    if (this.previewOn) return;
+    this.previewOn = true;
+    this.listen();
+    virtualMedia.onStale = () => this.queuePreview();
+    this.queuePreview();
+  }
+
+  /** The virtual device is gone: nothing is drawn any more. */
+  hidePreview(): void {
+    this.previewOn = false;
+    this.previewToken++;
+    virtualMedia.onStale = null;
+    this.setIdle(null, 'none', '');
+  }
+
+  /**
+   * Show a page: on the idle device (the stepper looks through config.json's
+   * pages) or, while a script runs, on the running one, as the script's own
+   * display.showPage() would.
+   */
+  showPage(page: number): void {
+    this.page = page;
+    const emu = this.face();
+    if (emu) showPageOn(emu, page);
+  }
+
+  /** The main display as the firmware draws it now, at the device's resolution; null: no display is drawn by the firmware. */
+  screenshot(): { name: string; width: number; height: number; rgba: Uint8ClampedArray } | null {
+    const emu = this.face();
+    if (!emu || !emu.displays().some(d => d.id === 'main')) return null;
+    const shot = emu.screenshot('main');
+    return { name: 'main', width: shot.width, height: shot.height, rgba: shot.data };
+  }
+
+  private queuePreview(): void {
+    if (!this.previewOn || this.previewQueued) return;
+    this.previewQueued = true;
+    queueMicrotask(() => {
+      this.previewQueued = false;
+      void this.refreshPreview();
+    });
+  }
+
+  private setIdle(emu: Emulator | null, state: FaceInfo['state'], note: string, key = ''): void {
+    const old = this.idle;
+    if (old === emu && state === this.faceState && note === this.faceNote) return;
+    this.idle = emu;
+    this.idleKey = emu ? key : '';
+    this.faceState = state;
+    this.faceNote = note;
+    if (old && old !== emu) old.dispose();
+    emit('emulator-face');
+  }
+
+  /** Bring the idle device in line with config.json as the workspace has it now. */
+  private async refreshPreview(): Promise<void> {
+    // While a script runs its device is the one shown; Stop comes back here.
+    if (!this.previewOn || this.status === 'running' || this.status === 'starting') return;
+    const token = ++this.previewToken;
+    const text = this.readConfig ? this.readConfig() : workspace.configText();
+    if (text === null || text.trim() === '') {
+      this.setIdle(null, 'none', '');
+      return;
+    }
+    const why = cannotDraw();
+    drawable = why === '';
+    if (why) {
+      this.setIdle(null, 'failed', why);
+      return;
+    }
+    let config: unknown;
+    try {
+      config = JSON.parse(text);
+    } catch {
+      // Mid-edit: what was drawn stays (the virtual device says the text is not valid JSON).
+      if (!this.idle) this.setIdle(null, 'failed', 'config.json is not valid JSON');
+      return;
+    }
+    const connectors = connectorKinds(getConnectors());
+    const key = `${virtualMedia.generation}|${connectors?.join('') ?? ''}|${text}`;
+    if (this.idle && key === this.idleKey) return;
+    if (!this.idle) this.setIdle(null, 'loading', '');
+    try {
+      const api = this.api ??= await import('./emulator/session-runtime');
+      if (token !== this.previewToken) return;
+      virtualMedia.useConfig(config, path => workspace.readQuietly(path));
+      const emu = await api.Emulator.create({
+        config: text,
+        identity: virtualDeviceId(),
+        media: this.mediaCache(api),
+        // Nothing runs: no sensor reports, no broker but the one in the page.
+        sampleSensors: false,
+        ...(this.wasm ? { wasm: this.wasm } : {}),
+        ...(connectors ? { connectors } : {}),
+      });
+      if (token !== this.previewToken || !this.previewOn) {
+        emu.dispose();
+        return;
+      }
+      if (this.page !== 1) showPageOn(emu, this.page);
+      this.setIdle(emu, 'engine', '', key);
+    } catch (err) {
+      if (token !== this.previewToken) return;
+      this.setIdle(null, 'failed', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** The page's media: one cache for every emulator, so a file is fetched once. */
+  private mediaCache(api: EmulatorModule): MediaCache {
+    if (!this.media) {
+      this.media = new api.MediaCache(this.mediaSource ?? { read: virtualMedia.read });
+      virtualMedia.attach(this.media);
+      // A font that arrived late (or not at all) changes what the face has to say.
+      this.media.subscribe(() => emit('emulator-face'));
+    }
+    return this.media;
   }
 
   /**
@@ -222,6 +409,7 @@ export class EmulatorSession {
       });
       // Other brokers than the run before: offline again. The same: the connection and the mode stay.
       mqtt.configure(source.config);
+      if (source.config.trim() !== '') virtualMedia.useConfig(JSON.parse(source.config), path => workspace.readQuietly(path));
       const connectors = connectorKinds(getConnectors());
       this.emu = await this.api.Emulator.create({
         config: source.config.trim() === '' ? {} : source.config,
@@ -231,6 +419,7 @@ export class EmulatorSession {
         // (emulator/live-session.ts): the mode can change while the script runs.
         publishMode: 'live-publish', allowDiscovery: true, allowRetain: true,
         transport: context => mqtt.transport(context),
+        media: this.mediaCache(api),
         ...(this.wasm ? { wasm: this.wasm } : {}),
         ...(connectors ? { connectors } : {}),
       });
@@ -260,6 +449,7 @@ export class EmulatorSession {
     this.startedAt = Date.now();
     this.built = { version: emu.state.firmware, model: emu.state.model, timezone: emu.state.timezone };
     this.publish();
+    emit('emulator-face');
     emit('emulator-state');
     emit('emulator-mqtt');
   }
@@ -276,6 +466,10 @@ export class EmulatorSession {
     this.mqtt?.stop();
     if (was === 'running') this.say('Virtual device stopped', 'info');
     this.publish();
+    // The idle device is shown again, on the page looked at, with config.json as it is now.
+    if (this.idle) showPageOn(this.idle, this.page);
+    emit('emulator-face');
+    this.queuePreview();
     emit('emulator-state');
     emit('emulator-mqtt');
   }
@@ -294,7 +488,7 @@ export class EmulatorSession {
       return {
         ...base, uptimeSeconds: null, heap: null, bytecode: null, timers: null, subscriptions: null, mqttDropped: null,
         brokers: null, sensors: null, firmware: this.built?.version || null, model: this.built?.model || null,
-        timezone: this.built?.timezone || null, connectors: null,
+        timezone: this.built?.timezone || null, connectors: null, ...this.fit(),
       };
     }
     const stats = emu.stats();
@@ -316,6 +510,16 @@ export class EmulatorSession {
       model: emu.state.model || null,
       timezone: emu.state.timezone || null,
       connectors: [...emu.state.connectors],
+      ...this.fit(stats),
+    };
+  }
+
+  /** Whether what is shown fits the device: LVGL's pool and the texts it could not draw. */
+  private fit(stats = this.face()?.stats()): Pick<VirtualInfo, 'lvgl' | 'textCollapsed' | 'textSkipped'> {
+    if (!stats || !this.face() || stats.lvglTotal <= 0) return { lvgl: null, textCollapsed: 0, textSkipped: 0 };
+    return {
+      lvgl: { free: stats.lvglFree, total: stats.lvglTotal, lowest: stats.lvglLowest },
+      textCollapsed: stats.textCollapsed, textSkipped: stats.textSkipped,
     };
   }
 
@@ -461,12 +665,17 @@ export class EmulatorSession {
       if (!next || next === this.stale) return;
       this.stale = next;
       this.publish();
-    })];
+    }),
+    // config.json as the virtual device shows it changed (stored, or the editor's draft).
+    on('device-config', () => this.queuePreview())];
   }
 
   /** Stop, and stop listening to the page (a session that is thrown away: tests). */
   destroy(): void {
     this.stop();
+    this.hidePreview();
+    this.media = null;
+    virtualMedia.attach(null);
     this.unlisten?.forEach(off => off());
     this.unlisten = null;
     this.used = false;
@@ -533,8 +742,11 @@ export class EmulatorSession {
       this.say(`Virtual device did not start: ${message}`, 'error');
     }
     this.publish();
+    if (this.idle) showPageOn(this.idle, this.page);
+    emit('emulator-face');
     emit('emulator-state');
     emit('emulator-mqtt');
+    this.queuePreview();
   }
 
   private disposeEmulator(): void {
@@ -555,6 +767,38 @@ export class EmulatorSession {
   private publish(): void {
     emit('emulator-change', this.snapshot());
   }
+}
+
+/** Why the firmware's displays cannot be shown in this browser; '' when they can. */
+function cannotDraw(): string {
+  if (typeof WebAssembly !== 'object') return 'this browser has no WebAssembly';
+  try {
+    if (!document.createElement('canvas').getContext('2d')) return 'this browser has no 2D canvas';
+  } catch {
+    return 'this browser has no 2D canvas';
+  }
+  return '';
+}
+
+let drawable: boolean | null = null;
+function canDraw(): boolean {
+  return drawable ??= cannotDraw() === '';
+}
+
+/** For tests that give or take the canvas: ask the browser again. */
+export function _forgetCanDraw(): void {
+  drawable = null;
+}
+
+/**
+ * Show a page of the main display. The firmware changes its page only when
+ * a script asks (display.showPage): an idle device gets a script of that one
+ * line, a running one has it evaluated.
+ */
+function showPageOn(emu: Emulator, page: number): void {
+  if (!emu.state.connectors.includes(2) || emu.state.shownPage === page) return;
+  const code = `fb.main.display.showPage(${Math.trunc(page)})`;
+  if (emu.running) emu.eval(code); else emu.run(code);
 }
 
 /** The file open in the editor as the user sees it, else the stored one. */

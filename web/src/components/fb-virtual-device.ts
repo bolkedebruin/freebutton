@@ -3,7 +3,9 @@ import { customElement, state } from 'lit/decorators.js';
 import {
   emit, on, sameConfigRef, type ConfigRef, type EmulatorSnapshot, type PageConfig, type ConnectorConfig, type PreviewState,
 } from '../js/app-state.js';
-import { emulatorSession } from '../js/emulator-session.js';
+import { emulatorSession, type FaceInfo } from '../js/emulator-session.js';
+import type { Emulator } from '../js/emulator/index.js';
+import { drawScreenshot, saveCanvasPng } from '../js/screenshot.js';
 import './fb-virtual-info.js';
 import { getConfig, getConnectors, getFontTable, getPreviewState, loadDefaultConfig } from '../js/device-config.js';
 import { positionsForConnector } from '../js/config-model.js';
@@ -11,19 +13,25 @@ import { addItem, listKeyFor, removeItem, setItemProps, type PropValue } from '.
 import { applyConfigEdit, ensureConfigOpen, readConfigItem } from '../js/config-session.js';
 import { fieldText, fieldValue, itemFields, KIND_LABEL, type Field } from '../js/item-props.js';
 import { openPopover, type PopoverHandle } from '../js/popover.js';
-import { InfoIcon, PlusIcon, TrashIcon, XIcon } from '../icons/index.js';
+import { CameraIcon, InfoIcon, PlusIcon, TrashIcon, XIcon } from '../icons/index.js';
 import { askConfirm } from './fb-dialog.js';
 import type { FbTftDisplay } from './fb-tft-display.js';
 
-// Front-face geometry (px) used to size the flip container per layout.
-const TFT_H = 219;
-const KEY_ROW_H = 57.1 + 6.72;
+/**
+ * Front-face geometry (CSS px). Every display is drawn a CSS px per device
+ * pixel: the main display 320 x 240 between two 19 px columns, a key's
+ * display 160 x 80. A pane narrower than the face scales the whole face down.
+ */
+const FACE_W = 358;
+const TFT_H = 240 + 6.72;
+const KEY_ROW_H = 86 + 6.72;
 /**
  * The least the face is high: what the info side needs without scrolling
- * (its title, the rows of fb-virtual-info with an error and all gauges).
+ * (its title, the rows of fb-virtual-info with all gauges, the display memory
+ * and the line about dropped texts).
  * The front is usually higher; the flip container takes the higher of the two.
  */
-const MIN_FACE_H = 352;
+const MIN_FACE_H = 392;
 
 // Kept for callers that import it from here.
 export { formatFirmware } from './fb-device-info.js';
@@ -31,6 +39,8 @@ export { formatFirmware } from './fb-device-info.js';
 const INVALID_HINT = 'config.json is not valid JSON: correct it to move or change items here';
 const RUNNING_HINT = 'The script is running: Stop (in the toolbar) to move or change items';
 const NOTICE_MS = 6000;
+/** How long a new entry may take to be drawn by the firmware before its properties are not opened. */
+const DRAWN_WAIT_MS = 1500;
 /** A new text item (a caption line, about 28 px) starts no lower than this (%): it stays on the screen. */
 const NEW_ITEM_MAX_Y = 88;
 
@@ -73,6 +83,13 @@ export class FbVirtualDevice extends LitElement {
   @state() private _runPages: PageConfig[] | null = null;
   /** The page the script showed last (the stepper may look at another one). */
   private _shownPage: number | null = null;
+  /** The emulator whose displays are shown (the firmware's pixels); null: the config model is drawn here. */
+  @state() private _engine: Emulator | null = emulatorSession.face();
+  @state() private _face: FaceInfo = emulatorSession.faceInfo();
+  /** The face's scale: 1, or less in a pane narrower than the face. */
+  @state() private _zoom = 1;
+  private _resize?: ResizeObserver;
+  private _dpr?: MediaQueryList;
 
   private _unsubs: Array<() => void> = [];
   private _noticeTimer?: ReturnType<typeof setTimeout>;
@@ -103,7 +120,16 @@ export class FbVirtualDevice extends LitElement {
         if (e.detail.status !== 'idle' && was === 'idle') this._popover?.close();
       }),
       on('emulator-state', () => this._followEmulator()),
+      on('emulator-face', () => this._followFace()),
     );
+    // On screen: config.json is drawn by the firmware from here on (the engine and the media load now, not with the IDE).
+    emulatorSession.showPage(this.currentPage);
+    emulatorSession.showPreview();
+    if (typeof ResizeObserver === 'function') {
+      this._resize = new ResizeObserver(() => this._fit());
+      this._resize.observe(this);
+    }
+    this._watchScreen();
     this._connectors = getConnectors();
     this._preview = getPreviewState();
     const cfg = getConfig();
@@ -120,8 +146,45 @@ export class FbVirtualDevice extends LitElement {
     this._unsubs = [];
     this._popover?.close();
     if (this._noticeTimer) clearTimeout(this._noticeTimer);
+    this._resize?.disconnect();
+    this._dpr?.removeEventListener('change', this._onScreen);
     // The emulator belongs to this element: without it nothing shows what runs.
     emulatorSession.stop();
+    emulatorSession.hidePreview();
+  }
+
+  private _followFace() {
+    this._engine = emulatorSession.face();
+    this._face = emulatorSession.faceInfo();
+  }
+
+  /** Another screen, or the browser's zoom: a device pixel is another number of screen pixels (square pixels or smoothing). */
+  private _onScreen = () => {
+    this._watchScreen();
+    this.requestUpdate();
+  };
+
+  private _watchScreen() {
+    this._dpr?.removeEventListener('change', this._onScreen);
+    if (typeof window.matchMedia !== 'function') return;
+    this._dpr = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    this._dpr.addEventListener?.('change', this._onScreen);
+  }
+
+  /** The whole face at a smaller scale when the pane is narrower than it. */
+  private _fit() {
+    const width = this.clientWidth;
+    this._zoom = width > 0 && width < FACE_W ? Math.max(0.5, Math.floor(width / FACE_W * 1000) / 1000) : 1;
+  }
+
+  /**
+   * Square pixels only when a device pixel is a whole number of screen
+   * pixels (the face at its own size on a 1x or 2x screen); at any other
+   * scale the browser smooths, as text with uneven pixel widths reads worse.
+   */
+  private get _smooth(): boolean {
+    const perPixel = this._zoom * (window.devicePixelRatio || 1);
+    return Math.abs(perPixel - Math.round(perPixel)) > 0.01;
   }
 
   /** Draw what the running script made of the device; go to the page it shows. */
@@ -142,6 +205,12 @@ export class FbVirtualDevice extends LitElement {
 
   private get _running(): boolean {
     return this._emu.status === 'running';
+  }
+
+  protected willUpdate(changed: Map<PropertyKey, unknown>) {
+    // The device that is shown goes to the page looked at (a page the running device went to itself is the same one).
+    if (changed.has('currentPage')) emulatorSession.showPage(this.currentPage);
+    if (changed.has('_emu')) this._followFace();
   }
 
   protected updated() {
@@ -480,8 +549,27 @@ export class FbVirtualDevice extends LitElement {
       name: `text${n}`, page: this.currentPage, x: Math.min(x, 100 - width), y: Math.min(y, NEW_ITEM_MAX_Y), width, align: 1, boxtype: 1, label: 'Text',
     }), { userEvent: 'input.device.add' });
     if (!result.ok) { this._say(result.error); return; }
-    await this.updateComplete;
-    if (result.ref && this._itemElement(result.ref)) void this._openProperties(result.ref);
+    if (result.ref && await this._whenDrawn(result.ref)) void this._openProperties(result.ref);
+  }
+
+  /** Resolves when the entry is on the front (the firmware draws a new config a moment after the edit); false: it did not come. */
+  private async _whenDrawn(ref: ConfigRef): Promise<boolean> {
+    const until = Date.now() + DRAWN_WAIT_MS;
+    for (;;) {
+      await this.updateComplete;
+      if (this._itemElement(ref)) return true;
+      if (Date.now() > until) return false;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
+
+  /** The main display as a PNG file, at the device's resolution (nothing is written on a device for it). */
+  private _saveScreenshot() {
+    const shot = emulatorSession.screenshot();
+    if (!shot) return;
+    const canvas = document.createElement('canvas');
+    drawScreenshot(canvas, shot);
+    saveCanvasPng(canvas, `virtual-device-page${this.currentPage}.png`);
   }
 
   // ---- pages --------------------------------------------------------------
@@ -553,6 +641,13 @@ export class FbVirtualDevice extends LitElement {
         <div class="flex items-center justify-between">
           <span class="text-[13px] font-medium text-gray-100">Virtual device</span>
           <button
+            class="ml-auto mr-1 flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-gray-100 hover:bg-white/10 hover:text-white cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-purple-80 disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent"
+            title=${this._engine ? 'Save the main display as a PNG, at the device\'s resolution (nothing is written on a device)' : 'No display drawn by the firmware to save'}
+            ?disabled=${!this._engine} @click=${() => this._saveScreenshot()} data-testid="virtual-screenshot">
+            <span class="w-3.5 h-3.5 flex items-center justify-center [&>svg]:w-3.5 [&>svg]:h-3.5">${CameraIcon()}</span>
+            Save screenshot
+          </button>
+          <button
             class="p-1 rounded-lg hover:bg-white/10 cursor-pointer transition-colors text-gray-200 hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-purple-80"
             title="Back to the device" aria-label="Back to the device"
             @click=${() => this._toggleFlip()}
@@ -580,23 +675,38 @@ export class FbVirtualDevice extends LitElement {
     const items = page?.displayItems ?? [];
     const lists = page?.lists ?? [];
     const images = page?.images ?? [];
-    // The running device's clock on this page, and its local time for the hands.
-    const clocks = this._running ? (page as { clocks?: unknown[] } | undefined)?.clocks ?? [] : [];
-    const utcOffset = clocks.length ? emulatorSession.utcOffset() : 0;
-    const slots = this._connectors.filter(c => c.type !== 'empty');
+    const slots = this._slots();
+    const smooth = this._smooth;
     if (slots.length === 0) {
       return html`
         <fb-tft-display .currentPage=${this.currentPage} .displayItems=${items} .deviceName=${this._deviceName}
-          .lists=${lists} .images=${images} .selected=${this._selected} .editable=${this._editable} .running=${this._running} .clocks=${clocks} .utcOffset=${utcOffset}></fb-tft-display>
-        <fb-button-grid .currentPage=${this.currentPage} .buttons=${buttons} .selected=${this._selected} .pressable=${this._running}></fb-button-grid>
+          .lists=${lists} .images=${images} .selected=${this._selected} .editable=${this._editable} .running=${this._running}
+          .engine=${this._engine} .smooth=${smooth}></fb-tft-display>
+        <fb-button-grid .currentPage=${this.currentPage} .buttons=${buttons} .selected=${this._selected} .pressable=${this._running}
+          .engine=${this._engine} .smooth=${smooth}></fb-button-grid>
       `;
     }
     return slots.map(c => c.type === 'display'
       ? html`<fb-tft-display data-connector=${c.id} .currentPage=${this.currentPage} .displayItems=${items}
           .deviceName=${this._deviceName} .lists=${lists} .images=${images} .selected=${this._selected}
-          .editable=${this._editable} .running=${this._running} .clocks=${clocks} .utcOffset=${utcOffset}></fb-tft-display>`
+          .editable=${this._editable} .running=${this._running} .engine=${this._engine} .smooth=${smooth}></fb-tft-display>`
       : html`<fb-button-grid data-connector=${c.id} .currentPage=${this.currentPage} .buttons=${buttons}
-          .positions=${positionsForConnector(c.id)} .selected=${this._selected} .pressable=${this._running}></fb-button-grid>`);
+          .positions=${positionsForConnector(c.id)} .selected=${this._selected} .pressable=${this._running}
+          .engine=${this._engine} .smooth=${smooth}></fb-button-grid>`);
+  }
+
+  /**
+   * The modules drawn, top to bottom: the known layout (the device's
+   * hardware scan, else config.json "info.connectors"); without one, the
+   * modules the firmware in the page made of the config, so that every bar
+   * shows its two key displays on every page. Empty: neither (legacy).
+   */
+  private _slots(): ConnectorConfig[] {
+    const known = this._connectors.filter(c => c.type !== 'empty');
+    if (known.length > 0 || !this._engine) return known;
+    return this._engine.state.connectors
+      .map((kind, id): ConnectorConfig => ({ id, type: kind === 2 ? 'display' : kind === 1 ? 'bar' : 'empty' }))
+      .filter(c => c.type !== 'empty');
   }
 
   /** Subtle note while the preview shows unsaved config.json edits. */
@@ -615,7 +725,7 @@ export class FbVirtualDevice extends LitElement {
    * that has most), and at least what the info side needs.
    */
   private _faceHeight(): number {
-    const slots = this._connectors.filter(c => c.type !== 'empty');
+    const slots = this._slots();
     let h: number;
     if (slots.length === 0) {
       const mostKeys = Math.max(0, ...this._drawnPages().map(p => p.buttons.length));
@@ -631,9 +741,9 @@ export class FbVirtualDevice extends LitElement {
     const currentPageConfig = pages.find(p => p.number === this.currentPage);
 
     return html`
-      <div class="flex flex-col items-center">
+      <div class="flex flex-col items-center" style=${this._zoom === 1 ? '' : `zoom: ${this._zoom};`} data-zoom=${this._zoom}>
         <!-- Page stepper, preview note and the info toggle. -->
-        <div class="relative flex items-center justify-between gap-1 w-[342px] mb-4">
+        <div class="relative flex items-center justify-between gap-1 w-[358px] mb-4">
           ${this._renderStepper(pages)}
           ${this._flipped ? '' : this._renderPreviewHint()}
           <button
@@ -651,12 +761,15 @@ export class FbVirtualDevice extends LitElement {
         </div>
 
         <!-- Flip container -->
-        <div class="device-flip-container w-[342px] ${this._running ? 'fb-device-running' : ''} ${this._running && this._emu.mqtt === 'live-publish' ? 'fb-device-live' : ''}" data-running=${this._running ? 'true' : 'false'} style="height: ${this._faceHeight()}px;">
+        <div class="device-flip-container w-[358px] ${this._running ? 'fb-device-running' : ''} ${this._running && this._emu.mqtt === 'live-publish' ? 'fb-device-live' : ''}" data-running=${this._running ? 'true' : 'false'} style="height: ${this._faceHeight()}px;">
           <div class="device-flip-inner ${this._flipped ? 'flipped' : ''} relative h-full">
             ${this._emu.status === 'starting' && !this._flipped ? html`
               <div class="absolute inset-0 z-10 flex items-center justify-center bg-black/40 pointer-events-none" role="status" data-testid="emu-loading">
                 <span class="px-3 py-1.5 rounded-lg bg-bg-primary border border-purple-80/50 text-xs text-text-default">Loading the virtual device…</span>
               </div>` : ''}
+            ${this._face.state === 'loading' && this._emu.status !== 'starting' && !this._flipped ? html`
+              <div class="absolute right-1 top-1 z-10 px-2 py-1 rounded-md bg-bg-primary/90 border border-white/10 text-[10px] text-gray-100 pointer-events-none"
+                role="status" data-testid="face-loading" title="Until then the display is drawn by the page: the same layout, approximate">Loading the display engine…</div>` : ''}
             <!-- Front face -->
             <div class="device-flip-front w-full font-fira text-[11.2px]" @click=${this._onFrontClick}
               @contextmenu=${this._onContextMenu} @item-menu=${this._onContextMenu} @keydown=${this._onFrontKeyDown}
@@ -672,7 +785,21 @@ export class FbVirtualDevice extends LitElement {
             </div>
           </div>
         </div>
+        ${this._renderFaceNote()}
       </div>
     `;
+  }
+
+  /**
+   * Under the face, only when there is something to know about how it is
+   * drawn: the firmware could not draw it (the page's approximation shows),
+   * or it draws without font files.
+   */
+  private _renderFaceNote() {
+    const failed = this._face.state === 'failed';
+    const text = failed ? `Approximate preview, drawn by the page: ${this._face.note}` : this._face.hint;
+    if (!text || this._flipped) return '';
+    return html`<p class="w-[358px] mt-2 text-[10px] leading-snug truncate ${failed ? 'text-status-orange' : 'text-gray-200'}"
+      data-testid="face-note" data-state=${failed ? 'failed' : 'hint'} title=${text}>${text}</p>`;
   }
 }

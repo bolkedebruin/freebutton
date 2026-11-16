@@ -7,16 +7,21 @@ import { getStyles } from '../js/device-config.js';
 import { fontsizePx, SLOTS, styleFont, unitFont } from '../js/font-config.js';
 import { StyleElement, styleItemPx, type ResolvedStyles } from '../js/style-config.js';
 import { iconView } from './icon-view.js';
-import { fontStyle, richText, runsView, styleColorCss, textStyleCss } from './font-view.js';
-import type { OverlayImage, OverlayItem, OverlayList } from '../js/emulator/preview-overlay.js';
-import type { BoxState, ClockState } from '../js/emulator/device-state.js';
+import { fontStyle, richText, styleColorCss, textStyleCss } from './font-view.js';
+import { attachCanvas } from '../js/emulator/canvas.js';
+import type { Emulator } from '../js/emulator/index.js';
+import type { LayoutRect } from '../js/emulator/device-state.js';
 import {
-  alignAnchor, boxOrigin, clampUnits, dragTo, hitTest, realign, unitRange, unitsAt, SCREEN_W,
-  type PlacedKind, type Rect, type Size, type UnitRange, type Units,
+  alignAnchor, boxOrigin, clampUnits, dragTo, realign, unitRange, unitsAt, SCREEN_H, SCREEN_W,
+  type PlacedKind, type Size, type UnitRange, type Units,
 } from '../js/display-geometry.js';
 
-// The preview screen is 283 px wide for the device's 320 x 240.
-const SCREEN_SCALE = 283 / 320;
+/**
+ * CSS px per device px of the screen as this component lays it out: one.
+ * (The virtual device scales the whole face down when its pane is narrower
+ * than the face; the positions here are measured, so they follow.)
+ */
+const SCREEN_SCALE = 1;
 /** A press that moves less than this (CSS px) is a click, not a drag. */
 export const DRAG_THRESHOLD_PX = 4;
 /** A touch held this long without moving opens the item's menu. */
@@ -54,7 +59,15 @@ interface Press {
  */
 interface Moving extends Placed {
   active: boolean;
+  /** The x and y the drawn box (the layout the firmware gave) stands for. */
+  base: Units;
 }
+
+const PLACED_KINDS: readonly string[] = ['displayitem', 'list', 'image'];
+/** The least height (device px) of the box over an entry: a thin one (an underline only) can still be pointed at. */
+const MIN_BOX_H = 12;
+/** The height of the place holder of an entry the firmware draws nothing of yet (no caption, no value). */
+const EMPTY_BOX_H = 14;
 // Roller row height relative to the font size (about LVGL's line height).
 const ROW_LINE_HEIGHT = 1.25;
 
@@ -82,12 +95,15 @@ export class FbTftDisplay extends LitElement {
    */
   @property({ type: Boolean }) editable = true;
   /**
-   * The boxes of the drawn entries in device px, when what draws the screen
-   * supplies them (a renderer that is not this component's DOM). Null: the
-   * press is matched to the element under it and the height is measured
-   * from that element (_itemEl, _placed: the only places that ask the DOM).
+   * The emulator that draws this display (the firmware's LVGL in the page):
+   * its main display is shown on a canvas, device pixel for device pixel,
+   * and every entry it laid out gets a transparent box over it for the
+   * pointer, the keyboard and the selection outline. Null: the screen is
+   * drawn here from the config model (an approximation, same layout).
    */
-  @property({ attribute: false }) itemRects: Array<{ ref: ConfigRef; rect: Rect }> | null = null;
+  @property({ attribute: false }) engine: Emulator | null = null;
+  /** The face is drawn at a scale that is not a whole number of screen pixels: smooth instead of square pixels. */
+  @property({ type: Boolean }) smooth = false;
   /**
    * A script runs in the virtual device: the screen is the device's, not the
    * editor's. A press on its left or right half is the main display's left or
@@ -95,10 +111,11 @@ export class FbTftDisplay extends LitElement {
    * as long as the pointer is down; nothing is selected or moved.
    */
   @property({ type: Boolean }) running = false;
-  /** The analog clock the running device draws on this page (the emulator's record). */
-  @property({ attribute: false }) clocks: ClockState[] = [];
-  /** Seconds east of UTC of the running device's local time (its time zone rule), for the clock's hands. */
-  @property({ type: Number }) utcOffset = 0;
+  /** Where the firmware laid out the entries of the shown page (device px). */
+  @state() private _layout: readonly LayoutRect[] = [];
+  private _attached: { engine: Emulator; canvas: HTMLCanvasElement; detach: () => void; offLayout: () => void } | null = null;
+  /** The engine's display could not be shown on a canvas: this component draws the screen itself. */
+  @state() private _canvasFailed: Emulator | null = null;
   /** The half held down now (0 left, 1 right); null: none. */
   @state() private _mainDown: 0 | 1 | null = null;
   @state() private timeStr = '';
@@ -125,22 +142,78 @@ export class FbTftDisplay extends LitElement {
     this.removeEventListener('click', this._onClickCapture, true);
     this._endPress();
     this._releaseMain();
+    this._detach();
     if (this._timer) clearInterval(this._timer);
     this._offIcons?.();
     this._offFonts?.();
   }
 
   protected willUpdate(changed: Map<PropertyKey, unknown>) {
-    // The edited config.json came back as the model: it has the new position.
-    if (this._moving && !this._moving.active
-      && (changed.has('displayItems') || changed.has('lists') || changed.has('images'))) {
+    // The edited config.json came back: as the model, or (the firmware draws) as a new layout.
+    if (this._moving && !this._moving.active && (this._drawsEngine()
+      ? changed.has('engine') || changed.has('_layout')
+      : changed.has('displayItems') || changed.has('lists') || changed.has('images'))) {
       this._moving = null;
+    }
+    if (changed.has('engine')) {
+      this._canvasFailed = null;
+      this._layout = this.engine ? this._mainLayout(this.engine) : [];
     }
     if (changed.has('running')) {
       this._endPress();
       this._moving = null;
       if (!this.running) this._releaseMain();
     }
+  }
+
+  protected updated() {
+    this._attach();
+    this._drawGhost();
+  }
+
+  // ---- the firmware's pixels ----------------------------------------------
+
+  private _drawsEngine(): boolean {
+    return !!this.engine && this._canvasFailed !== this.engine;
+  }
+
+  private _mainLayout(engine: Emulator): readonly LayoutRect[] {
+    try { return engine.layout('main'); } catch { return []; }
+  }
+
+  /** Keep the canvas on the engine's main display. */
+  private _attach() {
+    const engine = this._drawsEngine() ? this.engine : null;
+    const canvas = engine ? this.querySelector<HTMLCanvasElement>('canvas[data-display="main"]') : null;
+    if (this._attached && this._attached.engine === engine && this._attached.canvas === canvas) return;
+    this._detach();
+    if (!engine || !canvas) return;
+    try {
+      const detach = attachCanvas(engine, 'main', canvas);
+      const offLayout = engine.on('layout', (event) => {
+        if (event.display === 'main') this._layout = event.rects;
+      });
+      this._attached = { engine, canvas, detach, offLayout };
+    } catch {
+      // No main display, or no 2D canvas: the config model is drawn instead.
+      this._canvasFailed = engine;
+    }
+  }
+
+  private _detach() {
+    this._attached?.detach();
+    this._attached?.offLayout();
+    this._attached = null;
+  }
+
+  /** The dragged entry's pixels inside its moving box, copied once when the drag starts. */
+  private _drawGhost() {
+    const ghost = this.querySelector<HTMLCanvasElement>('canvas[data-ghost]:not([data-drawn])');
+    const main = this._attached?.canvas;
+    const rect = this._moving ? this._layout.find(r => sameConfigRef(r.ref, this._moving!.ref)) : undefined;
+    if (!ghost || !main || !rect) return;
+    ghost.setAttribute('data-drawn', '');
+    ghost.getContext('2d')?.drawImage(main, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height);
   }
 
   // ---- moving items -------------------------------------------------------
@@ -153,47 +226,40 @@ export class FbTftDisplay extends LitElement {
   private _scale(): Units {
     const r = this._screen()?.getBoundingClientRect();
     return r && r.width > 0 && r.height > 0
-      ? { x: r.width / SCREEN_W, y: r.height / (SCREEN_W * 0.75) }
+      ? { x: r.width / SCREEN_W, y: r.height / SCREEN_H }
       : { x: SCREEN_SCALE, y: SCREEN_SCALE };
   }
 
-  /** The entry `ref` with its box: the width the firmware gives it, the height as drawn. */
+  /** The entry `ref` with its box: as the firmware laid it out; else the width its rule gives and the height as drawn. */
   private _placed(ref: ConfigRef, el: HTMLElement | null): Placed | null {
-    const given = this.itemRects?.find(r => sameConfigRef(r.ref, ref))?.rect;
-    const heightPx = given ? given.height : (el?.offsetHeight ?? 0) / SCREEN_SCALE;
+    const laid = this._drawsEngine() ? this._layout.find(r => sameConfigRef(r.ref, ref)) : undefined;
+    const size = (width: number, height: number): Size => (laid ? { width: laid.width, height: laid.height } : { width, height });
+    const heightPx = (el?.offsetHeight ?? 0) / SCREEN_SCALE;
     const item = this.displayItems.find(d => sameConfigRef(d.ref, ref));
     if (item) {
       return {
         ref, kind: 'displayitem', align: item.align, at: { x: item.x, y: item.y },
-        size: { width: Math.trunc(item.width * SCREEN_W / 100), height: heightPx },
+        size: size(Math.trunc(item.width * SCREEN_W / 100), heightPx),
       };
     }
     const list = this.lists.find(l => sameConfigRef(l.ref, ref));
     if (list) {
       return {
         ref, kind: 'list', align: undefined, at: { x: list.x, y: list.y },
-        size: { width: Math.trunc(list.width * SCREEN_W / 100), height: heightPx },
+        size: size(Math.trunc(list.width * SCREEN_W / 100), heightPx),
       };
     }
     const img = this.images.find(m => sameConfigRef(m.ref, ref));
     if (img) {
       return {
         ref, kind: 'image', align: undefined, at: { x: img.x, y: img.y },
-        size: { width: img.width ?? 40, height: img.height ?? 40 },
+        size: size(img.width ?? 40, img.height ?? 40),
       };
     }
     return null;
   }
 
-  private _itemEl(target: EventTarget | null, point?: { clientX: number; clientY: number }): { el: HTMLElement; ref: ConfigRef } | null {
-    if (this.itemRects && point) {
-      const screen = this._screen();
-      const r = screen?.getBoundingClientRect();
-      const scale = this._scale();
-      const hit = r ? hitTest(this.itemRects, { x: (point.clientX - r.left) / scale.x, y: (point.clientY - r.top) / scale.y }) : null;
-      if (!hit || !screen) return null;
-      return { el: this.querySelector<HTMLElement>(`[data-ref="${hit.ref.list}:${hit.ref.index}"]`) ?? screen, ref: hit.ref };
-    }
+  private _itemEl(target: EventTarget | null): { el: HTMLElement; ref: ConfigRef } | null {
     const el = (target as Element | null)?.closest?.<HTMLElement>('[data-ref]');
     const [list, index] = (el?.getAttribute('data-ref') ?? '').split(':');
     const kind = el?.getAttribute('data-ref-kind') as ConfigRef['kind'] | null;
@@ -225,7 +291,7 @@ export class FbTftDisplay extends LitElement {
       this.dispatchEvent(new CustomEvent('main-key-press', { bubbles: true, detail: { side: this._mainDown } }));
       return;
     }
-    const hit = this._itemEl(e.target, e);
+    const hit = this._itemEl(e.target);
     const item = hit ? this._placed(hit.ref, hit.el) : null;
     if (!hit || !item) return;
     this._endPress();
@@ -266,7 +332,7 @@ export class FbTftDisplay extends LitElement {
       p.moved = true;
     }
     const at = dragTo(p.item.kind, p.item.at, { dx, dy }, p.scale, p.range, e.shiftKey);
-    this._moving = { ...p.item, at, active: true };
+    this._moving = { ...p.item, at, active: true, base: p.item.at };
   };
 
   private _onPointerUp = () => {
@@ -310,11 +376,13 @@ export class FbTftDisplay extends LitElement {
 
   /** Ask for the new position to be written (`item-move`); shown here until the model has it. */
   private _commitMove(item: Placed, at: Units) {
+    // A move still on its way: the drawn box stands for the position before it.
+    const base = this._moving && sameConfigRef(this._moving.ref, item.ref) ? this._moving.base : item.at;
     if (at.x === item.at.x && at.y === item.at.y) {
       this._moving = null;
       return;
     }
-    this._moving = { ...item, at, active: false };
+    this._moving = { ...item, at, active: false, base };
     this.dispatchEvent(new CustomEvent('item-move', { bubbles: true, detail: { ref: item.ref, x: at.x, y: at.y } }));
   }
 
@@ -390,16 +458,25 @@ export class FbTftDisplay extends LitElement {
     return `${h} ${v}${shift}`;
   }
 
+  /** Top-left corner (device px) of the entry that moves: where the firmware drew it, shifted by the move. */
+  private _movedOrigin(m: Moving): { left: number; top: number } {
+    const to = boxOrigin(m.kind, m.align, m.at, m.size);
+    const laid = this._drawsEngine() ? this._layout.find(r => sameConfigRef(r.ref, m.ref)) : undefined;
+    if (!laid) return to;
+    const from = boxOrigin(m.kind, m.align, m.base, m.size);
+    return { left: laid.x + to.left - from.left, top: laid.y + to.top - from.top };
+  }
+
   /** The position of the item that moves, next to it (inside the screen). */
   private _renderMoveBadge() {
     const m = this._moving;
     if (!m) return '';
-    const o = boxOrigin(m.kind, m.align, m.at, m.size);
+    const o = this._movedOrigin(m);
     const top = o.top * SCREEN_SCALE;
     const below = (o.top + m.size.height) * SCREEN_SCALE + 3;
     return html`<div class="absolute z-10 px-1.5 py-[3px] rounded bg-purple-90 text-white text-[10px] leading-none font-mono whitespace-nowrap pointer-events-none"
       data-testid="move-position" role="status"
-      style="left: ${px(Math.max(0, Math.min(o.left * SCREEN_SCALE, 283 - 78)))}; top: ${px(top >= 18 ? top - 18 : Math.min(below, 212.25 - 16))};"
+      style="left: ${px(Math.max(0, Math.min(o.left * SCREEN_SCALE, SCREEN_W - 78)))}; top: ${px(top >= 18 ? top - 18 : Math.min(below, SCREEN_H - 16))};"
       >x ${m.at.x} · y ${m.at.y}${m.kind === 'image' ? ' px' : ' %'}</div>`;
   }
 
@@ -424,27 +501,6 @@ export class FbTftDisplay extends LitElement {
    * (src = a raster the IDE cannot show) a dashed box with the key.
    */
   private _renderImage(img: ImageConfig) {
-    // The running device: what the firmware draws. null: nothing (its page is not shown, or no such raster).
-    if ('raster' in img) {
-      const raster = (img as OverlayImage).raster;
-      if (!raster) return '';
-      const box = `left: ${px(img.x * SCREEN_SCALE)}; top: ${px(img.y * SCREEN_SCALE)};`;
-      if (raster.name) {
-        return html`<div class="fb-item absolute flex cursor-pointer" data-image=${img.name} data-firmware-raster=${raster.key}
-          data-ref=${this._refAttr(img.ref)} data-ref-kind="image" ?data-selected=${sameConfigRef(img.ref, this.selected)}
-          tabindex=${img.ref ? 0 : nothing} role="button" aria-label=${this._ariaLabel('Image', img.name, img.x, img.y)}
-          title=${RUNNING_HINT} style="${box} ${this._outline(img.ref)}">
-          ${iconView(raster.name, raster.width ?? img.width ?? 32, raster.height ?? img.height ?? 32, raster.tint, SCREEN_SCALE)}
-        </div>`;
-      }
-      const w = img.width ?? 40;
-      const h = img.height ?? 40;
-      return html`<div class="fb-item absolute flex items-center justify-center border border-dashed border-white/40 text-[9px] text-gray-200 overflow-hidden cursor-pointer"
-        data-image=${img.name} data-firmware-raster=${raster.key} data-ref=${this._refAttr(img.ref)} data-ref-kind="image"
-        ?data-selected=${sameConfigRef(img.ref, this.selected)} tabindex=${img.ref ? 0 : nothing} role="button"
-        aria-label=${this._ariaLabel('Image', img.name, img.x, img.y)} title="images/${raster.key}"
-        style="${box} width: ${px(w * SCREEN_SCALE)}; height: ${px(h * SCREEN_SCALE)}; ${this._outline(img.ref)}">${raster.key}</div>`;
-    }
     // A src raster of unknown size: a 40 x 40 box stands in for it.
     const w = img.width ?? (img.icon ? 0 : 40);
     const h = img.height ?? (img.icon ? 0 : 40);
@@ -475,80 +531,6 @@ export class FbTftDisplay extends LitElement {
     return ref ? `${ref.list}:${ref.index}` : nothing;
   }
 
-  /** CSS position of a box of the running device: its pixels, against the corner its align names. */
-  private _pixelPosition(align: number, x: number, y: number): string {
-    const a = alignAnchor(align);
-    const X = x * SCREEN_SCALE;
-    const Y = y * SCREEN_SCALE;
-    const h = a.h === 0 ? `left: ${px(X)};` : a.h === 1 ? `right: ${px(-X)};` : `left: calc(50% + ${px(X)});`;
-    const v = a.v === 0 ? `top: ${px(Y)};` : a.v === 1 ? `bottom: ${px(-Y)};` : `top: calc(50% + ${px(Y)});`;
-    const shift = a.h === 0.5 || a.v === 0.5
-      ? ` transform: translate(${a.h === 0.5 ? '-50%' : '0'}, ${a.v === 0.5 ? '-50%' : '0'});` : '';
-    return `${h} ${v}${shift}`;
-  }
-
-  /**
-   * A display item of the running device, from what the firmware resolved
-   * (the emulator's BoxState): its pixel box, underline and paddings, and
-   * caption, value and unit as runs in the fonts, sizes and colours it chose
-   * (markup, style and setFont applied, texts cut to its slots). No rule of
-   * the design-time preview is used here.
-   */
-  private _renderBox(item: OverlayItem, box: BoxState) {
-    const S = SCREEN_SCALE;
-    const alignCss = (t: { align: string | null }) => (t.align ? `text-align: ${t.align};` : '');
-    return html`
-      <div class="fb-item absolute cursor-pointer" data-display-item=${item.name ?? item.id ?? ''} data-firmware-box
-        data-ref=${this._refAttr(item.ref)} data-ref-kind="displayitem" ?data-selected=${sameConfigRef(item.ref, this.selected)}
-        tabindex=${item.ref ? 0 : nothing} role="button" aria-label=${this._ariaLabel('Display item', item.name ?? item.label, item.x, item.y)}
-        title=${RUNNING_HINT}
-        style="${this._pixelPosition(box.align, box.x, box.y)} width: ${px(box.width * S)};
-          ${box.underline ? 'border-bottom: 1px solid rgb(170, 170, 170);' : ''}
-          ${box.boxPad !== null ? `padding-bottom: ${px(box.boxPad * S)};` : ''} ${this._outline(item.ref)}">
-        ${box.caption.hidden ? '' : html`<div class="leading-[1.15]" data-caption
-          style="${alignCss(box.caption)} ${box.captionPad !== null ? `padding-bottom: ${px(box.captionPad * S)};` : ''}">${runsView(box.caption.runs, S)}</div>`}
-        <div class="flex items-end">
-          ${box.icon?.name ? html`<span class="mr-[4px] flex" data-icon=${box.icon.name}>${iconView(box.icon.name, box.icon.width ?? 32, box.icon.height ?? 32, box.icon.tint, S)}</span>` : ''}
-          <div class="leading-[1.2] min-w-0 flex-1" data-value style=${alignCss(box.value)}>${runsView(box.value.runs, S)}${box.unit.hidden
-            ? '' : html`<span data-unit>${runsView(box.unit.runs, S)}</span>`}</div>
-        </div>
-      </div>`;
-  }
-
-  /**
-   * The analog clock of the running device: a face in its box, the hands at
-   * the device's local time (its time zone rule, from the emulator).
-   */
-  private _renderClock(clock: ClockState) {
-    const S = SCREEN_SCALE;
-    const local = new Date(Date.now() + this.utcOffset * 1000);
-    const h = local.getUTCHours() % 12;
-    const m = local.getUTCMinutes();
-    const s = local.getUTCSeconds();
-    const hand = (turn: number, length: number, width: number, color: string) => {
-      const a = turn * 2 * Math.PI;
-      return svg`<line x1="50" y1="50" x2=${(50 + Math.sin(a) * length).toFixed(2)} y2=${(50 - Math.cos(a) * length).toFixed(2)}
-        stroke=${color} stroke-width=${width} stroke-linecap="round" />`;
-    };
-    const size = Math.min(clock.width, clock.height) || 100;
-    return html`
-      <div class="absolute pointer-events-none" data-clock=${clock.id} data-time="${h}:${m}"
-        style="${this._pixelPosition(clock.align, clock.x, clock.y)} width: ${px(clock.width * S)}; height: ${px(clock.height * S)};"
-        title="The device's clock (local time)">
-        <svg viewBox="0 0 100 100" width=${px(size * S)} height=${px(size * S)} role="img" aria-label="Clock">
-          <circle cx="50" cy="50" r="47" fill="none" stroke="rgb(170,170,170)" stroke-width="2" />
-          ${Array.from({ length: 12 }, (_, i) => {
-            const a = i / 12 * 2 * Math.PI;
-            return svg`<line x1=${(50 + Math.sin(a) * 40).toFixed(2)} y1=${(50 - Math.cos(a) * 40).toFixed(2)}
-              x2=${(50 + Math.sin(a) * 45).toFixed(2)} y2=${(50 - Math.cos(a) * 45).toFixed(2)} stroke="rgb(170,170,170)" stroke-width="2" />`;
-          })}
-          ${hand((h + m / 60) / 12, 24, 4, '#ffffff')}
-          ${hand((m + s / 60) / 60, 36, 3, '#ffffff')}
-          ${hand(s / 60, 40, 1, '#ffd700')}
-        </svg>
-      </div>`;
-  }
-
   private _updateTime() {
     const now = new Date();
     this.timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -576,11 +558,7 @@ export class FbTftDisplay extends LitElement {
    */
   private _renderList(list: ListConfig, styles: ResolvedStyles) {
     const base = styleFont(styles, StyleElement.List);
-    // The running device: the roller as the firmware resolved it (pixels, font, colours).
-    const roller = (list as OverlayList).roller;
-    const font = roller
-      ? { face: Math.max(0, roller.font.face), px: roller.font.px, configured: true }
-      : list.font ?? { ...base, px: fontsizePx(list.fontSize, base.px) };
+    const font = list.font ?? { ...base, px: fontsizePx(list.fontSize, base.px) };
     // list.selected: the list's font unless the style gives the selected row its own.
     const ls = styles[StyleElement.List] ?? {};
     const sel = styles[StyleElement.ListSelected] ?? {};
@@ -593,15 +571,10 @@ export class FbTftDisplay extends LitElement {
     const { color: _c, ...selText } = sel;
     const { color: _l, ...listText } = ls;
     const fontPx = font.px * SCREEN_SCALE;
-    const rowH = roller ? (roller.font.lineHeight + roller.lineSpace) * SCREEN_SCALE : fontPx * ROW_LINE_HEIGHT;
-    const rows = roller ? roller.rows : list.rows;
-    const selected = roller ? roller.selected : list.selected;
-    const colors = roller
-      ? { color: roller.color, focusColor: roller.selectedBg, focusTextColor: roller.selectedColor }
-      : { color: list.color, focusColor: list.focusColor, focusTextColor: list.focusTextColor };
-    const place = roller
-      ? `left: ${px(roller.x * SCREEN_SCALE)}; top: ${px(roller.y * SCREEN_SCALE)}; width: ${px(roller.width * SCREEN_SCALE)};`
-      : null;
+    const rowH = fontPx * ROW_LINE_HEIGHT;
+    const rows = list.rows;
+    const selected = list.selected;
+    const colors = { color: list.color, focusColor: list.focusColor, focusTextColor: list.focusTextColor };
     const middle = (rows - 1) * rowH / 2;
     const shift = middle - Math.max(0, selected) * rowH;
     const at = this._at(list.ref, list.x, list.y);
@@ -610,8 +583,7 @@ export class FbTftDisplay extends LitElement {
         data-ref=${this._refAttr(list.ref)} data-ref-kind="list" ?data-selected=${sameConfigRef(list.ref, this.selected)}
         tabindex=${list.ref ? 0 : nothing} role="button" aria-label=${this._ariaLabel('List', list.name, at.x, at.y)}
         title=${this.running ? RUNNING_HINT : ITEM_HINT}
-        ?data-firmware-roller=${!!roller}
-        style="${place ?? `left: ${at.x}%; top: ${at.y}%; width: ${list.width}%;`} height: ${px(rows * rowH)}; ${this._outline(list.ref)}
+        style="left: ${at.x}%; top: ${at.y}%; width: ${list.width}%; height: ${px(rows * rowH)}; ${this._outline(list.ref)}
           ${fontStyle(font, SCREEN_SCALE)} line-height: ${px(rowH)};">
         <div class="absolute left-0 right-0 rounded-[6px]" data-list-focus
           style="top: ${px(middle)}; height: ${px(rowH)}; background: ${colors.focusColor};${sel.bgOpa !== undefined && sel.bgOpa < 255 ? ` opacity: ${sel.bgOpa / 255};` : ''}"></div>
@@ -620,7 +592,7 @@ export class FbTftDisplay extends LitElement {
             <div class="text-center whitespace-nowrap overflow-hidden text-ellipsis px-[4px]"
               data-list-item=${i} ?data-selected=${i === selected}
               style="height: ${px(rowH)}; ${i === selected
-                ? `${roller ? '' : selCss} ${textStyleCss(selText, SCREEN_SCALE)} color: ${styleColorCss(parseInt(colors.focusTextColor.slice(1), 16), sel.opa)};`
+                ? `${selCss} ${textStyleCss(selText, SCREEN_SCALE)} color: ${styleColorCss(parseInt(colors.focusTextColor.slice(1), 16), sel.opa)};`
                 : `${textStyleCss(listText, SCREEN_SCALE)} color: ${styleColorCss(parseInt(colors.color.slice(1), 16), ls.opa)};`}"
             >${text}</div>
           `)}
@@ -629,29 +601,74 @@ export class FbTftDisplay extends LitElement {
     `;
   }
 
-  render() {
+  /** The entry of the config model with this ref: what a label needs. */
+  private _entry(ref: ConfigRef): { what: string; name: string | undefined; x: number; y: number } | null {
+    const item = this.displayItems.find(d => sameConfigRef(d.ref, ref));
+    if (item) return { what: 'Display item', name: item.name ?? item.label, x: item.x, y: item.y };
+    const list = this.lists.find(l => sameConfigRef(l.ref, ref));
+    if (list) return { what: 'List', name: list.name, x: list.x, y: list.y };
+    const img = this.images.find(m => sameConfigRef(m.ref, ref));
+    return img ? { what: 'Image', name: img.name, x: img.x, y: img.y } : null;
+  }
+
+  /**
+   * The box over an entry the firmware drew: nothing is drawn in it (the
+   * pixels are the canvas's); it takes the pointer, the focus and the
+   * outlines. While the entry is dragged it moves with the pointer and
+   * carries a copy of the entry's pixels; config.json is written on drop.
+   *
+   * An entry with nothing to draw yet (its value comes from a script or
+   * MQTT) has no pixels: a dashed place holder with its name stands where
+   * it will be, so that it can be found and moved (not while a script runs).
+   */
+  private _renderOverlayBox(r: LayoutRect) {
+    const ref = r.ref!;
+    const entry = this._entry(ref);
+    const moving = this._moving && sameConfigRef(this._moving.ref, ref) ? this._moving : null;
+    const o = moving ? this._movedOrigin(moving) : { left: r.x, top: r.y };
+    const at = moving ? moving.at : { x: entry?.x ?? 0, y: entry?.y ?? 0 };
+    const idle = this.editable && !this.running;
+    const empty = !r.visible || r.height === 0;
+    const height = empty ? EMPTY_BOX_H : Math.max(r.height, MIN_BOX_H);
+    return html`
+      <div class="fb-item absolute cursor-pointer ${idle && !moving ? 'hover:outline hover:outline-1 hover:outline-white/50' : ''}
+        ${empty ? 'border border-dashed border-white/25 text-[9px] leading-[12px] text-white/45 font-fira px-[3px] overflow-hidden whitespace-nowrap' : ''}"
+        data-overlay=${r.kind} ?data-empty=${empty} data-ref=${this._refAttr(ref)} data-ref-kind=${r.kind}
+        ?data-selected=${sameConfigRef(ref, this.selected)} tabindex="0" role="button"
+        aria-label=${this._ariaLabel(entry?.what ?? 'Item', entry?.name, at.x, at.y)}
+        title=${this.running ? RUNNING_HINT : ITEM_HINT}
+        style="left: ${px(o.left)}; top: ${px(o.top)}; width: ${px(r.width)}; height: ${px(height)}; ${this._outline(ref)}">
+        ${empty ? entry?.name ?? '' : ''}
+        ${moving?.active && !empty ? html`<canvas data-ghost width=${r.width} height=${r.height} aria-hidden="true"
+          class="block w-full h-full pointer-events-none" style="image-rendering: ${this.smooth ? 'auto' : 'pixelated'};"></canvas>` : ''}
+      </div>`;
+  }
+
+  /** The firmware's main display on a canvas, and a box over each entry it laid out. */
+  private _renderEngine() {
+    // What the firmware drew; and, at design time, what it will draw once there is a value.
+    const boxes = this._layout.filter(r => r.ref && PLACED_KINDS.includes(r.kind) && r.width > 0
+      && ((r.visible && r.height > 0) || !this.running));
+    const from = this._moving?.active ? this._layout.find(r => sameConfigRef(r.ref, this._moving!.ref)) : undefined;
+    return html`
+      <canvas data-display="main" width=${SCREEN_W} height=${SCREEN_H} class="absolute inset-0 w-full h-full block"
+        role="img" aria-label="The main display, as the firmware draws it"
+        style="image-rendering: ${this.smooth ? 'auto' : 'pixelated'};"></canvas>
+      ${from ? html`<div class="absolute bg-black/60 pointer-events-none" data-move-origin
+        style="left: ${px(from.x)}; top: ${px(from.y)}; width: ${px(from.width)}; height: ${px(from.height)};"></div>` : ''}
+      ${boxes.map(r => this._renderOverlayBox(r))}`;
+  }
+
+  /** The screen drawn here from the config model: the same layout, approximate (the browser's text). */
+  private _renderModel() {
     const styles = getStyles();
     const caption = styles[StyleElement.DisplayCaption];
     const valueStyle = styles[StyleElement.DisplayValue];
     const unitStyle = styles[StyleElement.DisplayUnit];
     return html`
-      <!-- LargeDisplay outer -->
-      <div class="bg-[rgb(20,20,20)] w-[342px] h-[219px] flex py-[3.36px]">
-        <!-- Left config dots column -->
-        <div class="flex items-end w-[29.5px] h-[212.25px] pt-[12.32px] pb-[3.7px] font-fira">
-          <div class="text-white flex items-center" aria-hidden="true">
-            ${this._dotsIcon(24)}
-          </div>
-        </div>
-
-        <!-- TFT Screen -->
-        <div class="bg-[rgb(30,30,30)] w-[283px] h-[212.25px] relative overflow-hidden text-[11.2px] font-[Montserrat,sans-serif] leading-[11.2px] ${this._moving?.active ? 'cursor-grabbing [&_.fb-item]:cursor-grabbing' : ''}"
-          data-screen @pointerdown=${this._onPointerDown} @keydown=${this._onKeyDown}>
           ${this.displayItems.map(item => {
             // Caption, value and unit in the item's fonts and sizes; markup
             // (\f \s \c \a) as on the device (text-spans.ts).
-            const box = (item as OverlayItem).box;
-            if (box) return this._renderBox(item, box);
             const valueFont = this._valueFont(item, styles);
             const value = this._isTimeItem(item) ? this.timeStr : (item.value ?? '');
             return html`
@@ -676,20 +693,36 @@ export class FbTftDisplay extends LitElement {
           })}
           ${this.lists.map(list => this._renderList(list, styles))}
           ${this.images.map(img => this._renderImage(img))}
-          ${this.clocks.map(clock => this._renderClock(clock))}
+          <!-- Status bar -->
+          <div class="absolute text-[12.66px] font-normal font-[Montserrat,sans-serif] text-white text-left leading-[12.66px]"
+            data-testid="tft-device-name" style="top: 227px; left: 0;">${this.deviceName}</div>`;
+  }
+
+  render() {
+    const engine = this._drawsEngine();
+    return html`
+      <!-- LargeDisplay outer -->
+      <div class="bg-[rgb(20,20,20)] w-[358px] h-[246.72px] flex py-[3.36px]">
+        <!-- Left config dots column -->
+        <div class="flex items-end justify-center w-[19px] h-[240px] pb-[4px] font-fira">
+          <div class="text-white flex items-center" aria-hidden="true">
+            ${this._dotsIcon(16)}
+          </div>
+        </div>
+
+        <!-- TFT Screen: 320 x 240, a CSS px per device pixel -->
+        <div class="bg-[rgb(30,30,30)] w-[320px] h-[240px] relative overflow-hidden text-[12.66px] font-[Montserrat,sans-serif] leading-[12.66px] ${this._moving?.active ? 'cursor-grabbing [&_.fb-item]:cursor-grabbing' : ''}"
+          data-screen data-drawn-by=${engine ? 'firmware' : 'model'} @pointerdown=${this._onPointerDown} @keydown=${this._onKeyDown}>
+          ${engine ? this._renderEngine() : this._renderModel()}
           ${this._renderMoveBadge()}
           ${this._mainDown === null ? '' : html`<div class="absolute top-0 bottom-0 w-1/2 bg-white/10 pointer-events-none ${this._mainDown === 0 ? 'left-0' : 'right-0'}"
             data-main-pressed=${this._mainDown}></div>`}
-
-          <!-- Status bar -->
-          <div class="absolute text-[11.2px] font-normal font-[Montserrat,sans-serif] text-white text-left leading-[11.2px]"
-            data-testid="tft-device-name" style="top: 201px; left: 0;">${this.deviceName}</div>
         </div>
 
         <!-- Right config dots column -->
-        <div class="flex items-end w-[29.5px] h-[212.25px] pt-[12.32px] pb-[3.7px] font-fira">
+        <div class="flex items-end justify-center w-[19px] h-[240px] pb-[4px] font-fira">
           <div class="text-white flex items-center" aria-hidden="true">
-            ${this._dotsIcon(24)}
+            ${this._dotsIcon(16)}
           </div>
         </div>
       </div>

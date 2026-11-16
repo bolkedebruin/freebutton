@@ -125,24 +125,3 @@ export function unitsAt(kind: PlacedKind, px: { x: number; y: number }): Units {
     y: Math.min(Math.floor((SCREEN_H - 1) / u.y), Math.max(0, Math.round(px.y / u.y))),
   };
 }
-
-/** A box on the screen in device px. */
-export interface Rect { left: number; top: number; width: number; height: number }
-
-/** The box of an entry as the firmware places it. */
-export function itemRect(kind: PlacedKind, align: number | undefined, at: Units, size: Size): Rect {
-  return { ...boxOrigin(kind, align, at, size), width: size.width, height: size.height };
-}
-
-/**
- * The entry at a point of the screen (device px): the last one in drawing
- * order that contains it, as that one is on top. Works from boxes alone, so
- * whatever draws the screen (the DOM preview today) only has to supply them.
- */
-export function hitTest<T extends { rect: Rect }>(items: readonly T[], px: { x: number; y: number }): T | null {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const r = items[i].rect;
-    if (px.x >= r.left && px.x < r.left + r.width && px.y >= r.top && px.y < r.top + r.height) return items[i];
-  }
-  return null;
-}

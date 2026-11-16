@@ -41,8 +41,13 @@ export interface FontState {
   font: string;
   face: number;
   px: number;
-  /** Line box in px (approximate until the firmware's font engine is in the wasm). */
+  /** Line box in px (the font's own, as LVGL lays text out). */
   lineHeight: number;
+  /**
+   * Drawn from its TrueType file. false: LVGL's built-in font stands in (no
+   * file for the face in the fonts bucket, or not a usable font).
+   */
+  real?: boolean;
 }
 
 /** A text as the device draws it. */
@@ -230,6 +235,28 @@ export interface FontFaceState {
   fallback: number;
   /** Line height in em, 0 = the font's metrics. */
   lineheight: number;
+  /** The face's file is in the fonts bucket and usable; false: its text is drawn in LVGL's built-in font. */
+  loaded?: boolean;
+}
+
+/**
+ * Where a widget is on its display, in device pixels, as LVGL laid it out
+ * (lv_obj_get_coords: alignment, content size and wrapping included).
+ */
+export interface LayoutRect {
+  /** The config.json entry (as config-model.ts and overlayPages give it); absent for an item a script created. */
+  ref?: ConfigRef;
+  kind: 'displayitem' | 'button' | 'list' | 'image' | 'clock';
+  /** A display item's id, a key's position, the index of a list, image or clock. */
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** 1-based page of the entry; 0 = every page. */
+  page: number;
+  /** Drawn now (the firmware keeps a widget only while its page is shown, so this is true but for a hidden part). */
+  visible: boolean;
 }
 
 /** A style element as the firmware resolved config.json "style" ("key.label", "display.value", ...). */
@@ -263,6 +290,8 @@ export type StateChange =
   | { kind: 'image'; index: number }
   | { kind: 'clock'; index: number }
   | { kind: 'sensor'; id: number }
+  /** A widget of that display (0 = the main display, 1 + i = key display i) moved, came or went. */
+  | { kind: 'layout'; display: number }
   /** The device's name, brokers, sensors, fonts or styles (once, at boot). */
   | { kind: 'device' }
   /** A script (re)starts: what the old one changed goes back to config.json. Redraw all. */
@@ -300,11 +329,6 @@ export interface DeviceStateOptions {
   connectors?: readonly ConnectorKind[];
   /** The hardware sensors and their readings. Default: DEFAULT_SENSORS. [] = no sensor board. */
   sensors?: readonly SensorSpec[];
-  /**
-   * Which keys of the images bucket exist (icon rasters, user files).
-   * Default: all, as after the IDE saved the config and its rasters.
-   */
-  mediaExists?: (key: string) => boolean;
 }
 
 type Obj = Record<string, unknown>;
@@ -362,6 +386,14 @@ interface ImageRecord {
   index: number; name: string | null; page: number; x: number; y: number; width: number; height: number;
   kind: ImageState['kind']; value: string; raster: RasterState | null;
 }
+interface LayoutRecord {
+  display: number;
+  rects: Array<{
+    kind: 'item' | 'key' | 'list' | 'image' | 'clock'; id?: number; order?: number; index?: number;
+    x: number; y: number; width: number; height: number; page: number; visible: boolean;
+  }>;
+}
+
 interface DeviceRecord {
   id: string; name: string; firmware: string; model: string; timezone: string; connectors: number[]; keys: number[];
   keyDisplays: number[]; leds: number;
@@ -402,7 +434,8 @@ export class DeviceState {
   private readonly keyRefs: ConfigRef[];
   private readonly readings = new Map<number, number>();
   private readonly sensorIds: number[];
-  private readonly mediaExists: (key: string) => boolean;
+  /** Per display (0 = main, 1 + i = key display i). */
+  private readonly layouts: LayoutRect[][] = [];
   /** Bit (position - 1) is 0 while that key is held. */
   private keysUp = 0xff;
   private switchPins: [number, number] = [6, 2];
@@ -417,7 +450,6 @@ export class DeviceState {
     const sensors = options.sensors ?? DEFAULT_SENSORS;
     this.sensorIds = sensors.map(s => s.id);
     for (const s of sensors) this.readings.set(s.id, s.value ?? 0);
-    this.mediaExists = options.mediaExists ?? (() => true);
   }
 
   // --- reading ----------------------------------------------------------------
@@ -550,12 +582,11 @@ export class DeviceState {
       led.b = b;
       this.emit({ kind: 'led', index });
     },
-    mediaExists: key => this.mediaExists(key),
   };
 
   // --- what the firmware reports ----------------------------------------------------------
 
-  readonly display: DisplayHost = {
+  readonly display: Pick<DisplayHost, 'state'> = {
     state: (kind: StateKind, record: unknown) => {
       switch (kind) {
         case 'device': this.applyDevice(record as DeviceRecord); break;
@@ -566,6 +597,7 @@ export class DeviceState {
         case 'image': this.applyImage(record as ImageRecord); break;
         case 'clock': this.applyClock(record as ClockState); break;
         case 'page': this.applyPage((record as { page: number }).page); break;
+        case 'layout': this.applyLayout(record as LayoutRecord); break;
         default: break;
       }
     },
@@ -713,6 +745,35 @@ export class DeviceState {
     }
     Object.assign(old, r);
     this.emit({ kind: 'clock', index: r.index });
+  }
+
+  /** The widgets of a display (0 = the main display, 1 + i = key display i) and where they are. */
+  layout(display: number): readonly LayoutRect[] {
+    return this.layouts[display] ?? [];
+  }
+
+  private applyLayout(r: LayoutRecord): void {
+    const rects: LayoutRect[] = [];
+    for (const e of r.rects) {
+      const base = { x: e.x, y: e.y, width: e.width, height: e.height, page: e.page, visible: e.visible };
+      if (e.kind === 'item') {
+        const ref = this.item(e.id ?? -1)?.ref;
+        rects.push({ ...(ref ? { ref } : {}), kind: 'displayitem', id: e.id ?? -1, ...base });
+      } else if (e.kind === 'key') {
+        const key = this.keyList[e.order ?? -1];
+        rects.push({ ...(key?.ref ? { ref: key.ref } : {}), kind: 'button', id: key?.position ?? 0, ...base });
+      } else if (e.kind === 'list') {
+        const ref = this.lists[e.index ?? -1]?.ref;
+        rects.push({ ...(ref ? { ref } : {}), kind: 'list', id: e.index ?? -1, ...base });
+      } else if (e.kind === 'image') {
+        const ref = this.images[e.index ?? -1]?.ref;
+        rects.push({ ...(ref ? { ref } : {}), kind: 'image', id: e.index ?? -1, ...base });
+      } else {
+        rects.push({ kind: 'clock', id: e.index ?? -1, ...base });
+      }
+    }
+    this.layouts[r.display] = rects;
+    this.emit({ kind: 'layout', display: r.display });
   }
 
   private applyPage(page: number): void {

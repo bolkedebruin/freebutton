@@ -141,6 +141,15 @@ int gettimeofday(struct timeval *restrict tv, void *restrict tz)
     return 0;
 }
 
+/* The firmware's clock widget reads the time with time(). */
+time_t time(time_t *out)
+{
+    const time_t now = (time_t)((int64_t)fbh_now_ms() / 1000);
+    if (out != NULL)
+        *out = now;
+    return now;
+}
+
 /* The device booted when the module started: millis() and the FreeRTOS tick
  * count from there (system.uptime(), the firmware's rate limits). */
 static double boot_ms = -1;

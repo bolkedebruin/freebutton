@@ -576,16 +576,26 @@ describe('sensors, as the firmware samples and publishes them', () => {
     clock.advance(999);
     expect(firmware(rec, 'sensor')).toEqual([]);
     clock.advance(1);
-    expect(firmware(rec, 'sensor')).toEqual([
+    const published = firmware(rec, 'sensor');
+    const number = (name: string): number =>
+      Number(published.find(line => line.includes(`/sensor/${name}/state = `))!.split(' = ')[1]);
+    expect(published.map(line => line.replace(/(lvgl_\w+\/state) = .*/, '$1 = (pool)'))).toEqual([
       'buttonplus/virt_btn_0a1b2c/sensor/bme280_pressure/state = 1013.200012',
       'buttonplus/virt_btn_0a1b2c/sensor/bme280_humidity/state = 45.000000',
       'buttonplus/virt_btn_0a1b2c/sensor/bme280_temperature/state = 21.500000',
       'buttonplus/virt_btn_0a1b2c/sensor/free_memory/state = 40000.000000',
-      'buttonplus/virt_btn_0a1b2c/sensor/lvgl_used_memory/state = 13440.000000',
-      'buttonplus/virt_btn_0a1b2c/sensor/lvgl_free_memory/state = 48000.000000',
+      'buttonplus/virt_btn_0a1b2c/sensor/lvgl_used_memory/state = (pool)',
+      'buttonplus/virt_btn_0a1b2c/sensor/lvgl_free_memory/state = (pool)',
       'buttonplus/virt_btn_0a1b2c/sensor/js_used_memory/state = 0.000000',
       'buttonplus/virt_btn_0a1b2c/sensor/js_free_memory/state = 0.000000',
     ]);
+    // LVGL's own pool (LV_MEM_SIZE 61440 less the allocator's bookkeeping), as the firmware's LVGL task sampled it.
+    const total = number('lvgl_used_memory') + number('lvgl_free_memory');
+    expect(total).toBeGreaterThan(50_000);
+    expect(total).toBeLessThanOrEqual(61_440);
+    // (A snapshot of up to a second ago, as on the device; stats() measures now.)
+    expect(emu.stats().lvglFree).toBeLessThanOrEqual(number('lvgl_free_memory'));
+    expect(number('lvgl_used_memory')).toBeGreaterThan(4000);   // the screens, the widgets, the font instances
     expect(rec.publishes.every(p => p.qos === 0 && !p.retain)).toBe(true);
     rec.publishes.length = 0;
     emu.setSensor(5, 22.25);

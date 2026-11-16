@@ -58,9 +58,13 @@ EMULATOR_CONSTANTS = (
     ("src/drivers/NeoPixel.h", r"NUMBER_OF_LEDS *= *([0-9]+);", "NeoPixelController::NUMBER_OF_LEDS"),
     ("src/main.cpp", r"^    delay\(([0-9]+)\);$", "loop() delay"),
     ("sdkconfig.esp32", r"^CONFIG_MQTT_EVENT_QUEUE_SIZE=([0-9]+)$", "CONFIG_MQTT_EVENT_QUEUE_SIZE"),
+    ("src/main.cpp", r"^        vTaskDelay\(pdMS_TO_TICKS\(([0-9]+)\)\);$", "lvgl_task() delay"),
     # The JSON libraries the firmware sources are compiled with (.pio/libdeps).
     ("platformio.ini", r"bblanchon/ArduinoJson @ ([0-9.]+)", "ArduinoJson"),
     ("platformio.ini", r"bolkedebruin/rapidjson\.git#([0-9a-f]+)", "RapidJSON"),
+    # LVGL is compiled into the emulator from .pio/libdeps/esp32/lvgl; the
+    # build refuses any other version than the one pinned here.
+    ("platformio.ini", r"lvgl/lvgl @ ([0-9.]+)", "LVGL"),
 )
 
 

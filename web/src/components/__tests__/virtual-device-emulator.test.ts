@@ -414,7 +414,7 @@ describe('virtual device: keys and drawing while a script runs', () => {
     const el = await mount('fb-virtual-device');
     await run(el);
     const screen = el.querySelector('[data-screen]') as HTMLElement;
-    screen.getBoundingClientRect = () => ({ left: 0, top: 0, width: 283, height: 212, right: 283, bottom: 212, x: 0, y: 0, toJSON: () => '' });
+    screen.getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 240, right: 320, bottom: 240, x: 0, y: 0, toJSON: () => '' });
     pointer('pointerdown', screen, 250, 100);
     await settle();
     expect(el.querySelector('[data-main-pressed]')?.getAttribute('data-main-pressed')).toBe('1');
@@ -430,46 +430,11 @@ describe('virtual device: keys and drawing while a script runs', () => {
     expect(item(el, 'temp').textContent).toContain('left');
   });
 
-  it('what is drawn while it runs is what the firmware resolved: runs with its fonts and colours, key displays, the roller', async () => {
-    use(`
-      fb.main.display.setValue("temp", "\\\\cff0000hot \\\\c00ff0021,5");
-      fb.key("light").display.setLabel("\\\\cffd700On");
-      fb.main.list.select("scenes", 2);
-    `);
-    const el = await mount('fb-virtual-device');
-    // Design time: the IDE's own preview.
-    expect(item(el, 'temp').hasAttribute('data-firmware-box')).toBe(false);
-    await run(el);
-    const temp = item(el, 'temp');
-    expect(temp.hasAttribute('data-firmware-box')).toBe(true);
-    const runs = Array.from(temp.querySelectorAll('[data-value] [data-run]')) as HTMLElement[];
-    expect(runs.slice(0, 2).map(r => [r.textContent, r.style.color.replace(/\s/g, '')])).toEqual([
-      ['hot ', '#ff0000'], ['21,5', '#00ff00'],
-    ]);
-    // Caption and unit are the firmware's runs too, each with a font size it chose.
-    expect(temp.querySelector('[data-caption] [data-run]')?.textContent).toBe('Temperature');
-    expect(runs.every(r => /px$/.test(r.style.fontSize))).toBe(true);
-    // The key's display: its label as a run in the colour of the markup.
-    const label = key(el, 3).querySelector('[data-label][data-firmware-text] [data-run]') as HTMLElement;
-    expect([label.textContent, label.style.color.replace(/\s/g, '')]).toEqual(['On', '#ffd700']);
-    expect(key(el, 3).querySelector('[data-top-label][data-firmware-text]')?.textContent).toBe('Room');
-    // The list: the firmware's roller (pixels, selection).
-    const list = el.querySelector('[data-list="scenes"]') as HTMLElement;
-    expect(list.hasAttribute('data-firmware-roller')).toBe(true);
-    expect(list.querySelector('[data-list-item][data-selected]')?.textContent?.trim()).toBe('Night');
-    expect(list.style.left).toMatch(/px$/);
-
-    emulatorSession.stop();
-    await settle();
-    expect(item(el, 'temp').hasAttribute('data-firmware-box')).toBe(false);
-    expect(el.querySelector('[data-firmware-roller]')).toBeNull();
-  });
-
   it('a text longer than the firmware keeps is drawn as the firmware cut it', async () => {
     use(`fb.main.display.setValue("temp", "${'x'.repeat(80)}");`);
     const el = await mount('fb-virtual-device');
     await run(el);
-    const value = item(el, 'temp').querySelector('[data-value] [data-run]')!.textContent!;
+    const value = item(el, 'temp').querySelector('[data-value]')!.textContent!.replace(/[^x]/g, '');
     expect(value.length).toBeLessThan(80);
     expect(value.length).toBeGreaterThan(40);
   });

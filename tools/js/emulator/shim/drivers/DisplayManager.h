@@ -21,11 +21,16 @@ public:
     // display of its own (a key of the main display).
     int getSmallDisplayIndexByPosition(int buttonPosition) const;
     const std::vector<SmallDisplay>& smallDisplays() const { return smallDisplays_; }
+    size_t getSmallDisplayCount() const { return smallDisplays_.size(); }
+    // Whether a main display module was found (HardwareInitializer's tft320Bar).
+    bool hasMainDisplay() const { return mainConnector_ >= 0; }
+    void setMainConnector(const int connector) { mainConnector_ = connector; }
     void add(const SmallDisplay display) { smallDisplays_.push_back(display); }
     void clear() { smallDisplays_.clear(); }
 
 private:
     std::vector<SmallDisplay> smallDisplays_;
+    int mainConnector_ = -1;
 };
 
 DisplayManager& getDisplayManager();

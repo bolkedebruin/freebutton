@@ -6,8 +6,10 @@
  * clocks and their topics), the MQTT brokers with Home Assistant discovery,
  * the hardware scan, the key and sensor drivers. What it cannot have in a
  * page it asks from this host (tools/js/emulator/fbh.h): time, files, the
- * modules on the I2C buses, sensor readings, the MQTT transport; and it tells
- * the host what the device shows and lights. wasm.ts marshals the C
+ * modules on the I2C buses, sensor readings, fonts and images, the MQTT
+ * transport; and it tells
+ * the host what the device shows and lights: the pixels LVGL drew for each
+ * display, and a record per widget. wasm.ts marshals the C
  * arguments to these methods; nothing here knows about wasm memory.
  *
  * DeviceState (device-state.ts) implements `hardware` and `display`; the
@@ -38,17 +40,33 @@ export interface HardwareHost {
   sensorRead(input: number): number;
   /** A pixel of the LED strip, as the firmware wrote it. */
   led(index: number, r: number, g: number, b: number): void;
-  /** Whether the images bucket has that key (an icon raster or a user file). */
-  mediaExists(key: string): boolean;
+}
+
+/** The buckets of the device's media store (src/media/media_store.h, in this order). */
+export const MEDIA_BUCKETS = ['fonts', 'images', 'render'] as const;
+export type MediaBucket = typeof MEDIA_BUCKETS[number];
+
+/**
+ * The media store's files: the TrueType fonts and the image rasters the
+ * firmware reads in place. The wasm copies a file once and keeps it.
+ */
+export interface MediaHost {
+  /** The file's bytes; null when the bucket has no such key (the firmware then runs its own fallback). */
+  read(bucket: MediaBucket, key: string): Uint8Array | null;
 }
 
 /** The kinds of state record (tools/js/emulator/fbh.h FBH_STATE_*). */
-export const STATE_KIND = ['device', 'item', 'item-gone', 'key', 'list', 'image', 'clock', 'page', 'sensor'] as const;
+export const STATE_KIND = ['device', 'item', 'item-gone', 'key', 'list', 'image', 'clock', 'page', 'sensor', 'layout'] as const;
 export type StateKind = typeof STATE_KIND[number];
 
 /** What the device shows: one record per widget that changed (device-state.ts has the shapes). */
 export interface DisplayHost {
   state(kind: StateKind, record: unknown): void;
+  /**
+   * LVGL drew into a display's frame buffer: this rectangle changed. display:
+   * 0 = the main display, 1 + i = key display i.
+   */
+  frame(display: number, x: number, y: number, width: number, height: number): void;
 }
 
 /** Who made a publish: a script's mqtt.publish(), or the firmware by itself. */
@@ -100,6 +118,7 @@ export interface ConsoleHost {
 
 export interface EmulatorHost {
   hardware: HardwareHost;
+  media: MediaHost;
   display: DisplayHost;
   mqtt: MqttHost;
   system: SystemHost;

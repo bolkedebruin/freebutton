@@ -324,6 +324,8 @@ declare global {
     'emulator-change': CustomEvent<EmulatorSnapshot>;
     'emulator-state': CustomEvent<void>;
     'emulator-mqtt': CustomEvent<void>;
+    // What draws the virtual device's face changed (emulatorSession.face(), faceInfo()).
+    'emulator-face': CustomEvent<void>;
 
     // Device events
     // connectors: physical layout (empty = unknown, use the legacy layout).
