@@ -37,6 +37,7 @@ import { emit, on, type ConnectorConfig, type EmulatorSnapshot, type PageConfig 
 import { parseConfigText } from './config-model';
 import { getConnectors } from './device-config';
 import { getCode, getEditorView, showRuntimeError } from './editor';
+import { oneAtATime } from './device-queue';
 import { CONFIG_KEY, MAIN_SCRIPT_KEY } from './fs-rules';
 import { workspace } from './workspace';
 import { virtualMedia } from './virtual-media';
@@ -163,6 +164,7 @@ export class EmulatorSession {
   private emu: Emulator | null = null;
   private mqtt: MqttSession | null = null;
   private api: EmulatorModule | null = null;
+  private loading: Promise<EmulatorModule> | null = null;
   private status: EmulatorSnapshot['status'] = 'idle';
   private error = '';
   private errors = 0;
@@ -305,7 +307,7 @@ export class EmulatorSession {
     if (this.idle && key === this.idleKey) return;
     if (!this.idle) this.setIdle(null, 'loading', '');
     try {
-      const api = this.api ??= await import('./emulator/session-runtime');
+      const api = await this.loadApi();
       if (token !== this.previewToken) return;
       virtualMedia.useConfig(config, path => workspace.readQuietly(path));
       const emu = await api.Emulator.create({
@@ -330,6 +332,21 @@ export class EmulatorSession {
   }
 
   /** The page's media: one cache for every emulator, so a file is fetched once. */
+  /**
+   * The emulator's code and its wasm (about 320 KB compressed), fetched once.
+   * Both come from the device when it serves the IDE, so each is one turn of
+   * the device queue: a response of that size next to the storage requests
+   * of the IDE's start took the device's free memory down to 1 KB.
+   */
+  private loadApi(): Promise<EmulatorModule> {
+    return this.loading ??= (async () => {
+      const api = await oneAtATime(() => import('./emulator/session-runtime'));
+      if (!this.wasm) this.wasm = await oneAtATime(() => api.loadEmulatorModule());
+      this.api = api;
+      return api;
+    })().catch((error: unknown) => { this.loading = null; throw error; });
+  }
+
   private mediaCache(api: EmulatorModule): MediaCache {
     if (!this.media) {
       this.media = new api.MediaCache(this.mediaSource ?? { read: virtualMedia.read });
@@ -392,8 +409,8 @@ export class EmulatorSession {
         throw new Error('config.json is not valid JSON: correct it, then Run');
       }
       // The first Run fetches the engine (about 170 KB compressed): a device serves that slowly.
-      if (!this.api) this.say('Loading the virtual device (the first Run only)…', 'info');
-      const api = this.api ??= await import('./emulator/session-runtime');
+      if (!this.api) this.say('Loading the virtual device…', 'info');
+      const api = await this.loadApi();
       if (token !== this.runToken) return;
       const mqtt = this.mqtt ??= new api.MqttSession({
         identity: virtualDeviceId,
@@ -411,7 +428,7 @@ export class EmulatorSession {
       mqtt.configure(source.config);
       if (source.config.trim() !== '') virtualMedia.useConfig(JSON.parse(source.config), path => workspace.readQuietly(path));
       const connectors = connectorKinds(getConnectors());
-      this.emu = await this.api.Emulator.create({
+      this.emu = await api.Emulator.create({
         config: source.config.trim() === '' ? {} : source.config,
         files: source.files,
         identity: virtualDeviceId(),
