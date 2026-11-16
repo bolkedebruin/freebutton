@@ -6,9 +6,11 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <random>
 #include <vector>
 
+#define MEDIA_CORE_STATS // work counters of the core, for the cost tests
 #include "../../src/media/media_core.h"
 
 struct RamFlash {
@@ -22,16 +24,36 @@ struct RamFlash {
     bool hit = false;       // a cut happened
     std::mt19937 rng{12345};
 
+    // Transient faults (the flash keeps running, unlike a power cut): asked
+    // before every flash call. Fail: the call returns an error and does
+    // nothing. For a write also: FailHalf (half of it is programmed, error),
+    // FailDone (all of it is programmed, error), Drop (nothing is programmed,
+    // success), Corrupt (programmed with one bit wrong, success).
+    enum class Fault { None, Fail, FailHalf, FailDone, Drop, Corrupt };
+    std::function<Fault(const char *op, uint32_t off, uint32_t len)> fault;
+
     // checks
     unsigned violations = 0;     // bytes programmed over non-erased flash
     unsigned map_violations = 0; // flash of a multi-page mapping changed while mapped
-    unsigned writes = 0, erases = 0, header_writes = 0, maps_live = 0;
+    unsigned writes = 0, erases = 0, header_writes = 0;
+    unsigned maps_live = 0;     // mappings of data pages (files)
+    unsigned dir_maps_live = 0; // mappings of a directory half (the store keeps the active one mapped)
+    unsigned dir_maps = 0;      // map() calls for a directory half
+    // The device's mappings are live: a write or erase shows through an
+    // existing mapping (so does a one-page mapping here: it points into
+    // `mem`). With this set, a directory mapping is a copy made by map(), as
+    // in the host tool tools/media/mkmedia: it shows a write only after
+    // mapping again.
+    bool dir_maps_are_copies = false;
+    unsigned reads = 0;            // read() calls
+    unsigned long read_bytes = 0;  // bytes they returned
     std::vector<unsigned> sector_erases; // wear: erases per 4 KB sector (a page erase counts all 16)
 
     struct Map {
         std::vector<uint8_t> pages;
         std::vector<uint8_t> copy; // non-contiguous: a copy (checked on unmap)
         bool exclusive = false;    // more than one page: a large file, nobody may touch it
+        bool dir = false;          // a directory half
     };
 
     explicit RamFlash(uint32_t pages)
@@ -74,6 +96,9 @@ struct RamFlash {
 
     int read(uint32_t off, void *dst, uint32_t len) {
         if (power_off || off + len > mem.size()) return -1;
+        if (fault && fault("read", off, len) != Fault::None) return -1;
+        reads++;
+        read_bytes += len;
         memcpy(dst, mem.data() + off, len);
         return 0;
     }
@@ -107,6 +132,21 @@ struct RamFlash {
         if (touches_exclusive(off, len)) map_violations++;
         writes++;
         if (len == 32 && off % MEDIA_PAGE_SIZE == 0 && off < MEDIA_DIR_PAGES * MEDIA_PAGE_SIZE) header_writes++;
+        switch (fault ? fault("write", off, len) : Fault::None) {
+        case Fault::None: break;
+        case Fault::Fail: return -1;
+        case Fault::FailHalf: program(off, src, len / 2); return -1;
+        case Fault::FailDone: program(off, src, len); return -1;
+        case Fault::Drop: return 0;
+        case Fault::Corrupt:
+            program(off, src, len);
+            for (uint32_t i = 0; i < len; i++)
+                if (mem[off + i]) {
+                    mem[off + i] &= (uint8_t)(mem[off + i] - 1); // clears one bit
+                    break;
+                }
+            return 0;
+        }
         uint32_t keep = len;
         bool tear = false;
         if (ops_left == 0) {
@@ -137,6 +177,7 @@ struct RamFlash {
     int erase(uint32_t off, uint32_t len) {
         if (power_off || off % MEDIA_SECTOR_SIZE || len % MEDIA_SECTOR_SIZE || off + len > mem.size()) return -1;
         if (touches_exclusive(off, len)) map_violations++;
+        if (fault && fault("erase", off, len) != Fault::None) return -1;
         erases++;
         for (uint32_t s = off / MEDIA_SECTOR_SIZE; s < (off + len) / MEDIA_SECTOR_SIZE; s++) sector_erases[s]++;
         if (ops_left == 0) {
@@ -158,12 +199,14 @@ struct RamFlash {
 
     int map(const uint8_t *pages, uint32_t n, const void **out, void **handle) {
         if (power_off || n == 0) return -1;
+        if (fault && fault("map", pages[0] * MEDIA_PAGE_SIZE, n * MEDIA_PAGE_SIZE) != Fault::None) return -1;
         Map *m = new Map;
         m->pages.assign(pages, pages + n);
         m->exclusive = n > 1;
+        m->dir = n == 1 && pages[0] < MEDIA_DIR_PAGES;
         bool contiguous = true;
         for (uint32_t i = 1; i < n; i++) contiguous = contiguous && pages[i] == pages[0] + i;
-        if (contiguous) {
+        if (contiguous && !(m->dir && dir_maps_are_copies)) {
             *out = mem.data() + pages[0] * MEDIA_PAGE_SIZE;
         } else {
             m->copy.resize(n * MEDIA_PAGE_SIZE);
@@ -172,7 +215,8 @@ struct RamFlash {
             *out = m->copy.data();
         }
         maps.push_back(m);
-        maps_live++;
+        if (m->dir) dir_maps_live++, dir_maps++;
+        else maps_live++;
         *handle = m;
         return 0;
     }
@@ -181,14 +225,15 @@ struct RamFlash {
         Map *m = static_cast<Map *>(handle);
         for (size_t i = 0; i < maps.size(); i++) {
             if (maps[i] != m) continue;
-            if (!m->copy.empty()) {
+            if (!m->copy.empty() && !m->dir) {
                 for (size_t k = 0; k < m->pages.size(); k++)
                     if (memcmp(m->copy.data() + k * MEDIA_PAGE_SIZE, mem.data() + m->pages[k] * MEDIA_PAGE_SIZE,
                                MEDIA_PAGE_SIZE))
                         map_violations++;
             }
             maps.erase(maps.begin() + (long)i);
-            maps_live--;
+            if (m->dir) dir_maps_live--;
+            else maps_live--;
             delete m;
             return;
         }

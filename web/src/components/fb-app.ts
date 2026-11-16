@@ -2,7 +2,7 @@ import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { emit, on } from '../js/app-state.js';
 import { getCode, getEditorView, openDocument } from '../js/editor.js';
-import { compileForDeviceEx } from '../js/compiler.js';
+import { bytecodeUploadUrl, compileForDeviceEx } from '../js/compiler.js';
 import { validateCode, formatValidationErrors } from '../js/validator.js';
 import { workspace } from '../js/workspace.js';
 import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
@@ -130,7 +130,7 @@ export class FbApp extends LitElement {
       formData.append('file', blob, MAIN_BYTECODE_NAME);
 
       // Multipart body: signed with x-amz-content-sha256 UNSIGNED-PAYLOAD.
-      const uploadUrl = base + '/api/bytecode/upload' + (atomsId ? '?atoms=' + encodeURIComponent(atomsId) : '');
+      const uploadUrl = bytecodeUploadUrl(base, bytecode.length, atomsId);
       const response = await signedFetch(uploadUrl, {
         method: 'POST',
         body: formData

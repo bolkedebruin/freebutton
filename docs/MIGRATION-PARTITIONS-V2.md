@@ -21,9 +21,9 @@ device**. The erase loses:
 - NVS: the WiFi credentials (namespace `wifi`) and the device access
   credentials (namespace `fbauth`, see [AUTH.md](AUTH.md)). New access
   credentials are generated at the first boot.
-- `js_user`: the compiled scripts (`main.jsc`).
-- LittleFS: `config.json`, `scripts/`, the bytecode index
-  `js_bytecode_meta.json` and every other user file.
+- `js_user`: the compiled scripts (`main.jsc`) and their index
+  ([SCRIPT-STORE.md](SCRIPT-STORE.md)).
+- LittleFS: `config.json`, `scripts/` and every other user file.
 - The fonts: v1 kept them on LittleFS (`/fonts/*.bin`); v2 reads TrueType
   fonts from the `media` partition (bucket `fonts`).
 
@@ -47,7 +47,10 @@ python3 tools/scripts/ota_fs.py http://192.168.1.50 --dry-run
 in `devices/btn_a00001/backup/fs-<timestamp>/` (git-ignored):
 
 - `app/`: every object of the bucket `app`: `config.json`, `scripts/`
-  (including `scripts/main.js`), `js_bytecode_meta.json`, other user files.
+  (including `scripts/main.js`), other user files. A device with firmware
+  from before the script store also has `js_bytecode_meta.json` (its
+  bytecode index). It may stay in the backup: `ota_fs.py --restore` does not
+  put it into the image (the bytecode it lists is erased in step 2).
 - `fonts/`: the bucket `fonts`. On a v1 device these are the old `.bin`
   fonts, which v2 does not use; you do not need to restore them.
 
@@ -106,9 +109,8 @@ python3 tools/scripts/ota_fs.py http://192.168.1.50 \
 
 This builds a LittleFS image from the current build (web IDE, examples) with
 the backed-up files on top, uploads it and reboots the device (it backs up
-the fresh device first, into a new `fs-<timestamp>`). `--restore` leaves out
-`js_bytecode_meta.json`: the bytecode it indexes was in the erased
-`js_user`, so the device starts with an empty registry. Add
+the fresh device first, into a new `fs-<timestamp>`). The compiled scripts
+are not part of the filesystem (step 6). Add
 `--config devices/btn_a00001/config.json` to use that file instead of the
 backed-up `config.json`.
 
@@ -143,7 +145,7 @@ compiler and checks that it matches the firmware's stdlib.
    The IDE saves the source, asks the device for its stdlib ROM table
    (`GET /api/bytecode/next_address`: `rom_base`, `atoms_id`), compiles
    position-independent bytecode and uploads it as `main.jsc`
-   (`POST /api/bytecode/upload`, signed); the device places and relocates
+   (`POST /api/bytecode/upload?size=<bytes>`, signed); the device places and relocates
    it. The device runs `main.jsc` at boot; only `scripts/main.js` is
    compiled, other `.js` files are only stored.
 

@@ -8,6 +8,23 @@
 // spi_flash_cache2phys() and refuse a mapping that is not contiguous.
 // The core shares one mapping per shared page (mapping a page twice fails
 // with ESP_ERR_INVALID_STATE in spi_flash_mmap_pages).
+//
+// The core keeps the active directory half mapped and appends records to it
+// through esp_partition_write(). The mapping shows them at once: every
+// esp_flash_write() and esp_flash_erase_region() ends in
+// flash_end_flush_cache() (spi_flash/esp_flash_api.c), which calls the host
+// driver's flush_cache = memspi_host_flush_cache() ->
+// spi_flash_check_and_flush_cache() (spi_flash/flash_mmap.c): for every
+// 64 KB page of the written range that is mapped, cache_hal_invalidate_addr()
+// on its virtual address. This is the IDF implementation, not the ROM one
+// (CONFIG_SPI_FLASH_ROM_IMPL is off). It finds one virtual address per
+// physical page, so a directory page must not be mapped twice, and it never
+// is: the core has one mapping of a half and unmaps it before it maps the
+// half again. A page mapped after it was written is clean too: esp_mmu_map()
+// invalidates the range it maps. The core does not rely on this blindly: it
+// compares each record with the mapping after writing it; a record that
+// does not show is looked at once more through a new mapping (unmap, then
+// map), and the append fails when it still differs.
 #ifdef ESP_PLATFORM
 
 #include <string.h>

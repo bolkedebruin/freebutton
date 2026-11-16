@@ -83,7 +83,10 @@ void setup() {
     // Map js_user before anything else memory-maps flash (the fonts in the
     // media partition, in initializeLvgl): bytecode is relocated for that
     // virtual address, which depends on the mapping order. After the
-    // filesystem: instance() also loads the registry index from LittleFS.
+    // filesystem and before the web server: the first instance() also moves
+    // the scripts of older firmware's index file into the store
+    // (BytecodeRegistry::migrateLegacyIndex), which reads that file and must
+    // be done before an upload can arrive.
     BytecodeRegistry::instance();
 
     // Initialize LVGL display

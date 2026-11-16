@@ -48,6 +48,12 @@ MappedFile* file_hw_mmap(const char* partition_label, size_t offset, size_t size
     // Memory map the partition region
     // Note: size must be multiple of 64KB for ESP32 MMU
     size_t aligned_size = (size + 0xFFFF) & ~0xFFFF;  // Round up to 64KB
+    // Not past the partition: esp_partition_mmap() refuses that, and an image
+    // near the end need not start on a 64KB boundary (it starts behind its
+    // entry header in js_user).
+    if (aligned_size > partition->size - offset) {
+        aligned_size = partition->size - offset;
+    }
 
     esp_err_t err = esp_partition_mmap(
         partition,

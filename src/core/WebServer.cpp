@@ -304,6 +304,23 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
             destroyWriter(static_cast<BytecodeUpload*>(request->_tempObject));
         });
 
+        // "size=<bytes>": the image's own size. The region is then taken for
+        // exactly that; without it (an older IDE bundle, curl) for the
+        // request's length, which includes the multipart framing.
+        size_t image_size = content_length;
+        bool exactSize = false;
+        if (const AsyncWebParameter* p = request->getParam("size")) {
+            uint32_t announced = 0;
+            if (!bcstore::parseImageSize(p->value().c_str(), static_cast<uint32_t>(content_length),
+                                         BytecodeRegistry::instance().capacity(), &announced)) {
+                ESP_LOGE(TAG, "Bytecode upload refused: size=%s is not a possible image size", p->value().c_str());
+                upload->error = ESP_ERR_INVALID_ARG;
+                return;
+            }
+            image_size = announced;
+            exactSize = true;
+        }
+
         void* mem = malloc(sizeof(BytecodeWriter));
         if (!mem) {
             ESP_LOGE(TAG, "No heap for the bytecode writer");
@@ -319,8 +336,8 @@ void onBytecodeUpload(AsyncWebServerRequest *request, const String& filename,
         if (const AsyncWebParameter* p = request->getParam("atoms")) {
             atomsResolved = strtoul(p->value().c_str(), nullptr, 16) == bytecode_stdlib_atoms_id();
         }
-        // Initialize with total size for upfront flash erase
-        const esp_err_t err = upload->writer->beginWrite(filename.c_str(), content_length, atomsResolved);
+        // Initialize with the size for the upfront flash erase
+        const esp_err_t err = upload->writer->beginWrite(filename.c_str(), image_size, atomsResolved, exactSize);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "beginWrite failed: 0x%x", err);
             upload->error = err;

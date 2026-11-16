@@ -122,12 +122,23 @@ export async function getDeviceStdlibInfo(deviceUrl: string = ''): Promise<{
 }
 
 /**
+ * The URL a compiled image is uploaded to (POST, multipart, one file part).
+ * "size" is the image's own length in bytes: the device takes room for
+ * exactly that (the request is longer by the multipart framing) and refuses
+ * an upload that brings another number of bytes. "atoms" as returned by
+ * compileForDeviceEx ("" = not resolved: left out).
+ */
+export function bytecodeUploadUrl(deviceUrl: string, imageSize: number, atomsId: string = ''): string {
+    return `${deviceUrl}/api/bytecode/upload?size=${imageSize}` + (atomsId ? `&atoms=${encodeURIComponent(atomsId)}` : '');
+}
+
+/**
  * Compile JavaScript for the device at `deviceUrl` ("" = same origin). The
  * bytecode is position-independent; the device is asked for its built-in
  * table so that the compiler can resolve the built-in names for it.
  * `atomsId` is the device's "atoms_id" when the compiler did that, else "".
- * The upload passes it on ("?atoms=<id>") so that the device needs no lookup
- * memory.
+ * The upload passes it on ("atoms=<id>", bytecodeUploadUrl) so that the
+ * device needs no lookup memory.
  */
 export async function compileForDeviceEx(sourceCode: string, deviceUrl: string = ''): Promise<{ bytecode: Uint8Array; atomsId: string }> {
     const stdlibInfo = await getDeviceStdlibInfo(deviceUrl);

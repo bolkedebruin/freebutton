@@ -34,7 +34,14 @@ typedef struct media_flash {
     /* off and len are multiples of MEDIA_SECTOR_SIZE. */
     int (*erase)(void *ctx, uint32_t off, uint32_t len);
     /* Map `n` pages (partition page numbers, in file order) to one
-     * contiguous read-only range. */
+     * contiguous read-only range. The core keeps the active directory half
+     * (page 0 or 1) mapped and reads it in place. A mapping may be live (a
+     * later write or erase of the page shows through it: the device) or a
+     * copy made by map() (the host tool): after each directory write the
+     * core compares the mapping with what it wrote and, when it does not
+     * show it, unmaps the half and maps it again (a page is never mapped
+     * twice at the same time, except briefly the two halves in a snapshot:
+     * two different pages). */
     int (*map)(void *ctx, const uint8_t *pages, uint32_t n, const void **out, void **handle);
     void (*unmap)(void *ctx, void *handle);
     /* Optional (NULL = single-threaded). Not recursive. */
@@ -43,12 +50,23 @@ typedef struct media_flash {
 } media_flash_t;
 
 /* Mount a store on `flash` (kept by pointer until media_unmount). Formats a
- * blank or unreadable store. Does not map anything. */
+ * blank or unreadable store. Maps the active directory half (one page) and
+ * nothing else. */
 media_err_t media_mount(const media_flash_t *flash);
 
 /* Forget the RAM state and unmap what is still open, without touching the
  * flash: a reboot for the tests and the end of a host tool run. */
 void media_unmount(void);
+
+#ifdef MEDIA_CORE_STATS
+/* Work counters, compiled only into the native tests (test/test_media_store). */
+typedef struct {
+    unsigned long key_cmps;    /* key comparisons against directory records */
+    unsigned long rec_decodes; /* records decoded */
+    unsigned long crc_bytes;   /* bytes run through the CRC */
+} media_core_stats_t;
+extern media_core_stats_t media_core_stats;
+#endif
 
 #ifdef __cplusplus
 }

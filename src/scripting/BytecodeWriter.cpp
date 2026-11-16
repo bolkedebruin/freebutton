@@ -2,11 +2,19 @@
 // Bytecode Writer - Implementation with direct-to-flash streaming relocation
 // Flash write operations for user bytecode
 //
+// An upload becomes an entry of the script store (BytecodeStore.h,
+// docs/SCRIPT-STORE.md): the region is erased, the relocated image is
+// written behind the place of the entry's header, read back, and only then
+// the header is programmed (BytecodeRegistry::commit(), the commit point).
+// An upload that stops anywhere before that leaves a region without a
+// header, which is free space, and the script stored before is untouched.
+//
 
 #include "BytecodeWriter.h"
 #include <esp_log.h>
 #include <esp_partition.h>
 #include <esp_crc.h>
+#include <cstdlib>
 #include <cstring>
 
 // Include QuickJS for bytecode validation and structures
@@ -56,13 +64,13 @@ BytecodeWriter::BytecodeWriter()
     : registry_(BytecodeRegistry::instance())
     , partition_(nullptr)
     , partition_offset_(0)
+    , image_offset_(0)
     , write_offset_(0)
     , total_size_(0)
     , crc32_(0)
     , writing_(false)
     , reloc_state_(RelocationState::HEADER_PENDING)
     , overflow_size_(0)
-    , relocation_offset_(0)
     , relocation_target_addr_(0)
     , reloc_ctx_(nullptr)
     , reloc_ctx_mem_(nullptr)
@@ -91,25 +99,25 @@ BytecodeWriter::~BytecodeWriter() {
     cleanup();
 }
 
-esp_err_t BytecodeWriter::eraseRegion(uint32_t offset, size_t size) const {
-    if (!partition_) {
-        return ESP_ERR_INVALID_STATE;
+// Every image byte goes to flash through here, in order: refused when it
+// would put the store's header mark at a sector boundary (BoundaryGuard),
+// and counted into crc32_, the CRC of exactly what was handed to the flash
+// driver (finalizeWrite() compares it with what reads back).
+esp_err_t BytecodeWriter::writeImage(const uint8_t* data, size_t size) {
+    if (!guard_.feed(write_offset_, data, size)) {
+        ESP_LOGE(TAG, "The image would put the store's header mark at a sector boundary: not stored "
+                      "(any edit of the script moves it)");
+        return ESP_ERR_INVALID_ARG;
     }
-
-    // Align to sector boundaries
-    uint32_t aligned_offset = (offset / SECTOR_SIZE) * SECTOR_SIZE;
-    size_t aligned_size = ((size + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
-
-    ESP_LOGI(TAG, "Erasing flash region: offset=0x%lx, size=%zu (aligned from 0x%lx, %zu)",
-             aligned_offset, aligned_size, offset, size);
-
-    esp_err_t err = esp_partition_erase_range(partition_, aligned_offset, aligned_size);
-
+    const esp_err_t err = esp_partition_write(partition_, write_offset_, data, size);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to erase flash: 0x%x", err);
+        ESP_LOGE(TAG, "Failed to write to flash at 0x%lx: 0x%x", write_offset_, err);
+        return err;
     }
-
-    return err;
+    crc32_ = esp_crc32_le(crc32_, data, size);
+    write_offset_ += size;
+    total_size_ += size;
+    return ESP_OK;
 }
 
 void BytecodeWriter::cleanup() {
@@ -131,7 +139,8 @@ void BytecodeWriter::cleanup() {
     }
 }
 
-esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size, const bool atoms_resolved) {
+esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size, const bool atoms_resolved,
+                                     const bool exact_size) {
     if (!partition_) {
         ESP_LOGE(TAG, "Partition not initialized");
         return ESP_ERR_INVALID_STATE;
@@ -158,10 +167,12 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size, const 
     strncpy(current_name_, name, sizeof(current_name_) - 1);
     current_name_[sizeof(current_name_) - 1] = '\0';
     expected_size_ = total_size;
+    exact_size_ = exact_size;
 
-    // Pick the target region: lowest free gap that overlaps neither an active
-    // entry (including the old version of this name) nor bytecode executing
-    // since boot, and reserve it against a concurrent upload.
+    // Pick the target region (header + image, whole sectors): lowest free gap
+    // that overlaps neither an entry (including the old version of this
+    // name) nor bytecode executing since boot, and reserve it against a
+    // concurrent upload.
     {
         BytecodeRegistry::Lock lock;
         uint32_t offset = 0;
@@ -176,16 +187,20 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size, const 
         reserved_ = true;
         partition_offset_ = offset;
     }
-    relocation_target_addr_ = registry_.getVirtualBaseAddress() + partition_offset_;
+    // The image lies behind the entry's header and is relocated for that address.
+    image_offset_ = partition_offset_ + bcstore::kHeaderLen;
+    relocation_target_addr_ = registry_.getVirtualBaseAddress() + image_offset_;
 
-    ESP_LOGI(TAG, "Will relocate to: 0x%lx (partition offset: 0x%lx)",
-             relocation_target_addr_, partition_offset_);
+    ESP_LOGI(TAG, "Will relocate to: 0x%lx (region 0x%lx, image at 0x%lx)",
+             relocation_target_addr_, partition_offset_, image_offset_);
 
-    // Erase flash region upfront
-    size_t aligned_size = ((total_size + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
-    if (esp_err_t err = eraseRegion(partition_offset_, aligned_size); err != ESP_OK) {
+    // Erase the whole region upfront, the sector of the header included: an
+    // old entry that started here is gone (all of it, last sector first),
+    // and the place of the header reads 0xFF until the commit.
+    if (!registry_.eraseRegion(partition_offset_, total_size)) {
+        ESP_LOGE(TAG, "Failed to erase the region");
         cleanup();
-        return err;
+        return ESP_FAIL;
     }
 
     // QuickJS context for the ROM atom lookup; not needed for an image whose
@@ -215,12 +230,13 @@ esp_err_t BytecodeWriter::beginWrite(const char* name, size_t total_size, const 
     }
 
     // Initialize state
-    write_offset_ = partition_offset_;
+    write_offset_ = image_offset_;
     total_size_ = 0;
     crc32_ = 0;
+    guard_ = bcstore::BoundaryGuard();
     reloc_state_ = RelocationState::HEADER_PENDING;
     overflow_size_ = 0;
-    flash_data_start_ = partition_offset_ + sizeof(JSBytecodeHeader);
+    flash_data_start_ = image_offset_ + sizeof(JSBytecodeHeader);
     data_section_offset_ = 0;
     chunk_data_offset_ = 0;
     chunk_size_ = 0;
@@ -327,16 +343,13 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
                  hdr->version, (uint32_t)hdr->base_addr);
 
         // Write relocated header to flash
-        err = esp_partition_write(partition_, write_offset_, chunk_buffer_, sizeof(JSBytecodeHeader));
+        err = writeImage(chunk_buffer_, sizeof(JSBytecodeHeader));
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to write header to flash: 0x%x", err);
             cleanup();
             writing_ = false;
             return err;
         }
-
-        write_offset_ += sizeof(JSBytecodeHeader);
-        total_size_ += sizeof(JSBytecodeHeader);
 
         ESP_LOGI(TAG, "Header relocated and written to flash");
 
@@ -376,10 +389,8 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
                 chunk_data_offset_ = data_section_offset_ - overflow_size_;
                 chunk_size_ = combined_size;
 
-                // Temporarily point chunk_buffer_ at large buffer for callback
-                uint8_t* saved_chunk_buffer = chunk_buffer_;
-                // Note: Can't reassign array, so we handle this differently
-                // The callback uses chunk_buffer_, so we need to process differently
+                // The callback reads chunk_buffer_: each block is copied
+                // there before it is relocated (below).
 
                 // Process blocks from large buffer
                 size_t processed = 0;
@@ -418,7 +429,7 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
                         }
 
                         // Write to flash
-                        err = esp_partition_write(partition_, write_offset_, chunk_buffer_, block_size);
+                        err = writeImage(chunk_buffer_, block_size);
                         if (err != ESP_OK) {
                             ESP_LOGE(TAG, "Failed to write block to flash: 0x%x", err);
                             free(large_buffer);
@@ -427,8 +438,6 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
                             return err;
                         }
 
-                        write_offset_ += block_size;
-                        total_size_ += block_size;
                         data_section_offset_ += block_size;
                         processed += block_size;
                         overflow_size_ = 0;
@@ -498,7 +507,7 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
 
         // Write relocated blocks to flash (excluding overflow)
         if (size_t write_size = processed; write_size > 0) {
-            err = esp_partition_write(partition_, write_offset_, chunk_buffer_, write_size);
+            err = writeImage(chunk_buffer_, write_size);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to write data to flash: 0x%x", err);
                 cleanup();
@@ -506,8 +515,6 @@ esp_err_t BytecodeWriter::write(const uint8_t* data, size_t size, bool final) {
                 return err;
             }
 
-            write_offset_ += write_size;
-            total_size_ += write_size;
             data_section_offset_ += write_size;
 
             ESP_LOGD(TAG, "Wrote %zu bytes to flash (total: %lu, data_section: %lu)",
@@ -530,27 +537,32 @@ esp_err_t BytecodeWriter::finalizeWrite() {
     if (overflow_size_ > 0) {
         ESP_LOGW(TAG, "Trailing data in overflow buffer: %zu bytes", overflow_size_);
 
-        esp_err_t err = esp_partition_write(partition_, write_offset_,
-                                            overflow_buffer_, overflow_size_);
+        esp_err_t err = writeImage(overflow_buffer_, overflow_size_);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to write overflow to flash: 0x%x", err);
             cleanup();
             writing_ = false;
             return err;
         }
-        write_offset_ += overflow_size_;
-        total_size_ += overflow_size_;
         overflow_size_ = 0;
     }
 
     reloc_state_ = RelocationState::COMPLETE;
     ESP_LOGI(TAG, "Streaming relocation complete, wrote %lu bytes", total_size_);
 
-    // Calculate CRC32 of relocated bytecode in flash
+    // The region was taken for the size the client announced.
+    if (exact_size_ && total_size_ != expected_size_) {
+        ESP_LOGE(TAG, "Upload brought %lu image bytes, announced %zu: not stored", total_size_, expected_size_);
+        cleanup();
+        writing_ = false;
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    // CRC32 of the relocated bytecode as it reads back from flash
     ESP_LOGI(TAG, "Calculating CRC32 of relocated bytecode...");
     uint32_t relocated_crc = 0;
     uint32_t bytes_remaining = total_size_;
-    uint32_t read_offset = partition_offset_;
+    uint32_t read_offset = image_offset_;
 
     while (bytes_remaining > 0) {
         size_t read_size = (bytes_remaining > CHUNK_SIZE) ? CHUNK_SIZE : bytes_remaining;
@@ -571,19 +583,22 @@ esp_err_t BytecodeWriter::finalizeWrite() {
 
     ESP_LOGI(TAG, "Relocated bytecode CRC32: 0x%lx", relocated_crc);
 
-    // Update registry (replaces the old entry of this name; its region is
-    // reusable once nothing executes from it any more)
-    BytecodeRegistry::Lock lock;
-    uint32_t flash_addr = registry_.getPartitionAddress() + partition_offset_;
-    if (!registry_.add(current_name_, partition_offset_, total_size_, relocated_crc, flash_addr)) {
-        ESP_LOGE(TAG, "Failed to update registry");
+    // Verified: what reads back is what was written. Without this a page
+    // that programmed wrongly would get a header with a matching checksum.
+    if (relocated_crc != crc32_) {
+        ESP_LOGE(TAG, "Read back differs from what was written (0x%lx, written 0x%lx): not stored",
+                 relocated_crc, crc32_);
         cleanup();
         writing_ = false;
-        return ESP_ERR_INVALID_STATE;
+        return ESP_ERR_INVALID_CRC;
     }
 
-    if (!registry_.save()) {
-        ESP_LOGE(TAG, "Failed to save registry");
+    // Commit point: the header goes in last, now that the image is in flash
+    // and read back. It replaces the old entry of this name (its region is
+    // reusable once nothing executes from it any more).
+    if (registry_.commit(current_name_, partition_offset_, total_size_, relocated_crc) !=
+        BytecodeRegistry::CommitResult::Ok) {
+        ESP_LOGE(TAG, "Failed to commit the entry");
         cleanup();
         writing_ = false;
         return ESP_ERR_INVALID_STATE;

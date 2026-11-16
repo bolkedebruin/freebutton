@@ -407,4 +407,4 @@ npm install --save-dev rollup-plugin-visualizer
 
 ## License
 
-MIT
+GNU General Public License, version 3 (see `LICENSE` in the repository root).

@@ -1,10 +1,12 @@
 // Media store core (see media_core.h). On-flash format and the reasoning
 // behind it: docs/MEDIA-STORE.md, "On-flash format".
 //
-// RAM: two uint16 masks per page (sector in use, sector known erased), a
-// liveness bitmap of the directory records, the open-file and mapping
-// tables and two upload slots (about 1.7 KB static plus 4 bytes per page).
-// Everything else is read from the directory in flash when needed.
+// RAM. Static (the state `g`): the open-file table, the mapping table and
+// two upload slots. Heap: 6 bytes per page (sectors in use, sectors known
+// erased, wear) and the index, one uint16 per live entry (its offset in the
+// active directory half, sorted by bucket and key) in a block that grows in
+// steps of 16 entries. The records themselves are read in place: the active
+// directory half stays mapped. Numbers: docs/MEDIA-STORE.md.
 #include "media_core.h"
 
 #include <stdlib.h>
@@ -40,8 +42,29 @@ static const char *TAG = "media";
 #define KILL_NONE 0xFFFFu
 #define DIR_MAX_RECORDS 1024u
 #define DIR_LIVE_MAX (48u * 1024u)   /* live records; leaves 16 KB of log per snapshot */
-#define DIR_DEL_RESERVE 64u
-#define WIN 512u
+/* Directory snapshot when idle (media_maintain), see dir_snapshot_due(). */
+#define DIR_IDLE_DEAD_MIN 64u         /* dead records, at least */
+#define DIR_IDLE_DEAD_RATIO 2u        /* and at least this many per live entry */
+#define DIR_IDLE_TAIL_RECORDS 8u      /* or (with the minimum above) fewer record slots than this left */
+#define DIR_IDLE_TAIL (8u * REC_MAX)  /* or less log than this left (bytes) ... */
+#define DIR_IDLE_GAIN (8u * 1024u)    /* ... of which a snapshot wins back at least this much */
+
+/* The index block grows by this many entries (32 bytes): see idx_reserve(). */
+#define IDX_STEP 16u
+
+/* Heap: the free map (once, at mount) and the index. The native tests put a
+ * failing allocator here. */
+#ifndef MEDIA_ALLOC
+#define MEDIA_ALLOC(n) malloc(n)
+#define MEDIA_FREE(p) free(p)
+#endif
+
+#ifdef MEDIA_CORE_STATS
+media_core_stats_t media_core_stats;
+#define COUNT(field, n) (media_core_stats.field += (n))
+#else
+#define COUNT(field, n) ((void)0)
+#endif
 
 enum { LOC_EMPTY = 0, LOC_SECTORS = 1, LOC_PAGES = 2 };
 
@@ -96,12 +119,29 @@ static struct {
     bool half_erased[2];   /* known blank */
     bool stale;            /* the other half has to be erased before reuse */
     bool dirty;            /* log tail not trustworthy: snapshot before appending */
+    /* An append failed after its write was tried and the snapshot that
+     * drops the record failed too (the record may be valid on flash while
+     * RAM does not count it), or the free map could not be restored. Until
+     * a snapshot succeeds (it rebuilds the free map): the space of a failed
+     * commit stays in use, nothing is allocated, media_maintain rests. */
+    bool unsettled;
+    bool idle_failed;      /* the idle snapshot failed: not again before the directory changes */
     bool compact_dirty;    /* something was freed since the last compaction search */
     uint32_t gen, next_seq, end;
-    uint16_t nrec, live_count;
+    uint16_t nrec;
     uint32_t live_bytes;
     uint32_t open_gen;
-    uint8_t dead[DIR_MAX_RECORDS / 8];
+    /* The active half, mapped: every directory read after the headers goes
+     * through it. */
+    const uint8_t *dir;
+    void *dir_handle;
+    /* The index: byte offsets (in the active half) of the live PUT records,
+     * sorted by (bucket, key). Built at mount and after a snapshot, updated
+     * by every append. A heap block of idx_cap entries, sized to what the
+     * store holds (idx_reserve). */
+    uint16_t nidx; /* live entries */
+    uint16_t idx_cap;
+    uint16_t *idx;
     uint16_t *used;   /* per page: sectors in use (live, open, reserved) */
     uint16_t *erased; /* per page: sectors known to be 0xFF */
     /* Wear leveling (RAM only, see "Allocation" in docs/MEDIA-STORE.md):
@@ -139,6 +179,7 @@ static uint32_t crc32_calc(const uint8_t *p, size_t n) {
                                    0xEDB88320u, 0xF00F9344u, 0xD6D6A3E8u, 0xCB61B38Cu,
                                    0x9B64C2B0u, 0x86D3D2D4u, 0xA00AE278u, 0xBDBDF21Cu};
     uint32_t c = 0xFFFFFFFFu;
+    COUNT(crc_bytes, n);
     while (n--) {
         c ^= *p++;
         c = (c >> 4) ^ t[c & 15];
@@ -175,8 +216,10 @@ static int fl_erase(uint32_t off, uint32_t len) {
     return e;
 }
 
-static bool is_dead(uint16_t o) { return (g.dead[o >> 3] >> (o & 7)) & 1; }
-static void set_dead(uint16_t o) { g.dead[o >> 3] |= (uint8_t)(1u << (o & 7)); }
+/* Mount only: one bit per record of the half, set when the record is dead
+ * (128 bytes on the stack). At run time the index says what is live. */
+static bool is_dead(const uint8_t *dead, uint16_t o) { return (dead[o >> 3] >> (o & 7)) & 1; }
+static void set_dead(uint8_t *dead, uint16_t o) { dead[o >> 3] |= (uint8_t)(1u << (o & 7)); }
 
 static bool key_ok(int bucket, const char *key, uint8_t *kl) {
     if (bucket < 0 || bucket >= MEDIA_BUCKET_COUNT || !key) return false;
@@ -244,14 +287,18 @@ static bool loc_free(const loc_t *l) {
 
 /* ------------------------------------------------------------ records */
 
+static bool rec_crc_ok(const uint8_t *p, uint32_t len) { return get32(p + len - 4) == crc32_calc(p, len - 4); }
+
+/* Decode and validate the fields. The CRC is not checked here: mount checks
+ * it once (rec_crc_ok), an append is compared with what was written. */
 static int rec_decode(const uint8_t *p, uint32_t len, rec_t *r) {
+    COUNT(rec_decodes, 1);
     memset(r, 0, sizeof *r);
     r->type = p[0];
     r->bucket = p[1];
     r->len = (uint16_t)len;
     r->seq = get32(p + 4);
     r->kill = get16(p + 8);
-    if (get32(p + len - 4) != crc32_calc(p, len - 4)) return -1;
     if (r->type == REC_DEL) return len == DEL_LEN && r->kill != KILL_NONE ? 0 : -1;
     if (r->type != REC_PUT || len < REC_FIXED + 8u) return -1;
     if (r->bucket >= MEDIA_BUCKET_COUNT) return -1;
@@ -316,61 +363,221 @@ static uint16_t rec_encode(const rec_t *r, uint8_t *buf) {
 
 /* --------------------------------------------------- directory reading */
 
-typedef struct {
-    uint32_t base, off, win_off, win_len;
-    uint8_t win[WIN];
-} iter_t;
+/* The records of the active half are read in place through g.dir. After
+ * mount the log is trusted: no CRC, and only what is needed is decoded. */
 
-static void it_init(iter_t *it, uint8_t half) {
-    it->base = half * HALF;
-    it->off = HDR_LEN;
-    it->win_off = 0;
-    it->win_len = 0;
-}
-
-/* Make [off, off + len) present in the window: 0 ok, -1 io, -2 past the half. */
-static int it_load(iter_t *it, uint32_t len) {
-    if (it->win_len && it->off >= it->win_off && it->off + len <= it->win_off + it->win_len) return 0;
-    uint32_t n = HALF - it->off;
-    if (n > WIN) n = WIN;
-    if (len > n) return -2;
-    if (fl_read(it->base + it->off, it->win, n)) return -1;
-    it->win_off = it->off;
-    it->win_len = n;
-    return 0;
-}
-
-/* 1 record, 0 end of log, -1 io error, -2 torn or invalid record. */
-static int it_next(iter_t *it, rec_t *r) {
-    if (it->off + 4 > HALF) return 0;
-    int e = it_load(it, 4);
-    if (e) return e == -1 ? -1 : 0;
-    const uint8_t *p = it->win + (it->off - it->win_off);
+/* The record that starts at off: 1 and its length, 0 end of log, -2 no
+ * record can start here (torn). */
+static int rec_frame(uint32_t off, uint32_t *len) {
+    if (off + 4 > HALF) return 0;
+    const uint8_t *p = g.dir + off;
     if (get32(p) == 0xFFFFFFFFu) return 0;
-    const uint32_t len = get16(p + 2);
-    if (len < DEL_LEN || len > REC_MAX || (len & 3u) || it->off + len > HALF) return -2;
-    e = it_load(it, len);
-    if (e) return e == -1 ? -1 : -2;
-    p = it->win + (it->off - it->win_off);
-    if (rec_decode(p, len, r)) return -2;
-    it->off += len;
+    const uint32_t n = get16(p + 2);
+    if (n < DEL_LEN || n > REC_MAX || (n & 3u) || off + n > HALF) return -2;
+    *len = n;
     return 1;
 }
 
-/* The live entry (bucket, key): 1 found, 0 not found, -1 io. */
-static int dir_find(uint8_t bucket, const char *key, uint8_t keylen, rec_t *r, uint16_t *ord) {
-    iter_t it;
-    it_init(&it, g.active);
+/* The length of the record at off; 0 when the log has no record there (a
+ * damaged log: the caller stops). Never reads outside the log. */
+static uint32_t rec_len(uint32_t off) {
+    if (off < HDR_LEN || off + DEL_LEN > g.end) return 0;
+    const uint32_t n = get16(g.dir + off + 2);
+    return n < DEL_LEN || n > REC_MAX || (n & 3u) || off + n > g.end ? 0 : n;
+}
+
+/* The whole record at off: 0 ok. */
+static int rec_load(uint32_t off, rec_t *r) {
+    const uint32_t len = rec_len(off);
+    return len ? rec_decode(g.dir + off, len, r) : -1;
+}
+
+/* The key of the PUT record at off: it follows the location. A key that
+ * would not lie inside the log (damaged record) is given as empty. */
+static const char *rec_key(uint32_t off, size_t *keylen) {
+    const uint8_t *p = g.dir + off;
+    uint32_t k = REC_FIXED;
+    if (p[11] == LOC_SECTORS) k += 4;
+    else if (p[11] == LOC_PAGES) k += (get32(p + 12) + PAGE - 1) / PAGE;
+    if (off + k + p[10] > g.end) {
+        *keylen = 0;
+        return (const char *)p;
+    }
+    *keylen = p[10];
+    return (const char *)p + k;
+}
+
+/* The PUT record at off against (bucket, key): < 0, 0, > 0. */
+static int rec_cmp(uint32_t off, uint8_t bucket, const char *key, size_t keylen) {
+    COUNT(key_cmps, 1);
+    const uint8_t b = g.dir[off + 1];
+    if (b != bucket) return b < bucket ? -1 : 1;
+    size_t kl;
+    const char *k = rec_key(off, &kl);
+    return key_cmp(k, kl, key, keylen);
+}
+
+/* The ordinal of the record at off: a walk over the record lengths. Only an
+ * append that kills a record needs it. 0 ok, -1 the log is damaged. */
+static int ord_of(uint32_t off, uint16_t *ord) {
+    uint16_t o = 0;
+    uint32_t p = HDR_LEN;
+    while (p < off) {
+        const uint32_t len = rec_len(p);
+        if (!len) return -1;
+        p += len;
+        o++;
+    }
+    if (p != off) return -1;
+    *ord = o;
+    return 0;
+}
+
+/* ------------------------------------------------------------- the index */
+
+/* The first index position whose entry is >= (bucket, key); > with `upper`.
+ * *equal (may be NULL): an entry with this bucket and key exists (without
+ * `upper` it is the one at the position returned). */
+static uint16_t idx_search(uint8_t bucket, const char *key, size_t keylen, bool upper, bool *equal) {
+    uint16_t lo = 0, hi = g.nidx;
+    bool eq = false;
+    while (lo < hi) {
+        const uint16_t mid = (uint16_t)((lo + hi) / 2u);
+        const int c = rec_cmp(g.idx[mid], bucket, key, keylen);
+        if (c == 0) eq = true;
+        if (c < 0 || (upper && c == 0)) lo = (uint16_t)(mid + 1u);
+        else hi = mid;
+    }
+    if (equal) *equal = eq;
+    return lo;
+}
+
+/* The PUT record at off (len bytes) is live. A key is live once; should a
+ * damaged log hold it twice, the one earlier in the log comes first and is
+ * the one a lookup finds. */
+static void idx_insert(uint32_t off, uint32_t len) {
+    size_t kl;
+    const char *k = rec_key(off, &kl);
+    const uint16_t i = idx_search(g.dir[off + 1], k, kl, true, NULL);
+    memmove(&g.idx[i + 1], &g.idx[i], (size_t)(g.nidx - i) * sizeof g.idx[0]);
+    g.idx[i] = (uint16_t)off;
+    g.nidx++;
+    g.live_bytes += len;
+}
+
+/* The record at off is no longer live. */
+static void idx_remove(uint32_t off) {
+    for (uint16_t i = 0; i < g.nidx; i++) {
+        if (g.idx[i] != off) continue;
+        memmove(&g.idx[i], &g.idx[i + 1], (size_t)(g.nidx - i - 1u) * sizeof g.idx[0]);
+        g.nidx--;
+        g.live_bytes -= rec_len(off);
+        return;
+    }
+}
+
+/* The record at off is in the index (it is a live PUT). A scan of the
+ * offsets: used by the walks in log order (snapshot, compaction). */
+static bool idx_has(uint32_t off) {
+    for (uint16_t i = 0; i < g.nidx; i++)
+        if (g.idx[i] == off) return true;
+    return false;
+}
+
+/* Give the index block `cap` entries (>= nidx): 0 ok, -1 no memory, and
+ * then nothing has changed. */
+static int idx_resize(unsigned cap) {
+    uint16_t *nu = (uint16_t *)MEDIA_ALLOC(cap * sizeof *nu);
+    if (!nu) return -1;
+    if (g.nidx) memcpy(nu, g.idx, g.nidx * sizeof *nu);
+    if (g.idx) MEDIA_FREE(g.idx);
+    g.idx = nu;
+    g.idx_cap = (uint16_t)cap;
+    return 0;
+}
+
+/* Room for n entries: 0 ok, -1 no memory (nothing has changed). The block
+ * is n rounded up to IDX_STEP entries. A step of 16 entries is 32 bytes:
+ * a grow is an allocate, copy, free of a block this small, once per 16 new
+ * files, and the unused tail is 30 bytes at most; a smaller step would pay
+ * the allocator's header and rounding (4 to 8 bytes per block) and a
+ * grow more often for less than that. Called before anything is written
+ * for the operation that needs the entry. */
+static int idx_reserve(unsigned n) {
+    if (n <= g.idx_cap) return 0;
+    if (n > DIR_MAX_RECORDS) return -1;
+    return idx_resize((n + IDX_STEP - 1u) / IDX_STEP * IDX_STEP); /* DIR_MAX_RECORDS is a multiple */
+}
+
+/* After a snapshot: give back the steps the index no longer needs (entries
+ * were deleted). Keeps an entry for every upload in progress. When there is
+ * no memory for the smaller block the larger one stays. */
+static void idx_trim(void) {
+    unsigned need = g.nidx ? g.nidx : 1u;
+    for (int i = 0; i < MEDIA_MAX_WRITERS; i++) need += g.writers[i].used != 0;
+    const unsigned cap = (need + IDX_STEP - 1u) / IDX_STEP * IDX_STEP;
+    if (cap < g.idx_cap) (void)idx_resize(cap);
+}
+
+/* The index of the active half: a walk over the record lengths and one
+ * binary insertion per live entry. `dead`: the liveness bitmap of mount;
+ * NULL after a snapshot, where every record is a live PUT. 0 ok, -1 the log
+ * is damaged (the index then holds the entries before the damage), -2 no
+ * memory for the index (mount only: a snapshot does not add entries). */
+static int idx_build(const uint8_t *dead) {
+    unsigned live = 0;
+    uint32_t off = HDR_LEN;
     for (uint16_t o = 0; o < g.nrec; o++) {
-        if (it_next(&it, r) != 1) return -1;
-        if (r->type == REC_PUT && !is_dead(o) && r->bucket == bucket && r->keylen == keylen &&
-            memcmp(r->key, key, keylen) == 0) {
-            *ord = o;
-            return 1;
-        }
+        const uint32_t len = rec_len(off);
+        if (!len) break;
+        live += g.dir[off] == REC_PUT && !(dead && is_dead(dead, o));
+        off += len;
+    }
+    g.nidx = 0;
+    g.live_bytes = 0;
+    if (idx_reserve(live ? live : 1u)) return -2;
+    off = HDR_LEN;
+    for (uint16_t o = 0; o < g.nrec; o++) {
+        const uint32_t len = rec_len(off);
+        if (!len) return -1;
+        if (g.dir[off] == REC_PUT && !(dead && is_dead(dead, o))) idx_insert(off, len);
+        off += len;
     }
     return 0;
 }
+
+/* The live entry (bucket, key): 1 found (*off: where its record is), 0 not
+ * found, -1 unreadable. */
+static int dir_find(uint8_t bucket, const char *key, uint8_t keylen, rec_t *r, uint32_t *off) {
+    bool equal;
+    const uint16_t i = idx_search(bucket, key, keylen, false, &equal);
+    if (!equal) return 0;
+    if (rec_load(g.idx[i], r)) return -1;
+    *off = g.idx[i];
+    return 1;
+}
+
+/* Map directory half `half` (nothing is mapped). */
+static int dir_map(uint8_t half) {
+    const uint8_t page = half;
+    const void *ptr = NULL;
+    void *handle = NULL;
+    if (g.f->map(g.f->ctx, &page, 1, &ptr, &handle)) return -1;
+    g.dir = (const uint8_t *)ptr;
+    g.dir_handle = handle;
+    return 0;
+}
+
+static void dir_unmap(void) {
+    if (g.dir) g.f->unmap(g.f->ctx, g.dir_handle);
+    g.dir = NULL;
+    g.dir_handle = NULL;
+}
+
+/* The active half is mapped. It is not after a mapping failed in
+ * dir_readback(): every operation that reads the directory starts here and
+ * tries again. */
+static bool dir_ok(void) { return g.dir || dir_map(g.active) == 0; }
 
 typedef struct {
     bool valid;
@@ -418,34 +625,95 @@ static int verify_blank(uint32_t off, uint32_t len) {
 
 /* --------------------------------------------------- directory writing */
 
+/* The n records just written into the half now mapped, [HDR_LEN, end):
+ * every one framed and its CRC right. They become the log that is trusted. */
+static bool dir_verify(uint32_t end, uint16_t n) {
+    uint32_t off = HDR_LEN;
+    for (uint16_t i = 0; i < n; i++) {
+        uint32_t len = 0;
+        if (off >= end || rec_frame(off, &len) != 1 || off + len > end || !rec_crc_ok(g.dir + off, len)) return false;
+        off += len;
+    }
+    return off == end;
+}
+
+static void open_mark(const open_t *o, bool used);
+
+/* The free map from what owns space: the live entries, the open files (a
+ * dead one keeps its space until the last close) and the uploads in
+ * progress. *r is scratch. 0 ok. */
+static int map_rebuild(rec_t *r) {
+    for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++) g.used[p] = 0;
+    for (uint16_t i = 0; i < g.nidx; i++) {
+        if (rec_load(g.idx[i], r)) return -1;
+        loc_mark(&r->loc, true);
+    }
+    for (int i = 0; i < MEDIA_MAX_OPEN; i++)
+        if (g.open[i].used) open_mark(&g.open[i], true);
+    for (int i = 0; i < MEDIA_MAX_WRITERS; i++)
+        if (g.writers[i].used) loc_mark(&g.writers[i].loc, true);
+    g.compact_dirty = true;
+    return 0;
+}
+
 /* Copy the live records into the other half, then write its header (the
- * commit point), then switch to it. *kill (an ordinal in the old half) is
- * translated to the new half. */
-static media_err_t dir_snapshot(uint16_t *kill) {
+ * commit point), then switch to it. *kill_off (may be NULL; the offset of a
+ * record in the old half, 0 = none) is translated to the new half.
+ *
+ * The records are checked through the mapping before the header is written.
+ * After the header write the header is read back, whatever the write
+ * returned: when it is on flash the snapshot is committed (a write that
+ * reports an error after programming everything must not leave RAM on the
+ * old half while a reboot would take the new one). When it cannot be read,
+ * which half a reboot takes is not known: RAM stays on the old half, dirty,
+ * so nothing is appended to it before the next snapshot, and both halves
+ * hold the same entries. */
+static media_err_t dir_snapshot(uint32_t *kill_off) {
+    if (!dir_ok()) return MEDIA_ERR_IO;
     const uint8_t old = g.active, nu = (uint8_t)(old ^ 1u);
     const uint32_t base = nu * HALF;
     if (!g.half_erased[nu]) {
         if (fl_erase(base, HALF)) return MEDIA_ERR_IO;
     }
     g.half_erased[nu] = false;
-    iter_t it;
     rec_t r;
     uint8_t buf[REC_MAX];
-    it_init(&it, old);
-    uint32_t pos = HDR_LEN;
-    uint16_t n = 0, newkill = KILL_NONE;
+    uint32_t pos = HDR_LEN, off = HDR_LEN, newkill = 0;
+    uint16_t n = 0;
     for (uint16_t o = 0; o < g.nrec; o++) {
-        if (it_next(&it, &r) != 1) return MEDIA_ERR_IO;
-        if (r.type != REC_PUT || is_dead(o)) continue;
+        const uint32_t at = off, rlen = rec_len(at);
+        if (!rlen) return MEDIA_ERR_IO;
+        off += rlen;
+        if (g.dir[at] != REC_PUT || !idx_has(at)) continue;
+        if (rec_decode(g.dir + at, rlen, &r)) return MEDIA_ERR_IO;
         r.kill = KILL_NONE;
         const uint16_t len = rec_encode(&r, buf);
         if (pos + len > HALF) return MEDIA_ERR_NO_SPACE;
         if (fl_write(base + pos, buf, len)) return MEDIA_ERR_IO;
-        if (kill && *kill == o) newkill = n;
+        if (kill_off && *kill_off == at) newkill = pos;
         pos += len;
         n++;
     }
-    if (hdr_write(nu, g.gen + 1u, g.next_seq)) return MEDIA_ERR_IO;
+    /* Map the new half before its header commits it (its records are all
+     * written, so a mapping that is a copy has them). Until the header is
+     * known to be there the old half stays the active, mapped one. */
+    const uint8_t *const old_dir = g.dir;
+    void *const old_handle = g.dir_handle;
+    g.dir = NULL;
+    bool committed = false;
+    if (dir_map(nu) == 0 && dir_verify(pos, n)) {
+        (void)hdr_write(nu, g.gen + 1u, g.next_seq);
+        hdr_t h;
+        if (hdr_read(nu, &h)) g.dirty = true;
+        else committed = h.valid && h.gen == g.gen + 1u;
+    }
+    if (!committed) {
+        dir_unmap();
+        g.dir = old_dir;
+        g.dir_handle = old_handle;
+        return MEDIA_ERR_IO;
+    }
+    g.f->unmap(g.f->ctx, old_handle);
     g.gen++;
     g.active = nu;
     g.half_erased[old] = false;
@@ -453,39 +721,92 @@ static media_err_t dir_snapshot(uint16_t *kill) {
     g.end = pos;
     g.nrec = n;
     g.dirty = false;
-    memset(g.dead, 0, sizeof g.dead);
-    if (kill) *kill = newkill;
+    g.idle_failed = false;
+    if (kill_off) *kill_off = newkill;
+    /* neither can fail on records that dir_verify() passed (the index holds
+     * as many entries as before: no memory is needed) */
+    if (idx_build(NULL) || (g.unsettled && map_rebuild(&r))) {
+        g.dirty = true;
+        return MEDIA_ERR_IO;
+    }
+    g.unsettled = false;
+    idx_trim();
     return MEDIA_OK;
 }
 
-/* Append r (seq and kill filled in; kill is an ordinal of the active half).
- * The record is the commit point of the operation. */
-static media_err_t dir_append(rec_t *r) {
+static bool dir_blank(uint32_t off, uint32_t len) {
+    for (uint32_t i = 0; i < len; i++)
+        if (g.dir[off + i] != 0xFF) return false;
+    return true;
+}
+
+/* The record just written at off, read back through the mapping. On the
+ * device the mapping shows a write at once (the flash driver invalidates
+ * the cache of mapped pages, see media_esp.c). A flash whose mappings are
+ * copies (the host tool's) shows it after mapping again: unmap first, the
+ * device does not map a page twice. 0 = it is there; -1 it is not, or the
+ * half could not be mapped again (g.dir is NULL then, see dir_ok()). */
+static int dir_readback(uint32_t off, const uint8_t *buf, uint32_t len) {
+    if (memcmp(g.dir + off, buf, len) == 0) return 0;
+    dir_unmap();
+    if (dir_map(g.active)) return -1;
+    return memcmp(g.dir + off, buf, len) == 0 ? 0 : -1;
+}
+
+/* Append r (seq filled in). kill_off: the record it kills (its offset in
+ * the active half), 0 = none; r->kill is set from it. The record is the
+ * commit point of the operation. Keeps the liveness bitmap and the index up
+ * to date.
+ *
+ * When the write was tried and failed, or does not read back, the record
+ * may still be complete on flash, where a reboot would count it. A snapshot
+ * is written at once: it is made from RAM, so it drops the record. When
+ * that fails too the store is `unsettled` (see there) and the caller must
+ * not free the space the record refers to.
+ *
+ * A PUT that kills nothing adds an index entry: the room for it is made
+ * before anything is written (media_put_begin has done it already; here
+ * again for an upload whose key was deleted meanwhile). MEDIA_ERR_UNAVAILABLE
+ * when there is no memory: nothing was written. A replace, a move and a
+ * DEL need no entry. */
+static media_err_t dir_append(rec_t *r, uint32_t kill_off) {
     uint8_t buf[REC_MAX];
     const uint16_t len = r->type == REC_DEL ? (uint16_t)DEL_LEN : put_len(r->keylen, &r->loc);
+    if (g.nidx >= DIR_MAX_RECORDS) return MEDIA_ERR_NO_SPACE; /* a snapshot would not make room */
+    const bool adds = r->type == REC_PUT && !kill_off;
+    if (adds && idx_reserve(g.nidx + 1u)) return MEDIA_ERR_UNAVAILABLE;
     for (int attempt = 0; attempt < 2; attempt++) {
         if (g.dirty || g.nrec >= DIR_MAX_RECORDS || g.end + len > HALF) {
-            const media_err_t e = dir_snapshot(&r->kill);
+            const media_err_t e = dir_snapshot(&kill_off);
             if (e != MEDIA_OK) return e;
-            if (g.end + len > HALF) return MEDIA_ERR_NO_SPACE;
-            if (r->type == REC_DEL && r->kill == KILL_NONE) return MEDIA_ERR_IO; /* cannot happen */
+            if (g.nrec >= DIR_MAX_RECORDS || g.end + len > HALF) return MEDIA_ERR_NO_SPACE;
         }
-        const int v = verify_blank(g.active * HALF + g.end, len);
-        if (v < 0) return MEDIA_ERR_IO;
-        if (v == 0) {
+        r->kill = KILL_NONE;
+        if (kill_off && ord_of(kill_off, &r->kill)) {
+            LOGE("directory: damaged log before 0x%x", (unsigned)kill_off);
+            g.dirty = true;
+            return MEDIA_ERR_IO;
+        }
+        if (r->type == REC_DEL && r->kill == KILL_NONE) return MEDIA_ERR_IO; /* cannot happen */
+        if (r->type == REC_PUT && !kill_off && idx_reserve(g.nidx + 1u)) return MEDIA_ERR_UNAVAILABLE; /* not `adds`: cannot happen */
+        if (!dir_blank(g.end, len)) {
             LOGW("directory tail not blank at 0x%x, snapshot", (unsigned)g.end);
             g.dirty = true;
             continue;
         }
         rec_encode(r, buf);
-        if (fl_write(g.active * HALF + g.end, buf, len)) {
+        if (fl_write(g.active * HALF + g.end, buf, len) || dir_readback(g.end, buf, len)) {
+            LOGE("directory: append at 0x%x failed", (unsigned)g.end);
             g.dirty = true;
+            if (dir_snapshot(NULL) != MEDIA_OK) g.unsettled = true;
             return MEDIA_ERR_IO;
         }
-        if (r->kill != KILL_NONE) set_dead(r->kill);
-        if (r->type == REC_DEL) set_dead(g.nrec);
-        g.nrec++;
+        const uint32_t at = g.end;
         g.end += len;
+        g.nrec++;
+        if (kill_off) idx_remove(kill_off);
+        if (r->type == REC_PUT) idx_insert(at, len);
+        g.idle_failed = false;
         return MEDIA_OK;
     }
     return MEDIA_ERR_IO;
@@ -521,15 +842,20 @@ static void map_release(uint8_t m) {
     }
 }
 
-static void open_free_space(const open_t *o) {
+/* The space of an open file, in the free map. */
+static void open_mark(const open_t *o, bool used) {
     if (o->kind == LOC_SECTORS) {
-        g.used[o->page] &= (uint16_t)~run_mask(o->first, o->nsec);
+        const uint16_t m = run_mask(o->first, o->nsec);
+        if (used) g.used[o->page] |= m;
+        else g.used[o->page] &= (uint16_t)~m;
     } else if (o->kind == LOC_PAGES) {
         for (unsigned p = 0; p < g.npages; p++)
-            if (o->pagebits[p >> 3] & (1u << (p & 7))) g.used[p] = 0;
+            if (o->pagebits[p >> 3] & (1u << (p & 7))) g.used[p] = used ? 0xFFFFu : 0u;
     }
     g.compact_dirty = true;
 }
+
+static void open_free_space(const open_t *o) { open_mark(o, false); }
 
 static media_err_t open_map(open_t *o, const rec_t *r) {
     const loc_t *l = &r->loc;
@@ -572,14 +898,12 @@ static media_err_t open_map(open_t *o, const rec_t *r) {
     return MEDIA_OK;
 }
 
-/* r (live, ordinal killed by the record just appended) is no longer live:
- * free its space now, or on the last close when it is open. */
+/* r was killed by the record just appended (which took it out of the
+ * index): free its space now, or on the last close when it is open. */
 static void retire(const rec_t *r) {
     const int i = open_find(r->seq);
     if (i >= 0) g.open[i].dead = 1;
     else loc_mark(&r->loc, false);
-    g.live_count--;
-    g.live_bytes -= r->len;
 }
 
 /* ---------------------------------------------------------- allocation */
@@ -675,33 +999,36 @@ static bool alloc_find(loc_t *l) {
 }
 
 /* The oldest (lowest seq) live RENDER entry that is not open, with
- * after < seq <= upto: 1 found, 0 none, -1 io. */
-static int evictable_oldest(uint32_t after, uint32_t upto, rec_t *out, uint16_t *ord) {
-    iter_t it;
-    rec_t r;
-    int found = 0;
-    it_init(&it, g.active);
-    for (uint16_t o = 0; o < g.nrec; o++) {
-        if (it_next(&it, &r) != 1) return -1;
-        if (r.type != REC_PUT || is_dead(o) || r.bucket != MEDIA_BUCKET_RENDER || r.loc.kind == LOC_EMPTY) continue;
-        if (r.seq <= after || r.seq > upto || open_find(r.seq) >= 0) continue;
-        if (!found || r.seq < out->seq) {
-            *out = r;
-            *ord = o;
-            found = 1;
+ * after < seq <= upto: 1 found (*off: where its record is), 0 none, -1
+ * unreadable. The entries of a bucket are one run of the index. */
+static int evictable_oldest(uint32_t after, uint32_t upto, rec_t *out, uint32_t *off) {
+    uint32_t best = 0, best_seq = 0;
+    for (uint16_t i = idx_search(MEDIA_BUCKET_RENDER, "", 0, false, NULL); i < g.nidx; i++) {
+        const uint8_t *p = g.dir + g.idx[i];
+        if (p[1] != MEDIA_BUCKET_RENDER) break;
+        const uint32_t seq = get32(p + 4);
+        if (p[11] == LOC_EMPTY || seq <= after || seq > upto || open_find(seq) >= 0) continue;
+        if (!best || seq < best_seq) {
+            best = g.idx[i];
+            best_seq = seq;
         }
     }
-    return found;
+    if (!best) return 0;
+    if (rec_load(best, out)) return -1;
+    *off = best;
+    return 1;
 }
 
 static void evict_restore(uint32_t upto) {
     rec_t r;
-    uint16_t o;
+    uint32_t o;
     uint32_t after = 0;
-    while (evictable_oldest(after, upto, &r, &o) == 1) {
+    int e;
+    while ((e = evictable_oldest(after, upto, &r, &o)) == 1) {
         loc_mark(&r.loc, true);
         after = r.seq;
     }
+    if (e < 0) g.dirty = g.unsettled = true; /* the free map is rebuilt by the next snapshot */
 }
 
 /* Find and mark space for l; evict RENDER entries (oldest first) only when
@@ -714,7 +1041,7 @@ static media_err_t reserve(loc_t *l) {
         return MEDIA_OK;
     }
     rec_t r;
-    uint16_t o;
+    uint32_t o;
     uint32_t upto = 0;
     bool fits = false;
     for (;;) {
@@ -750,15 +1077,12 @@ static media_err_t reserve(loc_t *l) {
         d.type = REC_DEL;
         d.bucket = r.bucket;
         d.seq = g.next_seq;
-        d.kill = o;
-        const media_err_t err = dir_append(&d);
+        const media_err_t err = dir_append(&d, o);
         if (err != MEDIA_OK) {
             evict_restore(upto);
             return err;
         }
         g.next_seq++;
-        g.live_count--;
-        g.live_bytes -= r.len;
     }
     if (!alloc_find(l)) return MEDIA_ERR_NO_SPACE;
     loc_mark(l, true);
@@ -790,41 +1114,46 @@ static media_err_t mount_locked(void) {
     g.compact_dirty = true;
     for (unsigned p = 0; p < MEDIA_DIR_PAGES; p++) g.used[p] = 0xFFFFu;
 
-    iter_t it;
+    if (dir_map(g.active)) return MEDIA_ERR_IO;
+
+    /* The one pass that checks every record (CRC, fields, kill) and marks
+     * the dead ones. */
+    uint8_t dead[DIR_MAX_RECORDS / 8];
+    memset(dead, 0, sizeof dead);
     rec_t r;
     uint16_t n = 0;
-    uint32_t maxseq = 0;
-    it_init(&it, g.active);
+    uint32_t maxseq = 0, off = HDR_LEN;
     for (;;) {
-        const uint32_t start = it.off;
-        const int e = it_next(&it, &r);
+        uint32_t len = 0;
+        const int e = rec_frame(off, &len);
         if (e == 0) break;
-        if (e == -1) return MEDIA_ERR_IO;
-        bool ok = e == 1 && n < DIR_MAX_RECORDS;
-        if (ok && r.kill != KILL_NONE) ok = r.kill < n && !is_dead(r.kill);
+        bool ok = e == 1 && n < DIR_MAX_RECORDS && rec_crc_ok(g.dir + off, len) &&
+                  rec_decode(g.dir + off, len, &r) == 0;
+        if (ok && r.kill != KILL_NONE) ok = r.kill < n && !is_dead(dead, r.kill);
         if (!ok) {
-            LOGW("directory: torn or invalid record at 0x%x, ignored from there", (unsigned)start);
-            it.off = start;
+            LOGW("directory: torn or invalid record at 0x%x, ignored from there", (unsigned)off);
             g.dirty = true;
             break;
         }
-        if (r.kill != KILL_NONE) set_dead(r.kill);
-        if (r.type == REC_DEL) set_dead(n);
+        if (r.kill != KILL_NONE) set_dead(dead, r.kill);
+        if (r.type == REC_DEL) set_dead(dead, n);
         if (r.seq > maxseq) maxseq = r.seq;
+        off += len;
         n++;
     }
-    g.end = it.off;
+    g.end = off;
     g.nrec = n;
     if (maxseq + 1u > g.next_seq) g.next_seq = maxseq + 1u;
 
-    it_init(&it, g.active);
-    for (uint16_t o = 0; o < n; o++) {
-        if (it_next(&it, &r) != 1) return MEDIA_ERR_IO;
-        if (r.type != REC_PUT || is_dead(o)) continue;
+    /* A later record can kill an earlier one, so what is live is known only
+     * now: the index from the bitmap (its memory sized to the live entries),
+     * the free map from the index. */
+    const int b = idx_build(dead);
+    if (b) return b == -2 ? MEDIA_ERR_UNAVAILABLE : MEDIA_ERR_IO;
+    for (uint16_t i = 0; i < g.nidx; i++) {
+        if (rec_load(g.idx[i], &r)) return MEDIA_ERR_IO;
         if (!loc_free(&r.loc)) LOGE("directory: %.*s overlaps another entry", (int)r.keylen, r.key);
         loc_mark(&r.loc, true);
-        g.live_count++;
-        g.live_bytes += r.len;
     }
     return MEDIA_OK;
 }
@@ -837,11 +1166,12 @@ media_err_t media_mount(const media_flash_t *flash) {
     memset(&g, 0, sizeof g);
     g.f = flash;
     g.npages = (uint16_t)(flash->size / PAGE);
-    g.used = (uint16_t *)calloc(3u * g.npages, sizeof(uint16_t));
+    g.used = (uint16_t *)MEDIA_ALLOC(3u * g.npages * sizeof(uint16_t));
     if (!g.used) {
         g.f = NULL;
         return MEDIA_ERR_UNAVAILABLE;
     }
+    memset(g.used, 0, 3u * g.npages * sizeof(uint16_t));
     g.erased = g.used + g.npages;
     g.wear = g.erased + g.npages;
     g.fill = NO_PAGE;
@@ -863,7 +1193,9 @@ media_err_t media_mount(const media_flash_t *flash) {
     }
     unlock();
     if (e != MEDIA_OK) {
-        free(g.used);
+        dir_unmap();
+        if (g.idx) MEDIA_FREE(g.idx);
+        MEDIA_FREE(g.used);
         memset(&g, 0, sizeof g);
     }
     return e;
@@ -874,9 +1206,11 @@ void media_unmount(void) {
     lock();
     for (int i = 0; i < MEDIA_MAX_OPEN; i++)
         if (g.maps[i].refs) g.f->unmap(g.f->ctx, g.maps[i].handle);
+    dir_unmap();
     g.mounted = false;
     unlock();
-    free(g.used);
+    if (g.idx) MEDIA_FREE(g.idx);
+    MEDIA_FREE(g.used);
     memset(&g, 0, sizeof g);
 }
 
@@ -890,9 +1224,9 @@ media_err_t media_open(media_bucket_t bucket, const char *key, media_file_t *out
     if (!g.mounted) return MEDIA_ERR_UNAVAILABLE;
     lock();
     rec_t r;
-    uint16_t ord;
+    uint32_t at;
     media_err_t err = MEDIA_OK;
-    const int e = dir_find((uint8_t)bucket, key, kl, &r, &ord);
+    const int e = dir_ok() ? dir_find((uint8_t)bucket, key, kl, &r, &at) : -1;
     int i = -1;
     if (e < 0) err = MEDIA_ERR_IO;
     else if (e == 0) err = MEDIA_ERR_NOT_FOUND;
@@ -968,10 +1302,19 @@ media_err_t media_put_begin(media_bucket_t bucket, const char *key, uint32_t siz
     loc_for_size(size, &l);
     const uint16_t reclen = put_len(kl, &l);
     if (!w) err = MEDIA_ERR_BUSY;
-    else if (g.live_count + inflight_n + 1u > MEDIA_MAX_ENTRIES ||
+    else if (!dir_ok() || (g.unsettled && dir_snapshot(NULL) != MEDIA_OK)) err = MEDIA_ERR_IO;
+    else if (g.nidx + inflight_n + 1u > MEDIA_MAX_ENTRIES ||
              g.live_bytes + inflight_b + reclen > DIR_LIVE_MAX)
         err = MEDIA_ERR_NO_SPACE;
-    else err = reserve(&l);
+    else {
+        /* An index entry for this upload and for every other one in
+         * progress, before anything is written (evictions, data). A replace
+         * needs none: it does not fail for memory. */
+        bool exists = false;
+        (void)idx_search((uint8_t)bucket, key, kl, false, &exists);
+        if (idx_reserve(g.nidx + inflight_n + 1u) && !exists) err = MEDIA_ERR_UNAVAILABLE;
+        else err = reserve(&l);
+    }
     if (err == MEDIA_OK) {
         memset(w, 0, sizeof *w);
         w->used = 1;
@@ -1038,6 +1381,14 @@ static void writer_release(media_writer_t *w) {
     memset(w, 0, sizeof *w);
 }
 
+/* The commit of w failed. Its space is free again, unless its record may
+ * have reached the flash (`unsettled`): then it stays in use until a
+ * snapshot has dropped the record and rebuilt the free map. */
+static void writer_fail(media_writer_t *w) {
+    if (g.unsettled) memset(w, 0, sizeof *w);
+    else writer_release(w);
+}
+
 media_err_t media_put_commit(media_writer_t *w, const uint8_t md5[16]) {
     if (!w) return MEDIA_ERR_INVALID;
     if (!g.mounted) return MEDIA_ERR_UNAVAILABLE;
@@ -1050,8 +1401,8 @@ media_err_t media_put_commit(media_writer_t *w, const uint8_t md5[16]) {
         err = MEDIA_ERR_SIZE;
     } else {
         rec_t old, nr;
-        uint16_t ord = KILL_NONE;
-        const int e = dir_find(w->bucket, w->key, w->keylen, &old, &ord);
+        uint32_t at = 0;
+        const int e = dir_ok() ? dir_find(w->bucket, w->key, w->keylen, &old, &at) : -1;
         if (e < 0) {
             err = MEDIA_ERR_IO;
         } else {
@@ -1061,22 +1412,18 @@ media_err_t media_put_commit(media_writer_t *w, const uint8_t md5[16]) {
             nr.keylen = w->keylen;
             memcpy(nr.key, w->key, w->keylen);
             nr.seq = g.next_seq;
-            nr.kill = e ? ord : (uint16_t)KILL_NONE;
             nr.size = w->size;
             nr.mtime = w->mtime;
             if (md5) memcpy(nr.md5, md5, 16);
             nr.loc = w->loc;
-            nr.len = w->reclen;
-            err = dir_append(&nr);
+            err = dir_append(&nr, e ? at : 0u);
         }
         if (err == MEDIA_OK) {
             g.next_seq++;
             if (e) retire(&old);
-            g.live_count++;
-            g.live_bytes += nr.len;
             memset(w, 0, sizeof *w); /* the space now belongs to the entry */
         } else {
-            writer_release(w);
+            writer_fail(w);
         }
     }
     unlock();
@@ -1096,9 +1443,9 @@ media_err_t media_delete(media_bucket_t bucket, const char *key) {
     if (!g.mounted) return MEDIA_ERR_UNAVAILABLE;
     lock();
     rec_t r;
-    uint16_t ord;
+    uint32_t at;
     media_err_t err = MEDIA_OK;
-    const int e = dir_find((uint8_t)bucket, key, kl, &r, &ord);
+    const int e = dir_ok() ? dir_find((uint8_t)bucket, key, kl, &r, &at) : -1;
     if (e < 0) err = MEDIA_ERR_IO;
     else if (e == 0) err = MEDIA_ERR_NOT_FOUND;
     else {
@@ -1107,8 +1454,7 @@ media_err_t media_delete(media_bucket_t bucket, const char *key) {
         d.type = REC_DEL;
         d.bucket = r.bucket;
         d.seq = g.next_seq;
-        d.kill = ord;
-        err = dir_append(&d);
+        err = dir_append(&d, at);
         if (err == MEDIA_OK) {
             g.next_seq++;
             retire(&r);
@@ -1132,8 +1478,8 @@ media_err_t media_stat(media_bucket_t bucket, const char *key, media_stat_t *out
     if (!g.mounted) return MEDIA_ERR_UNAVAILABLE;
     lock();
     rec_t r;
-    uint16_t ord;
-    const int e = dir_find((uint8_t)bucket, key, kl, &r, &ord);
+    uint32_t at;
+    const int e = dir_ok() ? dir_find((uint8_t)bucket, key, kl, &r, &at) : -1;
     if (e == 1) fill_stat(&r, out);
     unlock();
     return e < 0 ? MEDIA_ERR_IO : e == 0 ? MEDIA_ERR_NOT_FOUND : MEDIA_OK;
@@ -1145,25 +1491,16 @@ media_err_t media_next(media_bucket_t bucket, const char *after, media_stat_t *o
     if (!after) after = "";
     const size_t alen = strlen(after);
     lock();
-    iter_t it;
-    rec_t r, best;
-    bool have = false, io = false;
-    it_init(&it, g.active);
-    for (uint16_t o = 0; o < g.nrec; o++) {
-        if (it_next(&it, &r) != 1) {
-            io = true;
-            break;
-        }
-        if (r.type != REC_PUT || is_dead(o) || r.bucket != bucket) continue;
-        if (key_cmp(r.key, r.keylen, after, alen) <= 0) continue;
-        if (!have || key_cmp(r.key, r.keylen, best.key, best.keylen) < 0) {
-            best = r;
-            have = true;
-        }
+    /* the entries of a bucket are one run of the index, in key order */
+    rec_t r;
+    int e = -1;
+    if (dir_ok()) {
+        const uint16_t i = idx_search((uint8_t)bucket, after, alen, true, NULL);
+        e = i < g.nidx && g.dir[g.idx[i] + 1u] == (uint8_t)bucket ? (rec_load(g.idx[i], &r) ? -1 : 1) : 0;
     }
-    if (have && !io) fill_stat(&best, out);
+    if (e == 1) fill_stat(&r, out);
     unlock();
-    return io ? MEDIA_ERR_IO : have ? MEDIA_OK : MEDIA_ERR_NOT_FOUND;
+    return e < 0 ? MEDIA_ERR_IO : e == 0 ? MEDIA_ERR_NOT_FOUND : MEDIA_OK;
 }
 
 void media_usage(media_usage_t *out) {
@@ -1185,12 +1522,12 @@ void media_usage(media_usage_t *out) {
             for (unsigned b = 0; b < sizeof o->pagebits; b++) out->reclaimable += popcount16(o->pagebits[b]) * PAGE;
     }
     out->used = out->total - out->free - out->reclaimable;
-    iter_t it;
-    rec_t r;
-    it_init(&it, g.active);
-    for (uint16_t o = 0; o < g.nrec; o++) {
-        if (it_next(&it, &r) != 1) break;
-        if (r.type == REC_PUT && !is_dead(o) && r.bucket == MEDIA_BUCKET_RENDER) out->derived += loc_alloc(&r.loc);
+    for (uint16_t i = dir_ok() ? idx_search(MEDIA_BUCKET_RENDER, "", 0, false, NULL) : g.nidx; i < g.nidx; i++) {
+        const uint8_t *p = g.dir + g.idx[i];
+        if (p[1] != MEDIA_BUCKET_RENDER) break;
+        loc_t l;
+        loc_for_size(get32(p + 12), &l);
+        out->derived += loc_alloc(&l);
     }
     unlock();
 }
@@ -1220,14 +1557,17 @@ static int compact_step(void) {
             return 0;
         }
         tried[src >> 3] |= (uint8_t)(1u << (src & 7));
-        iter_t it;
         rec_t r;
-        uint16_t ord = 0;
+        uint32_t walk = HDR_LEN, src_off = 0;
         int dst = -1, dfirst = 0;
-        it_init(&it, g.active);
+        /* the files of the page, in log order */
         for (uint16_t o = 0; o < g.nrec && dst < 0; o++) {
-            if (it_next(&it, &r) != 1) return -1;
-            if (r.type != REC_PUT || is_dead(o) || r.loc.kind != LOC_SECTORS || r.loc.page != src) continue;
+            const uint8_t *p = g.dir + walk;
+            const uint32_t at = walk, rlen = rec_len(at);
+            if (!rlen) return -1;
+            walk += rlen;
+            if (p[0] != REC_PUT || rlen < REC_FIXED + 8u || p[11] != LOC_SECTORS || p[36] != src || !idx_has(at)) continue;
+            if (rec_decode(p, rlen, &r)) return -1;
             int bestscore = -1;
             for (unsigned q = MEDIA_DIR_PAGES; q < g.npages; q++) {
                 const uint16_t u = g.used[q];
@@ -1243,7 +1583,7 @@ static int compact_step(void) {
                     }
                 }
             }
-            if (dst >= 0) ord = o;
+            if (dst >= 0) src_off = at;
         }
         if (dst < 0) continue;
         if (g.live_bytes + r.len > HALF - HDR_LEN) {
@@ -1278,9 +1618,9 @@ static int compact_step(void) {
         }
         rec_t nr = r;
         nr.loc = nl;
-        nr.kill = ord; /* same seq: it is the same entry, moved */
-        if (dir_append(&nr) != MEDIA_OK) {
-            loc_mark(&nl, false);
+        /* same seq: it is the same entry, moved */
+        if (dir_append(&nr, src_off) != MEDIA_OK) {
+            if (!g.unsettled) loc_mark(&nl, false); /* else the copy may be the live one after a reboot */
             return -1;
         }
         loc_mark(&r.loc, false);
@@ -1332,8 +1672,33 @@ static bool compact_needed(void) {
     return g.compact_dirty && (g.compact_wanted || free_pages() < COMPACT_BELOW);
 }
 
+/* A directory snapshot that pays, for media_maintain. Not while an upload
+ * is in progress, and not again after one failed until the directory has
+ * changed (else a flash that fails would be erased on every call).
+ * - The dead records are many: at least DIR_IDLE_DEAD_MIN, and
+ *   DIR_IDLE_DEAD_RATIO per live entry (mount and the ordinal walks read
+ *   them all).
+ * - Or the half is nearly full, the next appends would snapshot inside a
+ *   put or delete, and a snapshot wins something: by record slots with at
+ *   least DIR_IDLE_DEAD_MIN dead records, by bytes with at least
+ *   DIR_IDLE_GAIN of dead records. (With close to 1000 live entries a half
+ *   has few slots to win: there the snapshot stays in the put.)
+ * A snapshot leaves no dead record, so two idle snapshots are at least
+ * DIR_IDLE_DEAD_MIN dead records (32 deletes, 64 replaces) or
+ * DIR_IDLE_GAIN bytes of dead records apart. */
+static bool dir_snapshot_due(void) {
+    const unsigned dead = (unsigned)g.nrec - g.nidx;
+    if (g.idle_failed || dead == 0) return false;
+    for (int i = 0; i < MEDIA_MAX_WRITERS; i++)
+        if (g.writers[i].used) return false;
+    if (dead >= DIR_IDLE_DEAD_MIN &&
+        (dead >= DIR_IDLE_DEAD_RATIO * g.nidx || g.nrec + DIR_IDLE_TAIL_RECORDS > DIR_MAX_RECORDS))
+        return true;
+    return g.end + DIR_IDLE_TAIL > HALF && g.end - HDR_LEN - g.live_bytes >= DIR_IDLE_GAIN;
+}
+
 static bool work_pending(void) {
-    if (g.stale || compact_needed() || fill_todo()) return true;
+    if (g.stale || dir_snapshot_due() || compact_needed() || fill_todo()) return true;
     for (unsigned p = MEDIA_DIR_PAGES; p < g.npages; p++)
         if (!g.used[p] && g.erased[p] != 0xFFFFu) return true;
     return false;
@@ -1342,6 +1707,13 @@ static bool work_pending(void) {
 bool media_maintain(void) {
     if (!g.mounted) return false;
     lock();
+    if (!dir_ok() || g.unsettled) {
+        /* nothing in the background until a put or delete has brought a
+         * snapshot through: the free map is not to be trusted, and a retry
+         * here would erase a directory half on every call */
+        unlock();
+        return false;
+    }
     int did = 0;
     if (g.stale) {
         const uint8_t other = (uint8_t)(g.active ^ 1u);
@@ -1353,6 +1725,12 @@ bool media_maintain(void) {
             g.stale = false;
             did = 1;
         }
+    }
+    if (did == 0 && dir_snapshot_due()) {
+        /* the other half is blank by now (above): no erase here; the old
+         * half is erased by the next call */
+        did = dir_snapshot(NULL) == MEDIA_OK ? 1 : -1;
+        if (did < 0) g.idle_failed = true;
     }
     if (did == 0 && compact_needed()) {
         did = compact_step();
