@@ -228,9 +228,6 @@ bool isCrossOrigin(AsyncWebServerRequest* request) {
              strcmp(origin.c_str() + 7, host.c_str()) == 0);
 }
 
-constexpr const char* kExposeHeaders =
-    "x-freebutton-auth, Date, x-amz-date, ETag, x-amz-checksum-crc32, x-freebutton-reboot-required";
-
 void corsMiddleware(AsyncWebServerRequest* request, ArMiddlewareNext next) {
     if (!isCrossOrigin(request)) {
         next();
@@ -251,7 +248,7 @@ void corsMiddleware(AsyncWebServerRequest* request, ArMiddlewareNext next) {
     }
     next();
     if (AsyncWebServerResponse* response = request->getResponse()) {
-        // Do not replace what a handler set itself (S3, /api/device).
+        // Do not replace what a handler set itself.
         response->addHeader("Access-Control-Allow-Origin", "*", false);
         response->addHeader("Access-Control-Expose-Headers", kExposeHeaders, false);
     }

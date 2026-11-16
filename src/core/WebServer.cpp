@@ -5,7 +5,6 @@
 #include "ESPAsyncWebServer.h"
 #include "WifiManager.h"
 #include "components/ConfigManager.h"
-#include "json/StreamWrappers.h"
 #include "json/WindowOutputStream.h"
 #include "Update.h"
 #include "OtaManager.h"
@@ -17,6 +16,7 @@
 #include "drivers/LvglDisplay.h"
 #include "S3Server.h"
 #include "StaticFiles.h"
+#include "StreamResponse.h"
 #include "Auth.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
@@ -37,19 +37,29 @@ AsyncWebServer server(80);
 // old + new block per step: on a fragmented heap it stopped at ~3.8 KB,
 // truncating the JSON and draining the heap to a few hundred bytes. Instead,
 // measure once, then re-run the writer per TCP chunk and keep only that
-// chunk's window (WindowOutputStream). Peak RAM is the server's chunk buffer.
+// chunk's window (WindowOutputStream). Peak RAM is one segment-sized scratch
+// block, and the response takes its turn with the downloads (StreamResponse).
+
+// A full heap answers 503 instead of a response.
+static void sendOrBusy(AsyncWebServerRequest *request, AsyncWebServerResponse *response) {
+    if (response) {
+        request->send(response);
+    } else {
+        request->send(503);
+    }
+}
+
 void handleConfig(AsyncWebServerRequest *request) {
     WindowOutputStream counter;
     configManager.write(counter);
 
-    AsyncWebServerResponse *response = request->beginResponse(
-        "application/json", counter.total(),
-        [](uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
+    sendOrBusy(request, stream::beginGenerated(
+        counter.total(), "application/json",
+        [](void*, uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
             WindowOutputStream window(buffer, index, maxLen);
             configManager.write(window);
             return window.copied();
-        });
-    request->send(response);
+        }, nullptr));
 }
 
 // OTA Update Functionality
@@ -155,13 +165,36 @@ static constexpr std::string_view upgradePage = R"rawliteral(
 void handleUpgradePage(AsyncWebServerRequest *request) {
     // Sent from flash: the page that recovers a device must not need heap
     // for a copy of itself.
-    request->send(request->beginResponse(200, "text/html", reinterpret_cast<const uint8_t*>(upgradePage.data()),
-                                         upgradePage.size()));
+    sendOrBusy(request, stream::beginConst(upgradePage.data(), upgradePage.size(), "text/html"));
 }
 
-// OTA upload state (async_tcp task only).
+// OTA upload state (async_tcp task only). One upload at a time: its request
+// owns the updater until it disconnects.
+static AsyncWebServerRequest* s_uploadOwner = nullptr;
+static bool s_updaterOpen = false;           // Update.begin() succeeded, end() not yet called
 static const char* s_uploadError = nullptr;  // refused before anything was written
 static bool s_fsUnmounted = false;           // LittleFS unmounted for a filesystem OTA
+
+// The updater holds a 4 KB buffer from begin() to end()/abort(), and refuses
+// a new begin() while a session is open.
+static void closeUpdater() {
+    if (s_updaterOpen) {
+        Update.abort();
+        s_updaterOpen = false;
+    }
+}
+
+static bool beginUpdate(int command) {
+    if (Update.isRunning()) Update.abort();  // a session nobody owns any more
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, command)) {
+        Update.printError(Serial);
+        ESP_LOGE(TAG, "Update.begin() failed");
+        s_uploadError = "the updater could not start (out of memory?)";
+        return false;
+    }
+    s_updaterOpen = true;
+    return true;
+}
 
 // Function to handle file uploads
 // updateType=firmware: the app image goes to the next OTA slot.
@@ -174,19 +207,27 @@ static bool s_fsUnmounted = false;           // LittleFS unmounted for a filesys
 // filesystem unusable until a successful upload; the flash-resident
 // /upgrade page and this endpoint keep working.
 void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
-    static std::string updateType;
     if (!index) {
+        if (s_uploadOwner && s_uploadOwner != request) {
+            return;  // another upload is being written: this one is drained and refused
+        }
         ESP_LOGI(TAG, "Upload start for: %s", filename.c_str());
+        s_uploadOwner = request;
         s_uploadError = nullptr;
+        // A client that goes away mid-upload must not leave the updater
+        // open: its buffer would stay allocated and the next upload would be
+        // written into the old session.
+        request->onDisconnect([request]() {
+            if (s_uploadOwner != request) return;
+            if (s_updaterOpen) ESP_LOGW(TAG, "Upload interrupted: update aborted");
+            closeUpdater();
+            s_uploadOwner = nullptr;
+        });
 
-        // Get update type from request
-        updateType = std::string(request->arg("updateType").c_str());
+        const String& updateType = request->arg("updateType");
         if (updateType == "firmware") {
             ESP_LOGI(TAG, "Starting firmware update");
-            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-                Update.printError(Serial);
-                ESP_LOGE(TAG, "Update.begin() failed");
-            }
+            beginUpdate(U_FLASH);
         } else if (updateType == "filesystem") {
             // LittleFS superblock: the "littlefs" magic at byte 8 of block 0.
             if (len < 16 || memcmp(data + 8, "littlefs", 8) != 0) {
@@ -197,10 +238,7 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
                 ESP_LOGW(TAG, "Starting filesystem update: unmounting LittleFS");
                 LittleFS.end();
                 s_fsUnmounted = true;
-                if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) {
-                    Update.printError(Serial);
-                    ESP_LOGE(TAG, "Update.begin() failed");
-                }
+                beginUpdate(U_SPIFFS);
             }
         } else {
             s_uploadError = "updateType must be firmware or filesystem (and come before the file)";
@@ -210,8 +248,8 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
         }
     }
 
-    if (s_uploadError) {
-        return;  // refused: drain the body, write nothing
+    if (s_uploadOwner != request || s_uploadError || !s_updaterOpen) {
+        return;  // refused or failed: drain the body, write nothing
     }
 
     if (Update.write(data, len) != len) {
@@ -220,6 +258,7 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
     }
 
     if (final) {
+        s_updaterOpen = false;  // end() closes the session, whatever it returns
         if (Update.end(true)) {
             ESP_LOGI(TAG, "Update success: %u bytes", index + len);
         } else {
@@ -230,7 +269,13 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
 }
 
 void handleFirmwareUpload(AsyncWebServerRequest *request) {
-    if (s_uploadError) {
+    if (s_uploadOwner != request) {
+        if (s_uploadOwner) {
+            request->send(409, "text/plain", "Another upload is in progress.");
+        } else {
+            request->send(400, "text/plain", "No file in the request.");
+        }
+    } else if (s_uploadError) {
         request->send(400, "text/plain", s_uploadError);
     } else if (Update.hasError()) {
         request->send(500, "text/plain",
@@ -425,14 +470,13 @@ static void writeBytecodeList(S& out) {
 static void handleBytecodeList(AsyncWebServerRequest *request) {
     WindowOutputStream counter;
     writeBytecodeList(counter);
-    AsyncWebServerResponse *response = request->beginResponse(
-        "application/json", counter.total(),
-        [](uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
+    sendOrBusy(request, stream::beginGenerated(
+        counter.total(), "application/json",
+        [](void*, uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
             WindowOutputStream window(buffer, index, maxLen);
             writeBytecodeList(window);
             return window.copied();
-        });
-    request->send(response);
+        }, nullptr));
 }
 
 // POST /api/reboot: answer first, restart 500 ms later from an esp_timer
@@ -522,13 +566,9 @@ void webserver_start() {
     server.on("/api/device", HTTP_GET, [](AsyncWebServerRequest *request){
         FreeButton::DeviceInfoCollector collector;
         FreeButton::DeviceInfo info = collector.collectInfo();
-        // Read-only device info; allow a cross-origin dev build (Vite talking to
-        // a remote device) to read it. The IDE is served same-origin in prod, so
-        // this only matters for the explicit-device-URL dev workflow.
-        AsyncWebServerResponse *response =
-            request->beginResponse(200, "application/json", FreeButton::toJson(info).c_str());
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        request->send(response);
+        // The text is handed over, not copied. A cross-origin dev build
+        // gets its CORS headers from the auth middleware.
+        sendOrBusy(request, stream::beginText(FreeButton::toJson(info), "application/json"));
     });
 
     // POST only (and signed): as a GET it was a one-click WiFi wipe for any page.

@@ -128,11 +128,6 @@ using s3::put;
 
 constexpr const char* kXmlDecl = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
 constexpr const char* kXmlNs = " xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"";
-constexpr const char* kExposeHeaders =
-    "ETag, x-amz-checksum-crc32, x-freebutton-reboot-required, x-freebutton-auth, Date, x-amz-date, "
-    "x-fb-media-total, x-fb-media-used, x-fb-media-free, x-fb-media-reclaimable, "
-    "x-fb-media-erase-sectors, x-fb-media-erase-page-max, x-fb-media-dir-generation, "
-    "x-fb-fs-total, x-fb-fs-used";
 constexpr size_t kMountMax = 15;   // ESP_VFS_PATH_MAX
 constexpr int kMaxDepth = 6;       // directory levels walked by a listing
 constexpr int kSearchesPerFill = 4;
@@ -336,10 +331,9 @@ size_t buildPath(const s3::Bucket& b, char* out, size_t cap, const char* key, si
     return s3::objectPath(b, mount, static_cast<size_t>(mp), key, keyLen, suffix, out, cap);
 }
 
-void addCommonHeaders(AsyncWebServerResponse* response) {
-    response->addHeader("Access-Control-Allow-Origin", "*");
-    response->addHeader("Access-Control-Expose-Headers", kExposeHeaders);
-}
+// CORS headers are not added here: a cross-origin request gets them from the
+// auth middleware (Auth.cpp), a same-origin one (the IDE on the device) does
+// not need their 300 bytes.
 
 void sendXmlError(AsyncWebServerRequest* request, int status, const char* code, const char* message,
                   bool authDenied = false) {
@@ -358,7 +352,6 @@ void sendXmlError(AsyncWebServerRequest* request, int status, const char* code, 
         body[w.copied()] = '\0';
         response = request->beginResponse(status, "application/xml", body);
     }
-    addCommonHeaders(response);
     if (authDenied) fbauth::addDeniedHeaders(response);
     request->send(response);
 }
@@ -432,9 +425,11 @@ bool verifyNoBody(AsyncWebServerRequest* request, fbauth::Result& r) {
 }
 
 void sendConstXml(AsyncWebServerRequest* request, const char* xml, size_t len) {
-    AsyncWebServerResponse* response =
-        request->beginResponse(200, "application/xml", reinterpret_cast<const uint8_t*>(xml), len);
-    addCommonHeaders(response);
+    AsyncWebServerResponse* response = stream::beginConst(xml, len, "application/xml");
+    if (!response) {
+        sendXmlError(request, 503, "SlowDown", "out of memory");
+        return;
+    }
     request->send(response);
 }
 
@@ -933,12 +928,19 @@ void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
         s->markerFrom = v2 ? ListState::StartAfter : ListState::V1Marker;
     }
 
-    AsyncWebServerResponse* response = request->beginChunkedResponse(
-        "application/xml", [request](uint8_t* buffer, size_t maxLen, size_t) -> size_t {
-            return listFill(request, buffer, maxLen);
-        });
+    // Takes its turn with the downloads; the request's headers are dropped
+    // while it waits and sends (everything it needs is in the state).
+    AsyncWebServerResponse* response = stream::beginChunked(
+        "application/xml",
+        [](void* context, uint8_t* buffer, size_t maxLen, size_t) -> size_t {
+            return listFill(static_cast<AsyncWebServerRequest*>(context), buffer, maxLen);
+        },
+        request);
+    if (!response) {
+        sendXmlError(request, 503, "SlowDown", "out of memory");
+        return;
+    }
     addUsageHeaders(response, bucket);
-    addCommonHeaders(response);
     request->send(response);
 }
 
@@ -991,7 +993,6 @@ void handleMediaGet(AsyncWebServerRequest* request, const Target& t) {
         }
     }
     addMediaStatHeaders(response, st.md5, st.mtime);
-    addCommonHeaders(response);
     request->send(response);
 }
 
@@ -1034,7 +1035,6 @@ void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
         }
     }
     formatStatHeaders(response, st);
-    addCommonHeaders(response);
     request->send(response);
 }
 
@@ -1070,7 +1070,6 @@ void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
             freebutton::ui::mediaImageNotifyChanged();  // items showing it re-resolve (and hide it)
         }
         AsyncWebServerResponse* response = request->beginResponse(204);
-        addCommonHeaders(response);
         request->send(response);
         return;
     }
@@ -1092,7 +1091,6 @@ void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
         return;
     }
     AsyncWebServerResponse* response = request->beginResponse(204);
-    addCommonHeaders(response);
     request->send(response);
 }
 
@@ -1464,7 +1462,6 @@ void putFinish(AsyncWebServerRequest* request) {
         response->addHeader("x-amz-checksum-crc32", crc);
     }
     if (st->isConfig) response->addHeader("x-freebutton-reboot-required", "true");
-    addCommonHeaders(response);
     releaseState(request);
     request->send(response);
 }
@@ -1479,7 +1476,7 @@ void handlePreflight(AsyncWebServerRequest* request) {
     response->addHeader("Access-Control-Allow-Methods", "GET, PUT, HEAD, DELETE");
     const char* requested = headerValue(request, "Access-Control-Request-Headers");
     response->addHeader("Access-Control-Allow-Headers", requested && *requested ? requested : "*");
-    response->addHeader("Access-Control-Expose-Headers", kExposeHeaders);
+    response->addHeader("Access-Control-Expose-Headers", fbauth::kExposeHeaders);
     response->addHeader("Access-Control-Max-Age", "600");
     request->send(response);
 }
@@ -1552,7 +1549,6 @@ public:
                     AsyncWebServerResponse* response = request->beginResponse(200);
                     response->addHeader("x-amz-bucket-region", "us-east-1");
                     addUsageHeaders(response, *t.bucket);
-                    addCommonHeaders(response);
                     request->send(response);
                 } else if (method == HTTP_GET && request->hasParam("location")) {
                     sendConstXml(request, kLocationXml, sizeof(kLocationXml) - 1);

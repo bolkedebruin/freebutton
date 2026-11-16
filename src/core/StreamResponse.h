@@ -19,6 +19,8 @@
 
 #include <ESPAsyncWebServer.h>
 
+#include <string>
+
 #include "media/media_store.h"
 
 namespace stream {
@@ -33,6 +35,25 @@ AsyncWebServerResponse* beginFile(const char* path, size_t size, const char* con
 // the file was replaced before the download's turn the connection is closed.
 AsyncWebServerResponse* beginMedia(media_bucket_t bucket, const char* key, const media_stat_t& st,
                                    const char* contentType);
+
+// A body that is already in memory and outlives the response (flash). It
+// needs no buffer and no file, so it does not wait for a turn.
+AsyncWebServerResponse* beginConst(const char* data, size_t size, const char* contentType);
+
+// The same for a text the response takes over (moved in, not copied).
+AsyncWebServerResponse* beginText(std::string&& text, const char* contentType);
+
+// A body written piece by piece: fill() puts up to max bytes of the body
+// from offset index into buffer and returns how many. It takes its turn like
+// a file download; its scratch block (one segment) lives for the call only.
+using Fill = size_t (*)(void* context, uint8_t* buffer, size_t max, size_t index);
+
+// size bytes exactly (Content-Length); fill must deliver them all.
+AsyncWebServerResponse* beginGenerated(size_t size, const char* contentType, Fill fill, void* context);
+
+// Length not known (chunked): fill returns 0 when the body is complete, and
+// is then not called again. Bytes it returned are never asked for twice.
+AsyncWebServerResponse* beginChunked(const char* contentType, Fill fill, void* context);
 
 // Downloads that are sending or waiting.
 uint8_t active();

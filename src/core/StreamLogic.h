@@ -47,6 +47,21 @@ inline bool stalled(uint32_t nowMs, uint32_t lastProgressMs) {
     return static_cast<uint32_t>(nowMs - lastProgressMs) >= kStallMs;  // wrap-safe
 }
 
+// A sender must also keep a pace: a client that acknowledges a few bytes now
+// and then is never "stalled", and would hold its slot for ever. Fewer than
+// kPaceMinBytes acknowledged in a window of kPaceWindowMs costs the slot
+// (checked, like stalled(), only when another download cannot start).
+constexpr uint32_t kPaceWindowMs = 10 * 1000;
+constexpr size_t kPaceMinBytes = 2048;
+
+inline bool paceWindowOver(uint32_t nowMs, uint32_t windowStartMs) {
+    return static_cast<uint32_t>(nowMs - windowStartMs) >= kPaceWindowMs;  // wrap-safe
+}
+
+inline bool tooSlow(uint32_t nowMs, uint32_t windowStartMs, size_t ackedInWindow) {
+    return paceWindowOver(nowMs, windowStartMs) && ackedInWindow < kPaceMinBytes;
+}
+
 // ---------------------------------------------------------------------------
 // Piece size for a file that is not mapped (LittleFS)
 // ---------------------------------------------------------------------------
@@ -60,6 +75,42 @@ constexpr size_t kPieceMax = 1440;
 inline size_t pieceSize(size_t tcpRoom, size_t remaining) {
     size_t n = tcpRoom < remaining ? tcpRoom : remaining;
     return n > kPieceMax ? kPieceMax : n;
+}
+
+// ---------------------------------------------------------------------------
+// Generated responses (/config, listings)
+// ---------------------------------------------------------------------------
+//
+// A response that is written by a function, piece by piece, into the same
+// kind of scratch block. With a known length the pieces are the body; without
+// one each piece is an HTTP chunk: "xxx\r\n" + data + "\r\n" (3 hex digits
+// are enough for kPieceMax), and "000\r\n\r\n" ends the body.
+
+constexpr size_t kChunkHead = 5;   // "xxx\r\n"
+constexpr size_t kChunkTail = 2;   // "\r\n"
+constexpr size_t kChunkFrame = kChunkHead + kChunkTail;
+constexpr size_t kGeneratedMin = 64;  // do not bother the writer for less room
+
+// Data bytes to ask the writer for. tcpRoom: what the TCP stack takes now;
+// remaining: body bytes left, or SIZE_MAX when the length is not known
+// (chunked). 0: wait for more room.
+inline size_t generatedPiece(size_t tcpRoom, size_t remaining, bool chunked) {
+    const size_t frame = chunked ? kChunkFrame : 0;
+    if (tcpRoom <= frame) return 0;
+    size_t n = tcpRoom - frame;
+    if (n > kPieceMax) n = kPieceMax;
+    if (n >= remaining) return remaining;
+    return n < kGeneratedMin ? 0 : n;
+}
+
+// Writes the chunk head for n data bytes (n <= 0xfff) into out[kChunkHead].
+inline void chunkHead(size_t n, char* out) {
+    static constexpr char hex[] = "0123456789abcdef";
+    out[0] = hex[(n >> 8) & 0xf];
+    out[1] = hex[(n >> 4) & 0xf];
+    out[2] = hex[n & 0xf];
+    out[3] = '\r';
+    out[4] = '\n';
 }
 
 // ---------------------------------------------------------------------------

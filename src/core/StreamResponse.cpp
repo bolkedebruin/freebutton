@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <string>
+#include <utility>
 
 #include "StreamLogic.h"
 #include "StreamStats.h"
@@ -30,31 +32,64 @@ uint32_t freeHeap() {
     return heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 }
 
+enum class Source : uint8_t {
+    File,       // LittleFS, read through a file descriptor
+    Media,      // media store, mapped flash
+    Memory,     // a block that outlives the response, or the text it owns
+    Generated,  // written piece by piece by a function
+};
+
 class StreamResponse final : public AsyncWebServerResponse {
 public:
-    // name: the file's path, or the media key. Copied.
-    StreamResponse(const char* name, size_t size, const char* contentType) {
+    // A full heap must give nullptr, not abort: the default nothrow new
+    // calls the throwing one, which aborts without exceptions.
+    static void* operator new(size_t n, const std::nothrow_t&) noexcept { return malloc(n); }
+    static void operator delete(void* p, const std::nothrow_t&) noexcept { free(p); }
+    static void operator delete(void* p) noexcept { free(p); }
+
+    StreamResponse(Source source, size_t size, const char* contentType) : _source(source) {
         _code = 200;
         _contentLength = size;
         _sendContentLength = true;
         _chunked = false;
         _contentType = contentType;
+    }
+
+    // name: the file's path, or the media key. Copied.
+    bool setName(const char* name) {
         _name = strdup(name);
+        return _name != nullptr;
     }
 
     void setMedia(media_bucket_t bucket, const uint8_t md5[16]) {
-        _media = true;
         _bucket = bucket;
         memcpy(_md5, md5, sizeof _md5);
     }
 
-    bool ok() const { return _name != nullptr; }
+    void setMemory(const char* data) { _mem = data; }
+
+    void setText(std::string&& text) {
+        _text = std::move(text);
+        _mem = _text.data();
+        _contentLength = _text.size();
+    }
+
+    // chunked: the length is not known; the writer ends the body with 0.
+    void setWriter(stream::Fill fill, void* context, bool chunked) {
+        _fill = fill;
+        _context = context;
+        if (chunked) {
+            _chunked = true;
+            _sendContentLength = false;
+        }
+    }
 
     ~StreamResponse() override {
         leaveQueue();
         closeSource();
         releaseSlot();
         free(_name);
+        free(_pend);
     }
 
     bool _sourceValid() const override { return true; }
@@ -69,9 +104,10 @@ public:
         _headers.clear();
         _contentType = String();
         request->removeHeaders();
+        _frames = _chunked && request->version() != 0;  // HTTP/1.0: the close ends the body
         if (AsyncClient* c = request->client()) _fullRoom = c->space();
         if (_fullRoom == 0) _fullRoom = CONFIG_LWIP_TCP_SND_BUF_DEFAULT;
-        if (s_waitHead || !stream::mayStart(s_active, freeHeap())) {
+        if (needsSlot() && (s_waitHead || !stream::mayStart(s_active, freeHeap()))) {
             joinQueue();
             return;
         }
@@ -123,11 +159,16 @@ private:
         --s_waiting;
     }
 
+    // Memory needs neither a scratch block nor a file: it never waits.
+    bool needsSlot() const { return _source != Source::Memory; }
+
     bool takeSlot() {
         if (_slot) return true;
         if (_queued && s_waitHead != this) return false;  // first in, first out
-        if (s_active >= stream::kMaxStreams) dropStalled();
-        if (!stream::mayStart(s_active, freeHeap())) return false;
+        if (!stream::mayStart(s_active, freeHeap())) {
+            dropStalled();
+            if (!stream::mayStart(s_active, freeHeap())) return false;
+        }
         leaveQueue();
         for (StreamResponse*& h : s_holders) {
             if (!h) {
@@ -137,6 +178,8 @@ private:
         }
         _slot = true;
         _progressAt = millis();
+        _paceAt = _progressAt;
+        _paceAcked = _acked;
         ++s_active;
         return true;
     }
@@ -153,23 +196,35 @@ private:
         if (next && s_waitHead) s_waitHead->turn();
     }
 
-    // Slot holders that went silent (StreamLogic.h, kStallMs) lose their
-    // slot. Their connection is closed when it next shows life.
+    // Slot holders that went silent or are too slow (StreamLogic.h) lose
+    // their slot and their connection. Called by a download that cannot
+    // start, so never by a holder itself.
     static void dropStalled() {
         const uint32_t now = millis();
         for (StreamResponse* h : s_holders) {
-            if (h && stream::stalled(now, h->_progressAt)) {
+            if (!h) continue;
+            const size_t paced = h->_acked - h->_paceAcked;
+            if (stream::stalled(now, h->_progressAt) || stream::tooSlow(now, h->_paceAt, paced)) {
                 ++s_stalled;
                 h->_state = RESPONSE_FAILED;
+                h->_closed = true;
                 h->closeSource();
                 h->releaseSlot(false);
+                // Reset, not close: a close would keep the unsent bytes (and
+                // their memory) for a client that does not read. This frees
+                // the request and, with it, h.
+                if (AsyncClient* c = h->_request ? h->_request->client() : nullptr) c->abort();
+            } else if (stream::paceWindowOver(now, h->_paceAt)) {
+                h->_paceAt = now;
+                h->_paceAcked = h->_acked;
             }
         }
     }
 
     // --- source -----------------------------------------------------------
     bool openSource() {
-        if (_media) {
+        if (_source == Source::Generated) return true;
+        if (_source == Source::Media) {
             media_stat_t st;
             if (media_stat(_bucket, _name, &st) != MEDIA_OK || st.size != _contentLength ||
                 memcmp(st.md5, _md5, sizeof _md5) != 0) {
@@ -214,12 +269,17 @@ private:
         return _acked >= _writtenLength || c->space() >= _fullRoom;
     }
 
+    bool contentDone() const {
+        if (_source == Source::Generated) return _writerDone && !_pend;
+        return _sentLength >= _contentLength;
+    }
+
     // --- sending ----------------------------------------------------------
     size_t pump() {
         if (_state == RESPONSE_FAILED || _state == RESPONSE_END || !_request) return 0;
         AsyncClient* c = _request->client();
         if (!c) return 0;
-        if (!_slot) {
+        if (needsSlot() && !_slot) {
             if (!takeSlot()) return 0;
             if (!openSource()) {
                 fail();
@@ -243,15 +303,21 @@ private:
 
         if (_state == RESPONSE_CONTENT) {
             const size_t before = wrote;
-            if (_media) {
+            bool good = true;
+            if (_source == Source::Media || _source == Source::Memory) {
                 wrote += sendMapped(c);
-            } else if (!sendFile(c, wrote)) {
+            } else if (_source == Source::Generated) {
+                good = sendGenerated(c, wrote);
+            } else {
+                good = sendFile(c, wrote);
+            }
+            if (!good) {
                 _writtenLength += wrote;
                 fail();
                 return wrote;
             }
             _sentLength += wrote - before;
-            if (_sentLength >= _contentLength) {
+            if (contentDone()) {
                 _state = RESPONSE_WAIT_ACK;
                 closeSource();  // nothing more to read: the TCP stack has its copy
             }
@@ -265,7 +331,7 @@ private:
 
         if (_state == RESPONSE_WAIT_ACK && allAcknowledged(c)) {
             _state = RESPONSE_END;
-            ++s_served;
+            if (needsSlot()) ++s_served;
             closeSource();
             releaseSlot();
         }
@@ -277,8 +343,63 @@ private:
         size_t n = _contentLength - _sentLength;
         if (n > room) n = room;
         if (n == 0) return 0;
-        const char* at = reinterpret_cast<const char*>(_file.data) + _sentLength;
-        return c->add(at, n);  // copied by the TCP stack, straight from the mapping
+        const char* base = _source == Source::Media ? reinterpret_cast<const char*>(_file.data) : _mem;
+        return c->add(base + _sentLength, n);  // copied by the TCP stack, straight from the source
+    }
+
+    // False when the writer gave less than the announced length. wrote grows
+    // by what the TCP stack took. The scratch block outlives the call only
+    // when the stack took less than it said it would (_pend): the writer
+    // cannot be asked for the same bytes again.
+    bool sendGenerated(AsyncClient* c, size_t& wrote) {
+        if (_pend) {
+            const size_t added = c->add(_pend + _pendSent, _pendLength - _pendSent);
+            _pendSent += added;
+            wrote += added;
+            if (_pendSent < _pendLength) return true;
+            free(_pend);
+            _pend = nullptr;
+        }
+        const size_t head = _frames ? stream::kChunkHead : 0;
+        while (!_writerDone) {
+            const size_t remaining = _chunked ? SIZE_MAX : _contentLength - _written;
+            if (remaining == 0) {
+                _writerDone = true;
+                break;
+            }
+            const size_t n = stream::generatedPiece(c->space(), remaining, _frames);
+            if (n == 0) break;
+            char* block = static_cast<char*>(malloc(n + (_frames ? stream::kChunkFrame : 0)));
+            if (!block) break;  // try again on the next poll
+            const size_t got = _fill(_context, reinterpret_cast<uint8_t*>(block) + head, n, _written);
+            _written += got;
+            size_t length = got;
+            if (got == 0) {
+                _writerDone = true;
+                if (!_chunked) {
+                    free(block);
+                    return false;
+                }
+                if (_frames) {
+                    memcpy(block, "000\r\n\r\n", stream::kChunkFrame);
+                    length = stream::kChunkFrame;
+                }
+            } else if (_frames) {
+                stream::chunkHead(got, block);
+                memcpy(block + head + got, "\r\n", stream::kChunkTail);
+                length = got + stream::kChunkFrame;
+            }
+            const size_t added = length ? c->add(block, length) : 0;
+            wrote += added;
+            if (added < length) {
+                _pend = block;
+                _pendLength = length;
+                _pendSent = added;
+                break;
+            }
+            free(block);
+        }
+        return true;
     }
 
     // False on a read error. wrote grows by what the TCP stack took.
@@ -318,19 +439,31 @@ private:
     size_t _acked = 0;
     size_t _fullRoom = 0;
     uint32_t _progressAt = 0;
+    uint32_t _paceAt = 0;      // start of the pace window, and what was
+    size_t _paceAcked = 0;     // acknowledged by then
+    const char* _mem = nullptr;
+    std::string _text;
+    stream::Fill _fill = nullptr;
+    void* _context = nullptr;
+    size_t _written = 0;       // body bytes the writer produced
+    char* _pend = nullptr;     // a piece the TCP stack took only part of
+    size_t _pendLength = 0;
+    size_t _pendSent = 0;
     int _fd = -1;
     media_file_t _file{};
     uint8_t _md5[16] = {};
     media_bucket_t _bucket{};
-    bool _media = false;
+    Source _source;
+    bool _frames = false;      // the body goes out as HTTP chunks
+    bool _writerDone = false;
     bool _slot = false;
     bool _queued = false;
     bool _closed = false;
 };
 
-StreamResponse* make(const char* name, size_t size, const char* contentType) {
-    auto* r = new (std::nothrow) StreamResponse(name, size, contentType);
-    if (r && !r->ok()) {
+StreamResponse* make(Source source, size_t size, const char* contentType, const char* name = nullptr) {
+    auto* r = new (std::nothrow) StreamResponse(source, size, contentType);
+    if (r && name && !r->setName(name)) {
         delete r;
         r = nullptr;
     }
@@ -342,13 +475,37 @@ StreamResponse* make(const char* name, size_t size, const char* contentType) {
 namespace stream {
 
 AsyncWebServerResponse* beginFile(const char* path, size_t size, const char* contentType) {
-    return make(path, size, contentType);
+    return make(Source::File, size, contentType, path);
 }
 
 AsyncWebServerResponse* beginMedia(media_bucket_t bucket, const char* key, const media_stat_t& st,
                                    const char* contentType) {
-    StreamResponse* r = make(key, st.size, contentType);
+    StreamResponse* r = make(Source::Media, st.size, contentType, key);
     if (r) r->setMedia(bucket, st.md5);
+    return r;
+}
+
+AsyncWebServerResponse* beginConst(const char* data, size_t size, const char* contentType) {
+    StreamResponse* r = make(Source::Memory, size, contentType);
+    if (r) r->setMemory(data);
+    return r;
+}
+
+AsyncWebServerResponse* beginText(std::string&& text, const char* contentType) {
+    StreamResponse* r = make(Source::Memory, 0, contentType);
+    if (r) r->setText(std::move(text));
+    return r;
+}
+
+AsyncWebServerResponse* beginGenerated(size_t size, const char* contentType, Fill fill, void* context) {
+    StreamResponse* r = make(Source::Generated, size, contentType);
+    if (r) r->setWriter(fill, context, false);
+    return r;
+}
+
+AsyncWebServerResponse* beginChunked(const char* contentType, Fill fill, void* context) {
+    StreamResponse* r = make(Source::Generated, 0, contentType);
+    if (r) r->setWriter(fill, context, true);
     return r;
 }
 

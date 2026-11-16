@@ -65,6 +65,29 @@ Bench device btn_a00002 (about 58 KB free when idle), lowest free heap:
 What is left at the low point is the TCP stack's copy (3 KB per sender), the
 Wi-Fi driver's frames (up to 7 KB) and the connections themselves.
 
+## Other responses
+
+The same response class also sends what is not a file (`StreamResponse.h`):
+
+- `beginConst`, `beginText`: a body that is already in memory (the upgrade
+  page and constant XML in flash, the `/api/device` text, which is moved in,
+  not copied). The TCP stack copies it from there; such a response needs no
+  buffer and does not wait for a turn.
+- `beginGenerated`, `beginChunked`: a body written piece by piece (`/config`,
+  the bytecode list, bucket listings). It takes its turn like a download and
+  uses the same one-segment scratch block, where the server library took
+  2,880 B per round.
+
+On btn_a00002 the lowest free heap during a signed `GET /config` rose by
+about 5 KB (dip 11 to 12 KB before, 6.7 KB after).
+
+## Slow clients
+
+A download that holds a slot loses it, and its connection is reset, when
+another download cannot start and it has either had no progress for 20 s or
+had fewer than 2 KB acknowledged in the last 10 s (`StreamLogic.h`). The
+reset frees the bytes the TCP stack still held for it.
+
 ## The heap probe
 
 `src/debug/heap_probe.cpp` (diagnostic builds only; the file's header says

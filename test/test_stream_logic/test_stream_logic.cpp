@@ -121,6 +121,41 @@ static void test_if_none_match() {
     TEST_ASSERT_FALSE(stream::etagMatches(nullptr, e));
 }
 
+void test_too_slow_needs_a_full_window() {
+    TEST_ASSERT_FALSE(stream::tooSlow(9999, 0, 0));
+    TEST_ASSERT_TRUE(stream::tooSlow(10000, 0, 0));
+    TEST_ASSERT_TRUE(stream::tooSlow(10000, 0, stream::kPaceMinBytes - 1));
+    TEST_ASSERT_FALSE(stream::tooSlow(10000, 0, stream::kPaceMinBytes));
+    // wrap of the millisecond clock
+    TEST_ASSERT_TRUE(stream::tooSlow(6000, 0xFFFFFFFFu - 4000, 10));
+    TEST_ASSERT_TRUE(stream::paceWindowOver(10000, 0));
+    TEST_ASSERT_FALSE(stream::paceWindowOver(500, 0xFFFFFFFFu - 100));
+}
+
+void test_generated_piece() {
+    // known length: room, one segment at most, never more than is left
+    TEST_ASSERT_EQUAL(1440, stream::generatedPiece(2880, 100000, false));
+    TEST_ASSERT_EQUAL(700, stream::generatedPiece(700, 100000, false));
+    TEST_ASSERT_EQUAL(10, stream::generatedPiece(2880, 10, false));
+    TEST_ASSERT_EQUAL(10, stream::generatedPiece(10, 10, false));   // the last bytes go out in any room
+    TEST_ASSERT_EQUAL(0, stream::generatedPiece(10, 100000, false)); // too little room to bother
+    TEST_ASSERT_EQUAL(0, stream::generatedPiece(0, 100, false));
+    // chunked: the frame comes out of the room
+    TEST_ASSERT_EQUAL(1440, stream::generatedPiece(2880, SIZE_MAX, true));
+    TEST_ASSERT_EQUAL(1440 - stream::kChunkFrame, stream::generatedPiece(1440, SIZE_MAX, true));
+    TEST_ASSERT_EQUAL(0, stream::generatedPiece(stream::kChunkFrame, SIZE_MAX, true));
+    TEST_ASSERT_EQUAL(0, stream::generatedPiece(stream::kChunkFrame + 20, SIZE_MAX, true));
+}
+
+void test_chunk_head() {
+    char h[stream::kChunkHead + 1] = {};
+    stream::chunkHead(1440, h);
+    TEST_ASSERT_EQUAL_STRING("5a0\r\n", h);
+    stream::chunkHead(7, h);
+    TEST_ASSERT_EQUAL_STRING("007\r\n", h);
+    TEST_ASSERT_TRUE(stream::kPieceMax <= 0xfff);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_first_download_always_starts);
@@ -134,5 +169,8 @@ int main() {
     RUN_TEST(test_static_path_leaves_room_for_gz);
     RUN_TEST(test_etag);
     RUN_TEST(test_if_none_match);
+    RUN_TEST(test_too_slow_needs_a_full_window);
+    RUN_TEST(test_generated_piece);
+    RUN_TEST(test_chunk_head);
     return UNITY_END();
 }

@@ -336,7 +336,14 @@ void start_wifimanager_portal() {
         request->send(200, "text/html", wifiConfigHTML);
     });
 
+    // /scan and /connect belong to the setup portal only. The routes stay
+    // registered after it has closed (no reboot follows), so they must
+    // refuse then: /connect replaces the stored WiFi credentials.
     server.on("/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (!is_captive_portal_active()) {
+            request->send(404);
+            return;
+        }
         const int n = WiFi.scanNetworks();
         String json = "{\"networks\":[";
         for (int i = 0; i < n; ++i) {
@@ -347,9 +354,14 @@ void start_wifimanager_portal() {
         request->send(200, "application/json", json);
     });
 
-    server.on("/connect", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
+    server.on("/connect", HTTP_POST, [](AsyncWebServerRequest *request) {
+            if (!is_captive_portal_active()) request->send(404);
+        }, nullptr,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            const String body = String(reinterpret_cast<char *>(data)).substring(0, len);
+            if (!is_captive_portal_active()) return;  // answered 404 by the request handler
+            // data is not terminated: take exactly len bytes.
+            String body;
+            body.concat(reinterpret_cast<const char *>(data), len);
 
             // Parse JSON manually for simplicity
             const int ssidStart = body.indexOf("\"ssid\":\"") + 8;
