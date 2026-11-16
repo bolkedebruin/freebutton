@@ -4,6 +4,7 @@
 #include "config.h"
 #include "pins.h"
 #include "components/ConfigManager.h"
+#include "core/ConnectionGuard.h"
 #include "core/WebServer.h"
 #include "core/WifiManager.h"
 #include "core/HardwareInitializer.h"
@@ -220,6 +221,13 @@ void loop() {
     if (currentTime - lastMediaMaintainTime > (mediaWorkPending ? 250UL : 10000UL)) {
         lastMediaMaintainTime = currentTime;
         mediaWorkPending = media_maintain();
+    }
+
+    // The number of HTTP connections allowed follows the free heap.
+    static unsigned long lastGuardTime = 0;
+    if (currentTime - lastGuardTime > 500) {
+        lastGuardTime = currentTime;
+        guard::tick();
     }
 
     // Clean up stale WebSocket clients every second

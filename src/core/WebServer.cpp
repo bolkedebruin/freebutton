@@ -18,6 +18,7 @@
 #include "StaticFiles.h"
 #include "StreamResponse.h"
 #include "Auth.h"
+#include "ConnectionGuard.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -212,6 +213,7 @@ void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t
             return;  // another upload is being written: this one is drained and refused
         }
         ESP_LOGI(TAG, "Upload start for: %s", filename.c_str());
+        guard::release(request->client());  // long: must not keep other requests out
         s_uploadOwner = request;
         s_uploadError = nullptr;
         // A client that goes away mid-upload must not leave the updater
@@ -517,6 +519,9 @@ void webserver_start() {
     // post now gets 403), static www, captive portal, OPTIONS.
     fbauth::init();
     fbauth::installGate(server);
+    // Connections in progress follow the free heap; bodies nobody consumes
+    // are refused (ConnectionGuard.h).
+    guard::install(server);
 
     // No route and no static file: 404. (OPTIONS and the captive portal are
     // answered first.)

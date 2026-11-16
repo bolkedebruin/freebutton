@@ -2,6 +2,7 @@
 // WebSocketREPL - WebSocket-based JavaScript REPL implementation
 //
 
+#include "core/ConnectionGuard.h"
 #include "WebSocketREPL.h"
 #include "ScriptEngine.h"
 #include "../json/JsonEscape.h"
@@ -97,6 +98,7 @@ void WebSocketREPL::onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client
         case WS_EVT_CONNECT:
             ESP_LOGI(TAG, "Client #%u connected from %s",
                      client->id(), client->remoteIP().toString().c_str());
+            guard::release(client->client());  // stays open: not a request in progress
             // Send connected message
             client->text(R"({"type":"connected"})");
             break;
