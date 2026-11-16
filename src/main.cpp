@@ -28,6 +28,10 @@ namespace Scripting {
     void processWebSocketRepl();
 }
 
+#ifdef FB_HEAP_PROBE
+void heapProbeStart();   // src/debug/heap_probe.cpp
+#endif
+
 using namespace FreeButton;
 
 static const auto TAG = "main";
@@ -191,6 +195,9 @@ void setup() {
     progressBar->hide();
 
     ESP_LOGI(TAG, "main UI loaded");
+#ifdef FB_HEAP_PROBE
+    heapProbeStart();
+#endif
 }
 
 void loop() {

@@ -16,7 +16,7 @@
 #include "drivers/DeviceInfo.h"
 #include "drivers/LvglDisplay.h"
 #include "S3Server.h"
-#include "StaticCache.h"
+#include "StaticFiles.h"
 #include "Auth.h"
 #include <ArduinoJson.h>
 #include <esp_log.h>
@@ -603,16 +603,11 @@ void webserver_start() {
     // of /fonts/... still fall through to the IDE).
     s3_register(server);
 
-    // Serve the locally-built web IDE bundle (with .gz auto-negotiation) from
-    // LittleFS /www/. index.html is the default document for "/". Files with
-    // a content hash in their name and the IDE's web fonts may be kept by the
-    // browser, so a later page load asks for index.html and little else; the
-    // rest is checked again every time (ETag).
-    server.serveStatic("/assets/", LittleFS, "/www/assets/", "public, max-age=31536000, immutable")
-        .setFilter([](AsyncWebServerRequest* request) { return freebutton::isHashedAssetUrl(request->url()); });
-    server.serveStatic("/fonts/", LittleFS, "/www/fonts/", "public, max-age=604800")
-        .setFilter([](AsyncWebServerRequest* request) { return freebutton::isWebFontUrl(request->url()); });
-    server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
+    // The web IDE (LittleFS /www/), last: every GET whose file exists there.
+    // index.html is the document for "/"; "<file>.gz" is sent for "<file>".
+    // Files with a content hash in their name and the IDE's web fonts may be
+    // kept by the browser, the rest is checked again every time (ETag).
+    freebutton::registerStaticFiles(server);
 
     ESP_LOGI(TAG, "Starting webserver");
     server.begin();

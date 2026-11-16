@@ -99,6 +99,7 @@
 
 #include "Auth.h"
 #include "S3Logic.h"
+#include "StreamResponse.h"
 #include "json/JsonValidator.h"
 #include "json/WindowOutputStream.h"
 #include "ui/MediaImage.h"   // mediaImageNotifyChanged
@@ -134,7 +135,6 @@ constexpr const char* kExposeHeaders =
     "x-fb-fs-total, x-fb-fs-used";
 constexpr size_t kMountMax = 15;   // ESP_VFS_PATH_MAX
 constexpr int kMaxDepth = 6;       // directory levels walked by a listing
-constexpr uint8_t kMaxGets = 2;    // concurrent GetObject file handles
 constexpr int kSearchesPerFill = 4;
 // Entries one walk of a LittleFS bucket collects (ListState::batch: 97 bytes each).
 constexpr int kListBatch = 12;
@@ -152,21 +152,13 @@ static constexpr char kLocationXml[] =
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
     "<LocationConstraint xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>";
 
-enum class Kind : uint8_t { Get = 1, Put, List };
+enum class Kind : uint8_t { Put = 2, List };
 
 bool s_putActive = false;
-uint8_t s_getsActive = 0;
 
 // ---------------------------------------------------------------------------
 // Per-request state (lives in request->_tempObject)
 // ---------------------------------------------------------------------------
-
-struct GetState {
-    Kind kind = Kind::Get;
-    int fd = -1;           // LittleFS
-    uint32_t mediaSize = 0;
-    media_file_t file{};   // media store: mapped while file.handle != 0
-};
 
 struct PutState {
     Kind kind = Kind::Put;
@@ -225,12 +217,6 @@ void dropWriter(PutState* p) {
 }
 
 // Drops the mapping of a media GetObject; idempotent.
-void closeMediaFile(GetState* g) {
-    if (!g->file.handle) return;
-    media_close(&g->file);
-    memset(&g->file, 0, sizeof g->file);
-}
-
 struct ListState {
     enum Phase : uint8_t { Header, Items, Footer, Done };
     enum Piece : uint8_t { None, HeaderPiece, ItemPiece, FooterPiece };
@@ -293,15 +279,7 @@ T* allocState(AsyncWebServerRequest* request) {
 void releaseState(AsyncWebServerRequest* request) {
     auto* kind = static_cast<Kind*>(request->_tempObject);
     if (!kind) return;
-    if (*kind == Kind::Get) {
-        auto* g = reinterpret_cast<GetState*>(kind);
-        if (g->fd >= 0) {
-            close(g->fd);
-            g->fd = -1;
-            if (s_getsActive) --s_getsActive;
-        }
-        closeMediaFile(g);
-    } else if (*kind == Kind::Put) {
+    if (*kind == Kind::Put) {
         auto* p = reinterpret_cast<PutState*>(kind);
         if (p->fd >= 0) {
             close(p->fd);
@@ -977,9 +955,9 @@ void addMediaStatHeaders(AsyncWebServerResponse* response, const uint8_t md5[16]
     response->addHeader("Last-Modified", date);
 }
 
-// GetObject / HeadObject in a media bucket. GET maps the file and copies it
-// from the mapping straight into the TCP buffer; the mapping is dropped once
-// the last byte is copied, or when the client goes away (releaseState).
+// GetObject / HeadObject in a media bucket. GET hands the mapped file to the
+// TCP stack by reference (StreamResponse.h): the file is mapped when the
+// download gets its turn and unmapped when its last byte is acknowledged.
 void handleMediaGet(AsyncWebServerRequest* request, const Target& t) {
     switch (s3::checkMediaReadKey(t.key, t.keyLen)) {
         case s3::MediaReadKey::Ok:
@@ -1006,36 +984,11 @@ void handleMediaGet(AsyncWebServerRequest* request, const Target& t) {
         response = request->beginResponse(200, type, "");
         response->setContentLength(st.size);
     } else {
-        GetState* g = allocState<GetState>(request);
-        if (!g) {
+        response = stream::beginMedia(mb, key, st, type);
+        if (!response) {
             sendXmlError(request, 503, "SlowDown", "out of memory");
             return;
         }
-        watchState(request);
-        if (const media_err_t e = media_open(mb, key, &g->file); e != MEDIA_OK) {
-            memset(&g->file, 0, sizeof g->file);
-            sendHttpError(request, s3::mediaError(e, s3::MediaOp::Read));
-            return;
-        }
-        if (g->file.size != st.size) {
-            // Replaced between media_stat and media_open: describe what is sent.
-            if (media_stat(mb, key, &st) != MEDIA_OK || st.size != g->file.size) {
-                closeMediaFile(g);
-                sendXmlError(request, 503, "SlowDown", "object changed while opening, retry");
-                return;
-            }
-        }
-        g->mediaSize = g->file.size;
-        response = request->beginResponse(type, g->mediaSize,
-                                          [request](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
-            auto* gs = static_cast<GetState*>(request->_tempObject);
-            if (!gs || gs->kind != Kind::Get || !gs->file.handle || index >= gs->mediaSize) return 0;
-            size_t n = gs->mediaSize - index;
-            if (n > maxLen) n = maxLen;
-            memcpy(buffer, gs->file.data + index, n);
-            if (index + n >= gs->mediaSize) closeMediaFile(gs);  // all copied: the mapping is no longer needed
-            return n;
-        });
     }
     addMediaStatHeaders(response, st.md5, st.mtime);
     addCommonHeaders(response);
@@ -1073,30 +1026,12 @@ void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
         response = request->beginResponse(200, type, "");
         response->setContentLength(size);
     } else {
-        if (s_getsActive >= kMaxGets) {
-            sendXmlError(request, 503, "SlowDown", "too many concurrent downloads");
-            return;
-        }
-        const int fd = open(path, O_RDONLY);
-        if (fd < 0) {
-            sendXmlError(request, 500, "InternalError", "open failed");
-            return;
-        }
-        GetState* g = allocState<GetState>(request);
-        if (!g) {
-            close(fd);
+        // Opened when the download gets its turn (StreamResponse.h).
+        response = stream::beginFile(path, size, type);
+        if (!response) {
             sendXmlError(request, 503, "SlowDown", "out of memory");
             return;
         }
-        g->fd = fd;
-        ++s_getsActive;
-        watchState(request);
-        response = request->beginResponse(type, size, [request](uint8_t* buffer, size_t maxLen, size_t) -> size_t {
-            auto* gs = static_cast<GetState*>(request->_tempObject);
-            if (!gs || gs->kind != Kind::Get || gs->fd < 0) return 0;
-            const ssize_t n = read(gs->fd, buffer, maxLen);
-            return n > 0 ? static_cast<size_t>(n) : 0;
-        });
     }
     formatStatHeaders(response, st);
     addCommonHeaders(response);
@@ -1663,7 +1598,7 @@ public:
 }  // namespace
 
 bool s3_idle() {
-    return !s_putActive && s_getsActive == 0;
+    return !s_putActive && stream::active() == 0;
 }
 
 void s3_register(AsyncWebServer& server) {
