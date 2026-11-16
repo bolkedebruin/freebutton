@@ -266,6 +266,13 @@ void WebSocketREPL::sendResult(AsyncWebSocketClient* client, const uint32_t clie
         if (client) {
             client->text(buffer, len);
         } else if (ws_) {
+            // From loop(), after the code ran. Its console output may have
+            // filled the client's short queue: a result must not be dropped
+            // with it (the IDE waits for it), so give the queue up to a
+            // second to drain.
+            for (int i = 0; i < 100 && ws_->hasClient(clientId) && !ws_->availableForWrite(clientId); ++i) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
             ws_->text(clientId, buffer, len);  // no-op if the client has gone
         }
     }
@@ -274,6 +281,21 @@ void WebSocketREPL::sendResult(AsyncWebSocketClient* client, const uint32_t clie
 void WebSocketREPL::broadcastConsole(std::string_view message) {
     if (!ws_ || ws_->count() == 0) {
         return;  // No clients connected
+    }
+
+    // A client's queue is short (WS_MAX_QUEUED_MESSAGES, platformio.ini): a
+    // burst of lines must not take the heap. Lines that do not fit are
+    // counted, and the count is sent when there is room again.
+    if (!ws_->availableForWriteAll()) {
+        ++consoleDropped_;
+        return;
+    }
+    if (consoleDropped_) {
+        char note[112];
+        const int n = snprintf(note, sizeof(note), R"({"type":"console","message":"... %u lines dropped: the console could not keep up"})",
+                               static_cast<unsigned>(consoleDropped_));
+        consoleDropped_ = 0;
+        if (n > 0 && n < static_cast<int>(sizeof(note))) ws_->textAll(note, n);
     }
 
     // Escape message for JSON and truncate if needed

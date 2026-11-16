@@ -11,6 +11,8 @@ extern "C" {
 #include "../scripting/ScriptEngine.h"
 
 #include "config.h"
+#include "../core/StreamStats.h"
+#include <atomic>
 
 namespace FreeButton {
 
@@ -38,6 +40,13 @@ DeviceInfo DeviceInfoCollector::collectInfo() const {
     info.heapFree = getFreeMemory();
     info.heapTotal = getTotalHeap();
     info.heapMinFree = getMinFreeHeap();
+    info.heapLow = getLowFreeHeap();
+    const stream::Stats dl = stream::stats();
+    info.dlSending = dl.sending;
+    info.dlWaiting = dl.waiting;
+    info.dlWaitingMax = dl.waitingMax;
+    info.dlServed = dl.served;
+    info.dlStalled = dl.stalled;
     getLvglMemory(info.lvglFree, info.lvglTotal);
     ui_text_stats(&info.textCollapsed, &info.textSkipped);  // two word reads, no lock needed
     const auto& engine = Scripting::ScriptEngine::getInstance();
@@ -114,8 +123,24 @@ size_t DeviceInfoCollector::getTotalHeap() {
     return heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
 }
 
-size_t DeviceInfoCollector::getMinFreeHeap() {
+// The SDK keeps one low-water mark per heap. markHeapLow() restarts it
+// (heap_caps_monitor_local_minimum_free_size_start: the mark becomes the
+// free heap now), so the lowest value before the last mark is kept here.
+static std::atomic<size_t> s_minBeforeMark{SIZE_MAX};
+
+size_t DeviceInfoCollector::getLowFreeHeap() {
     return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+}
+
+size_t DeviceInfoCollector::getMinFreeHeap() {
+    const size_t sinceMark = getLowFreeHeap();
+    const size_t before = s_minBeforeMark.load();
+    return sinceMark < before ? sinceMark : before;
+}
+
+void DeviceInfoCollector::markHeapLow() {
+    s_minBeforeMark.store(getMinFreeHeap());
+    heap_caps_monitor_local_minimum_free_size_start();
 }
 
 void DeviceInfoCollector::getLvglMemory(size_t& freeBytes, size_t& totalBytes) {

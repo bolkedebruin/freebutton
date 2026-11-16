@@ -94,7 +94,8 @@ void test_exact_key_set() {
     for (const char* key : {
              "\"deviceName\"", "\"ipv4\"", "\"ipv6\"", "\"ssid\"", "\"rssi\"",
              "\"mac\"", "\"firmware\"", "\"uptime\"", "\"heapFree\"", "\"heapTotal\"",
-             "\"heapMinFree\"", "\"lvglFree\"", "\"lvglTotal\"",
+             "\"heapMinFree\"", "\"heapLow\"", "\"lvglFree\"", "\"lvglTotal\"",
+             "\"dlSending\"", "\"dlWaiting\"", "\"dlWaitingMax\"", "\"dlServed\"", "\"dlStalled\"",
              "\"textSkipped\"", "\"textCollapsed\"",
              "\"jsHeapUsed\"", "\"jsHeapFree\"", "\"jsHeapSize\"",
              "\"scriptStarts\"", "\"scriptError\"",

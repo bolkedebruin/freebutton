@@ -153,8 +153,10 @@ static constexpr std::string_view upgradePage = R"rawliteral(
 )rawliteral";
 
 void handleUpgradePage(AsyncWebServerRequest *request) {
-    const std::string content{upgradePage};
-    request->send(200, "text/html", content.c_str());
+    // Sent from flash: the page that recovers a device must not need heap
+    // for a copy of itself.
+    request->send(request->beginResponse(200, "text/html", reinterpret_cast<const uint8_t*>(upgradePage.data()),
+                                         upgradePage.size()));
 }
 
 // OTA upload state (async_tcp task only).
@@ -548,6 +550,12 @@ void webserver_start() {
     server.on("/api/bytecode/upload", HTTP_POST, handleBytecodeUpload, onBytecodeUpload);
     server.on("/api/bytecode/list", HTTP_GET, handleBytecodeList);
     server.on("/api/reboot", HTTP_POST, handleReboot);
+
+    // Measurements: heapLow of /api/device counts from this call on.
+    server.on("/api/heap/mark", HTTP_POST, [](AsyncWebServerRequest *request){
+        FreeButton::DeviceInfoCollector::markHeapLow();
+        request->send(200, "application/json", R"({"status":"marked"})");
+    });
     // Debug: repaint every display once and save what is flushed to LittleFS
     // /screenshot-*.rgb565 (bucket app; tools/scripts/screenshot.py).
     // Debug: repaint every display ?n= times (default 5) and time it; GET

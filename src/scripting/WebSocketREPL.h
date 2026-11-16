@@ -58,6 +58,7 @@ private:
 
     // WebSocket instance (lazy initialized)
     AsyncWebSocket* ws_{nullptr};
+    uint32_t consoleDropped_{0};  // console lines not sent for a full queue (broadcastConsole)
 
     // One parked eval request, handed from the async_tcp task to the loop
     // task (which owns the JS engine). Waiting for the engine in async_tcp

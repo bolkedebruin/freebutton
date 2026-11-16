@@ -71,3 +71,14 @@ Wi-Fi driver's frames (up to 7 KB) and the connections themselves.
 how) records which allocations are alive when the free heap reaches a new
 low. `tools/scripts/heap_probe_decode.py <serial log>` prints them by call
 site.
+
+## Measuring on a device
+
+`GET /api/device` reports, beside `heapMinFree` (lowest free heap since
+boot):
+
+- `heapLow`: the lowest free heap since the last `POST /api/heap/mark`
+  (signed), so a measurement needs no reboot;
+- `dlSending`, `dlWaiting`: downloads that send or wait now;
+- `dlWaitingMax`, `dlServed`, `dlStalled`: since boot, the most that waited
+  at once, downloads completed, and senders that lost their slot for silence.

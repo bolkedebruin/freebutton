@@ -10,6 +10,7 @@
 #include <new>
 
 #include "StreamLogic.h"
+#include "StreamStats.h"
 
 namespace {
 
@@ -21,6 +22,9 @@ uint8_t s_active = 0;
 uint8_t s_waiting = 0;
 StreamResponse* s_waitHead = nullptr;
 StreamResponse* s_holders[stream::kMaxStreams] = {};
+uint8_t s_waitingMax = 0;
+uint32_t s_served = 0;
+uint32_t s_stalled = 0;
 
 uint32_t freeHeap() {
     return heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -103,6 +107,7 @@ private:
         while (*p) p = &(*p)->_next;
         *p = this;
         ++s_waiting;
+        if (s_waiting > s_waitingMax) s_waitingMax = s_waiting;
     }
 
     void leaveQueue() {
@@ -154,6 +159,7 @@ private:
         const uint32_t now = millis();
         for (StreamResponse* h : s_holders) {
             if (h && stream::stalled(now, h->_progressAt)) {
+                ++s_stalled;
                 h->_state = RESPONSE_FAILED;
                 h->closeSource();
                 h->releaseSlot(false);
@@ -259,6 +265,7 @@ private:
 
         if (_state == RESPONSE_WAIT_ACK && allAcknowledged(c)) {
             _state = RESPONSE_END;
+            ++s_served;
             closeSource();
             releaseSlot();
         }
@@ -347,6 +354,17 @@ AsyncWebServerResponse* beginMedia(media_bucket_t bucket, const char* key, const
 
 uint8_t active() {
     return s_active + s_waiting;
+}
+
+// Read from another task: single bytes and words, a torn view is harmless.
+Stats stats() {
+    Stats s;
+    s.sending = s_active;
+    s.waiting = s_waiting;
+    s.waitingMax = s_waitingMax;
+    s.served = s_served;
+    s.stalled = s_stalled;
+    return s;
 }
 
 }  // namespace stream
