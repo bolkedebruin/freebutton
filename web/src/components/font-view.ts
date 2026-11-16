@@ -73,3 +73,17 @@ export function richText(text: string, base: ItemFont, slot: FontSlot, scale: nu
     return html`<span style="${fontStyle({ ...f, configured: true }, scale, table)}${color}">${out.slice(s.offset, s.offset + s.len)}</span>`;
   })}</span>`;
 }
+
+/**
+ * A text as the firmware resolved it (the emulator's TextState runs): each
+ * run in its font, size and colour. Nothing is decided here: the markup,
+ * the style cascade and the font fallbacks were the firmware's.
+ * A run's face -1 is LVGL's built-in font: drawn with the first system font.
+ */
+export function runsView(
+  runs: ReadonlyArray<{ text: string; face: number; px: number; color: string }>, scale: number, table: FontTable = getFontTable(),
+) {
+  return runs.map(run => html`<span data-run
+    style="${fontStyle({ face: run.face >= 0 ? run.face : 0, px: run.px, configured: true }, scale, table)} color: ${run.color}; white-space: pre-wrap;"
+    >${run.text}</span>`);
+}

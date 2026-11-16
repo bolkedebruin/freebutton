@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  decidePublish, isDiscoveryOrAvailability, isOwnTopic, isVirtualIdentity, rewriteIdentity, virtualIdentity,
+  decidePublish, isAnnouncement, isPeriodicState, realDeviceIn, isDiscoveryOrAvailability, isOwnTopic, isVirtualIdentity, rewriteIdentity, virtualIdentity,
   type PublishPolicy, type PublishRequest,
 } from '../emulator/publish-policy';
 import { makeEmulator } from './emulator-helpers';
@@ -72,19 +72,99 @@ describe('decidePublish', () => {
       .toMatchObject({ action: 'send', retain: true, retainCleared: false, rewritten: false });
   });
 
-  it('live-publish: a literal topic is blocked unless the allow list has it', () => {
-    const blocked = decidePublish(request('home/light/set'), live);
-    expect(blocked).toMatchObject({ action: 'block', reason: 'not-allowed' });
-    expect(blocked.log).toContain('would publish to broker 0: home/light/set = "ON"');
+  it('live-publish: a literal topic is sent; with an allow list only what it has', () => {
+    expect(decidePublish(request('home/light/set'), live)).toMatchObject({ action: 'send', reason: 'allowed', topic: 'home/light/set' });
 
-    expect(decidePublish(request('home/light/set'), { ...live, allowTopics: ['home/light/set'] }))
-      .toMatchObject({ action: 'send', reason: 'allowed', topic: 'home/light/set' });
+    const listed = { ...live, allowTopics: ['home/light/set'] };
+    expect(decidePublish(request('home/light/set'), listed)).toMatchObject({ action: 'send', reason: 'allowed' });
+    const blocked = decidePublish(request('home/other/set'), listed);
+    expect(blocked).toMatchObject({ action: 'block', reason: 'not-allowed' });
+    expect(blocked.log).toContain('would publish to broker 0: home/other/set = "ON"');
     // Filters need a matcher; without one only exact topics match.
     expect(decidePublish(request('home/light/set'), { ...live, allowTopics: ['home/+/set'] }).action).toBe('block');
     const plus = (filter: string, topic: string): boolean => new RegExp('^' + filter.replace('+', '[^/]+') + '$').test(topic);
     expect(decidePublish(request('home/light/set'), { ...live, allowTopics: ['home/+/set'] }, plus).action).toBe('send');
-    // Another device's topic is a literal topic too.
-    expect(decidePublish(request('buttonplus/btn_a00002/display/x'), live).action).toBe('block');
+    // The virtual device's own topics need no entry.
+    expect(decidePublish(request(`buttonplus/${live.virtualId}/key`), { ...live, allowTopics: [] }).action).toBe('send');
+  });
+
+  it('live-publish: a real device\'s topic is held when asked for, until that exact topic is allowed', () => {
+    const asking = { ...live, realId: undefined, askRealDevice: true };
+    const topic = 'buttonplus/btn_a00001/cover/raam/set';
+    const held = decidePublish(request(topic), asking);
+    expect(held).toMatchObject({ action: 'block', reason: 'real-device', realDeviceId: 'btn_a00001', topic });
+    expect(held.log).toContain('belongs to the real device btn_a00001');
+    // Allowed: that topic only, as a Set or a list.
+    expect(decidePublish(request(topic), { ...asking, realTopics: new Set([topic]) }))
+      .toMatchObject({ action: 'send', reason: 'allowed', realDeviceId: 'btn_a00001' });
+    expect(decidePublish(request(topic), { ...asking, realTopics: [topic] }).action).toBe('send');
+    expect(decidePublish(request('buttonplus/btn_a00001/other'), { ...asking, realTopics: [topic] }).action).toBe('block');
+    // Not asked for: sent (the Emulator's own call; the broker link asks).
+    expect(decidePublish(request(topic), { ...live, realId: undefined }).action).toBe('send');
+    // The virtual device's own topics and plain topics are never held.
+    expect(decidePublish(request(`buttonplus/${live.virtualId}/key`), asking)).toMatchObject({ action: 'send', reason: 'own-topic' });
+    expect(decidePublish(request('home/light/set'), asking).action).toBe('send');
+    // Read-only and offline never get as far as asking.
+    expect(decidePublish(request(topic), { ...asking, mode: 'live-readonly' }).reason).toBe('read-only');
+    expect(decidePublish(request(topic), { ...asking, mode: 'offline' }).action).toBe('mock');
+  });
+
+  it('the firmware\'s periodic reports: held only when asked for, until allowed; a script\'s publish is never one', () => {
+    const base = { ...live, realId: undefined };
+    const sensor = { ...request(`buttonplus/${live.virtualId}/sensor/temperature`), origin: 'firmware' as const, kind: 'sensor' };
+    const state = { ...sensor, topic: `buttonplus/${live.virtualId}/light/led_1/state`, kind: 'state' };
+    expect(isPeriodicState(sensor)).toBe(true);
+    expect(isPeriodicState(state)).toBe(true);
+    expect(isPeriodicState({ origin: 'firmware', kind: 'press' })).toBe(false);
+    expect(isPeriodicState({ origin: 'script', kind: 'state' })).toBe(false);
+    // Not asked for (the Emulator's own call): sent.
+    expect(decidePublish(sensor, base).action).toBe('send');
+    const held = decidePublish(sensor, { ...base, holdStates: true });
+    expect(held).toMatchObject({ action: 'block', reason: 'own-state' });
+    expect(decidePublish(state, { ...base, holdStates: true }).reason).toBe('own-state');
+    expect(decidePublish(sensor, { ...base, holdStates: true, allowStates: true })).toMatchObject({ action: 'send', reason: 'own-topic' });
+    // A key's default action is what is being tested: it goes out.
+    expect(decidePublish({ ...sensor, topic: `buttonplus/${live.virtualId}/button_3/state`, kind: 'press' }, { ...base, holdStates: true }).action).toBe('send');
+    // Read-only and offline do not get this far.
+    expect(decidePublish(sensor, { ...base, holdStates: true, mode: 'live-readonly' }).reason).toBe('read-only');
+    expect(decidePublish(sensor, { ...base, holdStates: true, mode: 'offline' }).action).toBe('mock');
+  });
+
+  it('a script that publishes to an announcement topic is announcing too (kind "script": by the topic)', () => {
+    const base = { ...live, realId: undefined };
+    const config = { ...request(`homeassistant/sensor/${live.virtualId}_t/config`), kind: 'script' };
+    expect(isAnnouncement(config)).toBe(true);
+    expect(decidePublish(config, base)).toMatchObject({ action: 'block', reason: 'discovery' });
+    expect(isAnnouncement({ topic: 'home/light/set', kind: 'script' })).toBe(false);
+  });
+
+  it('realDeviceIn: a device id as a token, never the virtual identity', () => {
+    expect(realDeviceIn('buttonplus/btn_a00001/cover/set')).toBe('btn_a00001');
+    expect(realDeviceIn('homeassistant/event/btn_a00001_key1/config')).toBe('btn_a00001');
+    expect(realDeviceIn('btn_a00002')).toBe('btn_a00002');
+    expect(realDeviceIn('buttonplus/virt_btn_a00001/key')).toBeNull();
+    expect(realDeviceIn('home/btn_light/set')).toBeNull();
+    expect(realDeviceIn('x/abtn_a00001/y')).toBeNull();
+    expect(realDeviceIn('x/btn_a000011/y')).toBeNull();
+  });
+
+  it('announcements: by kind when the sender gives one, else by topic; off unless allowed; retain needs its own switch', () => {
+    const base = { ...live, realId: undefined };
+    const discovery = { ...request(`homeassistant/sensor/${live.virtualId}_t/config`), retain: true, origin: 'firmware' as const, kind: 'discovery' };
+    expect(isAnnouncement(discovery)).toBe(true);
+    expect(decidePublish(discovery, base)).toMatchObject({ action: 'block', reason: 'discovery', announce: true });
+    expect(decidePublish(discovery, { ...base, allowDiscovery: true })).toMatchObject({ action: 'send', announce: true, retain: false, retainCleared: true });
+    expect(decidePublish(discovery, { ...base, allowDiscovery: true, allowRetain: true })).toMatchObject({ action: 'send', retain: true });
+    // An availability publish on a topic that does not look like one.
+    expect(decidePublish({ ...request('custom/state'), origin: 'firmware', kind: 'availability' }, base).reason).toBe('discovery');
+    // A firmware publish of another kind on its own topic: ordinary traffic.
+    const keyEvent = { ...request(`buttonplus/${live.virtualId}/button_1/state`), origin: 'firmware' as const, kind: 'press' };
+    expect(isAnnouncement(keyEvent)).toBe(false);
+    expect(decidePublish(keyEvent, base)).toMatchObject({ action: 'send', reason: 'own-topic' });
+    // A kind that is not an announcement wins over the look of the topic.
+    expect(isAnnouncement({ topic: `buttonplus/${live.virtualId}/status`, kind: 'state' })).toBe(false);
+    // No kind (a script): by the topic.
+    expect(isAnnouncement({ topic: 'homeassistant/light/x/config' })).toBe(true);
   });
 
   it('live-publish: discovery and availability are suppressed unless explicitly allowed', () => {
@@ -113,6 +193,8 @@ describe('the emulator applies the policy', () => {
     const { emu } = await makeEmulator();
     emu.run(script);
     expect(emu.broker(0).published.map(p => [p.topic, p.retain])).toEqual([
+      // The firmware's birth message comes first, then what the script publishes.
+      ['buttonplus/virt_btn_0a1b2c/status', true],
       ['buttonplus/virt_btn_0a1b2c/key/3', true],
       ['buttonplus/btn_a00001/display/temp', true],
       ['home/light/set', false],

@@ -165,8 +165,8 @@ describe('emulator session: run and stop', () => {
 describe('emulator session: info (the virtual device\'s info side)', () => {
   it('not run yet: the identity, idle, nothing measured', () => {
     expect(session.info()).toEqual({
-      identity: virtualDeviceId(), status: 'idle', error: '', mqtt: 'offline', uptimeSeconds: null, heap: null, bytecode: null,
-      timers: null, subscriptions: null, mqttDropped: null, brokers: null, sensors: null, firmware: null, model: null, connectors: null,
+      identity: virtualDeviceId(), status: 'idle', error: '', mqtt: 'offline', mqttLink: 'none', uptimeSeconds: null, heap: null, bytecode: null,
+      timers: null, subscriptions: null, mqttDropped: null, brokers: null, sensors: null, firmware: null, model: null, timezone: null, connectors: null,
     });
   });
 
@@ -177,7 +177,7 @@ describe('emulator session: info (the virtual device\'s info side)', () => {
     expect(info).toMatchObject({
       identity: virtualDeviceId(), status: 'running', error: '', mqtt: 'offline', uptimeSeconds: 0, mqttDropped: 0,
       timers: { used: 1, limit: 16 }, subscriptions: { used: 2, limit: 8 },
-      brokers: ['local'], sensors: 3, connectors: [2, 1, 0, 0],
+      brokers: ['local'], sensors: 8, connectors: [2, 1, 0, 0],
       model: 'Model 1 Version 9',
     });
     expect(info.firmware).toMatch(/^FreeButton \d+\.\d+/);
@@ -322,7 +322,8 @@ describe('emulator session: MQTT (in-page broker) and sensors', () => {
     expect(session.inject(0, 'home/temp', '21.5')).toBe(true);
     await wait(60);
     expect(session.pages()![0]!.displayItems[0]!.value).toBe('21.5');
-    const log = session.mqttLog();
+    // The firmware's own publishes aside (its birth message).
+    const log = session.mqttLog().filter(e => e.origin !== 'firmware');
     expect(log.map(e => [e.kind, e.topic, e.payload])).toEqual([
       ['published', 'home/ack', 'got 21.5'],
       ['delivered', 'home/temp', '21.5'],
@@ -330,16 +331,16 @@ describe('emulator session: MQTT (in-page broker) and sensors', () => {
     ]);
     // What the publish policy decided: offline, nothing is sent.
     expect(log[0]!.note).toBe('not sent: offline (in-page broker only)');
-    expect(log[2]!.note).toBe('a subscription matches');
+    expect(log[2]!.note).toBe('local: a subscription matches');
     expect(log.every(e => e.time > 0)).toBe(true);
   });
 
   it('a message no subscription wants is logged as not delivered; a retained one is kept for a later subscription', async () => {
     await start(SCRIPT);
     session.inject(0, 'other/topic', 'x');
-    expect(session.mqttLog()[0]).toMatchObject({ kind: 'injected', note: 'no subscription matches: not delivered' });
+    expect(session.mqttLog()[0]).toMatchObject({ kind: 'injected', note: 'local: no subscription matches: not delivered' });
     session.inject(0, 'late/topic', 'kept', true);
-    expect(session.mqttLog()[0]).toMatchObject({ retain: true, note: 'no subscription matches: kept as retained' });
+    expect(session.mqttLog()[0]).toMatchObject({ retain: true, note: 'local: no subscription matches: kept as retained' });
     window.dispatchEvent(new CustomEvent('console-eval', {
       detail: { code: 'mqtt.subscribe(0, "late/topic", function (t, p) { print("late " + p); })', target: 'virtual' },
     }));
@@ -388,11 +389,11 @@ describe('emulator session: MQTT (in-page broker) and sensors', () => {
     const file = session.exportSession()!;
     expect(file).toMatchObject({ format: 'freebutton-mqtt-session', version: 1, identity: virtualDeviceId() });
     expect(file.brokers[0]!.name).toBe('local');
-    expect(file.brokers[0]!.session.events.map(e => [e.dir, e.topic, e.payload])).toEqual([
+    expect(file.brokers[0]!.session.events.filter(e => !e.topic.startsWith('buttonplus/virt_btn_')).map(e => [e.dir, e.topic, e.payload])).toEqual([
       // The script answers at its next loop pass: after the second message came in.
       ['in', 'home/temp', '19'], ['in', 'home/mode', 'eco'], ['out', 'home/ack', 'got 19'],
     ]);
-    expect(file.brokers[0]!.session.retained.map(m => m.topic)).toEqual(['home/mode']);
+    expect(file.brokers[0]!.session.retained.map(m => m.topic).filter(t => !t.startsWith('buttonplus/virt_btn_'))).toEqual(['home/mode']);
     // Through JSON, as the file on disk.
     const saved = JSON.parse(JSON.stringify(file)) as SessionFile;
 

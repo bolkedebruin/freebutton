@@ -19,7 +19,7 @@
  */
 import { RealClock, type Clock, type TimerHandle } from './clock';
 import { DeviceState, type ConnectorKind, type SensorSpec, type StateChange } from './device-state';
-import type { EmulatorHost, KeyEventName, LogLevel, ScriptErrorWhere } from './host';
+import type { EmulatorHost, KeyEventName, LogLevel, PublishKind, PublishOrigin, ScriptErrorWhere } from './host';
 import { LIMIT } from './layout';
 import { MockBroker, type MqttTransport, type TransportState } from './mqtt';
 import {
@@ -34,7 +34,8 @@ export * from './host';
 export * from './mqtt';
 export * from './publish-policy';
 export { frontLedIndex, overlayPages } from './preview-overlay';
-export { DISPLAY_ITEM_INFO, LAYOUT_ORDER, LIMIT, SENSOR_INFO } from './layout';
+export type { OverlayButton, OverlayImage, OverlayItem, OverlayList, OverlayPage } from './preview-overlay';
+export { LIMIT } from './layout';
 export { DEFAULT_WASM_URL, EngineInstance, loadEmulatorModule, type WasmSource } from './wasm';
 
 /** The device's JS heap (src/main.cpp). */
@@ -71,6 +72,10 @@ export interface PublishEvent {
   qos: number;
   retain: boolean;
   time: number;
+  /** Who published: a script's mqtt.publish(), or the firmware by itself. */
+  origin: PublishOrigin;
+  /** What it is: 'script', or of the firmware 'press' (a key's default action), 'discovery', 'availability', 'sensor', 'state'. */
+  kind: PublishKind;
   /** mock: went to the in-page broker; send: to a real broker; block: nowhere (see `log`). */
   action: PublishAction;
   reason: PublishDecision['reason'];
@@ -161,13 +166,23 @@ export interface EmulatorOptions {
   connectors?: readonly ConnectorKind[];
   /** Default: DEFAULT_SENSORS. */
   sensors?: readonly SensorSpec[];
+  /**
+   * false: the firmware's 1 s sensor sample does not run (no sensor state is
+   * published, sensor.onChange never fires). For tests that count publishes
+   * or timers. Default true.
+   */
+  sampleSensors?: boolean;
+  /**
+   * Which keys of the device's images bucket exist (icon rasters
+   * "ico-<name>-<w>x<h>.bin", user files). Default: every key, as after the IDE
+   * saved the config with its rasters.
+   */
+  mediaExists?: (key: string) => boolean;
   /** What system.freeHeap() reports. Default 40000. */
   freeHeapBytes?: number;
 }
 
 type Listeners = { [K in keyof EmulatorEvents]: Set<EmulatorEvents[K]> };
-
-const ALL_KEYS_UP = 0xff;
 
 function parsePosition(error: { message: string; stack?: string }): { line?: number; column?: number } {
   const match = /:(\d+):(\d+)\)?\s*$/m.exec(error.stack ?? '') ?? /:(\d+):(\d+)\)?\s*$/m.exec(error.message);
@@ -187,20 +202,18 @@ export class Emulator {
   private readonly module: WebAssembly.Module;
   private readonly options: EmulatorOptions;
   private readonly transports: MqttTransport[] = [];
+  private readonly wills: Array<{ topic: string; payload: string; qos: number; retain: boolean }> = [];
   private readonly host: EmulatorHost;
   private readonly listeners: Listeners = {
     console: new Set(), log: new Set(), error: new Set(), publish: new Set(), subscribe: new Set(),
     unsubscribe: new Set(), state: new Set(), key: new Set(), exit: new Set(),
   };
   private readonly files = new Map<string, Uint8Array>();
-  private readonly bootTime: number;
   private readonly wall: () => number;
   private readonly budgetMs: number;
 
   private image: Uint8Array | null = null;
   private scriptRunning = false;
-  /** The script's top level is running: it may already subscribe and get retained messages. */
-  private starting = false;
   /** > 0 while a call into the engine is on the stack. */
   private depth = 0;
   private inLoopPass = false;
@@ -214,7 +227,6 @@ export class Emulator {
   private consoleLine = '';
   private lastStats: EmulatorStats | null = null;
 
-  private gpio = ALL_KEYS_UP;
   private idleScans = 0;
   private keyTimer: TimerHandle | null = null;
   private loopTimer: TimerHandle | null = null;
@@ -238,7 +250,6 @@ export class Emulator {
     this.options = options;
     this.identity = identity;
     this.clock = options.clock ?? new RealClock();
-    this.bootTime = this.clock.now();
     this.wall = options.wallClock ?? (() => performance.now());
     this.budgetMs = options.interruptBudgetMs ?? 2000;
     for (const [path, content] of Object.entries(options.files ?? {})) {
@@ -246,7 +257,12 @@ export class Emulator {
     }
 
     const config = typeof options.config === 'string' ? safeParse(options.config) : options.config;
-    this.state = new DeviceState(config, { connectors: options.connectors, sensors: options.sensors });
+    // The firmware reads the configuration itself, as the file it is on the device.
+    this.files.set('/config.json', new TextEncoder().encode(
+      typeof options.config === 'string' ? options.config : JSON.stringify(options.config ?? {})));
+    this.state = new DeviceState(config, {
+      connectors: options.connectors, sensors: options.sensors, mediaExists: options.mediaExists,
+    });
     this.state.subscribe(change => this.emit('state', change));
     this.host = this.makeHost();
 
@@ -255,8 +271,6 @@ export class Emulator {
     this.limits = Object.fromEntries(
       Object.entries(LIMIT).map(([name, which]) => [name, limit(which)]),
     ) as Record<keyof typeof LIMIT, number>;
-    engine.setFileLimit(this.limits.bytecodeBytes);
-    this.state.setLedCount(this.limits.leds);
 
     const mode = options.publishMode ?? 'offline';
     this.state.brokers.forEach((broker, index) => {
@@ -272,6 +286,7 @@ export class Emulator {
       transport.onState(state => this.onTransportState(index, state));
     });
     if ((options.boot ?? 'restart') === 'restart') this.connectTransports();
+    this.startSensors();
   }
 
   // --- events --------------------------------------------------------------------
@@ -411,7 +426,7 @@ export class Emulator {
   press(key: number | string): boolean {
     const position = this.keyPosition(key);
     if (position === null) return false;
-    this.gpio &= ~(1 << (position - 1));
+    this.state.setKey(position, true);
     this.startKeyScan();
     return true;
   }
@@ -420,7 +435,7 @@ export class Emulator {
   release(key: number | string): boolean {
     const position = this.keyPosition(key);
     if (position === null) return false;
-    this.gpio |= 1 << (position - 1);
+    this.state.setKey(position, false);
     this.startKeyScan();
     return true;
   }
@@ -438,21 +453,20 @@ export class Emulator {
 
   /** Keys that are held down now. */
   get pressedKeys(): number[] {
-    const out: number[] = [];
-    for (let i = 0; i < 8; i++) if ((this.gpio & (1 << i)) === 0) out.push(i + 1);
-    return out;
+    return this.state.heldKeys();
   }
 
   // --- MQTT, sensors ------------------------------------------------------------------
 
   /**
    * A message arrives from broker `broker`, as from its transport. The
-   * firmware's filter decides whether a script subscription wants it; the
-   * script gets it on the next loop pass.
+   * firmware takes it: its own subscribers (a config topic of an item or key,
+   * a Home Assistant command) at once, a script subscription on the next
+   * loop pass. 'unwanted': the device has no subscription for the topic.
    */
   deliver(broker: number, topic: string, payload: string): DeliverResult {
     const engine = this.engine;
-    if (!engine || !(this.scriptRunning || this.starting)) return 'stopped';
+    if (!engine) return 'stopped';
     if (this.inLoopPass) {
       // A publish of this pass came back (loopback): on the device the
       // answer of the broker arrives after the pass, never inside it.
@@ -462,14 +476,18 @@ export class Emulator {
     const rc = engine.withString(topic, (topicPtr, topicLen) =>
       engine.withString(payload, (payloadPtr, payloadLen) =>
         engine.exports.fbe_mqtt_message(broker, topicPtr, topicLen, payloadPtr, payloadLen)));
-    if (rc === 1) {
+    if (rc === 1 || rc === 2) {
       this.scheduleLoop(0);
       return 'queued';
     }
-    return rc === 0 ? 'unwanted' : rc === -2 ? 'too-large' : 'dropped';
+    // -3: no such broker, or its client is not connected: nothing is subscribed there.
+    return rc === 0 || rc === -3 ? 'unwanted' : rc === -2 ? 'too-large' : 'dropped';
   }
 
-  /** A sensor's reading. The script's onChange hears it at the next sample (every second, as on the device). */
+  /**
+   * A hardware sensor's reading (the BME280: ids 3 pressure in hPa, 4 humidity, 5 temperature; the STS35: 1, 2).
+   * The firmware samples it at its next pass (every second): it publishes the state and tells the script's onChange.
+   */
   setSensor(id: number, value: number): boolean {
     return this.state.setSensor(id, value);
   }
@@ -503,16 +521,21 @@ export class Emulator {
   }
 
   /**
-   * What the firmware in the wasm calls itself: system.version() and
-   * system.model(), asked in the script's context (the wasm has no export
-   * for them). Null while no script context exists or inside a callback.
+   * Seconds east of UTC of the device's local time at `atMs` (default: now on
+   * the emulator's clock): the firmware's time zone rule (config.json
+   * "core.timezone", a POSIX TZ string) with its daylight saving changes. A
+   * renderer draws the clock's hands with it.
    */
-  firmware(): { version: string; model: string } | null {
-    if (!this.scriptRunning || this.depth > 0 || !this.engine) return null;
-    const version = this.eval('system.version()');
-    const model = this.eval('system.model()');
-    if (!version.ok || !model.ok) return null;
-    return { version: version.value, model: model.value };
+  utcOffsetSeconds(atMs: number = this.clock.now()): number {
+    return this.requireEngine().exports.fbe_utc_offset(Math.floor(atMs / 1000));
+  }
+
+  /**
+   * The last will the firmware's MQTT client of broker `index` connects with
+   * (<device>/status "offline", retained): what a transport hands its broker.
+   */
+  lastWill(index: number): { topic: string; payload: string; qos: number; retain: boolean } | undefined {
+    return this.wills[index];
   }
 
   /** The ROM atoms id of the engine (compare with the device's /api/bytecode/next_address atoms_id). */
@@ -554,16 +577,14 @@ export class Emulator {
       this.engine = null;
       throw new Error('emulator: cannot allocate the JS heap');
     }
-    for (const broker of this.state.brokers) engine.withString(broker.name, ptr => x.fbe_broker_add(ptr));
+    this.state.setSwitchPins(x.fbe_switch_pin(0), x.fbe_switch_pin(1));
+    // The transports of an earlier engine (after a panic) are still there.
     this.transports.forEach((transport, index) => {
-      x.fbe_broker_set_connected(index, transport.state === 'connected' ? 1 : 0, 1);
+      x.fbe_mqtt_connected(index, transport.state === 'connected' ? 1 : 0);
     });
-    for (const position of this.state.physicalKeys()) x.fbe_button_add(position);
-    for (const sensor of this.state.sensors) {
-      engine.withString(sensor.name, name =>
-        engine.withString(sensor.type, type =>
-          engine.withString(sensor.unit, unit => x.fbe_sensor_add(sensor.id, name, type, unit, sensor.online ? 1 : 0))));
-    }
+    // setup(): hardware scan, config.json, brokers, discovery sources.
+    this.enter(() => x.fbe_device_boot());
+    if (!this.engine) throw new Error('emulator: the firmware did not start');
     return engine;
   }
 
@@ -647,13 +668,8 @@ export class Emulator {
     this.lastError = null;
 
     const ptr = image ? engine.allocBytes(image) : 0;
-    this.starting = true;
-    let rc: number | undefined;
-    try {
-      rc = this.enter(() => engine.exports.fbe_start(ptr, image ? image.length : 0, 1));
-    } finally {
-      this.starting = false;
-    }
+    this.state.noteRestart();
+    const rc = this.enter(() => engine.exports.fbe_start(ptr, image ? image.length : 0, 1));
     if (this.engine && ptr !== 0) engine.exports.fbe_free(ptr);
     if (rc === undefined) {
       const error: ScriptError = { where: 'panic', message: 'the script engine stopped while starting the script' };
@@ -709,7 +725,7 @@ export class Emulator {
 
   /** One timer for the next loop pass, at the earliest time anything asked for. */
   private scheduleLoop(delayMs: number): void {
-    if (!this.scriptRunning || this.disposed) return;
+    if (!this.engine || this.disposed) return;
     const due = this.clock.now() + delayMs;
     if (this.loopTimer !== null && this.loopDue <= due) return;
     this.cancel('loopTimer');
@@ -725,7 +741,7 @@ export class Emulator {
   /** The firmware's loop(): queued MQTT events, one due timer. Returns ms to the next pass; 0 = more now; -1 = idle. */
   private runLoopPass(): number {
     const engine = this.engine;
-    if (!engine || !this.scriptRunning) return -1;
+    if (!engine) return -1;
     this.inLoopPass = true;
     let next: number | undefined;
     try {
@@ -761,29 +777,36 @@ export class Emulator {
       this.keyTimer = null;
       const engine = this.engine;
       if (!engine) return;
-      this.enter(() => engine.exports.fbe_button_tick(this.gpio));
+      this.enter(() => engine.exports.fbe_button_tick());
       this.afterEntry();
       // Two more scans after the last key went up: the firmware's history
       // needs them to see the release (and to take the next press as a click).
-      this.idleScans = this.gpio === ALL_KEYS_UP ? this.idleScans + 1 : 0;
+      this.idleScans = this.state.heldKeys().length === 0 ? this.idleScans + 1 : 0;
       if (this.idleScans < 3 && this.engine) this.keyTimer = this.clock.setTimer(scan, this.limits.keyScanMs);
     };
     this.keyTimer = this.clock.setTimer(scan, this.limits.keyScanMs);
   }
 
-  /** sampleSensors(): every sensor's reading to the firmware, which decides about onChange. */
+  /**
+   * sampleSensors() of the firmware's loop(), every second from boot, script
+   * or not: each sensor's state is published and a script's onChange hears
+   * of a change.
+   */
   private startSensors(): void {
-    if (this.sensorTimer !== null || this.state.sensors.length === 0 || !this.engine) return;
+    if (this.sensorTimer !== null || !this.engine || this.disposed || this.options.sampleSensors === false) return;
     const interval = this.engine.exports.fbe_sensor_interval_ms();
     const sample = (): void => {
       this.sensorTimer = null;
       const engine = this.engine;
-      if (!engine || !this.scriptRunning) return;
-      this.enter(() => {
-        for (const sensor of this.state.sensors) engine.exports.fbe_sensor_notify(sensor.id, sensor.value);
-      });
+      if (!engine || this.disposed) return;
+      this.enter(() => engine.exports.fbe_sample_sensors());
+      if (this.engine) {
+        for (const sensor of this.state.sensors) {
+          if (sensor.input < 0) this.state.noteSensorValue(sensor.id, engine.exports.fbe_sensor_value(sensor.id));
+        }
+      }
       this.afterEntry();
-      if (this.scriptRunning) this.sensorTimer = this.clock.setTimer(sample, interval);
+      if (this.engine) this.sensorTimer = this.clock.setTimer(sample, interval);
     };
     this.sensorTimer = this.clock.setTimer(sample, interval);
   }
@@ -799,16 +822,18 @@ export class Emulator {
   private onTransportState(index: number, state: TransportState): void {
     const engine = this.engine;
     if (!engine || state === 'connecting') return;
-    // Queued like a message; the firmware drops it while no script uses MQTT.
-    engine.exports.fbe_broker_set_connected(index, state === 'connected' ? 1 : 0, 0);
+    // The firmware's client: birth message and subscriptions at once, discovery on later passes.
+    const tell = (): void => engine.exports.fbe_mqtt_connected(index, state === 'connected' ? 1 : 0);
+    if (this.depth > 0) tell();
+    else this.enter(tell);
     this.scheduleLoop(0);
   }
 
   // --- the host the wasm calls ----------------------------------------------------------------
 
   private keyPosition(key: number | string): number | null {
-    const position = typeof key === 'string' ? this.state.host.keys.findByName(key) : key;
-    return position !== null && this.state.physicalKeys().includes(position) ? position : null;
+    const position = typeof key === 'string' ? this.state.key(key)?.position : key;
+    return position !== undefined && this.state.physicalKeys().includes(position) ? position : null;
   }
 
   private flushConsole(): void {
@@ -820,13 +845,17 @@ export class Emulator {
 
   private makeHost(): EmulatorHost {
     return {
-      ...this.state.host,
+      hardware: this.state.hardware,
+      display: this.state.display,
       mqtt: {
-        publish: (broker, topic, payload, qos, retain) => {
+        // The transports connect by the emulator's boot mode (connectTransports);
+        // what the firmware's client asked for is kept for them (lastWill).
+        start: (broker, options) => { this.wills[broker] = options.will; },
+        publish: (broker, topic, payload, qos, retain, about) => {
           const transport = this.transports[broker];
           if (!transport) return false;
           const decision = decidePublish(
-            { broker, topic, payload, qos, retain, origin: 'script' },
+            { broker, topic, payload, qos, retain, origin: about.origin, kind: about.kind },
             {
               mode: this.options.publishMode ?? 'offline', virtualId: this.identity, realId: this.options.realId,
               allowTopics: this.options.allowTopics, allowDiscovery: this.options.allowDiscovery,
@@ -836,10 +865,13 @@ export class Emulator {
           );
           this.emit('publish', {
             broker, requestedTopic: topic, topic: decision.topic, payload, qos, retain: decision.retain,
-            time: this.clock.now(), action: decision.action, reason: decision.reason,
+            time: this.clock.now(), origin: about.origin, kind: about.kind,
+            action: decision.action, reason: decision.reason,
             ...(decision.log ? { log: decision.log } : {}),
           });
-          if (decision.action !== 'block') transport.publish({ topic: decision.topic, payload, qos, retain: decision.retain });
+          if (decision.action !== 'block') {
+            transport.publish({ topic: decision.topic, payload, qos, retain: decision.retain }, about);
+          }
           return true;
         },
         subscribe: (broker, topic, qos) => {
@@ -853,8 +885,6 @@ export class Emulator {
       },
       system: {
         deviceId: () => this.identity,
-        deviceName: () => this.state.deviceName || this.identity,
-        uptimeSeconds: () => Math.floor((this.clock.now() - this.bootTime) / 1000),
         freeHeap: () => this.options.freeHeapBytes ?? 40000,
         nowMs: () => this.clock.now(),
         shouldInterrupt: () => {
@@ -864,7 +894,7 @@ export class Emulator {
         },
       },
       files: {
-        load: path => this.files.get(normalizePath(path)) ?? null,
+        read: path => this.files.get(normalizePath(path)) ?? null,
       },
       console: {
         write: text => {
@@ -881,7 +911,6 @@ export class Emulator {
         },
       },
       keyEvent: (position, event, defaultPrevented) => this.emit('key', { position, event, defaultPrevented }),
-      restoreConfigState: () => this.state.restoreConfigState(),
     };
   }
 }

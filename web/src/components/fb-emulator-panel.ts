@@ -1,7 +1,7 @@
 import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { on } from '../js/app-state';
-import { emulatorSession, type MqttLogEntry } from '../js/emulator-session';
+import { emulatorSession, type BrokerStatus, type MqttLogEntry, type MqttStatus } from '../js/emulator-session';
 
 const INPUT = 'min-w-0 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-text-default font-mono outline-none focus:border-purple-80';
 const BUTTON = 'shrink-0 px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-text-default hover:bg-white/10 transition-colors '
@@ -9,9 +9,12 @@ const BUTTON = 'shrink-0 px-2 py-1 rounded-md text-[11px] bg-white/5 border bord
 const HEADING = 'text-[10px] uppercase tracking-wider text-gray-100';
 
 const KIND: Record<MqttLogEntry['kind'], { label: string; title: string; color: string }> = {
-  injected: { label: 'IN', title: 'Injected here: a message from another client of the broker', color: 'text-[#4fc3f7]' },
+  injected: { label: 'IN', title: 'Injected here: handed to the script as if the broker sent it (local)', color: 'text-[#4fc3f7]' },
   delivered: { label: '→JS', title: 'Delivered to the script: a subscription matches', color: 'text-status-green' },
-  published: { label: 'OUT', title: 'Published by the script', color: 'text-status-orange' },
+  published: { label: 'OUT', title: 'Published by the script to the in-page broker (offline): not sent', color: 'text-gray-100' },
+  sent: { label: 'SENT', title: 'Published to the real broker', color: 'text-status-orange' },
+  'would-publish': { label: 'WOULD', title: 'Read-only: this would be published, and was not', color: 'text-gray-100' },
+  blocked: { label: 'HELD', title: 'Not sent: the note says why', color: 'text-status-red' },
 };
 
 function clock(time: number): string {
@@ -37,6 +40,9 @@ export class FbEmulatorPanel extends LitElement {
   @state() private _retain = false;
   @state() private _message = '';
   @state() private _sensorsOpen = false;
+  /** Log filters: who published, and the direction. */
+  @state() private _source: 'all' | 'script' | 'firmware' = 'all';
+  @state() private _dir: 'all' | 'in' | 'out' = 'all';
   private _offs: Array<() => void> = [];
 
   connectedCallback() {
@@ -111,26 +117,169 @@ export class FbEmulatorPanel extends LitElement {
       </details>`;
   }
 
-  private _renderLog() {
-    const log = emulatorSession.mqttLog();
-    if (log.length === 0) {
-      return html`<p class="text-[11px] text-gray-100" data-testid="mqtt-log-empty">Nothing yet. Messages you inject, what the script receives and what it publishes are listed here, newest first.</p>`;
-    }
-    const brokers = emulatorSession.brokers();
+  private _setMode(mode: MqttStatus['mode']) {
+    this._message = emulatorSession.setMqttMode(mode);
+  }
+
+  /** Why a broker is not connected, with what to do about it. */
+  private _renderLinkError(b: BrokerStatus) {
+    const e = b.error;
+    if (!e) return '';
     return html`
+      <div class="text-[11px] leading-snug text-status-red" role="alert" data-testid="mqtt-link-error" data-error=${e.kind}>
+        ${e.message}
+        ${e.kind === 'unreachable' || e.kind === 'not-mqtt' ? html`
+          <span class="block mt-1 text-gray-100">Mosquitto needs a websockets listener (mosquitto.conf), and the address above its port as this computer reaches it:</span>
+          <pre class="mt-1 px-2 py-1 rounded bg-white/5 font-mono text-[11px] text-text-default" data-testid="mqtt-listener-help">listener 9001
+protocol websockets</pre>` : ''}
+        ${e.kind === 'taken-over' ? html`<span class="block mt-1 text-gray-100">Stop the virtual device in the other tab or window.</span>` : ''}
+      </div>`;
+  }
+
+  /**
+   * Where MQTT goes: the in-page broker (offline), or the real broker of
+   * config.json, read-only or publishing. Per broker: the WebSocket address
+   * and the state of the connection. In live publish: what else may be sent.
+   */
+  private _renderMode(status: MqttStatus | null) {
+    if (!status) return '';
+    const mode = status.mode;
+    const identity = emulatorSession.snapshot().identity;
+    const option = (value: MqttStatus['mode'], label: string, title: string) => {
+      const on = mode === value;
+      const color = !on ? 'text-gray-100 hover:text-text-default'
+        : value === 'live-publish' ? 'bg-status-orange text-black font-semibold' : 'bg-purple-90 text-white';
+      return html`<button role="radio" aria-checked=${on ? 'true' : 'false'} data-mode=${value} title=${title}
+        class="px-2 py-0.5 rounded-md text-[11px] whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-purple-80 ${color}"
+        @click=${() => this._setMode(value)}>${label}</button>`;
+    };
+    const words = mode === 'offline' ? html`In-page broker: nothing leaves this page.`
+      : mode === 'live-readonly' ? html`Connected to the real broker as <span class="font-mono">${identity}</span>. It subscribes; nothing is published (publishes are listed as WOULD).`
+        : html`<span class="text-status-orange">The virtual device publishes to the real broker</span> as <span class="font-mono">${identity}</span>.`;
+    const chip = (b: BrokerStatus) => mode === 'offline' ? html`<span class="text-gray-100">not connected</span>`
+      : b.state === 'connected' ? html`<span class="text-status-green">connected</span>`
+        : b.error && b.state === 'disconnected' ? html`<span class="text-status-red">not connected</span>`
+          : html`<span class="text-gray-100">connecting…</span>`;
+    return html`
+      <div class="flex flex-col gap-1.5" data-testid="mqtt-mode" data-mode=${mode}>
+        <div class="flex items-center gap-2 flex-wrap">
+          <h3 class=${HEADING}>MQTT</h3>
+          <div class="flex rounded-lg p-0.5 bg-white/5 border border-white/10" role="radiogroup" aria-label="MQTT mode">
+            ${option('offline', 'Offline', 'The broker in this page. The mode at every start.')}
+            ${option('live-readonly', 'Live read-only', 'Connect to the real broker and listen. Nothing is published.')}
+            ${option('live-publish', 'Live publish', 'Connect to the real broker and publish what the script publishes.')}
+          </div>
+        </div>
+        <p class="text-[11px] leading-snug text-gray-100" data-testid="mqtt-mode-words">${words}</p>
+        ${status.securePage ? html`<p class="text-[11px] leading-snug text-status-orange" data-testid="mqtt-secure-page">This page was loaded over https: the browser blocks ws:// addresses. Open the IDE over http, or use a wss:// address.</p>` : ''}
+        ${status.brokers.map(b => html`
+          <div class="flex flex-col gap-1" data-broker-status=${b.index}>
+            <label class="flex items-center gap-1.5 text-[11px]">
+              <span class="font-mono shrink-0 max-w-[96px] truncate" title="config.json broker ${b.name} (${b.host})">${b.name}</span>
+              <input class="${INPUT} flex-1" spellcheck="false" autocomplete="off" data-testid="mqtt-ws-url" aria-label="WebSocket address of broker ${b.name}"
+                title="The broker's WebSocket (websockets listener) address. Kept by this browser for ${b.host}."
+                placeholder="ws://host:9001" .value=${b.wsUrl}
+                @change=${(e: Event) => emulatorSession.setBrokerUrl(b.index, (e.target as HTMLInputElement).value)} />
+              <span class="shrink-0" data-testid="mqtt-link-state" data-state=${mode === 'offline' ? 'offline' : b.state}>${chip(b)}</span>
+            </label>
+            ${mode !== 'offline' ? this._renderLinkError(b) : ''}
+            ${b.configClientId ? html`<p class="text-[10px] leading-snug text-gray-100" data-testid="mqtt-client-id-note">config.json gives this broker the client id
+              <span class="font-mono">${b.configClientId}</span>: not used here. The virtual device always connects as <span class="font-mono">${identity}</span>.</p>` : ''}
+          </div>`)}
+        ${mode === 'live-publish' ? html`
+          <div class="flex flex-col gap-1 pl-2 border-l-2 border-status-orange/60" data-testid="mqtt-optins">
+            <p class="text-[10px] leading-snug text-gray-100">Sent: what the script publishes and a key's own press topics. Not sent unless switched on here: the retain flag, announcements, the device's own states. A topic of a real device (btn_…) asks first.</p>
+            <label class="flex items-start gap-1.5 text-[11px]">
+              <input type="checkbox" class="mt-0.5" data-testid="mqtt-send-retained" .checked=${status.sendRetained}
+                @change=${(e: Event) => emulatorSession.setSendRetained((e.target as HTMLInputElement).checked)} />
+              <span>Send retained <span class="block text-[10px] leading-snug text-gray-100">A retained message stays on the broker, for a device that does not exist.</span></span>
+            </label>
+            <label class="flex items-start gap-1.5 text-[11px]">
+              <input type="checkbox" class="mt-0.5" data-testid="mqtt-announce" .checked=${status.announce}
+                @change=${(e: Event) => emulatorSession.setAnnounce((e.target as HTMLInputElement).checked)} />
+              <span>Announce to Home Assistant <span class="block text-[10px] leading-snug text-gray-100">Discovery and "online" make entities for the virtual device in Home Assistant, with a last will. Reconnects. Remove them afterwards.</span></span>
+            </label>
+            <label class="flex items-start gap-1.5 text-[11px]">
+              <input type="checkbox" class="mt-0.5" data-testid="mqtt-own-states" .checked=${status.ownStates}
+                @change=${(e: Event) => emulatorSession.setOwnStates((e.target as HTMLInputElement).checked)} />
+              <span>Publish the virtual device's own states <span class="block text-[10px] leading-snug text-gray-100">Its sensors report about eight messages a second under its own id: harmless, and noisy.</span></span>
+            </label>
+            ${status.announced > 0 ? html`
+              <button class="${BUTTON} self-start" data-testid="mqtt-remove-announcement"
+                title="Switch announcing off and publish an empty retained message to each announcement topic sent in this session: Home Assistant removes the entities"
+                @click=${() => { this._message = emulatorSession.removeAnnouncement(); }}>Remove announcement (${status.announced})</button>` : ''}
+          </div>` : ''}
+      </div>`;
+  }
+
+  private _visible(entry: MqttLogEntry): boolean {
+    const incoming = entry.kind === 'injected' || entry.kind === 'delivered';
+    if (this._dir !== 'all' && (this._dir === 'in') !== incoming) return false;
+    // Who published: a question about what goes out only.
+    return this._source === 'all' || incoming || (entry.origin ?? 'script') === this._source;
+  }
+
+  private _renderFilters(shown: number, total: number) {
+    const chip = (on: boolean, label: string, title: string, set: () => void, id: string) => html`
+      <button role="radio" aria-checked=${on ? 'true' : 'false'} data-filter=${id} title=${title}
+        class="px-1.5 py-0.5 rounded text-[10px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-purple-80 ${on ? 'bg-white/15 text-text-default' : 'text-gray-100 hover:text-text-default'}"
+        @click=${set}>${label}</button>`;
+    return html`
+      <div class="flex items-center gap-2 flex-wrap text-[10px] text-gray-100" data-testid="mqtt-log-filters">
+        <div class="flex rounded-md bg-white/5 border border-white/10" role="radiogroup" aria-label="Published by">
+          ${chip(this._source === 'all', 'All', 'Publishes of the script and of the firmware', () => { this._source = 'all'; }, 'source-all')}
+          ${chip(this._source === 'script', 'Script', 'What the script publishes (mqtt.publish)', () => { this._source = 'script'; }, 'source-script')}
+          ${chip(this._source === 'firmware', 'Firmware', 'What the firmware publishes by itself: key presses, sensor states, discovery, availability', () => { this._source = 'firmware'; }, 'source-firmware')}
+        </div>
+        <div class="flex rounded-md bg-white/5 border border-white/10" role="radiogroup" aria-label="Direction">
+          ${chip(this._dir === 'all', 'In + out', 'Both directions', () => { this._dir = 'all'; }, 'dir-all')}
+          ${chip(this._dir === 'in', 'In', 'What the script received (and what was injected)', () => { this._dir = 'in'; }, 'dir-in')}
+          ${chip(this._dir === 'out', 'Out', 'What was published', () => { this._dir = 'out'; }, 'dir-out')}
+        </div>
+        ${shown < total ? html`<span data-testid="mqtt-log-hidden">${shown} of ${total} shown</span>` : ''}
+      </div>`;
+  }
+
+  /**
+   * The log, newest first. The firmware's periodic and bulk publishes
+   * (sensor, state, discovery) are one row per topic with a count and the
+   * latest payload: the row is updated where it stands, so nothing moves
+   * while it counts. Its earlier payloads open on demand.
+   */
+  private _renderLog() {
+    const all = emulatorSession.mqttLog();
+    if (all.length === 0) {
+      return html`<p class="text-[11px] text-gray-100" data-testid="mqtt-log-empty">Nothing yet. Messages you inject, what the script receives and what is published are listed here, newest first.</p>`;
+    }
+    const log = all.filter(e => this._visible(e));
+    const brokers = emulatorSession.brokers();
+    const row = (entry: MqttLogEntry) => html`
+      <span class="text-gray-100">${clock(entry.time)}</span>
+      <span class="${KIND[entry.kind].color} font-semibold" title=${KIND[entry.kind].title}>${KIND[entry.kind].label}</span>
+      <span class="min-w-0 break-words">
+        <span class="text-text-default" data-topic>${entry.topic}</span>
+        <span class="text-gray-100"> = </span><span class="text-status-green" data-payload>${entry.payload === '' ? '(empty)' : entry.payload}</span>
+        ${entry.retain ? html`<span class="ml-1 px-1 rounded bg-white/10 text-gray-100" title="Retained">R</span>` : ''}
+        ${entry.count > 1 ? html`<span class="ml-1 px-1 rounded bg-white/10 text-text-default tabular-nums" data-count title="${entry.count} messages on this topic; the latest is shown">×${entry.count}</span>` : ''}
+        ${brokers.length > 1 ? html`<span class="ml-1 text-gray-100">[${brokers[entry.broker]?.name ?? entry.broker}]</span>` : ''}
+        <span class="block font-sans text-[10px] text-gray-100"><span data-note>${entry.note}</span>${entry.what
+          ? html`<span data-what> · firmware: ${entry.what}</span>` : entry.origin === 'script' ? html`<span data-what> · script</span>` : ''}</span>
+      </span>`;
+    return html`
+      ${this._renderFilters(log.length, all.length)}
       <ol class="flex flex-col font-mono text-[11px] leading-[1.35]" data-testid="mqtt-log">
-        ${log.map(entry => html`
-          <li class="grid grid-cols-[52px_30px_1fr] gap-x-1.5 py-0.5 border-b border-white/5" data-kind=${entry.kind}>
-            <span class="text-gray-100">${clock(entry.time)}</span>
-            <span class="${KIND[entry.kind].color} font-semibold" title=${KIND[entry.kind].title}>${KIND[entry.kind].label}</span>
-            <span class="min-w-0 break-words">
-              <span class="text-text-default" data-topic>${entry.topic}</span>
-              <span class="text-gray-100"> = </span><span class="text-status-green" data-payload>${entry.payload === '' ? '(empty)' : entry.payload}</span>
-              ${entry.retain ? html`<span class="ml-1 px-1 rounded bg-white/10 text-gray-100" title="Retained">R</span>` : ''}
-              ${brokers.length > 1 ? html`<span class="ml-1 text-gray-100">[${brokers[entry.broker]?.name ?? entry.broker}]</span>` : ''}
-              ${entry.note ? html`<span class="block font-sans text-[10px] text-gray-100" data-note>${entry.note}</span>` : ''}
-            </span>
-          </li>`)}
+        ${log.map(entry => entry.history?.length ? html`
+          <li class="border-b border-white/5" data-kind=${entry.kind} data-origin=${entry.origin ?? 'in'}>
+            <details>
+              <summary class="grid grid-cols-[52px_44px_1fr] gap-x-1.5 py-0.5 cursor-pointer list-none outline-none focus-visible:ring-2 focus-visible:ring-purple-80 rounded"
+                title="Show the payloads before this one">${row(entry)}</summary>
+              <ol class="pl-[104px] pb-1 text-gray-100" data-history>
+                ${entry.history.map(h => html`<li>${clock(h.time)} <span class="text-status-green/80">${h.payload === '' ? '(empty)' : h.payload}</span></li>`)}
+                ${entry.count > entry.history.length + 1 ? html`<li>… ${entry.count - entry.history.length - 1} earlier</li>` : ''}
+              </ol>
+            </details>
+          </li>` : html`
+          <li class="grid grid-cols-[52px_44px_1fr] gap-x-1.5 py-0.5 border-b border-white/5" data-kind=${entry.kind} data-origin=${entry.origin ?? 'in'}>${row(entry)}</li>`)}
       </ol>`;
   }
 
@@ -144,16 +293,15 @@ export class FbEmulatorPanel extends LitElement {
         </div>`;
     }
     const brokers = emulatorSession.brokers();
+    const status = emulatorSession.mqttStatus();
+    const live = !!status && status.mode !== 'offline';
     const topics = [...new Set(brokers.flatMap(b => b.subscriptions.map(s => s.topic)))];
     return html`
       <div class="p-3 flex flex-col gap-3 bg-bg-default min-h-full text-text-default" data-testid="emulator-panel">
         ${this._renderSensors()}
 
         <section class="flex flex-col gap-2" aria-label="MQTT">
-          <div class="flex items-center gap-2 flex-wrap">
-            <h3 class=${HEADING}>MQTT</h3>
-            <span class="text-[10px] text-gray-100" title="The brokers of config.json are replaced by brokers inside this page. Nothing is sent to a real broker.">offline: in-page broker, nothing leaves this page</span>
-          </div>
+          ${this._renderMode(status)}
 
           ${brokers.length === 0 ? html`<p class="text-[11px] text-gray-100" data-testid="mqtt-no-broker">config.json has no "brokers": the script cannot use MQTT.</p>` : html`
             ${brokers.map(b => html`
@@ -186,16 +334,19 @@ export class FbEmulatorPanel extends LitElement {
                   <input type="checkbox" data-testid="mqtt-retain" .checked=${this._retain}
                     @change=${(e: Event) => { this._retain = (e.target as HTMLInputElement).checked; }} />retain</label>
                 <button type="submit" class="${BUTTON} bg-purple-90 border-transparent hover:bg-purple-active text-white" data-testid="mqtt-inject-button"
-                  title="Send this message to the script as if another client published it">Inject</button>
+                  title=${live
+                    ? 'Hand this message to the script here, as if the broker sent it. Local: the real broker does not get it.'
+                    : 'Send this message to the script as if another client published it'}>Inject${live ? ' (local)' : ''}</button>
               </div>
             </form>
             ${this._message ? html`<p class="text-[11px] text-status-orange" role="status" data-testid="mqtt-message">${this._message}</p>` : ''}
 
             <div class="flex items-center gap-1.5 flex-wrap">
+              ${live ? html`<span class="mr-auto"></span>` : html`
               <label class="flex items-center gap-1 text-[11px] text-gray-100 mr-auto"
                 title="As a real broker does: a message the script publishes comes back to its own matching subscriptions">
                 <input type="checkbox" data-testid="mqtt-loopback" .checked=${emulatorSession.loopback}
-                  @change=${(e: Event) => emulatorSession.setLoopback((e.target as HTMLInputElement).checked)} />loopback</label>
+                  @change=${(e: Event) => emulatorSession.setLoopback((e.target as HTMLInputElement).checked)} />loopback</label>`}
               <button class=${BUTTON} data-testid="mqtt-export" title="Save what came in and went out, and the retained messages, as a JSON file"
                 @click=${() => this._export()}>Export</button>
               <label class="${BUTTON} cursor-pointer focus-within:ring-2 focus-within:ring-purple-80" title="Load a saved session: its retained messages are set and its incoming messages are injected again at their recorded times">

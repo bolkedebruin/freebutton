@@ -176,6 +176,10 @@ for (var btnIdx = 0; btnIdx < sides.length; btnIdx++) {
 // Sensor monitoring - publish changes to MQTT. forEach gives each callback its
 // own id/type, so no IIFE is needed to capture them per iteration.
 sensor.forEach(function(sensorId, sensorType) {
+    // forEach also gives the device's own memory sensors (type "data_size",
+    // ids from 100). onChange takes the hardware sensors only (ids 0-7) and
+    // throws a RangeError for the others.
+    if (sensorType === "data_size") return;
     sensor.onChange(sensorId, function(value) {
         var sensorTopic = DEVICE_TOPIC + "/sensors/" + sensorType + "/" + sensorId;
         mqtt.publish(BROKER_ID, sensorTopic, value.toString());

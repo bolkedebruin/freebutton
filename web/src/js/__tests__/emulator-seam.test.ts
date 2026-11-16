@@ -1,40 +1,28 @@
 // @vitest-environment node
 /**
- * The seam between fb-emulator.wasm and the TypeScript host: struct layouts,
- * the import list, and the limits, each checked against what the wasm (built
- * from the firmware's headers) says, so a firmware change fails here.
+ * The seam between fb-emulator.wasm and the TypeScript host: the import list
+ * and the limits, each checked against what the wasm (built from the
+ * firmware's sources) says, so a firmware change fails here.
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { EngineInstance, LAYOUT_ORDER, type EmulatorHost } from '../emulator';
+import { EngineInstance } from '../emulator';
 import { emulatorModule, makeEmulator, readRepoFile, repoPath } from './emulator-helpers';
 
-/** A host for an engine nobody runs a script on: only the id is asked for. */
-function idleHost(): EmulatorHost {
-  const never = new Proxy({}, { get: () => () => { throw new Error('not expected'); } });
-  return {
-    keys: never, leds: never, display: never, lists: never, images: never, fonts: never, sensors: never,
-    topology: never, mqtt: never, files: never, console: never,
-    system: { ...never, deviceId: () => 'virt_btn_000000', deviceName: () => '' },
-    keyEvent: () => undefined,
-    restoreConfigState: () => undefined,
-  } as unknown as EmulatorHost;
-}
-
-describe('struct layouts', () => {
-  it('match offsetof / sizeof as the wasm was compiled (DisplayItemInfo, SensorInfo, long, pointer)', () => {
-    const engine = new EngineInstance(emulatorModule(), idleHost());
-    const compiled = LAYOUT_ORDER.map((_, i) => engine.exports.fbe_layout(i));
-    expect(compiled).toEqual([...LAYOUT_ORDER]);
-    // The table covers everything the wasm reports.
-    expect(engine.exports.fbe_layout(LAYOUT_ORDER.length)).toBe(-1);
-  });
-
-  it('a display item read back through displayitem_get_info has every field in its place', async () => {
+describe('what crosses the seam', () => {
+  it('a display item goes to the firmware as config.json and comes back through its own binding', async () => {
     const { emu, rec } = await makeEmulator();
     emu.run('print(JSON.stringify(fb.main.display.get("power")));');
+    // displayitem_get_info is the firmware's (src/scripting/displayitem_binding.cpp) since stage 2.
     expect(JSON.parse(rec.console[0]!)).toEqual({
       id: 9, x: 50, y: 20, width: 40, boxType: 2, fontSize: 0, alignment: 0, label: 'Power', unit: 'W', round: 1, page: 2,
+    });
+  });
+
+  it('the display comes back as records the host only has to keep', async () => {
+    const { emu } = await makeEmulator();
+    expect(emu.state.item('temp')!.box).toMatchObject({
+      x: 32, y: 48, width: 128, caption: { text: 'Temperature', runs: [{ text: 'Temperature' }] },
     });
   });
 });

@@ -29,7 +29,8 @@ export function readRepoFile(relative: string): string | null {
 export const BASIC_CONFIG = {
   core: { name: 'Test Button' },
   info: { connectors: [{ id: 0, type: 2 }, { id: 1, type: 1 }] },
-  brokers: [{ brokerid: 'local', url: 'mqtt://broker.test/', port: 1883 }],
+  // No Home Assistant discovery: the tests that are about it turn it on.
+  brokers: [{ brokerid: 'local', url: 'mqtt://broker.test/', port: 1883, hassdiscovery: false }],
   buttons: [
     { position: 1, label: 'M-L', toplabel: 'Main' },
     { position: 2, label: 'M-R' },
@@ -69,6 +70,9 @@ export async function makeEmulator(options: Partial<EmulatorOptions> = {}): Prom
     config: BASIC_CONFIG,
     wasm: emulatorModule(),
     identity: 'virt_btn_0a1b2c',
+    // The firmware's 1 s sensor sample publishes every sensor's state; tests
+    // about sensors pass sampleSensors: true.
+    sampleSensors: false,
     ...options,
     clock,
   });

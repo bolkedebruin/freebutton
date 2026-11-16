@@ -1,49 +1,55 @@
 // @vitest-environment node
 /**
- * DeviceState: built from config.json, changed by a script through the
- * firmware's bindings, observable change by change.
+ * DeviceState: the mirror of what the firmware in the wasm shows, built from
+ * its records; changed by a script through the firmware's bindings,
+ * observable change by change; and the overlay on the IDE's preview model.
  */
 import { describe, expect, it } from 'vitest';
 import { configToModel } from '../config-model';
 import { DeviceState, frontLedIndex, overlayPages, type StateChange } from '../emulator';
 import { BASIC_CONFIG, makeEmulator } from './emulator-helpers';
 
-describe('DeviceState from config.json', () => {
-  it('has the items, keys, lists, images, brokers and topology of the config', () => {
-    const state = new DeviceState(BASIC_CONFIG);
+describe('DeviceState, as the firmware reports the device', () => {
+  it('has the items, keys, lists, images, brokers and modules the firmware made of config.json', async () => {
+    const { emu } = await makeEmulator();
+    const state = emu.state;
     expect(state.deviceName).toBe('Test Button');
     expect(state.connectors).toEqual([2, 1, 0, 0]);
     expect(state.physicalKeys()).toEqual([1, 2, 3, 4]);
+    expect(state.keyDisplays).toEqual([3, 4]);
     expect(state.brokers).toEqual([{ index: 0, name: 'local', url: 'mqtt://broker.test/', hassDiscovery: false }]);
-    expect(state.items).toEqual([
+    expect(state.items.map(i => ({ ...i, box: i.box !== null }))).toEqual([
       {
         id: 7, ref: { kind: 'displayitem', list: 'displayitems', index: 0 }, name: 'temp',
         x: 10, y: 20, width: 40, boxType: 0, fontSize: 3, align: 1, round: 0, page: 1,
-        label: 'Temperature', value: '', unit: '°C', icon: '', font: null,
+        label: 'Temperature', value: '', unit: '°C', icon: '', font: { face: 0, size: 32 }, box: true,
       },
       {
         id: 9, ref: { kind: 'displayitem', list: 'displayitems', index: 1 }, name: 'power',
         x: 50, y: 20, width: 40, boxType: 2, fontSize: 0, align: 0, round: 1, page: 2,
-        label: 'Power', value: '', unit: 'W', icon: '', font: null,
+        label: 'Power', value: '', unit: 'W', icon: '', font: null, box: false,
       },
     ]);
-    expect(state.keys.map(k => [k.position, k.name, k.label, k.topLabel])).toEqual([
-      [1, undefined, 'M-L', 'Main'], [2, undefined, 'M-R', ''], [3, 'light', 'Light', 'Room'], [4, 'blind', 'Blind', ''],
+    expect(state.keys.map(k => [k.position, k.name, k.label, k.topLabel, k.display !== null])).toEqual([
+      [1, undefined, 'M-L', 'Main', false], [2, undefined, 'M-R', '', false],
+      [3, 'light', 'Light', 'Room', true], [4, 'blind', 'Blind', '', true],
     ]);
-    expect(state.lists).toEqual([{
-      index: 0, ref: { kind: 'list', list: 'lists', index: 0 }, name: 'scenes',
-      items: ['Morning', 'Evening', 'Night'], selected: 1, font: null,
-    }]);
-    expect(state.images).toEqual([{
+    expect(state.lists[0]).toMatchObject({
+      index: 0, ref: { kind: 'list', list: 'lists', index: 0 }, name: 'scenes', page: 1,
+      items: ['Morning', 'Evening', 'Night'], selected: 1,
+    });
+    expect(state.images[0]).toMatchObject({
       index: 0, ref: { kind: 'image', list: 'images', index: 0 }, name: 'weather', kind: 'icon', value: 'sun',
-    }]);
+      x: 0, y: 0, width: 48, height: 48,
+    });
     expect(state.leds).toHaveLength(12);
     expect(state.shownPage).toBe(1);
     expect(state.visibleItems().map(i => i.name)).toEqual(['temp']);
   });
 
-  it('entries carry the same ref as the IDE\'s preview model, so a renderer can overlay them', () => {
-    const state = new DeviceState(BASIC_CONFIG);
+  it('entries carry the same ref as the IDE\'s preview model, so a renderer can overlay them', async () => {
+    const { emu } = await makeEmulator();
+    const state = emu.state;
     const model = configToModel(BASIC_CONFIG);
     const previewRefs = model.pages.flatMap(p => [
       ...p.displayItems.map(i => i.ref), ...p.buttons.map(b => b.ref), ...(p.lists ?? []).map(l => l.ref),
@@ -54,44 +60,54 @@ describe('DeviceState from config.json', () => {
     expect(stateRefs).toHaveLength(8);
   });
 
-  it('gives display items the ids the firmware gives', () => {
-    const ids = (items: unknown[]): number[] => new DeviceState({ displayitems: items }).items.map(i => i.id);
-    expect(ids([{}, {}, {}])).toEqual([1, 2, 3]);
+  it('display item ids are the firmware\'s', async () => {
+    const ids = async (items: unknown[]): Promise<number[]> =>
+      (await makeEmulator({ config: { info: BASIC_CONFIG.info, displayitems: items } })).emu.state.items.map(i => i.id);
+    expect(await ids([{}, {}, {}])).toEqual([1, 2, 3]);
     // A numeric string counts; auto ids start above every configured id, and
     // every item takes a number from the counter.
-    expect(ids([{}, { displayitemid: '5' }, {}])).toEqual([6, 5, 8]);
+    expect(await ids([{}, { displayitemid: '5' }, {}])).toEqual([6, 5, 8]);
     // A duplicate gets the next free id.
-    expect(ids([{ displayitemid: 4 }, { displayitemid: 4 }])).toEqual([4, 7]);
-    expect(ids([{ displayitemid: 'x' }, { displayitemid: 0 }])).toEqual([1, 2]);
+    expect(await ids([{ displayitemid: 4 }, { displayitemid: 4 }])).toEqual([4, 7]);
+    // Entries that are not objects are skipped, and do not shift the refs.
+    const { emu } = await makeEmulator({ config: { info: BASIC_CONFIG.info, displayitems: [5, { name: 'x' }] } });
+    expect(emu.state.items.map(i => [i.name, i.ref])).toEqual([['x', { kind: 'displayitem', list: 'displayitems', index: 1 }]]);
   });
 
-  it('reads both spellings of the lists, and takes the first valid name', () => {
-    const state = new DeviceState({
-      info: { connectors: [{ id: 0, type: 1 }] },
-      mqttbuttons: [{ position: 1, label: 'old', name: 'k' }],
-      buttons: [{ position: 2, label: 'new', name: 'k' }, { position: 1, label: 'again' }, { position: 5, label: 'no module' }],
-      mqttdisplays: [{ name: 'a', label: 'legacy' }, { name: '1bad' }],
-      displayitems: [{ name: 'a', label: 'dup' }],
+  it('reads both spellings of the lists; the first valid name wins', async () => {
+    const { emu } = await makeEmulator({
+      config: {
+        info: { connectors: [{ id: 0, type: 1 }, { id: 1, type: 2 }] },
+        mqttbuttons: [{ position: 1, label: 'old', name: 'k' }],
+        buttons: [{ position: 2, label: 'new', name: 'k' }, { position: 7, label: 'no module' }],
+        mqttdisplays: [{ name: 'a', label: 'legacy' }, { name: '1bad' }],
+        displayitems: [{ name: 'a', label: 'dup' }],
+      },
     });
-    expect(state.keys.map(k => [k.position, k.label, k.name])).toEqual([[1, 'old', 'k'], [2, 'new', undefined]]);
-    expect(state.host.keys.findByName('k')).toBe(1);
+    const state = emu.state;
+    expect(state.keys.map(k => [k.position, k.label, k.name, k.display !== null])).toEqual([
+      [1, 'old', 'k', true], [2, 'new', undefined, true], [7, 'no module', undefined, false],
+    ]);
+    expect(state.key('k')!.position).toBe(1);
     expect(state.items.map(i => [i.label, i.name])).toEqual([['legacy', 'a'], ['', undefined], ['dup', undefined]]);
-    expect(state.item('a')!.label).toBe('legacy');
-    expect(state.host.display.findByName('1bad')).toBeNull();
+    expect(emu.eval('fb.main.display.get("a").label')).toEqual({ ok: true, value: 'legacy' });
+    expect(emu.eval('fb.main.display.get("1bad")')).toMatchObject({ ok: false });
   });
 
-  it('infers the modules when the config has no info.connectors', () => {
-    const state = new DeviceState({ buttons: [{ position: 7, label: 'a' }, { position: 8, label: 'b' }] });
+  it('the modules: config.json info.connectors, an option, or inferred from the keys', async () => {
+    const inferred = await makeEmulator({ config: { buttons: [{ position: 7, label: 'a' }, { position: 8, label: 'b' }] } });
     // A bar where the keys are, the main display on the first free connector.
-    expect(state.connectors).toEqual([2, 0, 0, 1]);
+    expect(inferred.emu.state.connectors).toEqual([2, 0, 0, 1]);
+    expect((await makeEmulator({ config: {}, connectors: [1, 2] })).emu.state.connectors).toEqual([1, 2, 0, 0]);
     expect(new DeviceState({}, { connectors: [1, 2] }).connectors).toEqual([1, 2, 0, 0]);
   });
 
-  it('survives a config that is not an object', () => {
-    for (const config of [null, 42, 'x', []]) {
-      const state = new DeviceState(config);
-      expect(state.items).toEqual([]);
-      expect(state.brokers).toEqual([]);
+  it('survives a config that is not an object, or not JSON', async () => {
+    for (const config of [null, 42, 'x', [], '{"broken":']) {
+      const { emu } = await makeEmulator({ config });
+      expect(emu.state.items).toEqual([]);
+      expect(emu.state.brokers).toEqual([]);
+      expect(emu.run('print(typeof fb.main)').ok).toBe(true);
     }
   });
 });
@@ -110,17 +126,21 @@ describe('a script changes the state through the firmware bindings', () => {
     expect(emu.state.item('temp')).toMatchObject({
       value: '21.5', label: 'Inside', unit: 'C', icon: 'sun', x: 5, y: 6, page: 2, font: { face: 1, size: 24 },
     });
-    expect(rec.changes).toEqual<StateChange[]>([
+    // One record per item after the script's turn: every field that differs is one change.
+    const mine = (c: StateChange): boolean => c.kind === 'reset' || c.kind === 'page' || (c.kind === 'item' && c.id === 7);
+    expect(rec.changes.filter(mine)).toEqual<StateChange[]>([
       { kind: 'reset' },
-      { kind: 'item', id: 7, field: 'value' },
+      { kind: 'page', page: 2 },
       { kind: 'item', id: 7, field: 'label' },
+      { kind: 'item', id: 7, field: 'value' },
       { kind: 'item', id: 7, field: 'unit' },
       { kind: 'item', id: 7, field: 'icon' },
+      { kind: 'item', id: 7, field: 'font' },
       { kind: 'item', id: 7, field: 'position' },
       { kind: 'item', id: 7, field: 'page' },
-      { kind: 'item', id: 7, field: 'font' },
-      { kind: 'page', page: 2 },
     ]);
+    // The other item only came with its page (and has a font now that it is drawn).
+    expect(rec.changes.filter(c => c.kind === 'item' && c.id === 9).map(c => c.kind === 'item' && c.field)).toEqual(['font', 'shown']);
     expect(emu.state.visibleItems().map(i => i.name)).toEqual(['temp', 'power']);
   });
 
@@ -140,9 +160,14 @@ describe('a script changes the state through the firmware bindings', () => {
       'Made null false false',
       'true 2 true 1',
     ]);
+    // The item made and removed in one turn never showed; the device state is what is left.
     expect(rec.changes.filter(c => c.kind === 'item-added' || c.kind === 'item-removed')).toEqual([
-      { kind: 'item-added', id: 10 }, { kind: 'item-removed', id: 9 }, { kind: 'item-removed', id: 10 },
+      { kind: 'item-removed', id: 9 },
     ]);
+    emu.eval('fb.main.display.create(0, 0, 10, 0, 1, 0, "Kept", "", 0, 1)');
+    expect(rec.changes[rec.changes.length - 1]).toEqual({ kind: 'item-added', id: 11 });
+    expect(emu.state.item(11)).toMatchObject({ label: 'Kept', page: 1 });
+    expect(emu.state.item(11)!.ref).toBeUndefined();
   });
 
   it('the firmware\'s argument checks and error texts apply', async () => {
@@ -176,14 +201,15 @@ describe('a script changes the state through the firmware bindings', () => {
       print(k.getLabel(), k.getTopLabel());
       k.setLabel("On"); k.setTopLabel("Lamp"); k.setIcon("moon"); k.setFont("montserrat", 3); k.setTopFont("montserrat", 18);
       print(k.getLabel(), k.getTopLabel());
-      fb.main.left.display.setLabel("main key");
       k.setFont("");
     `);
     expect(rec.console).toEqual(['Light Room', 'On Lamp']);
-    expect(emu.state.key(3)).toMatchObject({ label: 'On', topLabel: 'Lamp', icon: 'moon', font: null, topFont: { face: 0, size: 18 } });
-    expect(emu.state.key(1)!.label).toBe('main key');
+    // setFont("") is back to the configured font: the style's key.label.
+    expect(emu.state.key(3)).toMatchObject({
+      label: 'On', topLabel: 'Lamp', icon: 'moon', font: { face: 0, size: 32 }, topFont: { face: 0, size: 18 },
+    });
     expect(rec.changes.filter(c => c.kind === 'key').map(c => c.kind === 'key' && `${c.position}:${c.field}`)).toEqual([
-      '3:label', '3:topLabel', '3:icon', '3:font', '3:topFont', '1:label', '3:font',
+      '3:label', '3:topLabel', '3:icon', '3:topFont',
     ]);
   });
 
@@ -225,8 +251,10 @@ describe('a script changes the state through the firmware bindings', () => {
   it('images: an icon or a key of the images bucket', async () => {
     const { emu, rec } = await makeEmulator();
     rec.changes.length = 0;
-    emu.run('fb.main.image.setSrc("weather", "radar.bin"); fb.main.image.setIcon("weather", "");');
-    expect(emu.state.image('weather')).toMatchObject({ kind: 'none', value: '' });
+    emu.run('fb.main.image.setSrc("weather", "radar.bin");');
+    expect(emu.state.image('weather')).toMatchObject({ kind: 'src', value: 'radar.bin', raster: { key: 'radar.bin' } });
+    emu.eval('fb.main.image.setIcon("weather", "")');
+    expect(emu.state.image('weather')).toMatchObject({ kind: 'none', value: '', raster: null });
     expect(rec.changes.filter(c => c.kind === 'image')).toHaveLength(2);
   });
 
@@ -238,7 +266,7 @@ describe('a script changes the state through the firmware bindings', () => {
 
 describe('sensors', () => {
   it('are the device\'s; onChange hears a new reading at the next sample, once it changed enough', async () => {
-    const { emu, clock, rec } = await makeEmulator();
+    const { emu, clock, rec } = await makeEmulator({ sampleSensors: true });
     emu.run(`
       var found = [];
       sensor.forEach(function (id, type) { found.push(id + ":" + type); });
@@ -246,7 +274,7 @@ describe('sensors', () => {
       sensor.onChange(5, function (value) { print("changed", value); });
     `);
     expect(rec.console).toEqual([
-      '3 3:pressure,4:humidity,5:temperature {"id":5,"name":"BME280 Temperature","type":"temperature","unit":"°C","online":true} 21.5 humidity',
+      '8 3:pressure,4:humidity,5:temperature,100:data_size,101:data_size,102:data_size,103:data_size,104:data_size {"id":5,"name":"BME280 Temperature","type":"temperature","unit":"°C","online":true} 21.5 humidity',
     ]);
     clock.advance(1000);
     expect(rec.console[rec.console.length - 1]).toBe('changed 21.5');
@@ -258,20 +286,29 @@ describe('sensors', () => {
     expect(rec.console).toHaveLength(2);
     clock.advance(1);
     expect(rec.console[rec.console.length - 1]).toBe('changed 22.5');
-    expect(rec.changes.filter(c => c.kind === 'sensor')).toEqual([{ kind: 'sensor', id: 5 }, { kind: 'sensor', id: 5 }]);
+    expect(rec.changes.filter(c => c.kind === 'sensor' && c.id === 5)).toEqual([{ kind: 'sensor', id: 5 }, { kind: 'sensor', id: 5 }]);
     expect(emu.setSensor(99, 1)).toBe(false);
   });
 });
 
 describe('overlayPages: the running device in the preview model', () => {
-  it('is the config model when nothing ran', () => {
+  it('before a script ran it is the config as the device shows it', async () => {
+    const { emu } = await makeEmulator();
     const model = configToModel(BASIC_CONFIG);
-    const pages = overlayPages(model.pages, new DeviceState(BASIC_CONFIG));
+    const pages = overlayPages(model.pages, emu.state);
     expect(pages.map(p => p.number)).toEqual([1, 2]);
     expect(pages[0]!.displayItems.map(i => [i.name, i.label, i.value, i.unit, i.x, i.y])).toEqual([['temp', 'Temperature', '', '°C', 10, 20]]);
-    expect(pages[0]!.buttons).toEqual(model.pages[0]!.buttons);
-    expect(pages[0]!.lists).toEqual(model.pages[0]!.lists);
-    expect(pages[0]!.images).toEqual(model.pages[0]!.images);
+    expect(pages[0]!.buttons.map(b => [b.position, b.label, b.topLabel])).toEqual(model.pages[0]!.buttons.map(b => [b.position, b.label, b.topLabel]));
+    expect(pages[0]!.lists![0]).toMatchObject({ name: 'scenes', items: ['Morning', 'Evening', 'Night'], selected: 1 });
+    expect(pages[0]!.images![0]).toMatchObject({ name: 'weather', icon: 'sun' });
+    // And what the firmware resolved, for a renderer that draws it as it is.
+    expect(pages[0]!.displayItems[0]!.box).toMatchObject({ x: 32, y: 48, width: 128, value: { font: { font: 'montserrat', px: 32 } } });
+    expect(pages[0]!.buttons.find(b => b.position === 3)!.display!.label.runs).toEqual([
+      { text: 'Light', font: 'montserrat', face: 0, px: 32, color: '#ffffff' },
+    ]);
+    expect(pages[0]!.buttons.find(b => b.position === 1)!.display).toBeUndefined();
+    expect(pages[0]!.lists![0]!.roller).toMatchObject({ rows: 3, selected: 1 });
+    expect(pages[0]!.images![0]!.raster).toMatchObject({ key: 'ico-sun-48x48.bin' });
   });
 
   it('carries what a script changed, and leaves the model alone', async () => {
@@ -299,9 +336,10 @@ describe('overlayPages: the running device in the preview model', () => {
     expect(temp.ref).toEqual({ kind: 'displayitem', list: 'displayitems', index: 0 });
     // The removed config item is gone from its page, the created one is on page 3.
     expect(pages[1]!.displayItems).toEqual([]);
-    expect(pages[2]!.displayItems).toEqual([
+    expect(pages[2]!.displayItems).toMatchObject([
       { x: 5, y: 6, width: 30, height: 0, type: 'text', fontSize: 2, align: 1, id: '10', label: 'Made', value: '', unit: 'kW' },
     ]);
+    expect(pages[2]!.displayItems[0]!.box).toMatchObject({ x: 16, y: 14, width: 96 });
     const light = pages[0]!.buttons.find(b => b.position === 3)!;
     expect(light).toMatchObject({ label: 'On', topLabel: 'Room', icon: 'moon', ledOn: true, ledColor: 'rgb(255,128,0)' });
     expect(light.backLedColor).toBeUndefined();
@@ -312,26 +350,34 @@ describe('overlayPages: the running device in the preview model', () => {
     expect(pages[0]!.images![0]!.icon).toBeUndefined();
   });
 
-  it('carries a font a script set: the face at its size in px, over the configured one', () => {
-    const state = new DeviceState(BASIC_CONFIG);
+  it('carries the font the firmware chose, also one a script set', async () => {
+    const { emu } = await makeEmulator();
     const model = configToModel(BASIC_CONFIG);
-    const id = state.item('temp')!.id;
-    const configured = overlayPages(model.pages, state)[0]!;
-    state.host.display.setFont(id, { face: 1, size: 32 });
-    state.host.keys.setFont(3, { face: 1, size: 2 }, false);
-    state.host.keys.setFont(3, { face: 0, size: 12 }, true);
-    state.host.lists.setFont(0, { face: 1, size: 0 });
-    const page = overlayPages(model.pages, state)[0]!;
-    expect(page.displayItems[0]!.valueFont).toEqual({ face: 1, px: 32, configured: true });
+    emu.run(`
+      fb.main.display.setFont("temp", "montserrat_semibold", 40);
+      fb.key("light").display.setFont("montserrat_semibold", 2);
+      fb.key("light").display.setTopFont("montserrat", 12);
+      fb.main.list.setFont("scenes", "montserrat_semibold", 20);
+    `);
+    const page = overlayPages(model.pages, emu.state)[0]!;
+    expect(page.displayItems[0]!.valueFont).toEqual({ face: 1, px: 40, configured: true });
+    // The caption's font, as the style gives it.
+    expect(page.displayItems[0]!.labelFont).toEqual({ face: 1, px: 14, configured: true });
     const light = page.buttons.find(b => b.position === 3)!;
     expect(light.labelFont).toEqual({ face: 1, px: 24, configured: true });   // fontsize 2 = the 24 px step
     expect(light.topFont).toEqual({ face: 0, px: 12, configured: true });
-    // Size 0: the face changes, the size stays what the list had.
-    expect(page.lists![0]!.font).toEqual({ face: 1, px: configured.lists![0]!.font!.px, configured: true });
-    // Entries without a script font keep the configured one.
-    expect(page.buttons.find(b => b.position === 4)!.labelFont).toEqual(configured.buttons.find(b => b.position === 4)!.labelFont);
-    state.host.display.restoreFont(id);
-    expect(overlayPages(model.pages, state)[0]!.displayItems[0]!.valueFont).toEqual(configured.displayItems[0]!.valueFont);
+    expect(page.lists![0]!.font).toEqual({ face: 1, px: 20, configured: true });
+    emu.eval('fb.main.display.setFont("temp", "")');
+    expect(overlayPages(model.pages, emu.state)[0]!.displayItems[0]!.valueFont).toEqual({ face: 0, px: 32, configured: true });
+  });
+
+  it('the clock of the shown page is on that page', async () => {
+    const config = { ...BASIC_CONFIG, clocks: [{ x: 0, y: 0, width: 100, height: 100, page: 2 }] };
+    const { emu } = await makeEmulator({ config });
+    const model = configToModel(config);
+    expect(overlayPages(model.pages, emu.state).map(p => p.clocks?.length ?? 0)).toEqual([0, 0]);
+    emu.eval('fb.main.display.showPage(2)');
+    expect(overlayPages(model.pages, emu.state)[1]!.clocks).toMatchObject([{ x: 0, y: 0, width: 100, height: 100, shown: true }]);
   });
 
   it('maps a key to its front LED: four LEDs per bar, in bar order', () => {

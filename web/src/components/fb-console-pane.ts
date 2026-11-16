@@ -123,7 +123,10 @@ export class FbConsolePane extends LitElement {
       <button role="tab" id="fb-tab-${tab}" aria-selected=${on ? 'true' : 'false'} aria-controls="fb-tabpanel-${tab}"
         tabindex=${on ? 0 : -1} data-testid="tab-${tab}" title=${TAB_TITLE[tab]}
         class="${TAB} ${on ? 'bg-white/10 text-text-default font-semibold' : 'text-gray-100 hover:text-text-default hover:bg-white/5'}"
-        @click=${() => this._show(tab)}>${TAB_LABEL[tab]}${unread ? html`
+        @click=${() => this._show(tab)}>${TAB_LABEL[tab]}${tab === 'mqtt' && this._emu.status === 'running' && this._emu.mqtt !== 'offline' ? html`
+          <span class="ml-1 px-1 rounded text-[9px] font-semibold uppercase tracking-wider ${this._emu.mqtt === 'live-publish' ? 'bg-status-orange text-black' : 'border border-purple-80/60 text-purple-80'}"
+            data-testid="tab-live" title=${this._emu.mqtt === 'live-publish' ? 'Publishing to the real broker' : 'Connected to the real broker, read-only'}
+            >${this._emu.mqtt === 'live-publish' ? 'live' : 'read'}</span>` : ''}${unread ? html`
           <span class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full ${unread === 'error' ? 'bg-status-red' : 'bg-purple-80'}"
             data-unread=${unread} role="img" aria-label=${unread === 'error' ? 'new lines, with an error' : 'new lines'}></span>` : ''}</button>`;
   }

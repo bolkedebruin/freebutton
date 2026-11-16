@@ -7,7 +7,8 @@ import { getStyles } from '../js/device-config.js';
 import { SLOTS, styleFont } from '../js/font-config.js';
 import { StyleElement, type ResolvedStyles } from '../js/style-config.js';
 import { iconView } from './icon-view.js';
-import { fontStyle, richText, textStyleCss } from './font-view.js';
+import { fontStyle, richText, runsView, textStyleCss } from './font-view.js';
+import type { OverlayButton } from '../js/emulator/preview-overlay.js';
 
 // The 160 x 80 mini display drawn as the 113 x 42 label area.
 const MINI_SCALE = Math.min(113 / 160, 42 / 80);
@@ -103,6 +104,8 @@ export class FbButtonGrid extends LitElement {
     const topFont: ItemFont = btn.topFont ?? styleFont(styles, StyleElement.KeyTopLabel);
 
     const isSelected = sameConfigRef(btn.ref, this.selected);
+    // The running device: the key's display as the firmware resolved it (label and top label as runs, the icon).
+    const display = (btn as OverlayButton).display;
     const down = this._down.has(btn.position);
     const position = btn.position;
 
@@ -143,6 +146,12 @@ export class FbButtonGrid extends LitElement {
           class="${down ? 'bg-[rgb(70,70,70)]' : 'bg-[rgb(30,30,30)]'} border-0 text-white ${btn.ref || this.pressable ? 'cursor-pointer' : 'cursor-default'} flex flex-col items-center justify-center
           px-1.5 py-px w-[113px] h-[42px] font-fira text-[16.8px] font-normal text-center leading-[25.2px]
           transition-colors duration-100 hover:bg-[rgba(255,255,255,0.1)] outline-none focus-visible:ring-2 focus-visible:ring-white">
+          ${display ? html`
+            ${display.topLabel.hidden ? '' : html`<div class="text-center leading-[1.3] whitespace-nowrap" data-top-label data-firmware-text>${runsView(display.topLabel.runs, MINI_SCALE)}</div>`}
+            ${display.icon?.name
+              ? iconView(display.icon.name, display.icon.width ?? 48, display.icon.height ?? 48, display.icon.tint, MINI_SCALE)
+              : display.label.hidden ? '' : html`<div class="leading-[1.3] whitespace-nowrap" data-label data-firmware-text>${runsView(display.label.runs, MINI_SCALE)}</div>`}
+          ` : html`
           ${btn.topLabel ? html`
             <div class="text-center leading-[1.3] whitespace-nowrap" data-top-label
               style="${fontStyle(topFont, MINI_SCALE)} ${textStyleCss(styles[StyleElement.KeyTopLabel], MINI_SCALE)}">
@@ -153,6 +162,7 @@ export class FbButtonGrid extends LitElement {
             ? iconView(btn.icon, btn.iconSize ?? 48, btn.iconSize ?? 48, undefined, MINI_SCALE)
             : html`<div class="leading-[1.3] whitespace-nowrap" data-label
                 style="${fontStyle(labelFont, MINI_SCALE)} ${textStyleCss(styles[StyleElement.KeyLabel], MINI_SCALE)}">${richText(btn.label, labelFont, SLOTS.button, MINI_SCALE)}</div>`}
+          `}
         </button>
 
         <!-- Spacer -->

@@ -23,7 +23,7 @@ const KEY_ROW_H = 57.1 + 6.72;
  * (its title, the rows of fb-virtual-info with an error and all gauges).
  * The front is usually higher; the flip container takes the higher of the two.
  */
-const MIN_FACE_H = 330;
+const MIN_FACE_H = 352;
 
 // Kept for callers that import it from here.
 export { formatFirmware } from './fb-device-info.js';
@@ -580,18 +580,21 @@ export class FbVirtualDevice extends LitElement {
     const items = page?.displayItems ?? [];
     const lists = page?.lists ?? [];
     const images = page?.images ?? [];
+    // The running device's clock on this page, and its local time for the hands.
+    const clocks = this._running ? (page as { clocks?: unknown[] } | undefined)?.clocks ?? [] : [];
+    const utcOffset = clocks.length ? emulatorSession.utcOffset() : 0;
     const slots = this._connectors.filter(c => c.type !== 'empty');
     if (slots.length === 0) {
       return html`
         <fb-tft-display .currentPage=${this.currentPage} .displayItems=${items} .deviceName=${this._deviceName}
-          .lists=${lists} .images=${images} .selected=${this._selected} .editable=${this._editable} .running=${this._running}></fb-tft-display>
+          .lists=${lists} .images=${images} .selected=${this._selected} .editable=${this._editable} .running=${this._running} .clocks=${clocks} .utcOffset=${utcOffset}></fb-tft-display>
         <fb-button-grid .currentPage=${this.currentPage} .buttons=${buttons} .selected=${this._selected} .pressable=${this._running}></fb-button-grid>
       `;
     }
     return slots.map(c => c.type === 'display'
       ? html`<fb-tft-display data-connector=${c.id} .currentPage=${this.currentPage} .displayItems=${items}
           .deviceName=${this._deviceName} .lists=${lists} .images=${images} .selected=${this._selected}
-          .editable=${this._editable} .running=${this._running}></fb-tft-display>`
+          .editable=${this._editable} .running=${this._running} .clocks=${clocks} .utcOffset=${utcOffset}></fb-tft-display>`
       : html`<fb-button-grid data-connector=${c.id} .currentPage=${this.currentPage} .buttons=${buttons}
           .positions=${positionsForConnector(c.id)} .selected=${this._selected} .pressable=${this._running}></fb-button-grid>`);
   }
@@ -648,8 +651,12 @@ export class FbVirtualDevice extends LitElement {
         </div>
 
         <!-- Flip container -->
-        <div class="device-flip-container w-[342px] ${this._running ? 'fb-device-running' : ''}" data-running=${this._running ? 'true' : 'false'} style="height: ${this._faceHeight()}px;">
+        <div class="device-flip-container w-[342px] ${this._running ? 'fb-device-running' : ''} ${this._running && this._emu.mqtt === 'live-publish' ? 'fb-device-live' : ''}" data-running=${this._running ? 'true' : 'false'} style="height: ${this._faceHeight()}px;">
           <div class="device-flip-inner ${this._flipped ? 'flipped' : ''} relative h-full">
+            ${this._emu.status === 'starting' && !this._flipped ? html`
+              <div class="absolute inset-0 z-10 flex items-center justify-center bg-black/40 pointer-events-none" role="status" data-testid="emu-loading">
+                <span class="px-3 py-1.5 rounded-lg bg-bg-primary border border-purple-80/50 text-xs text-text-default">Loading the virtual device…</span>
+              </div>` : ''}
             <!-- Front face -->
             <div class="device-flip-front w-full font-fira text-[11.2px]" @click=${this._onFrontClick}
               @contextmenu=${this._onContextMenu} @item-menu=${this._onContextMenu} @keydown=${this._onFrontKeyDown}

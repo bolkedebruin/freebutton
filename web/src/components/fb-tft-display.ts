@@ -7,7 +7,9 @@ import { getStyles } from '../js/device-config.js';
 import { fontsizePx, SLOTS, styleFont, unitFont } from '../js/font-config.js';
 import { StyleElement, styleItemPx, type ResolvedStyles } from '../js/style-config.js';
 import { iconView } from './icon-view.js';
-import { fontStyle, richText, styleColorCss, textStyleCss } from './font-view.js';
+import { fontStyle, richText, runsView, styleColorCss, textStyleCss } from './font-view.js';
+import type { OverlayImage, OverlayItem, OverlayList } from '../js/emulator/preview-overlay.js';
+import type { BoxState, ClockState } from '../js/emulator/device-state.js';
 import {
   alignAnchor, boxOrigin, clampUnits, dragTo, hitTest, realign, unitRange, unitsAt, SCREEN_W,
   type PlacedKind, type Rect, type Size, type UnitRange, type Units,
@@ -93,6 +95,10 @@ export class FbTftDisplay extends LitElement {
    * as long as the pointer is down; nothing is selected or moved.
    */
   @property({ type: Boolean }) running = false;
+  /** The analog clock the running device draws on this page (the emulator's record). */
+  @property({ attribute: false }) clocks: ClockState[] = [];
+  /** Seconds east of UTC of the running device's local time (its time zone rule), for the clock's hands. */
+  @property({ type: Number }) utcOffset = 0;
   /** The half held down now (0 left, 1 right); null: none. */
   @state() private _mainDown: 0 | 1 | null = null;
   @state() private timeStr = '';
@@ -418,6 +424,27 @@ export class FbTftDisplay extends LitElement {
    * (src = a raster the IDE cannot show) a dashed box with the key.
    */
   private _renderImage(img: ImageConfig) {
+    // The running device: what the firmware draws. null: nothing (its page is not shown, or no such raster).
+    if ('raster' in img) {
+      const raster = (img as OverlayImage).raster;
+      if (!raster) return '';
+      const box = `left: ${px(img.x * SCREEN_SCALE)}; top: ${px(img.y * SCREEN_SCALE)};`;
+      if (raster.name) {
+        return html`<div class="fb-item absolute flex cursor-pointer" data-image=${img.name} data-firmware-raster=${raster.key}
+          data-ref=${this._refAttr(img.ref)} data-ref-kind="image" ?data-selected=${sameConfigRef(img.ref, this.selected)}
+          tabindex=${img.ref ? 0 : nothing} role="button" aria-label=${this._ariaLabel('Image', img.name, img.x, img.y)}
+          title=${RUNNING_HINT} style="${box} ${this._outline(img.ref)}">
+          ${iconView(raster.name, raster.width ?? img.width ?? 32, raster.height ?? img.height ?? 32, raster.tint, SCREEN_SCALE)}
+        </div>`;
+      }
+      const w = img.width ?? 40;
+      const h = img.height ?? 40;
+      return html`<div class="fb-item absolute flex items-center justify-center border border-dashed border-white/40 text-[9px] text-gray-200 overflow-hidden cursor-pointer"
+        data-image=${img.name} data-firmware-raster=${raster.key} data-ref=${this._refAttr(img.ref)} data-ref-kind="image"
+        ?data-selected=${sameConfigRef(img.ref, this.selected)} tabindex=${img.ref ? 0 : nothing} role="button"
+        aria-label=${this._ariaLabel('Image', img.name, img.x, img.y)} title="images/${raster.key}"
+        style="${box} width: ${px(w * SCREEN_SCALE)}; height: ${px(h * SCREEN_SCALE)}; ${this._outline(img.ref)}">${raster.key}</div>`;
+    }
     // A src raster of unknown size: a 40 x 40 box stands in for it.
     const w = img.width ?? (img.icon ? 0 : 40);
     const h = img.height ?? (img.icon ? 0 : 40);
@@ -448,6 +475,80 @@ export class FbTftDisplay extends LitElement {
     return ref ? `${ref.list}:${ref.index}` : nothing;
   }
 
+  /** CSS position of a box of the running device: its pixels, against the corner its align names. */
+  private _pixelPosition(align: number, x: number, y: number): string {
+    const a = alignAnchor(align);
+    const X = x * SCREEN_SCALE;
+    const Y = y * SCREEN_SCALE;
+    const h = a.h === 0 ? `left: ${px(X)};` : a.h === 1 ? `right: ${px(-X)};` : `left: calc(50% + ${px(X)});`;
+    const v = a.v === 0 ? `top: ${px(Y)};` : a.v === 1 ? `bottom: ${px(-Y)};` : `top: calc(50% + ${px(Y)});`;
+    const shift = a.h === 0.5 || a.v === 0.5
+      ? ` transform: translate(${a.h === 0.5 ? '-50%' : '0'}, ${a.v === 0.5 ? '-50%' : '0'});` : '';
+    return `${h} ${v}${shift}`;
+  }
+
+  /**
+   * A display item of the running device, from what the firmware resolved
+   * (the emulator's BoxState): its pixel box, underline and paddings, and
+   * caption, value and unit as runs in the fonts, sizes and colours it chose
+   * (markup, style and setFont applied, texts cut to its slots). No rule of
+   * the design-time preview is used here.
+   */
+  private _renderBox(item: OverlayItem, box: BoxState) {
+    const S = SCREEN_SCALE;
+    const alignCss = (t: { align: string | null }) => (t.align ? `text-align: ${t.align};` : '');
+    return html`
+      <div class="fb-item absolute cursor-pointer" data-display-item=${item.name ?? item.id ?? ''} data-firmware-box
+        data-ref=${this._refAttr(item.ref)} data-ref-kind="displayitem" ?data-selected=${sameConfigRef(item.ref, this.selected)}
+        tabindex=${item.ref ? 0 : nothing} role="button" aria-label=${this._ariaLabel('Display item', item.name ?? item.label, item.x, item.y)}
+        title=${RUNNING_HINT}
+        style="${this._pixelPosition(box.align, box.x, box.y)} width: ${px(box.width * S)};
+          ${box.underline ? 'border-bottom: 1px solid rgb(170, 170, 170);' : ''}
+          ${box.boxPad !== null ? `padding-bottom: ${px(box.boxPad * S)};` : ''} ${this._outline(item.ref)}">
+        ${box.caption.hidden ? '' : html`<div class="leading-[1.15]" data-caption
+          style="${alignCss(box.caption)} ${box.captionPad !== null ? `padding-bottom: ${px(box.captionPad * S)};` : ''}">${runsView(box.caption.runs, S)}</div>`}
+        <div class="flex items-end">
+          ${box.icon?.name ? html`<span class="mr-[4px] flex" data-icon=${box.icon.name}>${iconView(box.icon.name, box.icon.width ?? 32, box.icon.height ?? 32, box.icon.tint, S)}</span>` : ''}
+          <div class="leading-[1.2] min-w-0 flex-1" data-value style=${alignCss(box.value)}>${runsView(box.value.runs, S)}${box.unit.hidden
+            ? '' : html`<span data-unit>${runsView(box.unit.runs, S)}</span>`}</div>
+        </div>
+      </div>`;
+  }
+
+  /**
+   * The analog clock of the running device: a face in its box, the hands at
+   * the device's local time (its time zone rule, from the emulator).
+   */
+  private _renderClock(clock: ClockState) {
+    const S = SCREEN_SCALE;
+    const local = new Date(Date.now() + this.utcOffset * 1000);
+    const h = local.getUTCHours() % 12;
+    const m = local.getUTCMinutes();
+    const s = local.getUTCSeconds();
+    const hand = (turn: number, length: number, width: number, color: string) => {
+      const a = turn * 2 * Math.PI;
+      return svg`<line x1="50" y1="50" x2=${(50 + Math.sin(a) * length).toFixed(2)} y2=${(50 - Math.cos(a) * length).toFixed(2)}
+        stroke=${color} stroke-width=${width} stroke-linecap="round" />`;
+    };
+    const size = Math.min(clock.width, clock.height) || 100;
+    return html`
+      <div class="absolute pointer-events-none" data-clock=${clock.id} data-time="${h}:${m}"
+        style="${this._pixelPosition(clock.align, clock.x, clock.y)} width: ${px(clock.width * S)}; height: ${px(clock.height * S)};"
+        title="The device's clock (local time)">
+        <svg viewBox="0 0 100 100" width=${px(size * S)} height=${px(size * S)} role="img" aria-label="Clock">
+          <circle cx="50" cy="50" r="47" fill="none" stroke="rgb(170,170,170)" stroke-width="2" />
+          ${Array.from({ length: 12 }, (_, i) => {
+            const a = i / 12 * 2 * Math.PI;
+            return svg`<line x1=${(50 + Math.sin(a) * 40).toFixed(2)} y1=${(50 - Math.cos(a) * 40).toFixed(2)}
+              x2=${(50 + Math.sin(a) * 45).toFixed(2)} y2=${(50 - Math.cos(a) * 45).toFixed(2)} stroke="rgb(170,170,170)" stroke-width="2" />`;
+          })}
+          ${hand((h + m / 60) / 12, 24, 4, '#ffffff')}
+          ${hand((m + s / 60) / 60, 36, 3, '#ffffff')}
+          ${hand(s / 60, 40, 1, '#ffd700')}
+        </svg>
+      </div>`;
+  }
+
   private _updateTime() {
     const now = new Date();
     this.timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -475,7 +576,11 @@ export class FbTftDisplay extends LitElement {
    */
   private _renderList(list: ListConfig, styles: ResolvedStyles) {
     const base = styleFont(styles, StyleElement.List);
-    const font = list.font ?? { ...base, px: fontsizePx(list.fontSize, base.px) };
+    // The running device: the roller as the firmware resolved it (pixels, font, colours).
+    const roller = (list as OverlayList).roller;
+    const font = roller
+      ? { face: Math.max(0, roller.font.face), px: roller.font.px, configured: true }
+      : list.font ?? { ...base, px: fontsizePx(list.fontSize, base.px) };
     // list.selected: the list's font unless the style gives the selected row its own.
     const ls = styles[StyleElement.List] ?? {};
     const sel = styles[StyleElement.ListSelected] ?? {};
@@ -488,26 +593,35 @@ export class FbTftDisplay extends LitElement {
     const { color: _c, ...selText } = sel;
     const { color: _l, ...listText } = ls;
     const fontPx = font.px * SCREEN_SCALE;
-    const rowH = fontPx * ROW_LINE_HEIGHT;
-    const middle = (list.rows - 1) * rowH / 2;
-    const shift = middle - Math.max(0, list.selected) * rowH;
+    const rowH = roller ? (roller.font.lineHeight + roller.lineSpace) * SCREEN_SCALE : fontPx * ROW_LINE_HEIGHT;
+    const rows = roller ? roller.rows : list.rows;
+    const selected = roller ? roller.selected : list.selected;
+    const colors = roller
+      ? { color: roller.color, focusColor: roller.selectedBg, focusTextColor: roller.selectedColor }
+      : { color: list.color, focusColor: list.focusColor, focusTextColor: list.focusTextColor };
+    const place = roller
+      ? `left: ${px(roller.x * SCREEN_SCALE)}; top: ${px(roller.y * SCREEN_SCALE)}; width: ${px(roller.width * SCREEN_SCALE)};`
+      : null;
+    const middle = (rows - 1) * rowH / 2;
+    const shift = middle - Math.max(0, selected) * rowH;
     const at = this._at(list.ref, list.x, list.y);
     return html`
       <div class="fb-item absolute overflow-hidden cursor-pointer" data-list=${list.name}
         data-ref=${this._refAttr(list.ref)} data-ref-kind="list" ?data-selected=${sameConfigRef(list.ref, this.selected)}
         tabindex=${list.ref ? 0 : nothing} role="button" aria-label=${this._ariaLabel('List', list.name, at.x, at.y)}
         title=${this.running ? RUNNING_HINT : ITEM_HINT}
-        style="left: ${at.x}%; top: ${at.y}%; width: ${list.width}%; height: ${px(list.rows * rowH)}; ${this._outline(list.ref)}
+        ?data-firmware-roller=${!!roller}
+        style="${place ?? `left: ${at.x}%; top: ${at.y}%; width: ${list.width}%;`} height: ${px(rows * rowH)}; ${this._outline(list.ref)}
           ${fontStyle(font, SCREEN_SCALE)} line-height: ${px(rowH)};">
         <div class="absolute left-0 right-0 rounded-[6px]" data-list-focus
-          style="top: ${px(middle)}; height: ${px(rowH)}; background: ${list.focusColor};${sel.bgOpa !== undefined && sel.bgOpa < 255 ? ` opacity: ${sel.bgOpa / 255};` : ''}"></div>
+          style="top: ${px(middle)}; height: ${px(rowH)}; background: ${colors.focusColor};${sel.bgOpa !== undefined && sel.bgOpa < 255 ? ` opacity: ${sel.bgOpa / 255};` : ''}"></div>
         <div class="relative" style="transform: translateY(${px(shift)}); transition: transform 200ms ease-out;">
           ${list.items.map((text, i) => html`
             <div class="text-center whitespace-nowrap overflow-hidden text-ellipsis px-[4px]"
-              data-list-item=${i} ?data-selected=${i === list.selected}
-              style="height: ${px(rowH)}; ${i === list.selected
-                ? `${selCss} ${textStyleCss(selText, SCREEN_SCALE)} color: ${styleColorCss(parseInt(list.focusTextColor.slice(1), 16), sel.opa)};`
-                : `${textStyleCss(listText, SCREEN_SCALE)} color: ${styleColorCss(parseInt(list.color.slice(1), 16), ls.opa)};`}"
+              data-list-item=${i} ?data-selected=${i === selected}
+              style="height: ${px(rowH)}; ${i === selected
+                ? `${roller ? '' : selCss} ${textStyleCss(selText, SCREEN_SCALE)} color: ${styleColorCss(parseInt(colors.focusTextColor.slice(1), 16), sel.opa)};`
+                : `${textStyleCss(listText, SCREEN_SCALE)} color: ${styleColorCss(parseInt(colors.color.slice(1), 16), ls.opa)};`}"
             >${text}</div>
           `)}
         </div>
@@ -536,6 +650,8 @@ export class FbTftDisplay extends LitElement {
           ${this.displayItems.map(item => {
             // Caption, value and unit in the item's fonts and sizes; markup
             // (\f \s \c \a) as on the device (text-spans.ts).
+            const box = (item as OverlayItem).box;
+            if (box) return this._renderBox(item, box);
             const valueFont = this._valueFont(item, styles);
             const value = this._isTimeItem(item) ? this.timeStr : (item.value ?? '');
             return html`
@@ -560,6 +676,7 @@ export class FbTftDisplay extends LitElement {
           })}
           ${this.lists.map(list => this._renderList(list, styles))}
           ${this.images.map(img => this._renderImage(img))}
+          ${this.clocks.map(clock => this._renderClock(clock))}
           ${this._renderMoveBadge()}
           ${this._mainDown === null ? '' : html`<div class="absolute top-0 bottom-0 w-1/2 bg-white/10 pointer-events-none ${this._mainDown === 0 ? 'left-0' : 'right-0'}"
             data-main-pressed=${this._mainDown}></div>`}

@@ -12,12 +12,21 @@
  * It is runtime state for drawing only, never something to write back to
  * config.json.
  *
- * Fonts a script set (setFont) replace the entry's configured font; a key's
- * back LED is carried next to its front LED.
+ * Since stage 2 the values are the firmware's results: texts as it cut them
+ * to its slots, the font it chose for each (config, style, setFont), and next
+ * to the fields the preview already draws, what it resolved in full:
+ *   display item  `box`      BoxState: pixel position, paddings, caption /
+ *                            value / unit as runs with font, px and colour
+ *   key           `display`  label and top label as runs, the icon raster
+ *   list          `roller`   pixel position, font, colours as resolved
+ *   image         `raster`   the raster it draws (null: nothing)
+ *   page          `clocks`   the analog clock when it is drawn on that page
+ * A renderer that draws these needs no rule of its own (markup, style
+ * cascade, font fallback). A key's back LED is carried next to its front LED.
  */
 import { sameConfigRef, type ButtonConfig, type ConfigRef, type DisplayItem, type ImageConfig, type ItemFont, type ListConfig, type PageConfig } from '../app-state';
 import { fontsizePx } from '../font-config';
-import type { DeviceState, ItemState } from './device-state';
+import type { BoxState, ClockState, DeviceState, ImageState, ItemState, KeyState, ListState } from './device-state';
 import type { FontChoice } from './host';
 
 /** Size of a text whose entry gives none (the style's default caption / value size). */
@@ -46,7 +55,21 @@ function byRef<T extends { ref?: ConfigRef }>(pages: readonly PageConfig[], pick
   return undefined;
 }
 
-function drawnItem(pages: readonly PageConfig[], item: ItemState): DisplayItem {
+/** The preview model's entries with what the firmware resolved (see the head of this file). */
+export type OverlayItem = DisplayItem & { box?: BoxState };
+export type OverlayButton = ButtonConfig & { display?: NonNullable<KeyState['display']> };
+export type OverlayList = ListConfig & { roller?: NonNullable<ListState['roller']> };
+export type OverlayImage = ImageConfig & { raster?: ImageState['raster'] };
+export interface OverlayPage extends PageConfig {
+  displayItems: OverlayItem[];
+  buttons: OverlayButton[];
+  lists?: OverlayList[];
+  images?: OverlayImage[];
+  /** The clock drawn on this page (the device draws one). */
+  clocks?: ClockState[];
+}
+
+function drawnItem(pages: readonly PageConfig[], item: ItemState): OverlayItem {
   const base: DisplayItem = byRef(pages, p => p.displayItems, item.ref) ?? {
     // Made by a script: the fields a config entry would have given.
     x: item.x, y: item.y, width: item.width, height: 0, type: 'text',
@@ -62,6 +85,9 @@ function drawnItem(pages: readonly PageConfig[], item: ItemState): DisplayItem {
     unit: item.unit || undefined,
     ...(item.icon ? { icon: item.icon } : {}),
     ...(item.font ? { valueFont: scriptFont(item.font, base.valueFont) } : {}),
+    ...(item.box?.caption.font
+      ? { labelFont: scriptFont({ face: item.box.caption.font.face, size: item.box.caption.font.px }, base.labelFont) } : {}),
+    ...(item.box ? { box: item.box } : {}),
   };
 }
 
@@ -73,7 +99,7 @@ export function frontLedIndex(state: DeviceState, position: number): number {
   return bar * 4 + ((position - 1) % 2 === 1 ? 2 : 0);
 }
 
-function drawnButton(state: DeviceState, button: ButtonConfig): ButtonConfig {
+function drawnButton(state: DeviceState, button: ButtonConfig): OverlayButton {
   const key = state.keys.find(k => sameConfigRef(k.ref, button.ref));
   const front = frontLedIndex(state, button.position);
   const led = state.leds[front];
@@ -88,19 +114,21 @@ function drawnButton(state: DeviceState, button: ButtonConfig): ButtonConfig {
     ...(back && back.r + back.g + back.b > 0 ? { backLedColor: `rgb(${back.r},${back.g},${back.b})` } : {}),
     ...(key?.font ? { labelFont: scriptFont(key.font, button.labelFont) } : {}),
     ...(key?.topFont ? { topFont: scriptFont(key.topFont, button.topFont) } : {}),
+    ...(key?.display ? { display: key.display } : {}),
   };
 }
 
-function drawnList(state: DeviceState, list: ListConfig): ListConfig {
+function drawnList(state: DeviceState, list: ListConfig): OverlayList {
   const running = state.lists.find(l => sameConfigRef(l.ref, list.ref));
   if (!running) return list;
   return {
     ...list, items: [...running.items], selected: running.selected,
     ...(running.font ? { font: scriptFont(running.font, list.font) } : {}),
+    ...(running.roller ? { roller: running.roller } : {}),
   };
 }
 
-function drawnImage(state: DeviceState, image: ImageConfig): ImageConfig {
+function drawnImage(state: DeviceState, image: ImageConfig): OverlayImage {
   const running = state.images.find(m => sameConfigRef(m.ref, image.ref));
   if (!running) return image;
   const { icon: _icon, src: _src, ...rest } = image;
@@ -108,6 +136,7 @@ function drawnImage(state: DeviceState, image: ImageConfig): ImageConfig {
     ...rest,
     ...(running.kind === 'icon' ? { icon: running.value } : {}),
     ...(running.kind === 'src' ? { src: running.value } : {}),
+    raster: running.raster,
   };
 }
 
@@ -116,7 +145,7 @@ function drawnImage(state: DeviceState, image: ImageConfig): ImageConfig {
  * config does not have are added (empty of keys). The page to show is
  * state.shownPage.
  */
-export function overlayPages(pages: readonly PageConfig[], state: DeviceState): PageConfig[] {
+export function overlayPages(pages: readonly PageConfig[], state: DeviceState): OverlayPage[] {
   const numbers = new Set<number>(pages.map(p => p.number));
   numbers.add(state.shownPage);
   for (const item of state.items) if (item.page >= 1) numbers.add(item.page);
@@ -128,6 +157,7 @@ export function overlayPages(pages: readonly PageConfig[], state: DeviceState): 
       buttons: (page?.buttons ?? []).map(b => drawnButton(state, b)),
       ...(page?.lists ? { lists: page.lists.map(l => drawnList(state, l)) } : {}),
       ...(page?.images ? { images: page.images.map(m => drawnImage(state, m)) } : {}),
+      ...(number === state.shownPage && state.clocks.some(c => c.shown) ? { clocks: state.clocks.filter(c => c.shown) } : {}),
     };
   });
 }

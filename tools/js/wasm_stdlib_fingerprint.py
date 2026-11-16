@@ -41,33 +41,13 @@ HEADERS = ("freebutton_stdlib.h", "mquickjs_atom.h")
 STAMP = os.path.join(PROJECT, "web", "public", "assets", "mquickjs.stdlib.txt")
 EMULATOR_STAMP = os.path.join(PROJECT, "web", "public", "assets", "fb-emulator.stamp.txt")
 
-# Everything build_emulator_wasm.sh compiles or reads, besides the engine
-# (its commit is in the fingerprint) and the generated headers. Globs,
-# relative to the project root.
+# What build_emulator_wasm.sh compiled: the files of
+# tools/js/emulator/sources.txt (written by the build from the compilers'
+# dependency lists: every firmware source and header that went in), plus the
+# build script and everything in tools/js/emulator/. Besides: the engine (its
+# commit is in the fingerprint) and the generated headers.
+EMULATOR_SOURCE_LIST = os.path.join(PROJECT, "tools", "js", "emulator", "sources.txt")
 EMULATOR_SOURCES = (
-    "src/scripting/mquickjs_stdlib.c",
-    "src/scripting/js/*.c",
-    "src/scripting/js/*.h",
-    "src/scripting/*_hardware.h",
-    "src/scripting/*_binding.h",
-    "src/scripting/ScriptEngine.h",
-    "src/scripting/device_hardware.cpp",
-    "src/scripting/mqtt_binding.cpp",
-    "src/scripting/sensor_binding.cpp",
-    "src/mqtt/Broker.h",
-    "src/mqtt/Component.cpp",
-    "src/mqtt/Component.h",
-    "src/mqtt/Registry.cpp",
-    "src/mqtt/Registry.h",
-    "src/utils/MessageRing.h",
-    "src/drivers/PushButton.cpp",
-    "src/drivers/PushButton.h",
-    "src/components/IconLogic.h",
-    "src/components/ListLogic.h",
-    "src/ui/fonts/fonts.h",
-    "src/ui/fonts/font_logic.h",
-    "include/config.h",
-    "include/types.h",
     "tools/js/build_emulator_wasm.sh",
     "tools/js/emulator/**/*",
 )
@@ -77,6 +57,10 @@ EMULATOR_CONSTANTS = (
     ("sdkconfig.esp32", r"^CONFIG_MQTT_BUFFER_SIZE=([0-9]+)$", "CONFIG_MQTT_BUFFER_SIZE"),
     ("src/drivers/NeoPixel.h", r"NUMBER_OF_LEDS *= *([0-9]+);", "NeoPixelController::NUMBER_OF_LEDS"),
     ("src/main.cpp", r"^    delay\(([0-9]+)\);$", "loop() delay"),
+    ("sdkconfig.esp32", r"^CONFIG_MQTT_EVENT_QUEUE_SIZE=([0-9]+)$", "CONFIG_MQTT_EVENT_QUEUE_SIZE"),
+    # The JSON libraries the firmware sources are compiled with (.pio/libdeps).
+    ("platformio.ini", r"bblanchon/ArduinoJson @ ([0-9.]+)", "ArduinoJson"),
+    ("platformio.ini", r"bolkedebruin/rapidjson\.git#([0-9a-f]+)", "RapidJSON"),
 )
 
 
@@ -95,13 +79,22 @@ def fingerprint(header_dir):
 def emulator_stamp(header_dir):
     lines = [fingerprint(header_dir)]
     files = set()
+    try:
+        with open(EMULATOR_SOURCE_LIST) as f:
+            files.update(line.strip() for line in f if line.strip())
+    except FileNotFoundError:
+        pass
     for pattern in EMULATOR_SOURCES:
         for path in glob.glob(os.path.join(PROJECT, pattern), recursive=True):
             if os.path.isfile(path) and "__pycache__" not in path:
                 files.add(os.path.relpath(path, PROJECT).replace(os.sep, "/"))
     for rel in sorted(files):
-        with open(os.path.join(PROJECT, rel), "rb") as f:
-            data = f.read()
+        try:
+            with open(os.path.join(PROJECT, rel), "rb") as f:
+                data = f.read()
+        except FileNotFoundError:
+            lines.append(f"{'missing':64}  {rel}\n")
+            continue
         if rel == "include/config.h":
             # The version string changes with every release
             # (tools/scripts/sync_version.py); system.version() in the

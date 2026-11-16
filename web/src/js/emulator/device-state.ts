@@ -1,40 +1,104 @@
 /**
- * DeviceState: the virtual device's state, in memory.
+ * DeviceState: what the virtual device shows and what its hardware is.
  *
- * It is what ConfigManager, the display and the LED strip are on the device:
- * the display items, keys, lists and images of config.json with what a
- * script changed in them, the shown page, the LED colours, the sensors. It
- * holds state only; every rule (argument checks, name validity, limits,
- * selection clamping) ran in the firmware's code inside the wasm before a
- * method here is called.
+ * Since stage 2 the device itself runs inside the wasm: the firmware's
+ * ConfigManager reads config.json, its components subscribe to their topics,
+ * keep their texts and draw. This class is the mirror of that, for a
+ * renderer: the firmware reports every display item, key, list, image and
+ * clock as a record with what it decided to show (texts cut to their slots,
+ * runs with font and colour, pixel positions), and DeviceState keeps the
+ * latest of each. No rule of the firmware is repeated here.
  *
- * Built from a parsed config.json. The IDE's config-model.ts is the source of
- * truth for what an entry means (mapButton, mapList, mapImage, configNames,
- * mapConnectors, the font table); this file adds only what the preview model
- * leaves out and the firmware needs (display item ids, boxtype, round, the
- * raw page), see docs/EMULATOR.md "Adapter".
+ * It is also the virtual hardware the firmware's drivers read: which module
+ * is on which connector, which key is held, the sensor readings.
  *
- * Every entry keeps the `ref` config-model gives it ({kind, list, index}), so
- * a renderer can lay the runtime state over the preview model it already
- * draws. Changes are observable: subscribe() gets one StateChange per change.
+ * What it takes from config.json itself is only what the hardware is (the
+ * connectors) and where each entry stands in the file, so that every entry
+ * carries the `ref` ({kind, list, index}) that config-model.ts gives the
+ * preview model: a renderer can lay this state over the pages it already
+ * draws (preview-overlay.ts). Changes are observable: subscribe() gets one
+ * StateChange per change.
  *
- * Runtime state is never written back to config.json: restoreConfigState()
- * (the firmware's, docs/SCRIPT-RESTART.md) throws it away.
+ * Runtime state is never written back to config.json.
  */
 import type { ConfigRef } from '../app-state';
-import { configNames, mapButton, mapConnectors, mapImage, mapList, NAME_PATTERN } from '../config-model';
-import { findFace, fontTable, type FontTable } from '../font-config';
-import { isIconName } from '../icon-raster';
-import type {
-  DisplayHost, EmulatorHost, FontChoice, FontsHost, ImagesHost, KeysHost, LedsHost, ListsHost,
-  SensorsHost, TopologyHost,
-} from './host';
+import { mapButton, mapConnectors } from '../config-model';
+import type { DisplayHost, FontChoice, HardwareHost, StateKind } from './host';
+
+/** One run of text in one format, as the firmware resolved it. */
+export interface TextRun {
+  text: string;
+  /** Font name of config.json "style.fonts" (or a system font); '' = LVGL's built-in font. */
+  font: string;
+  /** Face index of the firmware's font table; -1 = the built-in font. */
+  face: number;
+  px: number;
+  /** "#rrggbb" */
+  color: string;
+}
+
+export interface FontState {
+  font: string;
+  face: number;
+  px: number;
+  /** Line box in px (approximate until the firmware's font engine is in the wasm). */
+  lineHeight: number;
+}
+
+/** A text as the device draws it. */
+export interface TextState {
+  /** As given, markup included, cut to what the firmware keeps. */
+  text: string;
+  /** Without the markup. */
+  plain: string;
+  /** Takes no room: an empty caption or unit, a key label behind an icon. */
+  hidden: boolean;
+  /** A key text in several formats: a row that does not wrap. */
+  rich: boolean;
+  /** From the markup (\al \ac \ar, \vt \vm \vb); null = none. */
+  align: 'left' | 'center' | 'right' | null;
+  valign: 'top' | 'middle' | 'bottom' | null;
+  /** More formats than the firmware draws: the last run took the rest. */
+  spansCut: boolean;
+  /** The text's own font (what a run without \f / \s has). */
+  font: FontState | null;
+  runs: TextRun[];
+}
+
+/** A raster the device draws: an icon ("ico-<name>-<w>x<h>.bin") or a file of the images bucket. */
+export interface RasterState {
+  key: string;
+  /** For an icon raster: the icon's name and size. */
+  name?: string;
+  width?: number;
+  height?: number;
+  /** "#rrggbb": the colour a single-colour raster is drawn in. */
+  tint: string;
+}
+
+/** A display item's box, in pixels on the 320x240 display. */
+export interface BoxState {
+  x: number;
+  y: number;
+  width: number;
+  /** lv_align_t of the box. */
+  align: number;
+  underline: boolean;
+  /** Bottom padding of the caption and of the box; null = none of its own. */
+  captionPad: number | null;
+  boxPad: number | null;
+  caption: TextState;
+  value: TextState;
+  unit: TextState;
+  icon: RasterState | null;
+}
 
 export interface ItemState {
   id: number;
   /** config.json entry; absent for an item a script created. */
   ref?: ConfigRef;
   name?: string;
+  /** Percent of the display, as in config.json. */
   x: number;
   y: number;
   width: number;
@@ -44,26 +108,41 @@ export interface ItemState {
   round: number;
   /** 1-based; 0 = every page. */
   page: number;
-  /** Shown caption, value and unit (config text until a script sets one; value starts empty). */
+  /**
+   * Caption, value and unit (the raw texts, markup included): what is on the
+   * display, or, while the item's page is not shown, what the item holds for
+   * when it comes.
+   */
   label: string;
   value: string;
   unit: string;
   /** Icon name shown before the value; '' = none. */
   icon: string;
-  /** Font a script set; null = the configured one. */
+  /** The value's font as the firmware chose it; null while not drawn. */
   font: FontChoice | null;
+  /** What is drawn; null while the item's page is not shown (the device keeps no widget then). */
+  box: BoxState | null;
 }
 
 export interface KeyState {
   position: number;
   ref?: ConfigRef;
   name?: string;
+  /** 1-based page of the config entry. */
+  page: number;
+  /** Label and top label as shown (raw texts); the configured ones for a key without a display. */
   label: string;
   topLabel: string;
   /** Icon shown instead of the label; '' = none. */
   icon: string;
+  /** The fonts the firmware chose; null for a key without a display. */
   font: FontChoice | null;
   topFont: FontChoice | null;
+  /**
+   * The key's own display; null for a key without one (a key of the main
+   * display has none: scripts cannot set its label either).
+   */
+  display: { index: number; label: TextState; topLabel: TextState; icon: RasterState | null } | null;
 }
 
 export interface LedState {
@@ -77,19 +156,48 @@ export interface ListState {
   index: number;
   ref?: ConfigRef;
   name: string;
+  page: number;
   items: string[];
   /** -1 when the list is empty. */
   selected: number;
+  /** The font the firmware chose; null while not drawn. */
   font: FontChoice | null;
+  /** The roller, in pixels; null while the list's page is not shown. */
+  roller: {
+    x: number; y: number; width: number; rows: number; selected: number; font: FontState; lineSpace: number;
+    color: string; selectedBg: string; selectedColor: string;
+  } | null;
 }
 
 export interface ImageState {
   index: number;
   ref?: ConfigRef;
   name: string;
-  /** What it shows: an icon name, an images-bucket key, or nothing. */
+  page: number;
+  /** Pixels. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** What it wants to show: an icon name, an images-bucket key, or nothing. */
   kind: 'icon' | 'src' | 'none';
   value: string;
+  /** What it draws; null while its page is not shown or the bucket has no such raster. */
+  raster: RasterState | null;
+}
+
+/** The analog clock (config.json "clocks"): its hands are the device's local time (DeviceState.timezone). */
+export interface ClockState {
+  index: number;
+  id: number;
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  align: number;
+  /** Drawn now (its page is shown; only the first clock of a config is drawn). */
+  shown: boolean;
 }
 
 export interface SensorState {
@@ -100,6 +208,8 @@ export interface SensorState {
   unit: string;
   online: boolean;
   value: number;
+  /** Which hardware reading it samples (HardwareHost.sensorRead); -1 = the firmware computes it (memory). */
+  input: number;
 }
 
 export interface BrokerInfo {
@@ -110,35 +220,75 @@ export interface BrokerInfo {
   hassDiscovery: boolean;
 }
 
-/** 0 = empty, 1 = bar, 2 = main display (device_hardware.h). */
+/** A face of the firmware's font table. */
+export interface FontFaceState {
+  face: number;
+  name: string;
+  src: string;
+  id: number;
+  /** Face index of the fallback, -1 = none. */
+  fallback: number;
+  /** Line height in em, 0 = the font's metrics. */
+  lineheight: number;
+}
+
+/** A style element as the firmware resolved config.json "style" ("key.label", "display.value", ...). */
+export interface StyleState {
+  font: string;
+  face: number;
+  px: number;
+  color: string;
+  opa: number;
+  align: 'left' | 'center' | 'right' | null;
+  letterSpace: number;
+  lineSpace: number;
+  underline: boolean;
+  strikethrough: boolean;
+  bgColor?: string;
+  bgOpa?: number;
+}
+
+/** 0 = empty, 1 = bar, 2 = main display (the firmware's ConnectorType). */
 export type ConnectorKind = 0 | 1 | 2;
 
 /** One observable change. A renderer redraws what the record names. */
 export type StateChange =
-  | { kind: 'item'; id: number; field: 'label' | 'value' | 'unit' | 'icon' | 'font' | 'position' | 'page' }
+  | { kind: 'item'; id: number; field: 'label' | 'value' | 'unit' | 'icon' | 'font' | 'position' | 'page' | 'shown' }
   | { kind: 'item-added'; id: number }
   | { kind: 'item-removed'; id: number }
   | { kind: 'page'; page: number }
   | { kind: 'key'; position: number; field: 'label' | 'topLabel' | 'icon' | 'font' | 'topFont' }
   | { kind: 'led'; index: number }
-  | { kind: 'list'; index: number; field: 'items' | 'selected' | 'font' }
+  | { kind: 'list'; index: number; field: 'items' | 'selected' | 'font' | 'shown' }
   | { kind: 'image'; index: number }
+  | { kind: 'clock'; index: number }
   | { kind: 'sensor'; id: number }
-  /** Everything went back to config.json (restart) or a new config was loaded: redraw all. */
+  /** The device's name, brokers, sensors, fonts or styles (once, at boot). */
+  | { kind: 'device' }
+  /** A script (re)starts: what the old one changed goes back to config.json. Redraw all. */
   | { kind: 'reset' };
 
 export type StateListener = (change: StateChange, state: DeviceState) => void;
 
-export type SensorSpec = Omit<SensorState, 'online' | 'value'> & { online?: boolean; value?: number };
+/** A sensor of the virtual hardware and its reading. id: the firmware's (1, 2 STS35; 3, 4, 5 BME280). */
+export interface SensorSpec {
+  id: number;
+  value?: number;
+  /** Kept for callers of stage 1; the firmware names its sensors itself. */
+  name?: string;
+  type?: string;
+  unit?: string;
+  online?: boolean;
+}
 
 /**
- * The sensors of a device with the sensor board (ids: SensorType in
- * src/drivers/Sensors.h), with room-like values.
+ * The sensor board: a BME280 (pressure in hPa, humidity in %, temperature in
+ * °C; the firmware's sensor ids 3, 4, 5), with room-like readings.
  */
 export const DEFAULT_SENSORS: readonly SensorSpec[] = [
-  { id: 3, name: 'BME280 Pressure', type: 'pressure', unit: 'hPa', value: 1013.2 },
-  { id: 4, name: 'BME280 Humidity', type: 'humidity', unit: '%', value: 45 },
-  { id: 5, name: 'BME280 Temperature', type: 'temperature', unit: '°C', value: 21.5 },
+  { id: 3, value: 1013.2 },
+  { id: 4, value: 45 },
+  { id: 5, value: 21.5 },
 ];
 
 export interface DeviceStateOptions {
@@ -148,46 +298,86 @@ export interface DeviceStateOptions {
    * the config and the main display on the first connector without.
    */
   connectors?: readonly ConnectorKind[];
-  /** Default: DEFAULT_SENSORS. */
+  /** The hardware sensors and their readings. Default: DEFAULT_SENSORS. [] = no sensor board. */
   sensors?: readonly SensorSpec[];
+  /**
+   * Which keys of the images bucket exist (icon rasters, user files).
+   * Default: all, as after the IDE saved the config and its rasters.
+   */
+  mediaExists?: (key: string) => boolean;
 }
 
 type Obj = Record<string, unknown>;
 
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-function int(v: unknown, fallback: number): number {
-  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
-  return Number.isFinite(n) ? Math.trunc(n) : fallback;
-}
-
-const text = (v: unknown): string => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
-
-/** The firmware reads both spellings of a list, in file order (config-model.ts nameEntries). */
-function entries(cfg: Obj, lists: readonly string[]): Array<{ list: string; index: number; raw: unknown }> {
-  const out: Array<{ list: string; index: number; raw: unknown }> = [];
+/** The firmware reads both spellings of a list, in file order; only objects are entries. */
+function entryRefs(cfg: Obj, lists: readonly string[], kind: ConfigRef['kind']): ConfigRef[] {
+  const out: ConfigRef[] = [];
   for (const key of Object.keys(cfg)) {
     const arr = cfg[key];
     if (!lists.includes(key) || !Array.isArray(arr)) continue;
-    arr.forEach((raw, index) => out.push({ list: key, index, raw }));
+    arr.forEach((raw, index) => { if (isObj(raw)) out.push({ kind, list: key, index }); });
   }
   return out;
 }
 
-/** DisplayItem::configuredId: "displayitemid" as a number or a numeric string; 0 = none. */
-function configuredItemId(raw: Obj): number {
-  const v = raw.displayitemid;
-  if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v;
-  if (typeof v === 'string' && /^[0-9]+$/.test(v)) return Number(v);
-  return 0;
+function refByName(cfg: Obj, list: string, kind: ConfigRef['kind'], name: string | null | undefined): ConfigRef | undefined {
+  const arr = cfg[list];
+  if (!name || !Array.isArray(arr)) return undefined;
+  const index = arr.findIndex(e => isObj(e) && e.name === name);
+  return index < 0 ? undefined : { kind, list, index };
 }
 
-const sameFont = (a: FontChoice | null, b: FontChoice | null): boolean =>
-  a === b || (!!a && !!b && a.face === b.face && a.size === b.size);
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+const fontChoice = (font: FontState | null | undefined): FontChoice | null => (font ? { face: font.face, size: font.px } : null);
+
+/** I2C address of the port expander of connector 0. */
+const MCP_BASE = 0x20;
+/** Sensor id -> the hardware reading it is (the BME280's three, the two STS35), and its scale to the driver's unit. */
+const SENSOR_INPUT: Readonly<Record<number, { input: number; scale: number; address: number }>> = {
+  5: { input: 0, scale: 1, address: 0x76 },
+  3: { input: 1, scale: 100, address: 0x76 },  // hPa; the driver reads Pa
+  4: { input: 2, scale: 1, address: 0x76 },
+  1: { input: 3, scale: 1, address: 0x4a },
+  2: { input: 4, scale: 1, address: 0x4b },
+};
+
+// The records the firmware sends (tools/js/emulator/device.cpp).
+interface ItemRecord {
+  id: number; order: number; name: string | null; x: number; y: number; width: number; boxType: number;
+  fontSize: number; align: number; round: number; page: number; label: string; unit: string;
+  now: { label: string; value: string; unit: string; icon: string };
+  box: BoxState | null;
+}
+interface KeyRecord {
+  order: number; position: number; name: string | null; page: number; label: string; topLabel: string;
+  display: KeyState['display'];
+}
+interface ListRecord {
+  index: number; name: string | null; page: number; selected: number; items: string[]; roller: ListState['roller'];
+}
+interface ImageRecord {
+  index: number; name: string | null; page: number; x: number; y: number; width: number; height: number;
+  kind: ImageState['kind']; value: string; raster: RasterState | null;
+}
+interface DeviceRecord {
+  id: string; name: string; firmware: string; model: string; timezone: string; connectors: number[]; keys: number[];
+  keyDisplays: number[]; leds: number;
+  brokers: Array<{ index: number; name: string; url: string; configured: boolean; discovery: boolean }>;
+  sensors: Array<{ id: number; name: string; type: string; unit: string; online: boolean; input: number }>;
+  fonts: FontFaceState[]; styles: Record<string, StyleState>;
+}
 
 export class DeviceState {
-  /** config.json "core.name" ('' = none: the device then uses its id). */
+  /** The device's name: config.json "core.name", else its id. */
   deviceName = '';
+  /** FIRMWARE and MODEL of the firmware in the wasm. */
+  firmware = '';
+  model = '';
+  /** The POSIX TZ string the device's local time follows (config.json "core.timezone", else the firmware's default). */
+  timezone = '';
   brokers: BrokerInfo[] = [];
   /** Module per connector id. */
   connectors: ConnectorKind[] = [0, 0, 0, 0];
@@ -195,25 +385,39 @@ export class DeviceState {
   leds: LedState[] = [];
   lists: ListState[] = [];
   images: ImageState[] = [];
+  clocks: ClockState[] = [];
   sensors: SensorState[] = [];
+  /** The firmware's font table and resolved styles. */
+  fonts: FontFaceState[] = [];
+  styles: Record<string, StyleState> = {};
+  /** Positions of the keys that have a display of their own (the keys of a bar). */
+  keyDisplays: number[] = [];
 
   private itemList: ItemState[] = [];
   private keyList: KeyState[] = [];
-  /** Config items a script removed: back at a restart. */
-  private parked: ItemState[] = [];
-  private nextItemId = 1;
-  private itemNames = new Map<string, number>();
-  private keyNames = new Map<string, number>();
-  private listNames = new Map<string, number>();
-  private imageNames = new Map<string, number>();
-  private fonts: FontTable = { faces: [] };
-  private listeners = new Set<StateListener>();
-  private config: Obj = {};
-  private readonly options: DeviceStateOptions;
+  private keyPositions: number[] = [];
+  private readonly listeners = new Set<StateListener>();
+  private readonly config: Obj;
+  private readonly itemRefs: ConfigRef[];
+  private readonly keyRefs: ConfigRef[];
+  private readonly readings = new Map<number, number>();
+  private readonly sensorIds: number[];
+  private readonly mediaExists: (key: string) => boolean;
+  /** Bit (position - 1) is 0 while that key is held. */
+  private keysUp = 0xff;
+  private switchPins: [number, number] = [6, 2];
 
   constructor(config: unknown, options: DeviceStateOptions = {}) {
-    this.options = options;
-    this.load(config);
+    this.config = isObj(config) ? config : {};
+    this.itemRefs = entryRefs(this.config, ['mqttdisplays', 'displayitems'], 'displayitem');
+    this.keyRefs = entryRefs(this.config, ['mqttbuttons', 'buttons'], 'button');
+    this.connectors = options.connectors
+      ? [0, 1, 2, 3].map(i => options.connectors![i] ?? 0)
+      : this.inferConnectors(this.config);
+    const sensors = options.sensors ?? DEFAULT_SENSORS;
+    this.sensorIds = sensors.map(s => s.id);
+    for (const s of sensors) this.readings.set(s.id, s.value ?? 0);
+    this.mediaExists = options.mediaExists ?? (() => true);
   }
 
   // --- reading ----------------------------------------------------------------
@@ -223,44 +427,41 @@ export class DeviceState {
     return this.itemList;
   }
 
-  /** The keys that exist: in config.json "buttons", on a connector with a module. */
+  /** The keys of config.json "buttons", in file order. */
   get keys(): readonly KeyState[] {
     return this.keyList;
   }
 
   /** A display item by id or config name. */
   item(idOrName: number | string): ItemState | undefined {
-    const id = typeof idOrName === 'string' ? this.itemNames.get(idOrName) : idOrName;
-    return id === undefined ? undefined : this.itemList.find(i => i.id === id);
+    return this.itemList.find(i => (typeof idOrName === 'string' ? i.name === idOrName : i.id === idOrName));
   }
 
-  /** A key by position or config name. */
+  /** A key by position or config name (the first config entry of that position). */
   key(positionOrName: number | string): KeyState | undefined {
-    const position = typeof positionOrName === 'string' ? this.keyNames.get(positionOrName) : positionOrName;
-    return position === undefined ? undefined : this.keyList.find(k => k.position === position);
+    return this.keyList.find(k => (typeof positionOrName === 'string' ? k.name === positionOrName : k.position === positionOrName));
   }
 
   list(indexOrName: number | string): ListState | undefined {
-    const index = typeof indexOrName === 'string' ? this.listNames.get(indexOrName) : indexOrName;
-    return index === undefined ? undefined : this.lists[index];
+    return typeof indexOrName === 'string' ? this.lists.find(l => l.name === indexOrName) : this.lists[indexOrName];
   }
 
   image(indexOrName: number | string): ImageState | undefined {
-    const index = typeof indexOrName === 'string' ? this.imageNames.get(indexOrName) : indexOrName;
-    return index === undefined ? undefined : this.images[index];
+    return typeof indexOrName === 'string' ? this.images.find(m => m.name === indexOrName) : this.images[indexOrName];
   }
 
   sensor(id: number): SensorState | undefined {
     return this.sensors.find(s => s.id === id);
   }
 
-  /** Items visible on the shown page (page 0 = every page). */
+  /** Items of the shown page (page 0 = every page). */
   visibleItems(): ItemState[] {
     return this.itemList.filter(i => i.page === 0 || i.page === this.shownPage);
   }
 
-  /** Key positions that have a module behind them (any connector that is not empty). */
+  /** Key positions the firmware found a switch for (the keys of every module). */
   physicalKeys(): number[] {
+    if (this.keyPositions.length) return [...this.keyPositions];
     const out: number[] = [];
     this.connectors.forEach((kind, id) => {
       if (kind !== 0) out.push(id * 2 + 1, id * 2 + 2);
@@ -274,280 +475,253 @@ export class DeviceState {
     return () => { this.listeners.delete(listener); };
   }
 
-  // --- writing (not from scripts) ---------------------------------------------------
+  // --- the virtual hardware ---------------------------------------------------------
 
-  /** A sensor's reading (the emulator's setSensor). */
+  /** A hardware sensor's reading (ids 1..5), in the sensor's unit. false: no such hardware sensor. */
   setSensor(id: number, value: number): boolean {
-    const sensor = this.sensor(id);
-    if (!sensor) return false;
-    if (sensor.value !== value) {
-      sensor.value = value;
+    if (!this.sensorIds.includes(id) || !SENSOR_INPUT[id]) return false;
+    if (this.readings.get(id) !== value) {
+      this.readings.set(id, value);
+      const sensor = this.sensor(id);
+      if (sensor) sensor.value = value;
       this.emit({ kind: 'sensor', id });
     }
     return true;
   }
 
-  /** The length of the LED strip (the firmware's NUMBER_OF_LEDS; the emulator sets it). All LEDs off. */
-  setLedCount(count: number): void {
-    this.leds = Array.from({ length: count }, (_, index) => ({ index, r: 0, g: 0, b: 0 }));
+  /** What the firmware samples of a sensor it computes itself (memory), for display. */
+  noteSensorValue(id: number, value: number): void {
+    const sensor = this.sensor(id);
+    if (!sensor || sensor.input >= 0 || sensor.value === value) return;
+    sensor.value = value;
+    this.emit({ kind: 'sensor', id });
   }
 
-  /** Replaces the configuration: all runtime state is gone. */
-  load(config: unknown): void {
-    this.config = isObj(config) ? config : {};
-    const cfg = this.config;
-    const core = isObj(cfg.core) ? cfg.core : {};
-    this.deviceName = typeof core.name === 'string' ? core.name : '';
-    this.brokers = (Array.isArray(cfg.brokers) ? cfg.brokers : []).filter(isObj).map((b, index) => ({
-      index,
-      name: text(b.brokerid) || `broker${index}`,
-      url: text(b.url),
-      hassDiscovery: b.hassdiscovery === true,
-    }));
-    this.fonts = fontTable(cfg);
-    this.connectors = this.options.connectors ? [0, 1, 2, 3].map(i => this.options.connectors![i] ?? 0) : this.inferConnectors(cfg);
-    this.setLedCount(this.leds.length || 12);
-    this.sensors = (this.options.sensors ?? DEFAULT_SENSORS).map(s => ({ online: true, value: 0, ...s }));
-    this.buildFromConfig();
+  /** A key's switch: held or not. */
+  setKey(position: number, held: boolean): void {
+    const bit = 1 << (position - 1);
+    this.keysUp = held ? this.keysUp & ~bit : this.keysUp | bit;
+  }
+
+  /** Positions held now. */
+  heldKeys(): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < 8; i++) if ((this.keysUp & (1 << i)) === 0) out.push(i + 1);
+    return out;
+  }
+
+  /** The pins of the left and right key switch on a connector's port expander (include/pins.h, from the wasm). */
+  setSwitchPins(left: number, right: number): void {
+    this.switchPins = [left, right];
+  }
+
+  /** A script (re)starts: tells the listeners to redraw everything. */
+  noteRestart(): void {
     this.emit({ kind: 'reset' });
   }
 
-  /**
-   * ConfigManager::restoreConfigState(): what a script changed goes back to
-   * config.json. Sensors keep their readings (they are not script state).
-   */
-  restoreConfigState(): void {
-    this.buildFromConfig();
-    for (const led of this.leds) led.r = led.g = led.b = 0;
-    this.emit({ kind: 'reset' });
-  }
-
-  // --- the seam ----------------------------------------------------------------
-
-  /** The groups of EmulatorHost this state implements. */
-  readonly host: Pick<EmulatorHost, 'keys' | 'leds' | 'display' | 'lists' | 'images' | 'fonts' | 'sensors' | 'topology'> = {
-    keys: this.keysHost(),
-    leds: this.ledsHost(),
-    display: this.displayHost(),
-    lists: this.listsHost(),
-    images: this.imagesHost(),
-    fonts: this.fontsHost(),
-    sensors: this.sensorsHost(),
-    topology: this.topologyHost(),
+  readonly hardware: HardwareHost = {
+    i2cProbe: (bus, address) => {
+      if (bus === 1) return address >= MCP_BASE && address < MCP_BASE + 4 && this.connectors[address - MCP_BASE] !== 0;
+      return this.sensorIds.some(id => SENSOR_INPUT[id]?.address === address);
+    },
+    // Every pin reads high, except: pin 1 of a main display module (how the
+    // firmware's scanner tells it from a bar), and the switch of a held key.
+    mcpGpio: address => {
+      const connector = address - MCP_BASE;
+      let pins = 0xff;
+      if (this.connectors[connector] === 2) pins &= ~(1 << 1);
+      if ((this.keysUp & (1 << (connector * 2))) === 0) pins &= ~(1 << this.switchPins[0]);
+      if ((this.keysUp & (1 << (connector * 2 + 1))) === 0) pins &= ~(1 << this.switchPins[1]);
+      return pins;
+    },
+    sensorRead: input => {
+      for (const [id, spec] of Object.entries(SENSOR_INPUT)) {
+        if (spec.input === input) return (this.readings.get(Number(id)) ?? 0) * spec.scale;
+      }
+      return 0;
+    },
+    led: (index, r, g, b) => {
+      while (this.leds.length <= index) this.leds.push({ index: this.leds.length, r: 0, g: 0, b: 0 });
+      const led = this.leds[index]!;
+      if (led.r === r && led.g === g && led.b === b) return;
+      led.r = r;
+      led.g = g;
+      led.b = b;
+      this.emit({ kind: 'led', index });
+    },
+    mediaExists: key => this.mediaExists(key),
   };
 
-  private keysHost(): KeysHost {
-    const set = <F extends 'label' | 'topLabel' | 'icon'>(position: number, field: F, value: string): boolean => {
-      const key = this.key(position);
-      if (!key) return false;
-      if (key[field] !== value) {
-        key[field] = value;
-        this.emit({ kind: 'key', position, field });
+  // --- what the firmware reports ----------------------------------------------------------
+
+  readonly display: DisplayHost = {
+    state: (kind: StateKind, record: unknown) => {
+      switch (kind) {
+        case 'device': this.applyDevice(record as DeviceRecord); break;
+        case 'item': this.applyItem(record as ItemRecord); break;
+        case 'item-gone': this.removeItem((record as { id: number }).id); break;
+        case 'key': this.applyKey(record as KeyRecord); break;
+        case 'list': this.applyList(record as ListRecord); break;
+        case 'image': this.applyImage(record as ImageRecord); break;
+        case 'clock': this.applyClock(record as ClockState); break;
+        case 'page': this.applyPage((record as { page: number }).page); break;
+        default: break;
       }
-      return true;
-    };
-    const font = (position: number, value: FontChoice | null, top: boolean): boolean => {
-      const key = this.key(position);
-      if (!key) return false;
-      const field = top ? 'topFont' : 'font';
-      if (!sameFont(key[field], value)) {
-        key[field] = value;
-        this.emit({ kind: 'key', position, field });
-      }
-      return true;
-    };
-    return {
-      getLabel: position => this.key(position)?.label ?? null,
-      getTopLabel: position => this.key(position)?.topLabel ?? null,
-      setLabel: (position, value) => set(position, 'label', value),
-      setTopLabel: (position, value) => set(position, 'topLabel', value),
-      setIcon: (position, name) => set(position, 'icon', name),
-      setFont: (position, value, top) => font(position, { ...value }, top),
-      restoreFont: (position, top) => font(position, null, top),
-      findByName: name => this.keyNames.get(name) ?? null,
-    };
+    },
+  };
+
+  private applyDevice(r: DeviceRecord): void {
+    this.deviceName = r.name;
+    this.firmware = r.firmware;
+    this.model = r.model;
+    this.timezone = r.timezone;
+    this.connectors = [0, 1, 2, 3].map(i => (r.connectors[i] ?? 0) as ConnectorKind);
+    this.keyPositions = [...r.keys];
+    this.keyDisplays = [...r.keyDisplays];
+    while (this.leds.length < r.leds) this.leds.push({ index: this.leds.length, r: 0, g: 0, b: 0 });
+    this.brokers = r.brokers.map(b => ({ index: b.index, name: b.name, url: b.url, hassDiscovery: b.discovery }));
+    this.sensors = r.sensors.map(s => ({
+      ...s,
+      value: s.input >= 0 ? this.readings.get(s.id) ?? 0 : this.sensor(s.id)?.value ?? 0,
+    }));
+    this.fonts = r.fonts;
+    this.styles = r.styles;
+    this.emit({ kind: 'device' });
   }
 
-  private ledsHost(): LedsHost {
-    return {
-      setColor: (index, r, g, b) => {
-        const led = this.leds[index];
-        if (!led || !Number.isInteger(index)) return false;
-        if (led.r !== r || led.g !== g || led.b !== b) {
-          led.r = r;
-          led.g = g;
-          led.b = b;
-          this.emit({ kind: 'led', index });
-        }
-        return true;
-      },
+  private applyItem(r: ItemRecord): void {
+    const old = this.item(r.id);
+    const box = r.box;
+    const item: ItemState = {
+      id: r.id,
+      ...(r.order >= 0 && this.itemRefs[r.order] ? { ref: this.itemRefs[r.order] } : {}),
+      ...(r.name ? { name: r.name } : {}),
+      x: r.x, y: r.y, width: r.width, boxType: r.boxType, fontSize: r.fontSize, align: r.align, round: r.round,
+      page: r.page,
+      // Drawn: what is on the display. Not drawn: what the item holds for when its page comes.
+      label: box ? box.caption.text : r.now.label,
+      value: box ? box.value.text : r.now.value,
+      unit: box ? box.unit.text : r.now.unit,
+      icon: box ? box.icon?.name ?? box.icon?.key ?? '' : r.now.icon,
+      font: box ? fontChoice(box.value.font) : old?.font ?? null,
+      box,
     };
+    if (!old) {
+      this.itemList.push(item);
+      this.emit({ kind: 'item-added', id: r.id });
+      return;
+    }
+    // The same object stays the item (a renderer may hold it); its fields change.
+    const was = { ...old };
+    Object.assign(old, item);
+    const changed = (field: Extract<StateChange, { kind: 'item' }>['field']): void =>
+      this.emit({ kind: 'item', id: r.id, field });
+    // A part that is drawn differently (other runs, fonts, colours) changed too;
+    // a box that only came or went with its page did not change the texts.
+    const redrawn = <K extends 'caption' | 'value' | 'unit' | 'icon'>(part: K): boolean =>
+      !!was.box && !!box && !same(was.box[part], box[part]);
+    if (was.label !== item.label || redrawn('caption')) changed('label');
+    if (was.value !== item.value || redrawn('value')) changed('value');
+    if (was.unit !== item.unit || redrawn('unit')) changed('unit');
+    if (was.icon !== item.icon || redrawn('icon')) changed('icon');
+    if (!same(was.font, item.font)) changed('font');
+    if (was.x !== item.x || was.y !== item.y) changed('position');
+    if (was.page !== item.page) changed('page');
+    if (!was.box !== !box) changed('shown');
   }
 
-  private displayHost(): DisplayHost {
-    const setText = (id: number, field: 'label' | 'value' | 'unit' | 'icon', value: string): boolean => {
-      const item = this.item(id);
-      if (!item) return false;
-      if (item[field] !== value) {
-        item[field] = value;
-        this.emit({ kind: 'item', id, field });
-      }
-      return true;
-    };
-    const setFont = (id: number, value: FontChoice | null): boolean => {
-      const item = this.item(id);
-      if (!item) return false;
-      if (!sameFont(item.font, value)) {
-        item.font = value;
-        this.emit({ kind: 'item', id, field: 'font' });
-      }
-      return true;
-    };
-    return {
-      create: spec => {
-        const id = this.nextItemId++;
-        const item: ItemState = {
-          id, x: spec.x, y: spec.y, width: spec.width, boxType: spec.boxType, fontSize: spec.fontSize,
-          align: spec.alignment, round: spec.round, page: spec.page,
-          label: spec.label, value: '', unit: spec.unit, icon: '', font: null,
-        };
-        this.configured.set(item, { label: spec.label, unit: spec.unit });
-        this.itemList.push(item);
-        this.emit({ kind: 'item-added', id });
-        return id;
-      },
-      remove: id => {
-        const at = this.itemList.findIndex(i => i.id === id);
-        if (at < 0) return false;
-        const [item] = this.itemList.splice(at, 1);
-        // A config item is only parked: it comes back at a restart.
-        if (item!.ref) this.parked.push(item!);
-        this.emit({ kind: 'item-removed', id });
-        return true;
-      },
-      findByName: name => this.itemNames.get(name) ?? null,
-      count: () => this.itemList.length,
-      getInfo: id => {
-        const item = this.item(id);
-        if (!item) return null;
-        const configured = this.configured.get(item);
-        return {
-          id: item.id, x: item.x, y: item.y, width: item.width, boxType: item.boxType, fontSize: item.fontSize,
-          alignment: item.align, label: configured?.label ?? item.label, unit: configured?.unit ?? item.unit,
-          round: item.round, page: item.page,
-        };
-      },
-      allIds: () => this.itemList.map(i => i.id),
-      setLabel: (id, value) => setText(id, 'label', value),
-      setValue: (id, value) => setText(id, 'value', value),
-      setUnit: (id, value) => setText(id, 'unit', value),
-      setIcon: (id, name) => setText(id, 'icon', name),
-      setFont: (id, value) => setFont(id, { ...value }),
-      restoreFont: id => setFont(id, null),
-      setPosition: (id, x, y) => {
-        const item = this.item(id);
-        if (!item) return false;
-        if (item.x !== x || item.y !== y) {
-          item.x = x;
-          item.y = y;
-          this.emit({ kind: 'item', id, field: 'position' });
-        }
-        return true;
-      },
-      setPage: (id, page) => {
-        const item = this.item(id);
-        if (!item) return false;
-        if (item.page !== page) {
-          item.page = page;
-          this.emit({ kind: 'item', id, field: 'page' });
-        }
-        return true;
-      },
-      showPage: page => {
-        if (page < 1) return false;
-        if (this.shownPage !== page) {
-          this.shownPage = page;
-          this.emit({ kind: 'page', page });
-        }
-        return true;
-      },
-      shownPage: () => this.shownPage,
-    };
+  private removeItem(id: number): void {
+    const at = this.itemList.findIndex(i => i.id === id);
+    if (at < 0) return;
+    this.itemList.splice(at, 1);
+    this.emit({ kind: 'item-removed', id });
   }
 
-  private listsHost(): ListsHost {
-    const setFont = (index: number, value: FontChoice | null): boolean => {
-      const list = this.lists[index];
-      if (!list) return false;
-      if (!sameFont(list.font, value)) {
-        list.font = value;
-        this.emit({ kind: 'list', index, field: 'font' });
-      }
-      return true;
+  private applyKey(r: KeyRecord): void {
+    const d = r.display;
+    const key: KeyState = {
+      position: r.position,
+      ...(this.keyRefs[r.order] ? { ref: this.keyRefs[r.order] } : {}),
+      ...(r.name ? { name: r.name } : {}),
+      page: r.page,
+      label: d ? d.label.text : r.label,
+      topLabel: d ? d.topLabel.text : r.topLabel,
+      icon: d ? d.icon?.name ?? d.icon?.key ?? '' : '',
+      font: d ? fontChoice(d.label.font) : null,
+      topFont: d ? fontChoice(d.topLabel.font) : null,
+      display: d,
     };
-    return {
-      findByName: name => this.listNames.get(name) ?? -1,
-      count: index => this.lists[index]?.items.length ?? -1,
-      selected: index => this.lists[index]?.selected ?? -1,
-      setSelected: (index, selected) => {
-        const list = this.lists[index];
-        if (!list || list.selected === selected) return;
-        list.selected = selected;
-        this.emit({ kind: 'list', index, field: 'selected' });
-      },
-      setItems: (index, items, selected) => {
-        const list = this.lists[index];
-        if (!list) return;
-        list.items = [...items];
-        this.emit({ kind: 'list', index, field: 'items' });
-        if (list.selected !== selected) {
-          list.selected = selected;
-          this.emit({ kind: 'list', index, field: 'selected' });
-        }
-      },
-      setFont: (index, value) => setFont(index, { ...value }),
-      restoreFont: index => setFont(index, null),
-    };
+    const current = this.keyList[r.order];
+    if (!current) {
+      this.keyList[r.order] = key;
+      return;
+    }
+    const old = { ...current };
+    Object.assign(current, key);
+    const changed = (field: Extract<StateChange, { kind: 'key' }>['field']): void =>
+      this.emit({ kind: 'key', position: r.position, field });
+    if (!same(old.display?.label, d?.label) || old.label !== key.label) changed('label');
+    if (!same(old.display?.topLabel, d?.topLabel) || old.topLabel !== key.topLabel) changed('topLabel');
+    if (!same(old.display?.icon, d?.icon)) changed('icon');
+    if (!same(old.font, key.font)) changed('font');
+    if (!same(old.topFont, key.topFont)) changed('topFont');
   }
 
-  private imagesHost(): ImagesHost {
-    return {
-      findByName: name => this.imageNames.get(name) ?? -1,
-      exists: index => this.images[index] !== undefined,
-      set: (index, kind, value) => {
-        const image = this.images[index];
-        if (!image) return;
-        const next = value === '' ? 'none' : kind;
-        if (image.kind === next && image.value === value) return;
-        image.kind = next;
-        image.value = value;
-        this.emit({ kind: 'image', index });
-      },
+  private applyList(r: ListRecord): void {
+    const old = this.lists[r.index];
+    const name = r.name ?? '';
+    const ref = refByName(this.config, 'lists', 'list', r.name);
+    const list: ListState = {
+      index: r.index, ...(ref ? { ref } : {}), name, page: r.page, items: r.items, selected: r.selected,
+      font: fontChoice(r.roller?.font), roller: r.roller,
     };
+    if (!old) {
+      this.lists[r.index] = list;
+      return;
+    }
+    const was = { ...old };
+    Object.assign(old, list);
+    const changed = (field: Extract<StateChange, { kind: 'list' }>['field']): void =>
+      this.emit({ kind: 'list', index: r.index, field });
+    if (!same(was.items, list.items)) changed('items');
+    if (was.selected !== list.selected) changed('selected');
+    if (was.roller && list.roller && !same(was.roller.font, list.roller.font)) changed('font');
+    if (!was.roller !== !list.roller) changed('shown');
   }
 
-  private fontsHost(): FontsHost {
-    return {
-      find: name => findFace(this.fonts, name),
-      findId: id => findFace(this.fonts, id),
+  private applyImage(r: ImageRecord): void {
+    const old = this.images[r.index];
+    const ref = refByName(this.config, 'images', 'image', r.name);
+    const image: ImageState = {
+      index: r.index, ...(ref ? { ref } : {}), name: r.name ?? '', page: r.page, x: r.x, y: r.y, width: r.width,
+      height: r.height, kind: r.kind, value: r.value, raster: r.raster,
     };
+    if (!old) {
+      this.images[r.index] = image;
+      return;
+    }
+    Object.assign(old, image);
+    this.emit({ kind: 'image', index: r.index });
   }
 
-  private sensorsHost(): SensorsHost {
-    return { sample: id => this.sensor(id)?.value ?? 0 };
+  private applyClock(r: ClockState): void {
+    const old = this.clocks[r.index];
+    if (!old) {
+      this.clocks[r.index] = r;
+      return;
+    }
+    Object.assign(old, r);
+    this.emit({ kind: 'clock', index: r.index });
   }
 
-  private topologyHost(): TopologyHost {
-    return {
-      connectorType: connector => (connector >= 0 && connector < this.connectors.length ? this.connectors[connector]! : -1),
-      mainConnector: () => this.connectors.indexOf(2),
-    };
+  private applyPage(page: number): void {
+    if (this.shownPage === page) return;
+    this.shownPage = page;
+    this.emit({ kind: 'page', page });
   }
 
-  // --- from config.json -----------------------------------------------------------
-
-  /** The configured caption and unit of an item (displayitem_get_info reports these, not the shown texts). */
-  private configured = new WeakMap<ItemState, { label: string; unit: string }>();
+  // --- from config.json: the hardware ---------------------------------------------------
 
   private inferConnectors(cfg: Obj): ConnectorKind[] {
     const out: ConnectorKind[] = [0, 0, 0, 0];
@@ -558,119 +732,17 @@ export class DeviceState {
       }
       return out;
     }
-    for (const e of entries(cfg, ['buttons', 'mqttbuttons'])) {
-      const button = mapButton(e.raw);
-      const connector = button ? Math.floor((button.position - 1) / 2) : -1;
-      if (connector >= 0 && connector < out.length) out[connector] = 1;
+    for (const key of ['mqttbuttons', 'buttons']) {
+      const arr = cfg[key];
+      for (const raw of Array.isArray(arr) ? arr : []) {
+        const button = mapButton(raw);
+        const connector = button ? Math.floor((button.position - 1) / 2) : -1;
+        if (connector >= 0 && connector < out.length) out[connector] = 1;
+      }
     }
     const free = out.indexOf(0);
     if (free >= 0) out[free] = 2;
     return out;
-  }
-
-  private buildFromConfig(): void {
-    const cfg = this.config;
-    // The names scripts can use: valid and first-wins, as the firmware's
-    // name table (config-model.ts configNames).
-    const names = configNames(cfg);
-    const usable = (kind: readonly string[], name: unknown, taken: Map<string, number>): name is string =>
-      typeof name === 'string' && NAME_PATTERN.test(name) && kind.includes(name) && !taken.has(name);
-
-    // Display items, with the defaults of the firmware's DisplayItem (x 0,
-    // y 0, width 100, page 1). Ids as ConfigManager gives them: the
-    // configured "displayitemid", else one above every configured id; each
-    // item takes a number from the counter whether it uses it or not.
-    const itemEntries = entries(cfg, ['mqttdisplays', 'displayitems']).filter(e => isObj(e.raw));
-    let nextId = 1 + itemEntries.reduce((max, e) => Math.max(max, configuredItemId(e.raw as Obj)), 0);
-    this.itemList = [];
-    this.parked = [];
-    this.itemNames = new Map();
-    for (const e of itemEntries) {
-      const raw = e.raw as Obj;
-      let id = nextId++;
-      const wanted = configuredItemId(raw);
-      if (wanted) id = wanted;
-      if (this.itemList.some(i => i.id === id)) id = nextId++;
-      const item: ItemState = {
-        id,
-        ref: { kind: 'displayitem', list: e.list, index: e.index },
-        x: int(raw.x, 0),
-        y: int(raw.y, 0),
-        width: int(raw.width, 100),
-        boxType: int(raw.boxtype, 0),
-        fontSize: int(raw.fontsize, 0),
-        align: int(raw.align, 0),
-        round: int(raw.round, 0),
-        page: int(raw.page, 1),
-        label: text(raw.label),
-        value: '',
-        unit: text(raw.unit),
-        icon: isIconName(raw.icon) ? raw.icon : '',
-        font: null,
-      };
-      if (usable(names.displayItems, raw.name, this.itemNames)) {
-        item.name = raw.name;
-        this.itemNames.set(raw.name, id);
-      }
-      this.configured.set(item, { label: item.label, unit: item.unit });
-      this.itemList.push(item);
-    }
-    // display.create() continues from here; a restart comes back to it.
-    this.nextItemId = nextId;
-
-    // Keys: the first config entry of a position, on a connector with a module.
-    this.keyList = [];
-    this.keyNames = new Map();
-    for (const e of entries(cfg, ['buttons', 'mqttbuttons'])) {
-      const button = mapButton(e.raw);
-      if (!button) continue;
-      const position = button.position;
-      const raw = e.raw as Obj;
-      if (usable(names.keys, raw.name, this.keyNames)) this.keyNames.set(raw.name, position);
-      if (this.keyList.some(k => k.position === position)) continue;
-      if ((this.connectors[Math.floor((position - 1) / 2)] ?? 0) === 0) continue;
-      this.keyList.push({
-        position,
-        ref: { kind: 'button', list: e.list, index: e.index },
-        ...(button.name !== undefined && this.keyNames.get(button.name) === position ? { name: button.name } : {}),
-        label: button.label,
-        topLabel: button.topLabel,
-        icon: button.icon ?? '',
-        font: null,
-        topFont: null,
-      });
-    }
-    this.keyList.sort((a, b) => a.position - b.position);
-
-    // Lists and images: only entries with a valid name exist (config-model.ts).
-    this.lists = [];
-    this.listNames = new Map();
-    (Array.isArray(cfg.lists) ? cfg.lists : []).forEach((raw, index) => {
-      const list = mapList(raw);
-      if (!list) return;
-      const at = this.lists.length;
-      if (!this.listNames.has(list.name)) this.listNames.set(list.name, at);
-      this.lists.push({
-        index: at, ref: { kind: 'list', list: 'lists', index }, name: list.name,
-        items: [...list.items], selected: list.selected, font: null,
-      });
-    });
-    this.images = [];
-    this.imageNames = new Map();
-    (Array.isArray(cfg.images) ? cfg.images : []).forEach((raw, index) => {
-      const image = mapImage(raw);
-      if (!image) return;
-      const at = this.images.length;
-      if (!this.imageNames.has(image.name)) this.imageNames.set(image.name, at);
-      // An icon wins over a src when both are given, as on the device.
-      const kind = image.icon ? 'icon' : image.src ? 'src' : 'none';
-      this.images.push({
-        index: at, ref: { kind: 'image', list: 'images', index }, name: image.name,
-        kind, value: image.icon ?? image.src ?? '',
-      });
-    });
-
-    this.shownPage = 1;
   }
 
   private emit(change: StateChange): void {

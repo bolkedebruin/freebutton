@@ -12,19 +12,30 @@
  *                   publish as it is
  *   live-readonly   connected to a real broker, subscriptions only; every
  *                   publish is blocked and logged as "would publish"
- *   live-publish    publishes go out, under these rules:
- *                   1. identity: the real device's id in a topic becomes the
- *                      virtual identity (virt_btn_xxxxxx)
- *                   2. Home Assistant discovery and availability topics (what
- *                      the firmware publishes by itself) are blocked unless
- *                      allowDiscovery
- *                   3. a topic that is not under the virtual identity is a
- *                      topic written literally in config.json or the script:
- *                      blocked unless it matches an entry of allowTopics
- *                   4. retain is cleared unless allowRetain
+ *   live-publish    publishes go out, under these rules, in this order:
+ *                   1. identity (only with `realId`): that id in a topic
+ *                      becomes the virtual identity (virt_btn_xxxxxx)
+ *                   2. announcements: Home Assistant discovery and
+ *                      availability (a publish of kind 'discovery' or
+ *                      'availability', or to such a topic) are blocked
+ *                      unless allowDiscovery
+ *                   3. a real device's topic (with `askRealDevice`): a topic
+ *                      that names a device id (btn_ + 6 hex) is that
+ *                      device's. Published there, a virtual key press acts
+ *                      as the real device: blocked ('real-device') unless
+ *                      the exact topic is in realTopics. The caller asks
+ *                      the user and publishes when the answer is yes.
+ *                   4. `allowTopics`, when given: a topic that is not the
+ *                      virtual device's own must match one of its filters
+ *                   5. retain is cleared unless allowRetain
+ *                   With `holdStates`: the firmware's own periodic reports
+ *                   (kind 'sensor' or 'state': about eight a second, under
+ *                   the virtual identity) are blocked ('own-state') unless
+ *                   allowStates. They are harmless and noisy.
  *
- * Stage 1 uses only `offline` (MockBroker); the live modes are here so the
- * WebSocket transport of stage 3 has nothing to decide.
+ * A topic is the virtual device's own when it names the virtual identity as
+ * a whole token (isOwnTopic): what the firmware builds from its device id
+ * and what a script builds from system.id(). Those are never asked about.
  */
 
 export type PublishMode = 'offline' | 'live-readonly' | 'live-publish';
@@ -58,6 +69,13 @@ export interface PublishRequest {
   retain: boolean;
   /** 'script': mqtt.publish(); 'firmware': what the firmware sends by itself (discovery, availability, key events). */
   origin: 'script' | 'firmware';
+  /**
+   * What a firmware publish is, when the sender knows: 'discovery' and
+   * 'availability' announce the device to Home Assistant; 'sensor' and
+   * 'state' are its periodic reports; 'press' is a key's default action;
+   * 'script' is mqtt.publish().
+   */
+  kind?: string;
 }
 
 export interface PublishPolicy {
@@ -66,8 +84,19 @@ export interface PublishPolicy {
   virtualId: string;
   /** The device the config and script were written for (btn_xxxxxx); its id in a topic is rewritten. */
   realId?: string;
-  /** MQTT topic filters ('+', '#') for literal topics that may be published in live-publish. */
+  /**
+   * When given: MQTT topic filters ('+', '#') for the topics outside the
+   * virtual device that may be published in live-publish; others are
+   * blocked. Absent: no such limit.
+   */
   allowTopics?: readonly string[];
+  /** live-publish: the firmware's periodic reports (kind 'sensor' / 'state') are blocked unless allowStates. */
+  holdStates?: boolean;
+  allowStates?: boolean;
+  /** live-publish: a topic that names a real device id is blocked unless it is in realTopics. */
+  askRealDevice?: boolean;
+  /** Exact topics of real devices the user allowed. */
+  realTopics?: ReadonlySet<string> | readonly string[];
   /** live-publish: let Home Assistant discovery and availability through. */
   allowDiscovery?: boolean;
   /** live-publish: keep the retain flag. */
@@ -86,8 +115,12 @@ export interface PublishDecision {
   rewritten: boolean;
   /** The retain flag was cleared. */
   retainCleared: boolean;
-  /** Why, in a word: 'offline' | 'read-only' | 'discovery' | 'not-allowed' | 'own-topic' | 'allowed'. */
-  reason: 'offline' | 'read-only' | 'discovery' | 'not-allowed' | 'own-topic' | 'allowed';
+  /** Why, in a word. */
+  reason: 'offline' | 'read-only' | 'discovery' | 'own-state' | 'real-device' | 'not-allowed' | 'own-topic' | 'allowed';
+  /** reason 'real-device' (and a real device's topic that was allowed): the device the topic names. */
+  realDeviceId?: string;
+  /** The publish announces the device to Home Assistant (discovery or availability). */
+  announce?: boolean;
   /** For a blocked publish: the console line ("would publish ..."). */
   log?: string;
 }
@@ -128,6 +161,28 @@ export function isDiscoveryOrAvailability(topic: string): boolean {
   return slash > 0 && rest.slice(slash) === '/status';
 }
 
+/**
+ * The real device a topic names: "btn_" + 6 hex digits as a token
+ * ("buttonplus/btn_a00001/cover/set", "homeassistant/event/btn_a00001_key1/config").
+ * Not the virtual identity ("virt_btn_a00001"). Null: none.
+ */
+export function realDeviceIn(topic: string): string | null {
+  const match = /(?:^|[^A-Za-z0-9_])(btn_[0-9a-f]{6})(?![0-9a-f])/.exec(topic);
+  return match ? match[1]! : null;
+}
+
+/** A publish that announces the device to Home Assistant. */
+export function isAnnouncement(request: Pick<PublishRequest, 'topic' | 'kind'>): boolean {
+  if (request.kind === 'discovery' || request.kind === 'availability') return true;
+  // A script's publish (kind 'script'), or a sender that gives no kind: by the topic.
+  return (request.kind === undefined || request.kind === 'script') && isDiscoveryOrAvailability(request.topic);
+}
+
+/** The firmware's own periodic reports: its sensors' states and the like. */
+export function isPeriodicState(request: Pick<PublishRequest, 'origin' | 'kind'>): boolean {
+  return request.origin === 'firmware' && (request.kind === 'sensor' || request.kind === 'state');
+}
+
 const exactMatch: TopicMatcher = (filter, topic) => filter === topic;
 
 function wouldPublish(request: PublishRequest, topic: string, why: string): string {
@@ -152,17 +207,36 @@ export function decidePublish(
 
   const topic = rewriteIdentity(request.topic, policy);
   const rewritten = topic !== request.topic;
-  const base = { topic, rewritten };
+  const announce = isAnnouncement({ topic, kind: request.kind });
+  const base = { topic, rewritten, ...(announce ? { announce } : {}) };
 
-  if (isDiscoveryOrAvailability(topic) && !policy.allowDiscovery) {
+  if (announce && !policy.allowDiscovery) {
     return {
       action: 'block', ...base, retain: request.retain, retainCleared: false, reason: 'discovery',
-      log: wouldPublish(request, topic, 'Home Assistant discovery and availability are off for the emulator'),
+      log: wouldPublish(request, topic, 'announcing the virtual device to Home Assistant is off'),
+    };
+  }
+
+  if (policy.holdStates && !policy.allowStates && isPeriodicState(request)) {
+    return {
+      action: 'block', ...base, retain: request.retain, retainCleared: false, reason: 'own-state',
+      log: wouldPublish(request, topic, 'the virtual device\'s own sensor and state reports are off'),
     };
   }
 
   const own = isOwnTopic(topic, policy.virtualId);
-  if (!own && !(policy.allowTopics ?? []).some(filter => matches(filter, topic))) {
+  const realDeviceId = own ? null : realDeviceIn(topic);
+  if (policy.askRealDevice && realDeviceId) {
+    const allowed = policy.realTopics instanceof Set ? policy.realTopics.has(topic) : (policy.realTopics as readonly string[] | undefined ?? []).includes(topic);
+    if (!allowed) {
+      return {
+        action: 'block', ...base, retain: request.retain, retainCleared: false, reason: 'real-device', realDeviceId,
+        log: wouldPublish(request, topic, `the topic belongs to the real device ${realDeviceId}`),
+      };
+    }
+  }
+
+  if (!own && policy.allowTopics && !policy.allowTopics.some(filter => matches(filter, topic))) {
     return {
       action: 'block', ...base, retain: request.retain, retainCleared: false, reason: 'not-allowed',
       log: wouldPublish(request, topic, 'a topic outside the virtual device; add it to the allow list to publish it'),
@@ -173,5 +247,6 @@ export function decidePublish(
   return {
     action: 'send', ...base, retain, retainCleared: request.retain && !retain,
     reason: own ? 'own-topic' : 'allowed',
+    ...(realDeviceId && policy.askRealDevice ? { realDeviceId } : {}),
   };
 }

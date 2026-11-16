@@ -4,13 +4,15 @@
 # (docs/EMULATOR.md, web/src/js/emulator/).
 #
 # Unlike build_wasm.sh (compile only, hardware APIs stubbed), this one links
-# the firmware's own JavaScript glue (src/scripting/mquickjs_stdlib.c with
-# src/scripting/js/*.c), the fb tree builder (device_hardware.cpp), the MQTT
-# script binding with its event ring (mqtt_binding.cpp, mqtt/Registry.cpp,
-# mqtt/Component.cpp), the sensor binding (sensor_binding.cpp) and the key
-# timing (drivers/PushButton.cpp), plus the runner and the seam of
-# tools/js/emulator/. What is left undefined is the device state: wasm imports
-# that web/src/js/emulator/wasm.ts implements.
+# the firmware itself, as far as it is not hardware or LVGL: the script engine
+# with its JavaScript glue and bindings (src/scripting), ConfigManager and the
+# components (display items, keys, lists, images, clocks, topics), the MQTT
+# brokers with Home Assistant discovery, the hardware scan with the key and
+# LED drivers, the sensors, and the pure UI rules (text markup, style
+# cascade, fonts, box layout). The list is FIRMWARE_CXX / FIRMWARE_C below.
+# Underneath are the runner and shims of tools/js/emulator/ (FreeRTOS,
+# esp-mqtt, I2C, the LVGL widgets); what is left undefined is the outside
+# world: wasm imports that web/src/js/emulator/wasm.ts implements.
 #
 # Output: web/public/assets/fb-emulator.wasm (a plain wasm module, no
 # Emscripten JS loader: the loader is web/src/js/emulator/wasm.ts) and
@@ -29,7 +31,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MQ="$PROJECT_ROOT/lib/mquickjs"                 # engine (pinned submodule, READ-ONLY)
 SRC="$PROJECT_ROOT/src"                         # firmware sources, compiled as they are
 JS="$SRC/scripting/js"
-EMU="$SCRIPT_DIR/emulator"                      # runner.c, seam*.cpp, fbh.h, shim/
+EMU="$SCRIPT_DIR/emulator"                      # runner.c, device.cpp, *shim.cpp, seam_*.cpp, shim/
+LIBS="$PROJECT_ROOT/.pio/libdeps/native"        # ArduinoJson, RapidJSON (PlatformIO fetches them)
 OUT="$PROJECT_ROOT/web/public/assets"           # committed output location
 BUILD="$PROJECT_ROOT/.pio/emulator_wasm_build"  # scratch (keeps the submodule clean)
 
@@ -37,6 +40,14 @@ if ! command -v emcc &> /dev/null; then
     echo "Error: emcc (Emscripten) not found on PATH. Install: https://emscripten.org/" >&2
     exit 1
 fi
+
+for lib in ArduinoJson/src/ArduinoJson.h RapidJSON/include/rapidjson/reader.h; do
+    if [ ! -f "$LIBS/$lib" ]; then
+        echo "Error: $LIBS/$lib not found. The firmware's JSON libraries come from PlatformIO:" >&2
+        echo "  ~/.local/bin/pio pkg install -e native" >&2
+        exit 1
+    fi
+done
 
 echo "== FreeButton emulator wasm build =="
 emcc --version | head -1
@@ -71,41 +82,65 @@ MQTT_BUFFER="$(number_from "$PROJECT_ROOT/sdkconfig.esp32" '^CONFIG_MQTT_BUFFER_
 LOOP_DELAY="$(number_from "$SRC/main.cpp" '^    delay\(([0-9]+)\);$')"
 # NeoPixelController::NUMBER_OF_LEDS: the LED strip (led_hw_set_color's range).
 LED_COUNT="$(number_from "$SRC/drivers/NeoPixel.h" '.*NUMBER_OF_LEDS *= *([0-9]+);.*')"
+# esp-mqtt's event queue: > 1 lets another task wake the MQTT task (mqtt/Broker.cpp).
+MQTT_EVENT_QUEUE="$(number_from "$PROJECT_ROOT/sdkconfig.esp32" '^CONFIG_MQTT_EVENT_QUEUE_SIZE=([0-9]+)$')"
 echo "Step 2: key scan ${BUTTON_INTERVAL} ms, MQTT in-buffer ${MQTT_BUFFER} B, loop delay ${LOOP_DELAY} ms"
 
 # Step 3: compile and link.
 # -UEMSCRIPTEN: the glue's EMSCRIPTEN branches are for the compile-only wasm
 # (no load(), no js_bindings_reset); this build wants the firmware branches.
 echo "Step 3: compiling to WebAssembly..."
+rm -f "$BUILD"/*.d
 DEFS=(-DESP_PLATFORM -D_GNU_SOURCE -UEMSCRIPTEN
       -DFB_BUTTON_UPDATE_INTERVAL_MS="$BUTTON_INTERVAL"
       -DFB_MQTT_BUFFER_SIZE="$MQTT_BUFFER"
       -DFB_LOOP_DELAY_MS="$LOOP_DELAY"
-      -DFB_LED_COUNT="$LED_COUNT")
+      -DFB_LED_COUNT="$LED_COUNT"
+      -DCONFIG_MQTT_EVENT_QUEUE_SIZE="$MQTT_EVENT_QUEUE")
 # The shim comes first: it stands in for the headers of what is not there
 # (Arduino, FreeRTOS, esp-mqtt, LVGL, ConfigManager, the hardware scanner).
-INC=(-I"$EMU/shim" -I"$EMU" -I"$BUILD" -I"$MQ" -I"$SRC" -I"$SRC/scripting" -I"$JS" -I"$PROJECT_ROOT/include")
+INC=(-I"$EMU/shim" -I"$EMU" -I"$BUILD" -I"$MQ" -I"$SRC" -I"$SRC/scripting" -I"$JS" -I"$PROJECT_ROOT/include"
+     -I"$LIBS/ArduinoJson/src" -I"$LIBS/RapidJSON/include")
+# Three firmware headers are included by relative path from firmware sources
+# (drivers/LvglDisplay.h ...), where -I cannot put the shim first. Included up
+# front, the shim defines the firmware header's include guard.
+SHIM_FIRST=(-include drivers/LvglDisplay.h -include drivers/DisplayManager.h -include drivers/BusAwareFileSystem.h)
 # The two -Wno: warnings in firmware sources that the ESP32 toolchain does not give.
-CXXFLAGS=(-Oz -flto -std=gnu++20 -fno-exceptions -fno-rtti -Wno-format -Wno-defaulted-function-deleted)
+CXXFLAGS=(-Oz -flto -std=gnu++23 -fno-exceptions -fno-rtti -Wno-format -Wno-defaulted-function-deleted
+          -Wno-vla-cxx-extension -Wno-keyword-macro "${SHIM_FIRST[@]}")
 
 OBJS=()
 cxx() {  # <source> <object name>
-    em++ "${CXXFLAGS[@]}" "${DEFS[@]}" "${INC[@]}" -c "$1" -o "$BUILD/$2.o"
+    em++ "${CXXFLAGS[@]}" "${DEFS[@]}" "${INC[@]}" -MD -MF "$BUILD/$2.d" -c "$1" -o "$BUILD/$2.o"
     OBJS+=("$BUILD/$2.o")
 }
-cxx "$SRC/scripting/device_hardware.cpp" device_hardware
-cxx "$SRC/scripting/sensor_binding.cpp"  sensor_binding
-cxx "$SRC/drivers/PushButton.cpp"        PushButton
-cxx "$SRC/mqtt/Registry.cpp"             Registry
-cxx "$SRC/mqtt/Component.cpp"            Component
-cxx "$EMU/seam.cpp"                      seam
-cxx "$EMU/seam_mqtt.cpp"                 seam_mqtt
+# The firmware, unchanged. (mqtt_binding.cpp, button_hardware.cpp and
+# HomeAssistantDiscovery.cpp are compiled through the seam_*.cpp files that
+# include them.)
+FIRMWARE_CXX=(
+    scripting/device_hardware.cpp scripting/sensor_binding.cpp scripting/displayitem_binding.cpp
+    scripting/list_binding.cpp scripting/image_binding.cpp scripting/led_hardware.cpp
+    scripting/system_binding.cpp scripting/file_hardware.cpp
+    components/ConfigManager.cpp components/DisplayItem.cpp components/Button.cpp components/List.cpp
+    components/ImageItem.cpp components/Clock.cpp components/TopicHandler.cpp components/ButtonEventPlan.cpp
+    mqtt/Broker.cpp mqtt/Registry.cpp mqtt/Component.cpp mqtt/HaEntities.cpp mqtt/HaSlug.cpp
+    drivers/PushButton.cpp drivers/ButtonManager.cpp drivers/ButtonLed.cpp drivers/NeoPixel.cpp
+    drivers/Sensors.cpp drivers/HardwareScanner.cpp core/HardwareInitializer.cpp
+    ui/PendingRender.cpp ui/MainPage.cpp json/FilteredReaderHandler.cpp
+)
+FIRMWARE_C=(ui/style_logic.c ui/text_spans.c ui/fonts/font_logic.c ui/media_image_check.c)
+for f in "${FIRMWARE_CXX[@]}"; do
+    cxx "$SRC/$f" "fw_$(echo "${f%.cpp}" | tr '/' '_')"
+done
+for f in device ui_shim mqtt_client_shim seam_mqtt seam_discovery seam_button; do
+    cxx "$EMU/$f.cpp" "$f"
+done
 
 # The parser reports a syntax error with longjmp(). Without a JS loader that
 # needs the wasm exception instructions (every browser since 2022, Node 18).
 SJLJ=(-s SUPPORT_LONGJMP=wasm)
 cc() {  # <source> <object name>
-    emcc -Oz -flto "${SJLJ[@]}" "${DEFS[@]}" "${INC[@]}" -c "$1" -o "$BUILD/$2.o"
+    emcc -Oz -flto "${SJLJ[@]}" "${DEFS[@]}" "${INC[@]}" -MD -MF "$BUILD/$2.d" -c "$1" -o "$BUILD/$2.o"
     OBJS+=("$BUILD/$2.o")
 }
 cc "$MQ/mquickjs.c" mquickjs
@@ -113,6 +148,10 @@ cc "$MQ/cutils.c"   cutils
 cc "$MQ/dtoa.c"     dtoa
 cc "$MQ/libm.c"     libm
 cc "$EMU/runner.c"  runner
+cc "$EMU/tz.c"      tz
+for f in "${FIRMWARE_C[@]}"; do
+    cc "$SRC/$f" "fw_$(echo "${f%.c}" | tr '/' '_')"
+done
 
 # No JS loader (-o *.wasm, no entry point): the module's imports are the seam,
 # its exports the fbe_* functions (export_name in the sources).
@@ -135,7 +174,10 @@ em++ -Oz -flto "${OBJS[@]}" \
 # Step 4: the imports must be exactly the documented seam.
 python3 "$EMU/check_imports.py" "$OUT/fb-emulator.wasm" "$EMU/imports.txt"
 
-# Step 5: what this wasm was built from.
+# Step 5: what this wasm was built from. Every firmware and emulator file a
+# compilation read (the compilers' dependency lists) goes into sources.txt;
+# the stamp has a hash of each, so CI sees a stale wasm.
+python3 "$EMU/list_sources.py" "$PROJECT_ROOT" "$BUILD" > "$EMU/sources.txt"
 python3 "$SCRIPT_DIR/wasm_stdlib_fingerprint.py" --emulator-stamp "$BUILD" > "$OUT/fb-emulator.stamp.txt"
 
 echo ""

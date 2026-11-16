@@ -23,6 +23,12 @@ export interface MqttMessage {
   retain: boolean;
 }
 
+/** Who made a publish and what it is (publish-policy.ts PublishRequest origin / kind). */
+export interface PublishAbout {
+  origin?: 'script' | 'firmware';
+  kind?: string;
+}
+
 export interface ConnectOptions {
   /** The MQTT client id: the emulator's virtual identity, never a device's. */
   clientId: string;
@@ -35,7 +41,11 @@ export interface MqttTransport {
   disconnect(): void;
   subscribe(topic: string, qos: number): void;
   unsubscribe(topic: string): void;
-  publish(message: MqttMessage): void;
+  /**
+   * `about`: what the sender knows of the publish (who made it, what kind);
+   * a transport that decides what leaves the page (BrokerLink) uses it.
+   */
+  publish(message: MqttMessage, about?: PublishAbout): void;
   /** A message from the broker for one of the subscriptions. Returns the unsubscribe function. */
   onMessage(listener: (message: MqttMessage) => void): () => void;
   onState(listener: (state: TransportState) => void): () => void;
@@ -148,18 +158,12 @@ export class MockBroker implements MqttTransport {
 
   /**
    * The connection comes up or goes away (a broker restart, a network drop).
-   * Coming up, the client's subscriptions are made again (the firmware's
-   * resubscribeAll), so the broker sends their retained messages.
+   * Coming up, nothing is delivered by itself: the session is clean, the
+   * firmware makes its subscriptions again (resubscribeAll) and each of them
+   * gets the retained messages, as from a real broker.
    */
   setConnected(connected: boolean): void {
-    const was = this.current;
     this.setState(connected ? 'connected' : 'disconnected');
-    if (!connected || was === 'connected') return;
-    for (const topic of [...this.subs.keys()]) {
-      for (const message of [...this.retained.values()]) {
-        if (this.matches(topic, message.topic)) this.deliver({ ...message, retain: true });
-      }
-    }
   }
 
   subscribe(topic: string, qos: number): void {

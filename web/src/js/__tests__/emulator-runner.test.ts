@@ -4,7 +4,9 @@
  * keys with the firmware's long-press timing, errors, runaway scripts.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_WASM_URL, DEVICE_HEAP_BYTES, Emulator, ManualClock, MockBroker, loadEmulatorModule } from '../emulator';
+import {
+  DEFAULT_WASM_URL, DEVICE_HEAP_BYTES, Emulator, ManualClock, MockBroker, loadEmulatorModule, type MqttMessage, type PublishAbout,
+} from '../emulator';
 import { readFileSync } from 'node:fs';
 import { emulatorModule, makeEmulator, readRepoFile, BASIC_CONFIG, WASM_PATH } from './emulator-helpers';
 
@@ -123,14 +125,14 @@ describe('timers', () => {
   });
 
   it('does not poll: no timer is pending when the script has nothing to wait for', async () => {
-    const { emu, clock } = await makeEmulator({ sensors: [] });
+    const { emu, clock } = await makeEmulator();
     emu.run('var x = 1;');
     clock.advance(1000);
     expect(clock.timers).toBe(0);
   });
 
   it('a setTimeout chain keeps exactly one clock timer', async () => {
-    const { emu, clock, rec } = await makeEmulator({ sensors: [] });
+    const { emu, clock, rec } = await makeEmulator();
     emu.run('var n = 0; function tick() { n++; print(n); setTimeout(tick, 1000); } tick();');
     clock.advance(3000);
     expect(rec.console).toEqual(['1', '2', '3', '4']);
@@ -177,10 +179,14 @@ describe('stop and restart', () => {
     emu.click('light');
     clock.advance(1000);
     expect(rec.console).toEqual(['made 10']);
-    expect(emu.state.item('temp')!.value).toBe('21.5');
     expect(emu.state.key('light')!.label).toBe('On');
     expect(emu.state.shownPage).toBe(2);
-    expect(emu.deliver(0, 'home/x', '1')).toBe('stopped');
+    // The value was set while page 2 was shown: the device has it, and shows it with page 1.
+    expect(emu.state.item('power')!.box).not.toBeNull();
+    expect(emu.state.item('temp')!.box).toBeNull();
+    // The device itself runs on: its keys still give the firmware's events, messages are for nobody.
+    expect(rec.keys).toEqual(['3:click', '3:release']);
+    expect(emu.deliver(0, 'home/x', '1')).toBe('unwanted');
     expect(clock.timers).toBe(0);
   });
 
@@ -224,12 +230,13 @@ describe('stop and restart', () => {
     expect(emu.state.item('power')).toBeUndefined();
     expect(emu.state.leds[3]).toEqual({ index: 3, r: 1, g: 2, b: 3 });
     emu.stop();
-    emu.state.restoreConfigState();
+    // The firmware's ConfigManager::restoreConfigState(), at the next start.
+    emu.run('var nothing = 0;');
     expect(emu.state.item('temp')).toMatchObject({ value: '', label: 'Temperature', unit: '°C', x: 10, y: 20, page: 1 });
     expect(emu.state.items.map(i => i.name)).toEqual(['temp', 'power']);
     expect(emu.state.key('light')!.topLabel).toBe('Room');
     expect(emu.state.list('scenes')).toMatchObject({ items: ['Morning', 'Evening', 'Night'], selected: 1 });
-    expect(emu.state.image('weather')).toMatchObject({ kind: 'icon', value: 'sun' });
+    expect(emu.state.image('weather')).toMatchObject({ kind: 'icon', value: 'sun', raster: { name: 'sun' } });
     expect(emu.state.leds.every(led => led.r + led.g + led.b === 0)).toBe(true);
     expect(emu.state.shownPage).toBe(1);
   });
@@ -272,7 +279,7 @@ describe('keys', () => {
     expect(rec.keys).toEqual(['3:click', '3:release']);
     // The scan stops by itself once every key is up.
     clock.advance(10 * scan);
-    expect(clock.timers).toBe(emu.state.sensors.length ? 1 : 0);
+    expect(clock.timers).toBe(0);
   });
 
   it('long press and its repeats come from the firmware tick constants', async () => {
@@ -384,8 +391,9 @@ describe('runaway scripts and engine panics', () => {
   it('an engine trap is reported, and the next run gets a new engine with the same device', async () => {
     // A trap inside the wasm reaches the host as a WebAssembly.RuntimeError.
     class TrappingBroker extends MockBroker {
-      override publish(): void {
-        throw new WebAssembly.RuntimeError('unreachable');
+      override publish(message: MqttMessage, about?: PublishAbout): void {
+        if (about?.origin === 'script') throw new WebAssembly.RuntimeError('unreachable');
+        super.publish(message);
       }
     }
     let trap = true;
@@ -472,7 +480,7 @@ describe('in the page', () => {
 
   it('with the real clock a waiting script is one browser timer to its next due time, not a poll', async () => {
     vi.useFakeTimers();
-    const emu = await Emulator.create({ config: BASIC_CONFIG, wasm: emulatorModule(), sensors: [] });
+    const emu = await Emulator.create({ config: BASIC_CONFIG, wasm: emulatorModule(), sampleSensors: false });
     const lines: string[] = [];
     emu.on('console', line => lines.push(line));
     emu.run('setTimeout(function () { print("fired"); }, 60000);');

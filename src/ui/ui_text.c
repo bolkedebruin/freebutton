@@ -10,13 +10,11 @@
 #include "ui_text.h"
 #include "text_spans.h"
 #include "style_logic.h"
+#include "box_logic.h"
 #include "fonts/fonts.h"
 #include "lvgl.h"
 
 #include <string.h>
-
-/* \s0 and \s6..\s9 were always 14 px (\s1..\s5: the legacy steps). */
-#define UI_TEXT_DEFAULT_PX 14
 
 int ui_text_resolve_font(const char *name, const size_t len, const bool is_id, const int32_t id, void *ctx) {
     (void)ctx;
@@ -25,32 +23,18 @@ int ui_text_resolve_font(const char *name, const size_t len, const bool is_id, c
 }
 
 /*
- * The font of a span: its \f face, else the base face; its \s size (a
- * legacy step through style_logic_item_px, on a title element step 2 = 18
- * px; \s0 / \s6..\s9 = 14 px; or px), else the base px.
+ * The font of a span: its \f face and \s size, else the base
+ * (box_logic_span_font).
  */
 lv_font_t *ui_text_span_font(const text_span_t *s, const int base_face, const int base_px, const bool title) {
     static bool unknown_warned = false;
-    int face = base_face;
-    if (s->font >= 0) {
-        face = s->font;
-    } else if (s->font == TEXT_FONT_UNKNOWN && !unknown_warned) {
+    if (s->font == TEXT_FONT_UNKNOWN && !unknown_warned) {
         LV_LOG_WARN("text: \\f{} names an unknown font; the item's font is used (warned once)");
         unknown_warned = true;
     }
-
-    int px = base_px;
-    switch (s->size_kind) {
-        case TEXT_SIZE_STEP:
-            px = (s->size >= 1 && s->size <= 5) ? style_logic_item_px(s->size, title, UI_TEXT_DEFAULT_PX)
-                                                : UI_TEXT_DEFAULT_PX;
-            break;
-        case TEXT_SIZE_PX:
-            px = s->size;
-            break;
-        default:
-            break;
-    }
+    int face;
+    int px;
+    box_logic_span_font(s, base_face, base_px, title, &face, &px);
     return fonts_get(face, px);
 }
 

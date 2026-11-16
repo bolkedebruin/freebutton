@@ -64,19 +64,35 @@ describe('subscriptions', () => {
   });
 
   it('only the first two brokers take script subscriptions (the firmware\'s table)', async () => {
-    const config = { ...BASIC_CONFIG, brokers: [{ brokerid: 'a' }, { brokerid: 'b' }, { brokerid: 'c' }] };
-    const { emu, rec } = await makeEmulator({ config });
+    // A broker entry without a url is skipped by the firmware.
+    const brokers = ['a', 'b', 'c'].map(brokerid => ({ brokerid, url: `mqtt://${brokerid}.test/` }));
+    const { emu, clock, rec } = await makeEmulator({ config: { ...BASIC_CONFIG, brokers } });
     emu.run('mqtt.subscribe(1, "x", function () {}); mqtt.subscribe(2, "x", function () {});');
+    // A subscribe reaches the broker after the script's turn, as on the device.
+    clock.advance(0);
     expect(rec.subscribes).toEqual(['1:x']);
     expect(rec.errors[0]!.message).toBe('RangeError: broker ID 2 out of range (0-1)');
   });
 
   it('unsubscribe reaches the broker', async () => {
-    const { emu, rec } = await makeEmulator();
-    emu.run(echo + ' mqtt.unsubscribe(0, "home/+/temp");');
+    const { emu, clock, rec } = await makeEmulator();
+    emu.run(echo);
+    clock.advance(0);
+    expect(emu.broker(0).subscriptions).toEqual([{ topic: 'home/+/temp', qos: 0 }]);
+    emu.eval('mqtt.unsubscribe(0, "home/+/temp")');
+    clock.advance(0);
     expect(rec.unsubscribes).toEqual(['0:home/+/temp']);
     expect(emu.broker(0).subscriptions).toEqual([]);
     expect(emu.deliver(0, 'home/kitchen/temp', '1')).toBe('unwanted');
+  });
+
+  it('subscribe and unsubscribe within one turn of the script: nothing is sent to the broker', async () => {
+    const { emu, clock, rec } = await makeEmulator();
+    emu.run(echo + ' mqtt.unsubscribe(0, "home/+/temp");');
+    clock.advance(100);
+    expect(rec.subscribes).toEqual([]);
+    expect(rec.unsubscribes).toEqual([]);
+    expect(emu.broker(0).subscriptions).toEqual([]);
   });
 
   it('reports an exception in a message callback', async () => {
@@ -133,10 +149,12 @@ describe('MockBroker', () => {
     clock.advance(500);
     const start = clock.now() - 500;
     expect(emu.broker(0).published).toEqual([
+      // The firmware's birth message, at connect.
+      { topic: 'buttonplus/virt_btn_0a1b2c/status', payload: 'online', qos: 0, retain: true, time: start },
       { topic: 'home/light/set', payload: 'ON', qos: 0, retain: false, time: start },
       { topic: 'home/state', payload: '1', qos: 1, retain: true, time: start + 500 },
     ]);
-    expect(rec.publishes.map(p => [p.broker, p.topic, p.payload, p.action, p.reason])).toEqual([
+    expect(rec.publishes.filter(p => p.origin === 'script').map(p => [p.broker, p.topic, p.payload, p.action, p.reason])).toEqual([
       [0, 'home/light/set', 'ON', 'mock', 'offline'],
       [0, 'home/state', '1', 'mock', 'offline'],
     ]);
@@ -152,23 +170,33 @@ describe('MockBroker', () => {
   });
 
   it('without loopback a script does not hear its own publish; with it, it does, as with a real broker', async () => {
-    const script = 'mqtt.subscribe(0, "ping", function (t, p) { print("heard " + p); }); mqtt.publish(0, "ping", "1");';
+    // The publish in a later turn: a subscribe reaches the broker after the turn it was made in.
+    const script = 'mqtt.subscribe(0, "ping", function (t, p) { print("heard " + p); }); setTimeout(function () { mqtt.publish(0, "ping", "1"); }, 50);';
     const quiet = await makeEmulator();
     quiet.emu.run(script);
-    quiet.clock.advance(100);
+    quiet.clock.advance(200);
     expect(quiet.rec.console).toEqual([]);
 
     const loop = await makeEmulator();
     loop.emu.broker(0).loopback = true;
     loop.emu.run(script);
-    loop.clock.advance(0);
+    loop.clock.advance(200);
     expect(loop.rec.console).toEqual(['heard 1']);
+
+    // In the same turn as the subscribe the broker does not know the subscription yet: not heard.
+    const early = await makeEmulator();
+    early.emu.broker(0).loopback = true;
+    early.emu.run('mqtt.subscribe(0, "ping", function (t, p) { print("heard " + p); }); mqtt.publish(0, "ping", "1");');
+    early.clock.advance(200);
+    expect(early.rec.console).toEqual([]);
   });
 
   it('a script that answers its own messages is paced by the loop, not an endless call', async () => {
     const { emu, clock } = await makeEmulator();
     emu.broker(0).loopback = true;
-    emu.run('var n = 0; mqtt.subscribe(0, "p", function () { n++; mqtt.publish(0, "p", "x"); }); mqtt.publish(0, "p", "x");');
+    emu.run('var n = 0; mqtt.subscribe(0, "p", function () { n++; mqtt.publish(0, "p", "x"); });');
+    clock.advance(0);
+    emu.eval('mqtt.publish(0, "p", "x")');
     clock.advance(5 * emu.limits.loopDelayMs);
     expect(emu.eval('n')).toEqual({ ok: true, value: '6' });
   });
@@ -181,7 +209,7 @@ describe('MockBroker', () => {
     emu.run(echo);
     clock.advance(0);
     expect(rec.console).toEqual(['home/hall/temp=18']);
-    expect(emu.broker(0).retainedMessages).toEqual([{ topic: 'home/hall/temp', payload: '18', qos: 0, retain: true }]);
+    expect(emu.broker(0).retainedMessages.filter(m => !m.topic.startsWith('buttonplus/virt_btn_'))).toEqual([{ topic: 'home/hall/temp', payload: '18', qos: 0, retain: true }]);
   });
 
   it('after a restart the new script subscribes again and gets the retained messages again', async () => {
@@ -205,12 +233,13 @@ describe('MockBroker', () => {
     first.emu.broker(0).inject('home/hall/temp', '19');
     const session = JSON.parse(JSON.stringify(first.emu.broker(0).exportSession())) as MockSession;
     expect(session.events.map(e => [e.t, e.dir, e.topic, e.payload])).toEqual([
+      [0, 'out', 'buttonplus/virt_btn_0a1b2c/status', 'online'],
       [0, 'out', 'home/ready', '1'],
       [0, 'in', 'home/config', 'c'],
       [1000, 'in', 'home/hall/temp', '18'],
       [1250, 'in', 'home/hall/temp', '19'],
     ]);
-    expect(session.retained).toEqual([{ topic: 'home/config', payload: 'c', qos: 0, retain: true }]);
+    expect(session.retained.filter(m => m.topic.startsWith('home/'))).toEqual([{ topic: 'home/config', payload: 'c', qos: 0, retain: true }]);
 
     const second = await makeEmulator();
     second.emu.run(echo);
@@ -222,8 +251,8 @@ describe('MockBroker', () => {
     expect(second.rec.console).toEqual(['home/hall/temp=18']);
     second.clock.advance(250);
     expect(second.rec.console).toEqual(['home/hall/temp=18', 'home/hall/temp=19']);
-    expect(second.emu.broker(0).retainedMessages).toHaveLength(1);
-    expect(second.clock.timers).toBe(1); // only the sensor sample is left
+    expect(second.emu.broker(0).retainedMessages.filter(m => m.topic.startsWith('home/'))).toHaveLength(1);
+    expect(second.clock.timers).toBe(0); // the replay left no timer behind
   });
 });
 

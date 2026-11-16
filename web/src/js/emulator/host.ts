@@ -1,144 +1,79 @@
 /**
- * EmulatorHost: the device behind the script bindings.
+ * EmulatorHost: the world around the virtual device.
  *
- * fb-emulator.wasm is the firmware's script engine and JavaScript glue. What
- * the glue calls on the device (the C "seam": src/scripting/*_hardware.h and
- * *_binding.h) ends here, one group per header. wasm.ts marshals the C
- * arguments (strings, structs) to these methods; nothing here knows about
- * wasm memory.
+ * fb-emulator.wasm is the firmware: the script engine and its bindings,
+ * ConfigManager and the components (display items, keys, lists, images,
+ * clocks and their topics), the MQTT brokers with Home Assistant discovery,
+ * the hardware scan, the key and sensor drivers. What it cannot have in a
+ * page it asks from this host (tools/js/emulator/fbh.h): time, files, the
+ * modules on the I2C buses, sensor readings, the MQTT transport; and it tells
+ * the host what the device shows and lights. wasm.ts marshals the C
+ * arguments to these methods; nothing here knows about wasm memory.
  *
- * DeviceState (device-state.ts) implements the groups that hold device
- * state; the Emulator (index.ts) supplies mqtt, system, files and console.
- *
- * The firmware's rules run before these methods: an icon name is already
- * valid or empty, a list selection already clamped, list items already cut to
- * their limits. Return values are what the C declaration returns, as a
- * boolean or a value / null.
+ * DeviceState (device-state.ts) implements `hardware` and `display`; the
+ * Emulator (index.ts) supplies mqtt, system, files and console.
  */
 
 /** EventType of include/types.h for key events. */
 export const KEY_EVENT = { click: 0, longPress: 1, release: 2 } as const;
 export type KeyEventName = 'click' | 'longpress' | 'release';
 
-/** A font set by a script: a face index of the font table and a fontsize (1..5 = step, else px). */
+/**
+ * A font on an entry: a face index of the font table and a size (1..5 = a
+ * legacy step, else px). Since stage 2 the firmware reports the font it
+ * chose, so the size is always px.
+ */
 export interface FontChoice {
   face: number;
   size: number;
 }
 
-/** button_hardware.h: the keys and their small displays. Positions are 1-based. */
-export interface KeysHost {
-  /** The text shown (last runtime text, else the configured one); null when there is no such key. */
-  getLabel(position: number): string | null;
-  getTopLabel(position: number): string | null;
-  /** false when there is no such key. */
-  setLabel(position: number, text: string): boolean;
-  setTopLabel(position: number, text: string): boolean;
-  /** '' hides the icon. */
-  setIcon(position: number, name: string): boolean;
-  setFont(position: number, font: FontChoice, top: boolean): boolean;
-  restoreFont(position: number, top: boolean): boolean;
-  /** Position for a config.json "name"; null when no key has it. */
-  findByName(name: string): number | null;
+/** The virtual hardware: what the firmware's drivers read and write. */
+export interface HardwareHost {
+  /** Does a device answer on I2C bus `bus` (0 sensors, 1 connectors) at `address`? */
+  i2cProbe(bus: number, address: number): boolean;
+  /** The 8 pins of the port expander of a connector (address 0x20 + connector). */
+  mcpGpio(address: number): number;
+  /** A sensor reading: 0 BME280 temperature (°C), 1 pressure (Pa), 2 humidity (%), 3 / 4 STS35 at 0x4A / 0x4B (°C). */
+  sensorRead(input: number): number;
+  /** A pixel of the LED strip, as the firmware wrote it. */
+  led(index: number, r: number, g: number, b: number): void;
+  /** Whether the images bucket has that key (an icon raster or a user file). */
+  mediaExists(key: string): boolean;
 }
 
-/** led_hardware.h: the LED strip (4 per bar). */
-export interface LedsHost {
-  /** false when index is out of range. */
-  setColor(index: number, r: number, g: number, b: number): boolean;
-}
+/** The kinds of state record (tools/js/emulator/fbh.h FBH_STATE_*). */
+export const STATE_KIND = ['device', 'item', 'item-gone', 'key', 'list', 'image', 'clock', 'page', 'sensor'] as const;
+export type StateKind = typeof STATE_KIND[number];
 
-/** DisplayItemInfo of displayitem_binding.h. label / unit are the configured texts. */
-export interface DisplayItemInfo {
-  id: number;
-  x: number;
-  y: number;
-  width: number;
-  boxType: number;
-  fontSize: number;
-  alignment: number;
-  label: string;
-  unit: string;
-  round: number;
-  page: number;
-}
-
-/** displayitem_binding.h: the items of the main display, and its pages. */
+/** What the device shows: one record per widget that changed (device-state.ts has the shapes). */
 export interface DisplayHost {
-  /** The new item's id; 0 on failure. */
-  create(spec: Omit<DisplayItemInfo, 'id'>): number;
-  remove(id: number): boolean;
-  findByName(name: string): number | null;
-  count(): number;
-  getInfo(id: number): DisplayItemInfo | null;
-  allIds(): number[];
-  /** The setters return false when there is no item with that id. */
-  setLabel(id: number, text: string): boolean;
-  setValue(id: number, text: string): boolean;
-  setUnit(id: number, text: string): boolean;
-  setIcon(id: number, name: string): boolean;
-  setFont(id: number, font: FontChoice): boolean;
-  restoreFont(id: number): boolean;
-  setPosition(id: number, x: number, y: number): boolean;
-  setPage(id: number, page: number): boolean;
-  /** false for page < 1. */
-  showPage(page: number): boolean;
-  shownPage(): number;
+  state(kind: StateKind, record: unknown): void;
 }
 
-/** list_binding.h: the lists (rollers) of the main display, by index in config.json "lists". */
-export interface ListsHost {
-  /** -1 when no list has that name. */
-  findByName(name: string): number;
-  /** -1 when there is no list at index. */
-  count(index: number): number;
-  selected(index: number): number;
-  setSelected(index: number, selected: number): void;
-  setItems(index: number, items: string[], selected: number): void;
-  setFont(index: number, font: FontChoice): boolean;
-  restoreFont(index: number): boolean;
-}
+/** Who made a publish: a script's mqtt.publish(), or the firmware by itself. */
+export type PublishOrigin = 'script' | 'firmware';
+/**
+ * What a publish is. 'discovery' and 'availability' are the firmware's
+ * announcements (Home Assistant discovery, <device>/status); 'press' a key's
+ * default action; 'sensor' a sensor's state; 'state' other firmware state.
+ */
+export type PublishKind = 'script' | 'press' | 'discovery' | 'availability' | 'sensor' | 'state';
 
-/** image_binding.h: the images of the main display, by index in config.json "images". */
-export interface ImagesHost {
-  findByName(name: string): number;
-  exists(index: number): boolean;
-  /** value '' shows nothing. */
-  set(index: number, kind: 'icon' | 'src', value: string): void;
-}
-
-/** src/ui/fonts/fonts.h fonts_find / fonts_find_id: face index, -1 when unknown. */
-export interface FontsHost {
-  find(name: string): number;
-  findId(id: number): number;
-}
-
-/** sensor_binding.h: the sample of a sensor (the firmware's sensor->sample()). */
-export interface SensorsHost {
-  sample(id: number): number;
-}
-
-/** device_hardware.h: which module is on which connector. */
-export interface TopologyHost {
-  /** 0 = empty, 1 = bar, 2 = main display; -1 = no such connector. */
-  connectorType(connector: number): number;
-  /** Connector of the main display, -1 when there is none. */
-  mainConnector(): number;
-}
-
-/** mqtt_binding.h: what a broker hands to its client. broker = index in config.json "brokers". */
+/** What esp-mqtt does for a broker. broker = index in config.json "brokers". */
 export interface MqttHost {
+  /** The firmware's client starts: connect, with this last will. */
+  start(broker: number, options: { uri: string; will: { topic: string; payload: string; qos: number; retain: boolean } }): void;
   /** false = not sent. */
-  publish(broker: number, topic: string, payload: string, qos: number, retain: boolean): boolean;
+  publish(broker: number, topic: string, payload: string, qos: number, retain: boolean,
+    about: { origin: PublishOrigin; kind: PublishKind }): boolean;
   subscribe(broker: number, topic: string, qos: number): void;
   unsubscribe(broker: number, topic: string): void;
 }
 
-/** system_binding.h, and the clock of the engine. */
 export interface SystemHost {
   deviceId(): string;
-  deviceName(): string;
-  uptimeSeconds(): number;
+  /** Free bytes of the general heap (system.freeHeap(), the free-memory sensor). */
   freeHeap(): number;
   /** Milliseconds since the Unix epoch. */
   nowMs(): number;
@@ -146,9 +81,9 @@ export interface SystemHost {
   shouldInterrupt(): boolean;
 }
 
-/** file_hardware.h: files of the device's filesystem, for load(). */
+/** Files of the device's filesystem: "/config.json", files for load(). */
 export interface FilesHost {
-  load(path: string): Uint8Array | null;
+  read(path: string): Uint8Array | null;
 }
 
 export type ScriptErrorWhere = 'compile' | 'load' | 'run' | 'callback' | 'key' | 'eval';
@@ -164,23 +99,15 @@ export interface ConsoleHost {
 }
 
 export interface EmulatorHost {
-  keys: KeysHost;
-  leds: LedsHost;
+  hardware: HardwareHost;
   display: DisplayHost;
-  lists: ListsHost;
-  images: ImagesHost;
-  fonts: FontsHost;
-  sensors: SensorsHost;
-  topology: TopologyHost;
   mqtt: MqttHost;
   system: SystemHost;
   files: FilesHost;
   console: ConsoleHost;
   /**
-   * A key event went through the script (ButtonManager). defaultPrevented =
-   * the handler returned false: the firmware publishes nothing for it.
+   * A key event went through the script. defaultPrevented = the handler
+   * returned false: the firmware publishes nothing for it.
    */
   keyEvent(position: number, event: KeyEventName, defaultPrevented: boolean): void;
-  /** ConfigManager::restoreConfigState(): before a script restarts. */
-  restoreConfigState(): void;
 }

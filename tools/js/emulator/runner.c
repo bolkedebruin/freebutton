@@ -21,9 +21,8 @@
 
 #include "mquickjs.h"
 #include "mquickjs_ext.h"
+#include "emu.h"
 #include "fbh.h"
-
-#define FBE_EXPORT(name) __attribute__((export_name(#name), used))
 
 /* --- script errors ---------------------------------------------------------
  * The glue fetches the exception of a failed timer / MQTT / sensor callback
@@ -129,9 +128,6 @@ static JSValue fbe_glue_exception(JSContext *ctx)
 
 #include "scripting/device_hardware.h"
 
-/* seam_mqtt.cpp: MqttBinding::processPending(); nonzero when events are left. */
-int fbe_mqtt_process_pending(void);
-
 /* --- clock ------------------------------------------------------------------
  * Everything in the glue that reads time (Date.now, setTimeout,
  * JS_ProcessTimers, performance.now) uses gettimeofday(): the host's clock. */
@@ -145,9 +141,21 @@ int gettimeofday(struct timeval *restrict tv, void *restrict tz)
     return 0;
 }
 
+/* The device booted when the module started: millis() and the FreeRTOS tick
+ * count from there (system.uptime(), the firmware's rate limits). */
+static double boot_ms = -1;
+
+unsigned long millis(void)
+{
+    const double now = fbh_now_ms();
+    if (boot_ms < 0)
+        boot_ms = now;
+    return (unsigned long)(int64_t)(now - boot_ms);
+}
+
 uint32_t xTaskGetTickCount(void)
 {
-    return (uint32_t)(int64_t)fbh_now_ms();
+    return (uint32_t)millis();
 }
 
 /* --- logging ----------------------------------------------------------------- */
@@ -312,7 +320,7 @@ FBE_EXPORT(fbe_stdlib_id) uint32_t fbe_stdlib_id(void) { return JS_StdlibAtomsId
  * -3 load failed, -4 the script threw (the context stays, with what the
  * script registered before the error, as on the device).
  */
-FBE_EXPORT(fbe_start) int fbe_start(const uint8_t *image, uint32_t len, int restore)
+static int start_script(const uint8_t *image, uint32_t len, int restore)
 {
     last_error[0] = '\0';
     last_stack[0] = '\0';
@@ -322,8 +330,12 @@ FBE_EXPORT(fbe_start) int fbe_start(const uint8_t *image, uint32_t len, int rest
         return -1;
     }
     free_context();
+    /* The MQTT task takes the old script's subscriptions off the brokers
+     * before the new script makes its own (which then get their retained
+     * messages again, docs/SCRIPT-RESTART.md). */
+    fbe_mqtt_pump();
     if (restore)
-        fbh_restore_config_state();
+        fbe_device_restore_config_state();
     if (!create_context()) {
         strcpy(last_error, "no engine");
         return -1;
@@ -363,11 +375,19 @@ FBE_EXPORT(fbe_start) int fbe_start(const uint8_t *image, uint32_t len, int rest
     return 0;
 }
 
+FBE_EXPORT(fbe_start) int fbe_start(const uint8_t *image, uint32_t len, int restore)
+{
+    const int rc = start_script(image, len, restore);
+    fbe_device_after_entry();
+    return rc;
+}
+
 /* The script stops: no handlers, timers or subscriptions; no context. The
- * device state stays as the script left it. */
+ * device state stays as the script left it, and the device runs on. */
 FBE_EXPORT(fbe_stop) void fbe_stop(void)
 {
     free_context();
+    fbe_device_after_entry();
 }
 
 FBE_EXPORT(fbe_running) int fbe_running(void) { return ctx != NULL; }
@@ -379,17 +399,21 @@ FBE_EXPORT(fbe_running) int fbe_running(void) { return ctx != NULL; }
  */
 FBE_EXPORT(fbe_loop_pass) int fbe_loop_pass(void)
 {
-    if (!ctx)
-        return -1;
     interrupt_count = 0;
-    const int more = fbe_mqtt_process_pending();
-    const int64_t delay = JS_ProcessTimers(ctx);
+    /* The firmware's other work of a pass (device.cpp). */
+    int more = fbe_device_pass();
+    int64_t delay = -1;
+    if (ctx) {
+        more |= fbe_mqtt_process_pending();
+        delay = JS_ProcessTimers(ctx);
+    }
+    fbe_device_after_entry();
     if (more)
         return 0;
     return delay < 0 ? -1 : (int)delay;
 }
 
-/* seam.cpp, after a key handler ran: the glue leaves its exception pending. */
+/* seam_button.cpp, after a key handler ran: the glue leaves its exception pending. */
 void fbe_report_pending_exception(void)
 {
     if (!ctx)
@@ -414,6 +438,7 @@ FBE_EXPORT(fbe_eval) int fbe_eval(const char *source, uint32_t len)
     JSValue value = JS_Eval(ctx, source, len, "<repl>", JS_EVAL_RETVAL);
     if (JS_IsException(value)) {
         report_exception(ctx, JS_GetException(ctx), FBE_ERR_EVAL);
+        fbe_device_after_entry();
         return -1;
     }
     JSCStringBuf buf;
@@ -423,15 +448,22 @@ FBE_EXPORT(fbe_eval) int fbe_eval(const char *source, uint32_t len)
         copy_text(eval_result, sizeof(eval_result), text, n);
     else
         (void)JS_GetException(ctx);
+    fbe_device_after_entry();
     return 0;
 }
 
 FBE_EXPORT(fbe_eval_result) const char *fbe_eval_result(void) { return eval_result; }
 
-/* seam_mqtt.cpp */
-uint32_t fbe_mqtt_dropped(void);
-uint32_t fbe_mqtt_queue_used(void);
-uint32_t fbe_mqtt_queue_bytes(void);
+/* ScriptEngine::measureHeap(), for the firmware's JS memory sensors. */
+void fbe_js_heap(size_t *used, size_t *free_bytes)
+{
+    *used = 0;
+    *free_bytes = 0;
+    if (ctx) {
+        JS_GC(ctx);
+        JS_GetMemoryUsage(ctx, used, free_bytes);
+    }
+}
 
 /*
  * out[0..9]: JS heap used, free, size (ScriptEngine::measureHeap: after a GC;
@@ -493,37 +525,4 @@ FBE_EXPORT(fbe_limit) int fbe_limit(int which)
 FBE_EXPORT(fbe_topic_matches) int fbe_topic_matches(const char *filter, const char *topic, uint32_t topic_len)
 {
     return mqtt_topic_matches(filter, topic, topic_len);
-}
-
-/*
- * Struct layouts the host writes through pointers (web/src/js/emulator/
- * layout.ts): offsetof / sizeof as this build's compiler laid them out. The
- * host's tests compare its table with these, so a header change fails a test.
- */
-#include <stddef.h>
-FBE_EXPORT(fbe_layout) int fbe_layout(int which)
-{
-    switch (which) {
-    case 0: return (int)sizeof(DisplayItemInfo);
-    case 1: return (int)offsetof(DisplayItemInfo, id);
-    case 2: return (int)offsetof(DisplayItemInfo, x);
-    case 3: return (int)offsetof(DisplayItemInfo, y);
-    case 4: return (int)offsetof(DisplayItemInfo, width);
-    case 5: return (int)offsetof(DisplayItemInfo, boxType);
-    case 6: return (int)offsetof(DisplayItemInfo, fontSize);
-    case 7: return (int)offsetof(DisplayItemInfo, alignment);
-    case 8: return (int)offsetof(DisplayItemInfo, label);
-    case 9: return (int)offsetof(DisplayItemInfo, unit);
-    case 10: return (int)offsetof(DisplayItemInfo, round);
-    case 11: return (int)offsetof(DisplayItemInfo, page);
-    case 12: return (int)sizeof(unsigned long);
-    case 13: return (int)sizeof(void *);
-    case 14: return (int)sizeof(SensorInfo);
-    case 15: return (int)offsetof(SensorInfo, id);
-    case 16: return (int)offsetof(SensorInfo, name);
-    case 17: return (int)offsetof(SensorInfo, type);
-    case 18: return (int)offsetof(SensorInfo, unit);
-    case 19: return (int)offsetof(SensorInfo, online);
-    default: return -1;
-    }
 }

@@ -2,6 +2,7 @@
 #include "ui_text.h"
 #include "ui_style.h"
 #include "style_logic.h"
+#include "box_logic.h"
 #include "fonts/fonts.h"
 
 #include <stdlib.h>
@@ -148,18 +149,6 @@ bool ui_box_update(lv_obj_t* box, const char* caption, const char* text, const c
 }
 
 
-/* The base font (face, px) of an element: the item's (local layer) where it
- * sets one, else the resolved style's. fontsize 0 = none. */
-static int base_face(const int item_face, const style_props_t* r)
-{
-	return item_face != FONT_FACE_NONE ? item_face : r->face;
-}
-
-static int base_px(const int item_fontsize, const bool title, const style_props_t* r)
-{
-	return style_logic_item_px(item_fontsize, title, r->px);
-}
-
 bool ui_box_set_caption(lv_obj_t* box, const char* caption)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
@@ -167,8 +156,8 @@ bool ui_box_set_caption(lv_obj_t* box, const char* caption)
 	 * (by default system bold 14; legacy step 2 = 18 px) */
 	const style_props_t* r = ui_style_resolved(STYLE_EL_DISPLAY_CAPTION);
 	const bool drawn = ui_render_text(b->title, caption, ui_style_get(STYLE_EL_DISPLAY_CAPTION),
-	                                  base_face(b->fonts.caption_face, r),
-	                                  base_px(b->fonts.caption_fontsize, true, r), true);
+	                                  box_logic_base_face(b->fonts.caption_face, r),
+	                                  box_logic_base_px(b->fonts.caption_fontsize, true, r), true);
     /* An empty caption takes no room: hidden flex children get no column
      * gap either (the theme's ~8 px per gap pushed text past the box). */
     lv_obj_set_hidden(b->title, caption == NULL || caption[0] == '\0');
@@ -179,8 +168,9 @@ bool ui_box_set_text(lv_obj_t* box, const char* text)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
 	const style_props_t* r = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
-	return ui_render_text(b->text, text, ui_style_get(STYLE_EL_DISPLAY_VALUE), base_face(b->fonts.face, r),
-	                      base_px(b->fonts.fontsize, false, r), false);
+	return ui_render_text(b->text, text, ui_style_get(STYLE_EL_DISPLAY_VALUE),
+	                      box_logic_base_face(b->fonts.face, r),
+	                      box_logic_base_px(b->fonts.fontsize, false, r), false);
 }
 
 bool ui_box_set_hint(lv_obj_t* box, const char* hint)
@@ -191,40 +181,12 @@ bool ui_box_set_hint(lv_obj_t* box, const char* hint)
 	 * else the value's. */
 	const style_props_t* v = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
 	const style_props_t* u = ui_style_resolved(STYLE_EL_DISPLAY_UNIT);
-	const int face = b->fonts.face != FONT_FACE_NONE ? b->fonts.face
-	                 : (u->has & STYLE_HAS_FONT)      ? u->face
-	                                                  : v->face;
-	const int px = style_logic_item_px(b->fonts.fontsize, false, (u->has & STYLE_HAS_SIZE) ? u->px : v->px);
+	const int face = box_logic_unit_face(b->fonts.face, v, u);
+	const int px = box_logic_unit_px(b->fonts.fontsize, v, u);
 	const bool drawn = ui_render_text(b->hint, hint, ui_style_get(STYLE_EL_DISPLAY_UNIT), face, px, false);
     /* An empty unit takes no room (see ui_box_set_caption). */
     lv_obj_set_hidden(b->hint, hint == NULL || hint[0] == '\0');
     return drawn;
-}
-
-/* The step whose padding the value gets: the item's legacy step as it is;
- * else the value's px (the item's, or the style's without one) as the
- * nearest step's px (14/24/32/48/72). Two cases get none: less than 14 px
- * (as the old invalid steps 6..9 always had), and 14 px that comes from the
- * style because the item has no size (as the old default fontsize 14 always
- * had). An item's own "fontsize": 14 is step 1, so a pixel size can replace
- * every legacy step. */
-static int padding_step(const int fontsize)
-{
-	static const uint8_t step_px[5] = {14, 24, 32, 48, 72};
-	if (fontsize >= 1 && fontsize <= 5) {
-		return fontsize;
-	}
-	const int px = style_logic_item_px(fontsize, false, ui_style_resolved(STYLE_EL_DISPLAY_VALUE)->px);
-	if (px < 14 || (px == 14 && fontsize == 0) || px > FONT_PX_MAX) {
-		return 0;
-	}
-	int best = 0;
-	for (int i = 1; i < 5; i++) {
-		if (abs(px - step_px[i]) < abs(px - step_px[best])) {
-			best = i;
-		}
-	}
-	return best + 1;
 }
 
 void ui_box_set_fonts(lv_obj_t* box, const ui_box_fonts_t* fonts, int boxtype)
@@ -236,32 +198,16 @@ void ui_box_set_fonts(lv_obj_t* box, const ui_box_fonts_t* fonts, int boxtype)
 
     b->fonts = *fonts;
 
-	switch (padding_step(fonts->fontsize)) {
-	case 1:
-		lv_obj_set_style_pad_bottom(b->title, 2, 0);
-		lv_obj_set_style_pad_bottom(b->main, 1, 0);
-		break;
-	case 2:
-		lv_obj_set_style_pad_bottom(b->title, 4, 0);
-		lv_obj_set_style_pad_bottom(b->main, 3, 0);
-		break;
-	case 3:
-		lv_obj_set_style_pad_bottom(b->title, boxtype ? 0 : 4, 0);
-		lv_obj_set_style_pad_bottom(b->main, 8, 0);
-		break;
-	case 4:
-		lv_obj_set_style_pad_bottom(b->title, boxtype ? 6 : 10, 0);
-		lv_obj_set_style_pad_bottom(b->main, 8, 0);
-		break;
-	case 5:
-		lv_obj_set_style_pad_bottom(b->title, boxtype ? 6 : 14, 0);
-		lv_obj_set_style_pad_bottom(b->main, 12, 0);
-		break;
-	default:
+	int caption_pad;
+	int box_pad;
+	const int step = box_logic_padding_step(fonts->fontsize, ui_style_resolved(STYLE_EL_DISPLAY_VALUE)->px);
+	if (box_logic_padding(step, boxtype, &caption_pad, &box_pad)) {
+		lv_obj_set_style_pad_bottom(b->title, caption_pad, 0);
+		lv_obj_set_style_pad_bottom(b->main, box_pad, 0);
+	} else {
 		/* none (as before); a font set at runtime may have left one */
 		lv_obj_remove_local_style_prop(b->title, LV_STYLE_PAD_BOTTOM, 0);
 		lv_obj_remove_local_style_prop(b->main, LV_STYLE_PAD_BOTTOM, 0);
-		break;
 	}
 }
 

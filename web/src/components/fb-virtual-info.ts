@@ -8,6 +8,8 @@ import { workspace } from '../js/workspace';
 /** The values are measured this often while the info side is shown. */
 export const INFO_INTERVAL_MS = 1000;
 
+const MQTT_WORDS = { offline: 'offline: in-page broker', 'live-readonly': 'live, read-only', 'live-publish': 'live, publishing' } as const;
+const LINK_WORDS = { none: 'not connected', connecting: 'connecting', connected: 'connected', error: 'not connected' } as const;
 const CONNECTOR = ['none', 'bar', 'display'] as const;
 const CONNECTOR_LONG = ['none', 'bar (two keys)', 'main display'] as const;
 
@@ -148,11 +150,12 @@ export class FbVirtualInfo extends LitElement {
         `}
 
         <div class="border-t border-white/10"></div>
-        ${this._row('MQTT', html`<span data-field="mqtt">offline: in-page broker</span>${brokers
+        ${this._row('MQTT', html`<span data-field="mqtt" class=${i.mqtt === 'live-publish' ? 'text-status-orange' : ''}>${MQTT_WORDS[i.mqtt]}${i.mqtt === 'offline' ? '' : ` (${LINK_WORDS[i.mqttLink]})`}</span>${brokers
           ? html`<span class="text-gray-200"> · </span><span data-field="brokers">${brokers}</span>` : ''}`,
-          `Nothing is sent to a real broker.${brokers ? ' Brokers of config.json: ' + brokers : ''}`)}
+          `${i.mqtt === 'live-publish' ? 'The virtual device publishes to the real broker.' : 'Nothing is sent to a real broker.'}${brokers ? ' Brokers of config.json: ' + brokers : ''}`)}
         ${modules.length ? this._row('Modules', html`<span data-field="modules">${modules.join(' · ')}</span>`, `Module per connector: ${i.connectors!.map((kind, id) => (kind === 0 ? '' : `${id}: ${CONNECTOR_LONG[kind]}`)).filter(Boolean).join(', ')}`) : ''}
         ${i.sensors !== null ? this._row('Sensors', html`<span data-field="sensors">${i.sensors}</span>`) : ''}
+        ${i.timezone ? this._row('Time zone', html`<span data-field="timezone">${i.timezone}</span>`, `The device's local time follows this POSIX TZ rule (config.json "core.timezone"): ${i.timezone}`) : ''}
         ${i.model ? this._row('Model', html`<span data-field="model">${i.model}</span>`, i.model) : ''}
         ${i.firmware ? this._row('Engine built from', html`<span data-field="firmware">${i.firmware}</span>`, `The firmware the script engine in this page was built from: ${i.firmware}`) : ''}
         <p class="text-[10px] leading-snug text-gray-200">The real device is in the Device view (left bar).</p>

@@ -35,8 +35,14 @@ export interface EmulatorSnapshot {
   status: 'idle' | 'starting' | 'running' | 'error';
   /** "virt_btn_" + 6 hex digits: what system.id() gives the script. Never a real device's id. */
   identity: string;
-  /** Stage 1: the in-page broker only. */
-  mqtt: 'offline';
+  /**
+   * Where the virtual device's MQTT goes: 'offline' the broker in the page
+   * (the mode at every start); 'live-readonly' the real broker, nothing is
+   * published; 'live-publish' the real broker, it publishes.
+   */
+  mqtt: 'offline' | 'live-readonly' | 'live-publish';
+  /** The live connection(s): 'none' offline. */
+  mqttLink: 'none' | 'connecting' | 'connected' | 'error';
   /** Why it stopped, or the last error of a script that still runs. */
   error: string;
   /** Errors since Run. */
