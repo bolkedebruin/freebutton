@@ -302,6 +302,26 @@ void MqttBroker::unsubscribe(std::string_view topic) {
     requestSubscriptionWork();
 }
 
+void MqttBroker::unsubscribe(std::string_view topic, MqttSubscriber* subscriber) {
+    if (topic.empty() || !subscriber) {
+        return;
+    }
+    {
+        SubscriptionsLock lock(subscriptionsLock_);
+        auto it = std::ranges::find_if(subscriptions_,
+                                       [topic](const SubscriptionEntry& entry) { return entry.topic == topic; });
+        if (it == subscriptions_.end() || std::erase(it->subscribers, subscriber) == 0 || !it->subscribers.empty()) {
+            return;  // not subscribed, or others still are
+        }
+        if (!(it->sent && connected_.load())) {
+            subscriptions_.erase(it);  // never reached the broker on this connection
+            return;
+        }
+        subscriptionWork_ = true;  // a pending UNSUBSCRIBE for the MQTT task
+    }
+    requestSubscriptionWork();
+}
+
 void MqttBroker::unsubscribe(MqttSubscriber* subscriber) {
     if (!subscriber) {
         ESP_LOGE(TAG, "Cannot unsubscribe null subscriber");

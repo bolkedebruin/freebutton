@@ -54,6 +54,7 @@ enum RecordKind : uint8_t { kMessage = 0, kConnected = 1, kDisconnected = 2 };
 
 freebutton::MessageRing<kQueueBytes> g_queue;
 std::atomic<uint32_t> g_dropped{0};
+constexpr int kJsOutboxLimitBytes = 1024;
 
 SemaphoreHandle_t queueLock() {
     static StaticSemaphore_t buffer;
@@ -95,7 +96,7 @@ void reportDrops() {
     if (reported != 0 && now - lastLog < pdMS_TO_TICKS(5000)) {
         return;
     }
-    ESP_LOGW(TAG, "JS MQTT queue full or busy: dropped %lu event(s) (%lu total)",
+    ESP_LOGW(TAG, "JS MQTT queue or script heap full, or busy: dropped %lu event(s) (%lu total)",
              static_cast<unsigned long>(dropped - reported), static_cast<unsigned long>(dropped));
     reported = dropped;
     lastLog = now;
@@ -123,9 +124,27 @@ int mqtt_binding_publish(uint8_t brokerId, const char* topic, const char* payloa
         return -1;
     }
 
+    if (strnlen(topic, MQTT_MAX_TOPIC_LEN + 1) > MQTT_MAX_TOPIC_LEN) {
+        ESP_LOGW(TAG, "mqtt_binding_publish: topic longer than %d characters", MQTT_MAX_TOPIC_LEN);
+        return -1;
+    }
+    // A message that waits for its acknowledgement (QoS 1, 2) is kept on
+    // the heap until then. The client library's own limit counts the packet
+    // bytes only, about half of what a short message really takes: refuse
+    // earlier, and let the script know.
+    if (qos > 0 && broker->outboxSize() > kJsOutboxLimitBytes) {
+        ESP_LOGW(TAG, "mqtt_binding_publish: broker %d has %d bytes waiting, message refused", brokerId,
+                 broker->outboxSize());
+        return -1;
+    }
+
+    // topic and payload are NUL-terminated and stay valid for the call: no copy.
     ESP_LOGD(TAG, "Publishing to broker %d: %s = %s", brokerId, topic, payload);
-    broker->publish(topic, payload, qos, retain);
-    return 0;
+    return broker->publish(topic, payload, strlen(payload), qos, retain) < 0 ? -1 : 0;
+}
+
+void mqtt_binding_count_drop(void) {
+    g_dropped.fetch_add(1, std::memory_order_relaxed);
 }
 
 // Dummy subscriber for JavaScript subscriptions
@@ -177,8 +196,10 @@ int mqtt_binding_unsubscribe(uint8_t brokerId, const char* topic) {
         return -1;
     }
 
+    // Only the script leaves the topic: a display item or key that has it
+    // from config.json keeps receiving.
     ESP_LOGD(TAG, "Unsubscribing from broker %d topic: %s", brokerId, topic);
-    broker->unsubscribe(topic);
+    broker->unsubscribe(topic, &g_js_subscriber);
     return 0;
 }
 

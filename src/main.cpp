@@ -185,11 +185,21 @@ void setup() {
         ESP_LOGE(TAG, "Failed to initialize ScriptEngine");
     }
 
+    // The script has subscribed: retained values and live messages arrive
+    // from now on, and loop() is not running yet. Deliver them during these
+    // pauses, or the queue (2 KB) overflows and retained values are lost.
+    const auto pauseDelivering = [scriptEngineReady](const uint32_t ms) {
+        for (uint32_t waited = 0; waited < ms; waited += 10) {
+            if (scriptEngineReady) MqttBinding::processPending();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    };
+
     progressBar->update(90, "Finalizing setup...");
-    vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to show final progress
+    pauseDelivering(500); // Brief pause to show final progress
 
     progressBar->update(100, "Ready!");
-    vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
+    pauseDelivering(1000); // Show completion
 
     // Hide progress bar and show main application screen with DisplayItems
     progressBar->hide();

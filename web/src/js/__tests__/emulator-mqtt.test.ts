@@ -129,7 +129,7 @@ describe('the event ring and message sizes', () => {
     clock.advance(1000);
     expect(emu.eval('got')).toEqual({ ok: true, value: String(fits) });
     expect(emu.stats().mqttQueueUsed).toBe(0);
-    expect(rec.logs.some(line => line.includes('JS MQTT queue full or busy: dropped 3 event(s)'))).toBe(true);
+    expect(rec.logs.some(line => line.includes('JS MQTT queue or script heap full, or busy: dropped 3 event(s)'))).toBe(true);
   });
 
   it('a message larger than the MQTT in-buffer never reaches the script', async () => {
