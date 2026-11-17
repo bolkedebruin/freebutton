@@ -32,7 +32,9 @@
 //                               AccessDenied)
 //   DELETE /<b>/<key>           DeleteObject (as PUT; in app a key of any
 //                               extension except .tmp)
-//   OPTIONS /<b>[/...]          CORS preflight
+//   OPTIONS /<b>[/...]          405 MethodNotAllowed. A CORS preflight does not
+//                               get here: the server's CORS middleware
+//                               (Auth.cpp) answers every cross-origin OPTIONS.
 //
 // /fonts/... is also the URL of the IDE's own web fonts (www/fonts/*.woff2):
 // GET/HEAD there reach bucket fonts only from S3 clients (see isS3Request);
@@ -58,7 +60,8 @@
 //             Content-MD5 and CRC32 checked as for app); the commit is atomic
 //             and stores the body's MD5. Any failure, or a client that
 //             disconnects, aborts the upload: the old version stays.
-//   GET/HEAD  sent straight from the memory-mapped flash; ETag = the stored
+//   GET/HEAD  the TCP stack copies the body from the memory-mapped flash (no
+//             buffer of ours in between: StreamLogic.h); ETag = the stored
 //             MD5 ("<32 hex>"), Last-Modified = upload time (1970 when the
 //             clock was not set), Content-Type font/ttf, font/otf or
 //             application/octet-stream.
@@ -147,7 +150,7 @@ static constexpr char kLocationXml[] =
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
     "<LocationConstraint xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>";
 
-enum class Kind : uint8_t { Put = 2, List };
+enum class Kind : uint8_t { Put, List };
 
 bool s_putActive = false;
 
@@ -211,7 +214,6 @@ void dropWriter(PutState* p) {
     p->writer = nullptr;
 }
 
-// Drops the mapping of a media GetObject; idempotent.
 struct ListState {
     enum Phase : uint8_t { Header, Items, Footer, Done };
     enum Piece : uint8_t { None, HeaderPiece, ItemPiece, FooterPiece };
@@ -300,10 +302,6 @@ void releaseState(AsyncWebServerRequest* request) {
     }
 }
 
-void watchState(AsyncWebServerRequest* request) {
-    request->onDisconnect([request]() { releaseState(request); });
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -360,36 +358,40 @@ void sendHttpError(AsyncWebServerRequest* request, const s3::HttpError& e) {
     sendXmlError(request, e.status, e.code, e.msg);
 }
 
-// Space of the bucket's store: the media partition, or the LittleFS
-// filesystem (HeadBucket and listings; the IDE shows it under its file lists).
-void addMediaUsageHeaders(AsyncWebServerResponse* response);
-void addUsageHeaders(AsyncWebServerResponse* response, const s3::Bucket& bucket) {
-    if (bucket.isMedia()) {
-        addMediaUsageHeaders(response);
-        return;
-    }
+// A header with a decimal value.
+void addUintHeader(AsyncWebServerResponse* response, const char* name, uint32_t value) {
     char num[11];
-    snprintf(num, sizeof num, "%lu", static_cast<unsigned long>(LittleFS.totalBytes()));
-    response->addHeader(s3::kFsTotalHeader, num);
-    snprintf(num, sizeof num, "%lu", static_cast<unsigned long>(LittleFS.usedBytes()));
-    response->addHeader(s3::kFsUsedHeader, num);
+    snprintf(num, sizeof num, "%lu", static_cast<unsigned long>(value));
+    response->addHeader(name, num);
 }
 
-void addMediaUsageHeaders(AsyncWebServerResponse* response) {
+// Space of the bucket's store: the media partition, or the LittleFS
+// filesystem (HeadBucket and listings; the IDE shows it under its file lists).
+void addUsageHeaders(AsyncWebServerResponse* response, const s3::Bucket& bucket) {
+    if (!bucket.isMedia()) {
+        addUintHeader(response, s3::kFsTotalHeader, LittleFS.totalBytes());
+        addUintHeader(response, s3::kFsUsedHeader, LittleFS.usedBytes());
+        return;
+    }
     media_usage_t u{};
     media_usage(&u);
-    char num[11];
-    const auto add = [&](const char* name, uint32_t v) {
-        snprintf(num, sizeof num, "%lu", static_cast<unsigned long>(v));
-        response->addHeader(name, num);
-    };
-    add(s3::kMediaTotalHeader, u.total);
-    add(s3::kMediaUsedHeader, u.used);
-    add(s3::kMediaFreeHeader, u.free);
-    add(s3::kMediaReclaimableHeader, u.reclaimable);
-    add(s3::kMediaEraseSectorsHeader, u.erase_sectors);
-    add(s3::kMediaErasePageMaxHeader, u.erase_page_max);
-    add(s3::kMediaDirGenerationHeader, u.dir_generation);
+    addUintHeader(response, s3::kMediaTotalHeader, u.total);
+    addUintHeader(response, s3::kMediaUsedHeader, u.used);
+    addUintHeader(response, s3::kMediaFreeHeader, u.free);
+    addUintHeader(response, s3::kMediaReclaimableHeader, u.reclaimable);
+    addUintHeader(response, s3::kMediaEraseSectorsHeader, u.erase_sectors);
+    addUintHeader(response, s3::kMediaErasePageMaxHeader, u.erase_page_max);
+    addUintHeader(response, s3::kMediaDirGenerationHeader, u.dir_generation);
+}
+
+// After a committed PUT or a DELETE in a media bucket: whatever shows the
+// object follows.
+void notifyMediaChanged(const s3::Bucket& bucket) {
+    if (bucket.media == MEDIA_BUCKET_FONTS) {
+        fonts_request_reload();  // the LVGL task reloads the fonts 1.5 s after the last change
+    } else if (bucket.media == MEDIA_BUCKET_IMAGES) {
+        freebutton::ui::mediaImageNotifyChanged();  // items showing the key resolve it again
+    }
 }
 
 // MEDIA_OK / NOT_FOUND when the media bucket can be read (an empty bucket
@@ -421,13 +423,11 @@ void sendAuthError(AsyncWebServerRequest* request, const fbauth::Result& r) {
 }
 
 // Signature check for requests without a body (everything but PutObject):
-// the signed payload must be UNSIGNED-PAYLOAD or the hash of "".
+// the signed payload must be UNSIGNED-PAYLOAD, or the hash of "" with
+// Content-Length 0 (AuthLogic.h bodylessPayload).
 bool verifyNoBody(AsyncWebServerRequest* request, fbauth::Result& r) {
     if (!fbauth::verifyRequest(request, r)) return false;
-    if (r.payload == fbauth::Payload::Unsigned) return true;
-    uint8_t empty[32];
-    fbauth::fromHex(fbauth::kEmptySha256, empty, sizeof empty);
-    if (r.payload == fbauth::Payload::Sha256 && fbauth::digestEqual(r.payloadSha256, empty, 32)) return true;
+    if (fbauth::bodylessPayload(r, request->contentLength()) == fbauth::Bodyless::Ok) return true;
     r.status = fbauth::Status::SignatureDoesNotMatch;
     r.message = "x-amz-content-sha256 does not match the (empty) body";
     return false;
@@ -436,7 +436,7 @@ bool verifyNoBody(AsyncWebServerRequest* request, fbauth::Result& r) {
 void sendConstXml(AsyncWebServerRequest* request, const char* xml, size_t len) {
     AsyncWebServerResponse* response = stream::beginConst(xml, len, "application/xml");
     if (!response) {
-        sendXmlError(request, 503, "SlowDown", "out of memory");
+        sendHttpError(request, s3::kOutOfMemory);
         return;
     }
     request->send(response);
@@ -887,7 +887,7 @@ void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
 
     ListState* s = allocState<ListState>(request);
     if (!s) {
-        sendXmlError(request, 503, "SlowDown", "out of memory");
+        sendHttpError(request, s3::kOutOfMemory);
         return;
     }
     s->startedUs = esp_timer_get_time();
@@ -906,7 +906,7 @@ void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
         char mount[kMountMax + 1];
         const int mountLen = mountPoint(mount);
         if (mountLen < 0) {
-            sendXmlError(request, 503, "ServiceUnavailable", "filesystem not mounted");
+            sendHttpError(request, s3::kNotMounted);
             return;
         }
         s->baseLen = static_cast<uint8_t>(
@@ -946,7 +946,7 @@ void handleList(AsyncWebServerRequest* request, const s3::Bucket& bucket) {
         },
         request);
     if (!response) {
-        sendXmlError(request, 503, "SlowDown", "out of memory");
+        sendHttpError(request, s3::kOutOfMemory);
         return;
     }
     addUsageHeaders(response, bucket);
@@ -966,18 +966,18 @@ void addMediaStatHeaders(AsyncWebServerResponse* response, const uint8_t md5[16]
     response->addHeader("Last-Modified", date);
 }
 
-// GetObject / HeadObject in a media bucket. GET hands the mapped file to the
-// TCP stack by reference (StreamResponse.h): the file is mapped when the
-// download gets its turn and unmapped when its last byte is acknowledged.
+// GetObject / HeadObject in a media bucket. The file is mapped when the
+// download gets its turn and unmapped when the download ends; the TCP stack
+// copies each segment from the mapping (StreamResponse.h, StreamLogic.h).
 void handleMediaGet(AsyncWebServerRequest* request, const Target& t) {
     switch (s3::checkMediaReadKey(t.key, t.keyLen)) {
         case s3::MediaReadKey::Ok:
             break;
         case s3::MediaReadKey::Malformed:
-            sendXmlError(request, 400, "InvalidArgument", "invalid key");
+            sendHttpError(request, s3::kInvalidKey);
             return;
         case s3::MediaReadKey::Missing:
-            sendXmlError(request, 404, "NoSuchKey", "The specified key does not exist.");
+            sendHttpError(request, s3::kNoSuchKey);
             return;
     }
     char key[MEDIA_KEY_MAX + 1];
@@ -997,7 +997,7 @@ void handleMediaGet(AsyncWebServerRequest* request, const Target& t) {
     } else {
         response = stream::beginMedia(mb, key, st, type);
         if (!response) {
-            sendXmlError(request, 503, "SlowDown", "out of memory");
+            sendHttpError(request, s3::kOutOfMemory);
             return;
         }
     }
@@ -1011,21 +1011,21 @@ void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
         return;
     }
     if (!s3::keyWellFormed(t.key, t.keyLen, s3::kReadKeyMax)) {
-        sendXmlError(request, 400, "InvalidArgument", "invalid key");
+        sendHttpError(request, s3::kInvalidKey);
         return;
     }
     if (!s3::keyReadable(*t.bucket, t.key, t.keyLen)) {  // in another bucket's directory
-        sendXmlError(request, 404, "NoSuchKey", "The specified key does not exist.");
+        sendHttpError(request, s3::kNoSuchKey);
         return;
     }
     char path[kMountMax + 1 + s3::kDirMax + 1 + s3::kReadKeyMax + 1];
     if (!buildPath(*t.bucket, path, sizeof path, t.key, t.keyLen)) {
-        sendXmlError(request, 503, "ServiceUnavailable", "filesystem not mounted");
+        sendHttpError(request, s3::kNotMounted);
         return;
     }
     struct stat st{};
     if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
-        sendXmlError(request, 404, "NoSuchKey", "The specified key does not exist.");
+        sendHttpError(request, s3::kNoSuchKey);
         return;
     }
     const char* type = s3::contentTypeFor(t.key, t.keyLen);
@@ -1039,7 +1039,7 @@ void handleGetObject(AsyncWebServerRequest* request, const Target& t) {
         // Opened when the download gets its turn (StreamResponse.h).
         response = stream::beginFile(path, size, type);
         if (!response) {
-            sendXmlError(request, 503, "SlowDown", "out of memory");
+            sendHttpError(request, s3::kOutOfMemory);
             return;
         }
     }
@@ -1051,14 +1051,11 @@ s3::HttpError checkWrite(const Target& t, bool forDelete = false) {
     return s3::writeRefusal(*t.bucket, t.key, t.keyLen, forDelete);
 }
 
-bool writeKeyAllowed(AsyncWebServerRequest* request, const Target& t, bool forDelete = false) {
-    const s3::HttpError r = checkWrite(t, forDelete);
-    if (r.status) sendHttpError(request, r);
-    return r.status == 0;
-}
-
 void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
-    if (!writeKeyAllowed(request, t, true)) return;
+    if (const s3::HttpError r = checkWrite(t, true); r.status) {
+        sendHttpError(request, r);
+        return;
+    }
     if (t.bucket->isMedia()) {
         if (s3::mediaKeyDeleteProtected(*t.bucket, t.key, t.keyLen)) {
             sendXmlError(request, 403, "AccessDenied", "system font cannot be deleted");
@@ -1071,12 +1068,9 @@ void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
             sendHttpError(request, r);
             return;
         }
-        if (e == MEDIA_OK && t.bucket->media == MEDIA_BUCKET_FONTS) {
+        if (e == MEDIA_OK) {  // not for a key that was not there
             ESP_LOGI(TAG, "DELETE %s", request->url().c_str());
-            fonts_request_reload();  // the LVGL task reloads the fonts 1.5 s after the last change
-        } else if (e == MEDIA_OK && t.bucket->media == MEDIA_BUCKET_IMAGES) {
-            ESP_LOGI(TAG, "DELETE %s", request->url().c_str());
-            freebutton::ui::mediaImageNotifyChanged();  // items showing it re-resolve (and hide it)
+            notifyMediaChanged(*t.bucket);
         }
         AsyncWebServerResponse* response = request->beginResponse(204);
         request->send(response);
@@ -1088,15 +1082,12 @@ void handleDeleteObject(AsyncWebServerRequest* request, const Target& t) {
     }
     char path[kMountMax + 1 + s3::kWriteKeyMax + 1];
     if (!buildPath(*t.bucket, path, sizeof path, t.key, t.keyLen)) {
-        sendXmlError(request, 503, "ServiceUnavailable", "filesystem not mounted");
+        sendHttpError(request, s3::kNotMounted);
         return;
     }
     if (unlink(path) != 0 && errno != ENOENT) {
-        if (errno == EBUSY) {
-            sendXmlError(request, 503, "SlowDown", "file is in use, retry");
-        } else {
-            sendXmlError(request, 500, "InternalError", "delete failed");
-        }
+        if (errno == EBUSY) sendHttpError(request, s3::kFileInUse);
+        else sendXmlError(request, 500, "InternalError", "delete failed");
         return;
     }
     AsyncWebServerResponse* response = request->beginResponse(204);
@@ -1155,7 +1146,7 @@ void putSink(PutState* st, const uint8_t* data, size_t len) {
 PutState* putBegin(AsyncWebServerRequest* request) {
     PutState* st = allocState<PutState>(request);
     if (!st) return nullptr;
-    watchState(request);
+    request->onDisconnect([request]() { releaseState(request); });
 
     // Every write is signed. Verified before anything touches the
     // filesystem; a refused body is read and dropped.
@@ -1260,7 +1251,7 @@ PutState* putBegin(AsyncWebServerRequest* request) {
     const size_t finalLen = buildPath(*t.bucket, st->path, sizeof st->path, t.key, t.keyLen, s3::kTmpSuffix);
     if (!finalLen) {
         st->path[0] = '\0';
-        st->fail(503, "ServiceUnavailable", "filesystem not mounted");
+        st->fail(s3::kNotMounted);
         return st;
     }
     s_putActive = true;
@@ -1295,12 +1286,10 @@ void putFeed(PutState* st, const uint8_t* data, size_t len) {
             }
             return true;
         };
-        if (!st->dec.feed(data, len, onData, onChunkEnd)) st->fail(400, "InvalidRequest", "malformed aws-chunked body");
+        if (!st->dec.feed(data, len, onData, onChunkEnd)) st->fail(s3::kMalformedChunked);
         return;
     }
-    if (!st->dec.feed(data, len, onData)) {
-        st->fail(400, "InvalidRequest", "malformed aws-chunked body");
-    }
+    if (!st->dec.feed(data, len, onData)) st->fail(s3::kMalformedChunked);
 }
 
 void putBody(AsyncWebServerRequest* request, const uint8_t* data, size_t len) {
@@ -1347,7 +1336,7 @@ void putFinish(AsyncWebServerRequest* request) {
     auto* st = static_cast<PutState*>(request->_tempObject);
     if (!st) st = putBegin(request);  // empty body: no handleBody call
     if (!st || st->kind != Kind::Put) {
-        sendXmlError(request, 503, "SlowDown", "out of memory");
+        sendHttpError(request, s3::kOutOfMemory);
         return;
     }
     if (request->multipart()) st->fail(400, "InvalidRequest", "multipart/form-data bodies are not supported");
@@ -1377,10 +1366,8 @@ void putFinish(AsyncWebServerRequest* request) {
         uint32_t trailerCrc = 0;
         if (!s3::parseCrc32B64(st->dec.crc32B64(), strlen(st->dec.crc32B64()), &trailerCrc)) {
             st->fail(400, "InvalidRequest", "invalid x-amz-checksum-crc32 trailer");
-        } else if (trailerCrc != st->crc) {
-            st->fail(400, "BadDigest", "x-amz-checksum-crc32 does not match the body");
         }
-        st->haveCrc = true;
+        st->haveCrc = true;  // compared below, like the header's
         st->wantCrc = trailerCrc;
     }
     if (!st->status && st->haveCrc && st->wantCrc != st->crc) {
@@ -1425,7 +1412,7 @@ void putFinish(AsyncWebServerRequest* request) {
         memcpy(finalPath, st->path, st->finalLen);
         finalPath[st->finalLen] = '\0';
         if (rename(st->path, finalPath) != 0) {
-            if (errno == EBUSY) st->fail(503, "SlowDown", "file is in use, retry");
+            if (errno == EBUSY) st->fail(s3::kFileInUse);
             else st->fail(500, "InternalError", "rename failed");
         } else {
             st->committed = true;
@@ -1458,11 +1445,7 @@ void putFinish(AsyncWebServerRequest* request) {
     char etag[40];
     if (media) {
         s3::formatMd5ETag(md5, etag);
-        if (t.bucket->media == MEDIA_BUCKET_FONTS) {
-            fonts_request_reload();  // the LVGL task reloads the fonts 1.5 s after the last change
-        } else if (t.bucket->media == MEDIA_BUCKET_IMAGES) {
-            freebutton::ui::mediaImageNotifyChanged();  // items showing this key re-acquire it
-        }
+        notifyMediaChanged(*t.bucket);
     } else {
         struct stat fst{};
         stat(finalPath, &fst);
@@ -1482,17 +1465,6 @@ void putFinish(AsyncWebServerRequest* request) {
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
-
-void handlePreflight(AsyncWebServerRequest* request) {
-    AsyncWebServerResponse* response = request->beginResponse(200);
-    response->addHeader("Access-Control-Allow-Origin", "*");
-    response->addHeader("Access-Control-Allow-Methods", "GET, PUT, HEAD, DELETE");
-    const char* requested = headerValue(request, "Access-Control-Request-Headers");
-    response->addHeader("Access-Control-Allow-Headers", requested && *requested ? requested : "*");
-    response->addHeader("Access-Control-Expose-Headers", fbauth::kExposeHeaders);
-    response->addHeader("Access-Control-Max-Age", "600");
-    request->send(response);
-}
 
 class S3Handler final : public AsyncWebHandler {
 public:
@@ -1529,8 +1501,12 @@ public:
     void handleRequest(AsyncWebServerRequest* request) override {
         const Target t = parseTarget(request->url());
         const auto method = request->method();
-        if (method == HTTP_OPTIONS && t.type != Target::Root) {
-            handlePreflight(request);
+        // Not a CORS preflight (the CORS middleware answered those): an
+        // OPTIONS from the same origin or without an Origin. No signature
+        // is asked for a method the API does not have.
+        if (method == HTTP_OPTIONS) {
+            sendXmlError(request, 405, "MethodNotAllowed",
+                         "The specified method is not allowed against this resource.");
             return;
         }
         // Signatures: reads of the public buckets and ListBuckets are

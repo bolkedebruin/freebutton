@@ -7,7 +7,7 @@
 // As before: "/" is index.html; "<file>.gz" is sent for "<file>" with
 // Content-Encoding: gzip; an ETag answers If-None-Match with 304; files with
 // a content hash in their name and the IDE's web fonts may be kept by the
-// browser (StaticCache.h), everything else is checked on every load.
+// browser (StreamLogic.h cacheControlFor), everything else is checked on every load.
 //
 #ifndef FREEBUTTON_STATICFILES_H
 #define FREEBUTTON_STATICFILES_H

@@ -579,6 +579,37 @@ void test_replay_cache_same_second() {
     TEST_ASSERT_FALSE(c.check(sig, 7000) == ReplayCache::Verdict::Fresh);
 }
 
+void test_bodyless_payload() {
+    using fbauth::Bodyless;
+    using fbauth::bodylessPayload;
+    fbauth::Result r;
+    r.status = Status::Ok;
+
+    // UNSIGNED-PAYLOAD: accepted, with or without a body (nobody hashes it)
+    r.payload = Payload::Unsigned;
+    TEST_ASSERT_TRUE(bodylessPayload(r, 0) == Bodyless::Ok);
+    TEST_ASSERT_TRUE(bodylessPayload(r, 4096) == Bodyless::Ok);
+
+    // the hash of "": only with Content-Length 0
+    r.payload = Payload::Sha256;
+    TEST_ASSERT_TRUE(fromHex(kEmptySha256, r.payloadSha256, 32));
+    TEST_ASSERT_TRUE(bodylessPayload(r, 0) == Bodyless::Ok);
+    TEST_ASSERT_TRUE(bodylessPayload(r, 1) == Bodyless::HasBody);
+
+    // another hash: wrong for no body, and a body is not hashed here
+    r.payloadSha256[31] ^= 1;
+    TEST_ASSERT_TRUE(bodylessPayload(r, 0) == Bodyless::HashMismatch);
+    TEST_ASSERT_TRUE(bodylessPayload(r, 12) == Bodyless::HasBody);
+
+    // aws-chunked payloads always carry a body
+    TEST_ASSERT_TRUE(fromHex(kEmptySha256, r.payloadSha256, 32));
+    r.payload = Payload::Streaming;
+    TEST_ASSERT_TRUE(bodylessPayload(r, 0) == Bodyless::HasBody);
+    r.payload = Payload::UnsignedStreaming;
+    TEST_ASSERT_TRUE(bodylessPayload(r, 0) == Bodyless::HasBody);
+    TEST_ASSERT_TRUE(bodylessPayload(r, 100) == Bodyless::HasBody);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_sha256_and_hmac_known_answers);
@@ -598,5 +629,6 @@ int main(int, char**) {
     RUN_TEST(test_credentials_format);
     RUN_TEST(test_replay_cache);
     RUN_TEST(test_replay_cache_same_second);
+    RUN_TEST(test_bodyless_payload);
     return UNITY_END();
 }

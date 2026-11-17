@@ -18,15 +18,10 @@
 #include "drivers/LvglDisplay.h"
 #include "ui/ProgressBar.h"
 #include "scripting/ScriptEngine.h"
+#include "scripting/WebSocketREPL.h"
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/mqtt_binding.h"
 #include "media/media_store.h"
-
-// Forward declaration - avoid include order issues with ESPAsyncWebServer
-namespace Scripting {
-    void cleanupWebSocketClients();
-    void processWebSocketRepl();
-}
 
 #ifdef FB_HEAP_PROBE
 void heapProbeStart();   // src/debug/heap_probe.cpp

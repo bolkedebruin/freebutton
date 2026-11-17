@@ -51,6 +51,46 @@ static void test_content_types() {
     TEST_ASSERT_EQUAL_STRING("text/plain", type("/www/assets/fb-emulator.stamp.txt.gz"));
     TEST_ASSERT_EQUAL_STRING("application/octet-stream", type("/www/assets/x.gz"));
     TEST_ASSERT_EQUAL_STRING("application/octet-stream", type("/www/unknown"));
+    TEST_ASSERT_EQUAL_STRING("application/json", type("/www/assets/ide-DXPoTqIV.js.map"));
+    TEST_ASSERT_EQUAL_STRING("font/ttf", type("/www/fonts/medium.ttf"));
+    TEST_ASSERT_EQUAL_STRING("font/otf", type("/www/fonts/medium.otf"));  // from the S3 table
+}
+
+static const char* cache(const char* url) { return stream::cacheControlFor(url, strlen(url)); }
+
+static void test_cache_control() {
+    static const char kForGood[] = "public, max-age=31536000, immutable";
+    static const char kWeek[] = "public, max-age=604800";
+    // a content hash in the name: kept for good
+    TEST_ASSERT_EQUAL_STRING(kForGood, cache("/assets/index-DSSHvBwi.js"));
+    TEST_ASSERT_EQUAL_STRING(kForGood, cache("/assets/index-C4K7GXCf.css"));
+    TEST_ASSERT_EQUAL_STRING(kForGood, cache("/assets/ide-a1b2c3d4.js"));
+    TEST_ASSERT_EQUAL_STRING(kForGood, cache("/assets/a-b_c-1234.js"));
+    // no hash: checked on every load
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/fb-emulator.wasm"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/fb-emulator.stamp.txt"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/index.html"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache(""));
+    // eight lower-case letters are a word, not a hash
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/mquickjs-compiler.js"));
+    // the hash must be exactly eight of [A-Za-z0-9_-] after a '-', before the last '.'
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/index-DSSHvBw.js"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/index-DSS.vBwi.js"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/index-DSS$vBwi.js"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/index-DSSHvBwi"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/DSSHvBwi.js"));
+    // only below /assets/
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/index-DSSHvBwi.js"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/other/index-DSSHvBwi.js"));
+    // the IDE's web fonts: a week
+    TEST_ASSERT_EQUAL_STRING(kWeek, cache("/fonts/inter.woff2"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/fonts/inter.woff"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/fonts/medium.ttf"));
+    TEST_ASSERT_EQUAL_STRING("no-cache", cache("/assets/inter.woff2"));
+    TEST_ASSERT_TRUE(stream::isHashedAssetUrl("/assets/index-DSSHvBwi.js", 25));
+    TEST_ASSERT_FALSE(stream::isHashedAssetUrl("/assets/index-DSSHvBwi.js", 22));  // not NUL-bound: the length counts
+    TEST_ASSERT_TRUE(stream::isWebFontUrl("/fonts/inter.woff2", 18));
 }
 
 static bool path(const char* url, char* out, size_t size = stream::kStaticPathMax + 1) {
@@ -164,6 +204,7 @@ int main() {
     RUN_TEST(test_stall_survives_clock_wrap);
     RUN_TEST(test_piece_is_at_most_one_segment);
     RUN_TEST(test_content_types);
+    RUN_TEST(test_cache_control);
     RUN_TEST(test_static_paths);
     RUN_TEST(test_static_paths_refused);
     RUN_TEST(test_static_path_leaves_room_for_gz);

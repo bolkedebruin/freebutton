@@ -7,7 +7,6 @@
 #include "components/ConfigManager.h"
 #include "json/WindowOutputStream.h"
 #include "Update.h"
-#include "OtaManager.h"
 #include "scripting/BytecodeWriter.h"
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/WebSocketREPL.h"
@@ -19,7 +18,6 @@
 #include "StreamResponse.h"
 #include "Auth.h"
 #include "RequestGuard.h"
-#include <ArduinoJson.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_system.h>
@@ -50,124 +48,47 @@ static void sendOrBusy(AsyncWebServerRequest *request, AsyncWebServerResponse *r
     }
 }
 
-void handleConfig(AsyncWebServerRequest *request) {
+// write is a plain function (no closure: nothing on the heap); it runs once
+// to count and once per chunk, and must write the same text every time.
+using JsonWriterFn = void (*)(WindowOutputStream& out);
+
+static void sendGeneratedJson(AsyncWebServerRequest *request, JsonWriterFn write) {
     WindowOutputStream counter;
-    configManager.write(counter);
+    write(counter);
 
     sendOrBusy(request, stream::beginGenerated(
         counter.total(), "application/json",
-        [](void*, uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
+        [](void* context, uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
             WindowOutputStream window(buffer, index, maxLen);
-            configManager.write(window);
+            reinterpret_cast<JsonWriterFn>(context)(window);
             return window.copied();
-        }, nullptr));
+        }, reinterpret_cast<void*>(write)));
+}
+
+void handleConfig(AsyncWebServerRequest *request) {
+    sendGeneratedJson(request, [](WindowOutputStream& out) { configManager.write(out); });
+}
+
+// Restarts the device 500 ms from now, from an esp_timer: the answer to the
+// request goes out first, and nothing waits with delay() on the async_tcp
+// task (the answer would not be sent before the restart). False when the
+// timer cannot be made; nothing restarts then.
+static bool scheduleRestart() {
+    static esp_timer_handle_t timer = nullptr;
+    if (!timer) {
+        esp_timer_create_args_t args = {};
+        args.callback = [](void*) { esp_restart(); };
+        args.name = "reboot";
+        if (esp_timer_create(&args, &timer) != ESP_OK) {
+            timer = nullptr;
+            return false;
+        }
+    }
+    esp_timer_start_once(timer, 500 * 1000);  // already running: keep that one
+    return true;
 }
 
 // OTA Update Functionality
-
-static constexpr std::string_view upgradePage = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-    <title>FreeButton Update</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            margin-top: 50px;
-        }
-        h2 {
-            color: #333;
-        }
-        form {
-            margin-bottom: 20px;
-        }
-        #progress {
-            width: 100%;
-            background-color: #f3f3f3;
-        }
-        #bar {
-            width: 0%;
-            height: 30px;
-            background-color: #4caf50;
-        }
-    </style>
-</head>
-<body>
-    <h2>FreeButton Update</h2>
-    <form id="uploadForm" method="POST" action="/upload" enctype="multipart/form-data">
-        <select id="updateType" name="updateType">
-            <option value="firmware">Firmware Update</option>
-            <option value="filesystem">Filesystem Update</option>
-        </select>
-        <input type="file" name="updateFile" required>
-        <input type="submit" value="Upload Update" id="uploadButton">
-    </form>
-    <div id="progress">
-        <div id="bar"></div>
-    </div>
-    <button id="otaButton" onclick="triggerOtaUpdate()" disabled>Trigger OTA Update</button>
-
-    <script>
-        const form = document.getElementById('uploadForm');
-        const otaButton = document.getElementById('otaButton');
-        const progress = document.getElementById('progress');
-        const bar = document.getElementById('bar');
-        const uploadButton = document.getElementById('uploadButton');
-
-        form.onsubmit = function(event) {
-            event.preventDefault();
-            const formData = new FormData(form);
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/upload', true);
-
-            xhr.upload.onprogress = function(event) {
-                if (event.lengthComputable) {
-                    const percentComplete = (event.loaded / event.total) * 100;
-                    bar.style.width = percentComplete + '%';
-                }
-            };
-
-            xhr.onload = function() {
-                uploadButton.disabled = false;
-                if (xhr.status == 200) {
-                    alert(xhr.responseText);
-                    if (xhr.responseText.includes('Upload complete')) {
-                        otaButton.disabled = false;
-                    }
-                } else {
-                    alert('Upload failed');
-                }
-            };
-
-            xhr.onerror = function() {
-                uploadButton.disabled = false;
-                alert('Network error');
-            };
-
-            uploadButton.disabled = true;
-            xhr.send(formData);
-        };
-
-        function triggerOtaUpdate() {
-            fetch('/ota_update', {
-                method: 'POST'
-            }).then(response => response.text()).then(data => {
-                alert(data);
-            }).catch(error => {
-                console.error('Error:', error);
-            });
-        }
-    </script>
-</body>
-</html>
-)rawliteral";
-
-void handleUpgradePage(AsyncWebServerRequest *request) {
-    // Sent from flash: the page that recovers a device must not need heap
-    // for a copy of itself.
-    sendOrBusy(request, stream::beginConst(upgradePage.data(), upgradePage.size(), "text/html"));
-}
 
 // OTA upload state (async_tcp task only). One upload at a time: its request
 // owns the updater until it disconnects.
@@ -216,8 +137,9 @@ static bool beginUpdate(int command) {
 // then LittleFS is unmounted, so nothing reads the partition while it is
 // rewritten (S3 answers 503, static files 404 meanwhile). Apply with
 // /ota_update (reboot). A failure after writing started leaves the
-// filesystem unusable until a successful upload; the flash-resident
-// /upgrade page and this endpoint keep working.
+// filesystem unusable until a successful upload; this endpoint needs no
+// filesystem and keeps working: send the image again
+// (tools/scripts/ota_fs.py, or an IDE page that is still open).
 void onFileUpload(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
     if (!index) {
         if (s_uploadOwner && s_uploadOwner != request) {
@@ -307,35 +229,17 @@ void handleFirmwareUpload(AsyncWebServerRequest *request) {
         request->send(500, "text/plain",
                       s_fsUnmounted ? "Upload failed; the filesystem must be uploaded again." : "Upload failed.");
     } else {
-        request->send(200, "text/plain", "Upload complete. Click 'Trigger OTA Update' to apply.");
+        request->send(200, "text/plain", "Upload complete. POST /ota_update applies it.");
     }
 }
 
 void handleOtaUpdate(AsyncWebServerRequest *request) {
     if (Update.hasError()) {
         request->send(500, "text/plain", "Update failed.");
+    } else if (!scheduleRestart()) {
+        request->send(500, "text/plain", "Update stored, but the restart could not be scheduled.");
     } else {
         request->send(200, "text/plain", "Update successful. Rebooting...");
-        delay(1000);
-        ESP.restart();
-    }
-}
-
-void handleRemoteFirmwareUpdate(AsyncWebServerRequest *request) {
-    ESP_LOGI(TAG, "Remote firmware update requested");
-
-    int firmware_id = 0;
-    if (request->hasParam("id")) {
-        // strtol, not std::stoi: without exceptions a non-numeric id aborts the firmware.
-        firmware_id = static_cast<int>(strtol(request->getParam("id")->value().c_str(), nullptr, 10));
-        ESP_LOGI(TAG, "Firmware ID: %d", firmware_id);
-    }
-
-    OtaResult result = ota_start_remote_update(firmware_id);
-    if (result == OtaResult::SUCCESS) {
-        request->send(200, "text/plain", "Remote firmware update initiated...");
-    } else {
-        request->send(500, "text/plain", "Failed to start OTA update");
     }
 }
 
@@ -504,10 +408,9 @@ void handleBytecodeUpload(AsyncWebServerRequest *request) {
     }
 }
 
-// GET /api/bytecode/list: the registry's active entries, rendered twice into
-// the response window (count, then per TCP chunk) like /config.
-template <class S>
-static void writeBytecodeList(S& out) {
+// GET /api/bytecode/list: the registry's active entries, generated like
+// /config (sendGeneratedJson).
+static void writeBytecodeList(WindowOutputStream& out) {
     auto put = [&out](const char* s) { while (*s) out.Put(*s++); };
     put("{\"entries\":[");
     bool first = true;
@@ -529,65 +432,44 @@ static void writeBytecodeList(S& out) {
 }
 
 static void handleBytecodeList(AsyncWebServerRequest *request) {
-    WindowOutputStream counter;
-    writeBytecodeList(counter);
-    sendOrBusy(request, stream::beginGenerated(
-        counter.total(), "application/json",
-        [](void*, uint8_t *buffer, const size_t maxLen, const size_t index) -> size_t {
-            WindowOutputStream window(buffer, index, maxLen);
-            writeBytecodeList(window);
-            return window.copied();
-        }, nullptr));
+    sendGeneratedJson(request, writeBytecodeList);
 }
 
-// POST /api/reboot: answer first, restart 500 ms later from an esp_timer
-// (never delay() on the async_tcp task).
+// POST /api/reboot: answer first, then restart (scheduleRestart).
 static void handleReboot(AsyncWebServerRequest *request) {
-    static esp_timer_handle_t timer = nullptr;
-    if (!timer) {
-        esp_timer_create_args_t args = {};
-        args.callback = [](void*) { esp_restart(); };
-        args.name = "reboot";
-        if (esp_timer_create(&args, &timer) != ESP_OK) {
-            timer = nullptr;
-            request->send(500, "application/json", R"({"status":"error","message":"timer"})");
-            return;
-        }
+    if (!scheduleRestart()) {
+        request->send(500, "application/json", R"({"status":"error","message":"timer"})");
+        return;
     }
     ESP_LOGI(TAG, "Reboot requested over HTTP");
-    esp_timer_start_once(timer, 500 * 1000);  // already running: keep that one
     request->send(200, "application/json", R"({"status":"rebooting"})");
 }
 
 void webserver_start() {
-    // The web IDE is now served locally from LittleFS /www/ (same-origin), so the
-    // wildcard CORS + Private-Network-Access DefaultHeaders that the former
-    // externally-hosted (cross-origin) IDE required are no longer needed and
-    // have been removed. Cross-origin (dev) clients get CORS headers from the
-    // auth middleware (fbauth::installGate).
-    // The HTTP_OPTIONS -> 200 preflight guard is kept in onNotFound for any
-    // remaining tooling that issues a CORS preflight against the API.
+    // The web IDE is served from LittleFS /www/ (same origin) and needs no
+    // CORS headers. A cross-origin client (dev: the IDE served by Vite) gets
+    // them from the CORS middleware (fbauth::installGate), which also answers
+    // every cross-origin OPTIONS (the preflight) itself, before any handler.
+    // An OPTIONS from the same origin or without an Origin is not a
+    // preflight and gets what any request without a route gets: 404 below,
+    // 405 from the S3 handler for a bucket path.
 
     // SigV4 authentication (Auth.h, docs/AUTH.md). The gate must be the FIRST
     // handler: it takes over a protected request whose signature fails at the
     // end of its headers, before any body byte reaches a handler. Signature
-    // required: POST /api/reboot, /upload, /ota_update, /updatefirmware,
+    // required: POST /api/reboot, /upload, /ota_update,
     // /resetWifi, /api/bytecode/upload; GET /config; the /ws/repl upgrade.
     // Anonymous: /api/version, /api/device, /api/bytecode/list,
-    // /api/bytecode/next_address, the /upgrade page (its unsigned form
-    // post now gets 403), static www, captive portal, OPTIONS.
+    // /api/bytecode/next_address, static www, captive portal, CORS
+    // preflights (cross-origin OPTIONS).
     fbauth::init();
     fbauth::installGate(server);
     // Bodies nobody consumes are refused (RequestGuard.h).
     guard::install(server);
 
-    // No route and no static file: 404. (OPTIONS and the captive portal are
-    // answered first.)
+    // No route and no static file: 404. (The captive portal is answered
+    // first.)
     server.onNotFound([](AsyncWebServerRequest *request){
-        if (request->method() == HTTP_OPTIONS) {
-            request->send(200);
-            return;
-        }
         // Captive portal: OS connectivity probes (/hotspot-detect.html,
         // /generate_204, /connecttest.txt, ...) resolve to us via the portal's
         // DNS. Redirect every unknown GET to the WiFi setup page.
@@ -635,6 +517,8 @@ void webserver_start() {
     });
 
     // POST only (and signed): as a GET it was a one-click WiFi wipe for any page.
+    // Not on scheduleRestart(): reset_wifi_credentials() writes NVS, stops
+    // WiFi and waits itself, which is too much for the esp_timer task.
     server.on("/resetWifi", HTTP_POST, [](AsyncWebServerRequest *request){
         request->send(200, "text/plain", "Resetting WiFi settings and rebooting...");
         delay(1000);
@@ -642,10 +526,10 @@ void webserver_start() {
     });
 
     // OTA endpoints
-    server.on("/upgrade", HTTP_GET, handleUpgradePage);
+    // (The former /upgrade page is gone: its form could not sign the upload.)
     server.on("/upload", HTTP_POST, handleFirmwareUpload, onFileUpload);
     server.on("/ota_update", HTTP_POST, handleOtaUpdate);
-    server.on("/updatefirmware", HTTP_POST, handleRemoteFirmwareUpdate);
+    // (The former /updatefirmware, a download from a firmware server, is gone.)
 
     // Bytecode upload endpoints (the former /bytecode dev page was removed:
     // its unsigned upload was refused; upload from the IDE).

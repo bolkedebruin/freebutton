@@ -278,7 +278,8 @@ public:
 
     /**
      * Write configuration to an output stream as JSON
-     * @param stream Output stream to write to (e.g., AsyncJsonOutputStream, FileOutputStream)
+     * @param stream Output stream to write to: anything with RapidJSON's
+     *               Put(char) / Flush() (e.g. WindowOutputStream)
      */
     template<class OutputStream>
     void write(OutputStream &stream);

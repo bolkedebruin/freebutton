@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "TextLogic.h"
+
 namespace stream {
 
 // ---------------------------------------------------------------------------
@@ -105,10 +107,9 @@ inline size_t generatedPiece(size_t tcpRoom, size_t remaining, bool chunked) {
 
 // Writes the chunk head for n data bytes (n <= 0xfff) into out[kChunkHead].
 inline void chunkHead(size_t n, char* out) {
-    static constexpr char hex[] = "0123456789abcdef";
-    out[0] = hex[(n >> 8) & 0xf];
-    out[1] = hex[(n >> 4) & 0xf];
-    out[2] = hex[n & 0xf];
+    out[0] = fbtext::kHexLower[(n >> 8) & 0xf];
+    out[1] = fbtext::kHexLower[(n >> 4) & 0xf];
+    out[2] = fbtext::kHexLower[n & 0xf];
     out[3] = '\r';
     out[4] = '\n';
 }
@@ -131,27 +132,12 @@ inline void chunkHead(size_t n, char* out) {
 // The web IDE's files (LittleFS /www)
 // ---------------------------------------------------------------------------
 
-inline bool endsWith(const char* s, size_t len, const char* suffix) {
-    const size_t n = strlen(suffix);
-    return len >= n && memcmp(s + len - n, suffix, n) == 0;
-}
+using fbtext::endsWith;
 
 // Content type from the name; a trailing ".gz" is not part of the name.
 inline const char* staticContentType(const char* path, size_t len) {
     if (endsWith(path, len, ".gz")) len -= 3;
-    if (endsWith(path, len, ".js") || endsWith(path, len, ".mjs")) return "application/javascript";
-    if (endsWith(path, len, ".css")) return "text/css";
-    if (endsWith(path, len, ".html") || endsWith(path, len, ".htm")) return "text/html";
-    if (endsWith(path, len, ".wasm")) return "application/wasm";
-    if (endsWith(path, len, ".json") || endsWith(path, len, ".map")) return "application/json";
-    if (endsWith(path, len, ".woff2")) return "font/woff2";
-    if (endsWith(path, len, ".woff")) return "font/woff";
-    if (endsWith(path, len, ".ttf")) return "font/ttf";
-    if (endsWith(path, len, ".svg")) return "image/svg+xml";
-    if (endsWith(path, len, ".png")) return "image/png";
-    if (endsWith(path, len, ".ico")) return "image/x-icon";
-    if (endsWith(path, len, ".txt")) return "text/plain";
-    return "application/octet-stream";
+    return fbtext::contentTypeByExtension(path, len);
 }
 
 constexpr size_t kStaticPathMax = 127;  // "/www" + URL + "index.html" + ".gz"
@@ -185,6 +171,50 @@ inline bool staticPath(const char* url, size_t urlLen, char* out, size_t outSize
     }
     out[n] = '\0';
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Which of the IDE's files a browser may keep
+// ---------------------------------------------------------------------------
+
+// "/assets/ide-BTquvnIq.js": a file whose name carries a hash of its content
+// (the bundler's "-<8 characters>" before the extension). It never changes,
+// so a browser may keep it for good. A hash of lower-case letters only is
+// not recognised and is then checked again on every load, which is safe.
+inline bool isHashedAssetUrl(const char* url, size_t len) {
+    constexpr size_t kPrefixLen = 8;  // "/assets/"
+    constexpr size_t kHashLen = 8;
+    if (len < kPrefixLen || memcmp(url, "/assets/", kPrefixLen) != 0) return false;
+    size_t dot = len;  // the last '.'
+    while (dot > 0 && url[dot - 1] != '.') --dot;
+    if (dot == 0) return false;
+    --dot;
+    if (dot < kHashLen + 1 || url[dot - kHashLen - 1] != '-') return false;
+    // A hash has capitals or digits; a word such as "-compiler" has not
+    // ("mquickjs-compiler.js" is not hashed and does change).
+    bool mixed = false;
+    for (size_t i = dot - kHashLen; i < dot; ++i) {
+        const char c = url[i];
+        const bool lower = c >= 'a' && c <= 'z';
+        const bool other = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!lower && !other) return false;
+        mixed = mixed || other;
+    }
+    return mixed;
+}
+
+// The IDE's own web fonts (/fonts/*.woff2 in /www/): replaced only with an
+// IDE update.
+inline bool isWebFontUrl(const char* url, size_t len) {
+    return len >= 7 && memcmp(url, "/fonts/", 7) == 0 && endsWith(url, len, ".woff2");
+}
+
+// Cache-Control of a static file, from its URL: a hashed asset for good, a
+// web font for a week, everything else checked on every load (ETag).
+inline const char* cacheControlFor(const char* url, size_t len) {
+    if (isHashedAssetUrl(url, len)) return "public, max-age=31536000, immutable";
+    if (isWebFontUrl(url, len)) return "public, max-age=604800";
+    return "no-cache";
 }
 
 // ETag of a static file: for a .gz the CRC-32 of its content (the gzip

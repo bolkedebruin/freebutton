@@ -330,14 +330,6 @@ void WebSocketREPL::broadcastConsole(std::string_view message) {
     }
 }
 
-bool WebSocketREPL::hasClients() const noexcept {
-    return ws_ && ws_->count() > 0;
-}
-
-size_t WebSocketREPL::clientCount() const noexcept {
-    return ws_ ? ws_->count() : 0;
-}
-
 void WebSocketREPL::cleanupClients() {
     if (!ws_) return;
     // New API keys: a console that was opened with the old ones must not
@@ -352,7 +344,7 @@ void WebSocketREPL::requestCloseAll() {
     closeAllRequested_.store(true);
 }
 
-// Free function for easy access from main loop without include issues
+// Free functions for the main loop
 void cleanupWebSocketClients() {
     WebSocketREPL::getInstance().cleanupClients();
 }

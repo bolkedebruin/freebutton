@@ -143,7 +143,6 @@ Signature required (anything else gets 403):
 | `POST /api/reboot` | no body: `UNSIGNED-PAYLOAD` or the empty-body hash |
 | `POST /upload` (firmware / filesystem image, multipart) | `UNSIGNED-PAYLOAD` |
 | `POST /ota_update` | no body |
-| `POST /updatefirmware` | no body |
 | `POST /resetWifi` (now POST only) | no body |
 | `POST /api/bytecode/upload` (multipart) | `UNSIGNED-PAYLOAD` |
 | `GET /config` (contains secrets) | no body |
@@ -163,13 +162,13 @@ itself is not integrity-protected by the signature (the firmware image has
 its own checksum, a filesystem image its LittleFS magic).
 
 Anonymous: `GET /api/version`, `GET /api/device`, `GET /api/bytecode/list`,
-`GET /api/bytecode/next_address`, the `/upgrade` page (its own unsigned form
-post to `/upload` now gets 403: use the IDE or `tools/scripts/ota_fs.py` with
-signing), static
+`GET /api/bytecode/next_address`, static
 files (`/www`), the captive portal (`/`, `/scan`, `/connect` in AP mode),
 and CORS preflights (`OPTIONS`). The former `/bytecode` dev page (its upload was refused) and its file
 `bytecode_upload.html` were removed. The former `/ws-test` page was removed: it
-could not sign the WebSocket upgrade.
+could not sign the WebSocket upgrade. The former `/upgrade` page was removed:
+its form could not sign the upload (use the IDE, or `tools/scripts/ota_fs.py`
+for a filesystem image).
 
 The S3 API (`S3Server`) verifies with the same API (see below). Anonymous
 there: reads of the buckets `web`, `examples`, `fonts` and ListBuckets;

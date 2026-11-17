@@ -48,7 +48,6 @@ constexpr const char* kProtected[] = {
     "/api/reboot",          // POST
     "/upload",              // POST multipart: firmware / filesystem image
     "/ota_update",          // POST: apply the upload (reboot)
-    "/updatefirmware",      // POST: remote OTA
     "/resetWifi",           // POST: forget WiFi + reboot
     "/api/bytecode/upload", // POST multipart
     "/config",              // GET: contains secrets (WiFi / MQTT passwords)
@@ -212,14 +211,15 @@ bool checkProtected(AsyncWebServerRequest* request, Result& res) {
         res.message = "X-Amz-Expires of the console URL must be at most 300";
         return false;
     }
-    if (res.payload == Payload::Unsigned) return true;
-    if (res.payload == Payload::Sha256 && request->contentLength() == 0) {
-        uint8_t empty[32];
-        fromHex(kEmptySha256, empty, 32);
-        if (digestEqual(empty, res.payloadSha256, 32)) return true;
-        res.status = Status::SignatureDoesNotMatch;
-        res.message = "x-amz-content-sha256 does not match the empty body";
-        return false;
+    switch (bodylessPayload(res, request->contentLength())) {
+        case Bodyless::Ok:
+            return true;
+        case Bodyless::HashMismatch:
+            res.status = Status::SignatureDoesNotMatch;
+            res.message = "x-amz-content-sha256 does not match the empty body";
+            return false;
+        case Bodyless::HasBody:
+            break;
     }
     res.status = Status::AccessDenied;
     res.message = "this endpoint does not check body hashes: sign the body as UNSIGNED-PAYLOAD";

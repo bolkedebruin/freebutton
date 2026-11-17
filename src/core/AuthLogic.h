@@ -43,6 +43,8 @@
 #include <cstring>
 #include <string_view>
 
+#include "TextLogic.h"
+
 namespace fbauth {
 
 using sv = std::string_view;
@@ -121,10 +123,12 @@ struct Result {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-inline bool isUnreserved(unsigned char c) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-           c == '-' || c == '_' || c == '.' || c == '~';
-}
+// Shared with the S3 and download rules (TextLogic.h).
+using fbtext::formatHttpDate;  // RFC 1123 HTTP Date, 30 bytes incl. NUL
+using fbtext::hexNibble;
+using fbtext::isUnreserved;
+using fbtext::putDigits;
+using fbtext::toHex;
 
 inline char lowerAscii(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; }
 
@@ -134,21 +138,6 @@ inline bool equalsIgnoreCase(sv a, sv b) {
         if (lowerAscii(a[i]) != lowerAscii(b[i])) return false;
     }
     return true;
-}
-
-inline void toHex(const uint8_t* in, size_t n, char* out) {
-    static constexpr char kDigits[] = "0123456789abcdef";
-    for (size_t i = 0; i < n; ++i) {
-        out[2 * i] = kDigits[in[i] >> 4];
-        out[2 * i + 1] = kDigits[in[i] & 15];
-    }
-}
-
-inline int hexNibble(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
 }
 
 // Exactly 2*n hex digits (either case) into n bytes.
@@ -198,39 +187,9 @@ inline bool parseAmzDate(sv s, int64_t& epoch) {
     return true;
 }
 
-// Seconds since the epoch (>= 0, i.e. 1970 or later) -> UTC calendar fields.
-struct CivilTime {
-    unsigned year, month, day, hour, minute, second, weekday;  // weekday 0 = Sunday
-};
-
-inline CivilTime civilFromEpoch(int64_t epoch) {
-    if (epoch < 0) epoch = 0;
-    const uint32_t days = static_cast<uint32_t>(epoch / 86400);
-    const uint32_t rem = static_cast<uint32_t>(epoch - static_cast<int64_t>(days) * 86400);
-    // civil_from_days (H. Hinnant), era >= 0 here
-    const uint32_t z = days + 719468;
-    const uint32_t era = z / 146097;
-    const uint32_t doe = z - era * 146097;
-    const uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const uint32_t mp = (5 * doy + 2) / 153;
-    CivilTime t;
-    t.day = doy - (153 * mp + 2) / 5 + 1;
-    t.month = mp < 10 ? mp + 3 : mp - 9;
-    t.year = yoe + era * 400 + (t.month <= 2 ? 1 : 0);
-    t.hour = rem / 3600;
-    t.minute = (rem / 60) % 60;
-    t.second = rem % 60;
-    t.weekday = (days + 4) % 7;  // 1970-01-01 was a Thursday
-    return t;
-}
-
-inline void putDigits(char* out, unsigned val, size_t len) {
-    for (size_t i = 0; i < len; ++i) {
-        out[len - 1 - i] = static_cast<char>('0' + val % 10);
-        val /= 10;
-    }
-}
+// Seconds since the epoch -> UTC calendar fields (1970 up to 2106: TextLogic.h).
+using CivilTime = fbtext::Civil;
+inline CivilTime civilFromEpoch(int64_t epoch) { return fbtext::toCivil(epoch); }
 
 // -> "yyyymmddThhmmssZ" (17 bytes incl. NUL).
 inline void formatAmzDate(int64_t epoch, char out[17]) {
@@ -244,29 +203,6 @@ inline void formatAmzDate(int64_t epoch, char out[17]) {
     putDigits(out + 13, t.second, 2);
     out[15] = 'Z';
     out[16] = '\0';
-}
-
-// -> RFC 1123 "Sun, 08 Nov 2026 12:00:00 GMT" (30 bytes incl. NUL), the HTTP
-// Date header (no strftime: it would pull ~12 KB of newlib printf code).
-inline void formatHttpDate(int64_t epoch, char out[30]) {
-    static constexpr char kDays[] = "SunMonTueWedThuFriSat";
-    static constexpr char kMonths[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    const CivilTime t = civilFromEpoch(epoch);
-    memcpy(out, kDays + 3 * t.weekday, 3);
-    out[3] = ',';
-    out[4] = ' ';
-    putDigits(out + 5, t.day, 2);
-    out[7] = ' ';
-    memcpy(out + 8, kMonths + 3 * (t.month - 1), 3);
-    out[11] = ' ';
-    putDigits(out + 12, t.year, 4);
-    out[16] = ' ';
-    putDigits(out + 17, t.hour, 2);
-    out[19] = ':';
-    putDigits(out + 20, t.minute, 2);
-    out[22] = ':';
-    putDigits(out + 23, t.second, 2);
-    memcpy(out + 25, " GMT", 5);
 }
 
 // ---------------------------------------------------------------------------
@@ -379,17 +315,7 @@ inline bool deriveSigningKey(sv secret, sv date8, sv region, sv service, uint8_t
 // keepSlash, '/' is kept (canonical URI); otherwise it is %2F (query).
 template <class Sink>
 inline void uriEncode(Sink& out, sv s, bool keepSlash) {
-    static constexpr char kDigits[] = "0123456789ABCDEF";
-    for (char ch : s) {
-        const auto c = static_cast<unsigned char>(ch);
-        if (isUnreserved(c) || (keepSlash && c == '/')) {
-            out.Put(ch);
-        } else {
-            out.Put('%');
-            out.Put(kDigits[c >> 4]);
-            out.Put(kDigits[c & 15]);
-        }
-    }
+    fbtext::percentEncode(out, s.data(), s.size(), keepSlash);
 }
 
 // Lazily URI-encodes a string one output char at a time (for comparisons
@@ -398,13 +324,12 @@ class EncodedChars {
 public:
     explicit EncodedChars(sv s) : s_(s) {}
     int next() {
-        static constexpr char kDigits[] = "0123456789ABCDEF";
         if (np_ > 0) return static_cast<unsigned char>(pending_[2 - np_--]);
         if (i_ >= s_.size()) return -1;
         const auto c = static_cast<unsigned char>(s_[i_++]);
         if (isUnreserved(c)) return c;
-        pending_[0] = kDigits[c >> 4];
-        pending_[1] = kDigits[c & 15];
+        pending_[0] = fbtext::kHexUpper[c >> 4];
+        pending_[1] = fbtext::kHexUpper[c & 15];
         np_ = 2;
         return '%';
     }
@@ -846,6 +771,28 @@ inline Status verify(const Req& req, const VerifyConfig& cfg, KeyFn&& keyFor, Re
     r.status = Status::Ok;
     r.message = "";
     return Status::Ok;
+}
+
+// ---------------------------------------------------------------------------
+// Requests whose body nobody hashes
+// ---------------------------------------------------------------------------
+//
+// Everything but an S3 PutObject: the body (if any) is not read against a
+// hash, so a verified request must have signed it as UNSIGNED-PAYLOAD, or
+// have no body (Content-Length 0) and claim the hash of "".
+
+enum class Bodyless : uint8_t {
+    Ok,
+    HashMismatch,  // no body, but the claimed hash is not that of ""
+    HasBody,       // a hashed body, or an aws-chunked payload
+};
+
+inline Bodyless bodylessPayload(const Result& r, size_t contentLength) {
+    if (r.payload == Payload::Unsigned) return Bodyless::Ok;
+    if (r.payload != Payload::Sha256 || contentLength != 0) return Bodyless::HasBody;
+    uint8_t empty[32];
+    fromHex(kEmptySha256, empty, sizeof empty);
+    return digestEqual(empty, r.payloadSha256, sizeof empty) ? Bodyless::Ok : Bodyless::HashMismatch;
 }
 
 // ---------------------------------------------------------------------------

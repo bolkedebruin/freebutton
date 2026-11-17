@@ -8,7 +8,6 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "StaticCache.h"
 #include "StreamLogic.h"
 #include "StreamResponse.h"
 
@@ -90,9 +89,7 @@ public:
         char etag[11];
         stream::formatStaticETag(hit->etag, etag);
         const String& url = request->url();
-        const char* cache = freebutton::isHashedAssetUrl(url) ? "public, max-age=31536000, immutable"
-                            : freebutton::isWebFontUrl(url)   ? "public, max-age=604800"
-                                                              : "no-cache";
+        const char* cache = stream::cacheControlFor(url.c_str(), url.length());
 
         AsyncWebServerResponse* response;
         const AsyncWebHeader* inm = request->getHeader("If-None-Match");

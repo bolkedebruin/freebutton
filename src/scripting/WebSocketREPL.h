@@ -26,12 +26,6 @@ public:
     // Called from the JS console callback - zero buffering, streams directly
     void broadcastConsole(std::string_view message);
 
-    // Check if any clients are connected
-    [[nodiscard]] bool hasClients() const noexcept;
-
-    // Get number of connected clients
-    [[nodiscard]] size_t clientCount() const noexcept;
-
     // Clean up stale/disconnected clients - call periodically from main loop
     void cleanupClients();
 
@@ -97,7 +91,8 @@ private:
 // Static callback for console output (called from mquickjs)
 void websocketConsoleCallback(const char* buf, size_t len);
 
-// Free function for main.cpp (avoids including ESPAsyncWebServer there)
+// Free functions for the main loop (main.cpp).
+void cleanupWebSocketClients();
 void processWebSocketRepl();
 
 } // namespace Scripting

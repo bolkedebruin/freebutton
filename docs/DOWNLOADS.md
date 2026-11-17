@@ -69,8 +69,8 @@ Wi-Fi driver's frames (up to 7 KB) and the connections themselves.
 
 The same response class also sends what is not a file (`StreamResponse.h`):
 
-- `beginConst`, `beginText`: a body that is already in memory (the upgrade
-  page and constant XML in flash, the `/api/device` text, which is moved in,
+- `beginConst`, `beginText`: a body that is already in memory (constant
+  XML in flash, the `/api/device` text, which is moved in,
   not copied). The TCP stack copies it from there; such a response needs no
   buffer and does not wait for a turn.
 - `beginGenerated`, `beginChunked`: a body written piece by piece (`/config`,
