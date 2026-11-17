@@ -9,6 +9,10 @@
 
 static auto TAG = "mqtt_component";
 
+// A subscriber keeps no list of its own: the broker's subscription list is
+// the only place a topic is stored (it already refuses a second registration
+// of the same subscriber on a topic).
+
 void MqttSubscriber::addSubscription(uint8_t brokerId, const std::string &topic, int qos) {
     if (topic.empty()) {
         ESP_LOGE(TAG, "Cannot add subscription with empty topic");
@@ -19,17 +23,6 @@ void MqttSubscriber::addSubscription(uint8_t brokerId, const std::string &topic,
         ESP_LOGW(TAG, "Skipping subscription to topic %s - invalid broker ID 255", topic.c_str());
         return;
     }
-
-    // check for existing subscription
-    for (const auto &sub : subscriptions) {
-        if (sub.brokerId == brokerId && sub.topic == topic) {
-            ESP_LOGW(TAG, "Subscription to topic %s on broker %d already exists", topic.c_str(), brokerId);
-            return;
-        }
-    }
-
-    subscriptions.emplace_back(brokerId, topic, qos);
-    ESP_LOGI(TAG, "Added subscription to topic %s on broker %d", topic.c_str(), brokerId);
 
     if (auto* broker = MqttBrokerRegistry::getBroker(brokerId)) {
         broker->subscribe(topic, qos, this);
@@ -43,44 +36,19 @@ void MqttSubscriber::removeSubscription(uint8_t brokerId, const std::string &top
         ESP_LOGE(TAG, "Cannot remove subscription with empty topic");
         return;
     }
-
-    // Find and remove the subscription
-    auto it = std::ranges::find_if(subscriptions,
-                                   [brokerId, &topic](const TopicSubscription& sub) {
-                                       return sub.brokerId == brokerId && sub.topic == topic;
-                                   });
-
-    if (it != subscriptions.end()) {
-        subscriptions.erase(it);
-        ESP_LOGI(TAG, "Removed subscription to topic %s on broker %d", topic.c_str(), brokerId);
-
-        // Always inform the broker to remove this subscriber from the topic
-        // The broker will handle cleanup if this was the last subscriber
-        if (auto* broker = MqttBrokerRegistry::getBroker(brokerId)) {
-            broker->unsubscribe(this);
-        }
-    } else {
-        ESP_LOGW(TAG, "Subscription to topic %s on broker %d not found", topic.c_str(), brokerId);
+    // Only this topic: the subscriber's other topics stay.
+    if (auto* broker = MqttBrokerRegistry::getBroker(brokerId)) {
+        broker->unsubscribe(topic, this);
     }
 };
 
 void MqttSubscriber::clearSubscriptions() {
-    // Make a copy to avoid iterator invalidation during removal
-    auto currentSubscriptions = subscriptions;
-    for (const auto& sub : currentSubscriptions) {
-        removeSubscription(sub.brokerId, sub.topic);
-    }
-    ESP_LOGD(TAG, "Cleared all subscriptions");
-}
-
-std::vector<std::string> MqttSubscriber::getSubscriptionTopics(uint8_t brokerId) const {
-    std::vector<std::string> topics;
-    for (const auto& sub : subscriptions) {
-        if (sub.brokerId == brokerId) {
-            topics.push_back(sub.topic);
+    MqttBrokerRegistry::forEachBroker([this](const uint8_t brokerId, const MqttBroker*) {
+        if (auto* broker = MqttBrokerRegistry::getBroker(brokerId)) {
+            broker->unsubscribe(this);
         }
-    }
-    return topics;
+    });
+    ESP_LOGD(TAG, "Cleared all subscriptions");
 }
 
 void MqttPublisher::addPublication(uint8_t brokerId, const std::string &topic, int qos, bool retain) {

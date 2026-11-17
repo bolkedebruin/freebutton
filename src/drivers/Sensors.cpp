@@ -26,8 +26,8 @@ private:
 public:
     SensorMqttComponent(const int id, const std::string& prefix)
         : sensorId(id), stateTopic(prefix + "/state") {
-        // Add this sensor's topic as a publication
-        addPublication(0, stateTopic, 0, false); // Will be updated with actual broker ID
+        // No publication entry: publishSensorValue() sends to the stored
+        // topic itself (an entry would hold the topic a second time).
     }
 
     // Every second for every sensor: no heap. The topic is kept, the value
