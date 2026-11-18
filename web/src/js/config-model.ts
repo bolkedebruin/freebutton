@@ -23,7 +23,11 @@
  *                        the fonts, sizes and colours of the previews;
  *                        "font"/"fontsize" on display items (+ "labelfont"/
  *                        "labelfontsize"), keys (+ "topfont"/"topfontsize") and
- *                        lists, and the lists' colours, override them per item
+ *                        lists, and the lists' colours, override them per item;
+ *                        style.styles{} are the named styles an item takes per
+ *                        part with "style" / "topstyle" (keys), "style" /
+ *                        "labelstyle" (display items), "style" / "focusstyle"
+ *                        (lists), between the element style and its own fields
  *   "name" on keys, display items and lists: the names scripts use with
  *                        fb.key("name"), fb.main.display.setValue("name", ...)
  *                        and fb.main.list.next("name") (configNames,
@@ -33,8 +37,11 @@
  */
 import type { ButtonConfig, ConfigItemKind, ConfigRef, ConnectorConfig, DisplayItem, ImageConfig, ListConfig, PageConfig } from './app-state';
 import { DEFAULT_BUTTON_ICON_SIZE, DEFAULT_DISPLAY_ICON_SIZE, iconTable, isIconName, itemIconSize } from './icon-raster';
-import { fontNames, fontStyles, fontTable, hasFontTable, slotFont, FONTSIZE_MAX, SLOTS, type FontTable } from './font-config';
-import { DEFAULT_STYLES, StyleElement, styleColorHex, type ResolvedStyles } from './style-config';
+import {
+  fontNamedStyles, fontNames, fontStyles, fontTable, hasFontTable, itemUnitFont, LIST_FOCUS_STYLE_FIELD, namedStyleOf, slotFont,
+  styleNames, FONTSIZE_MAX, SLOTS, type FontTable,
+} from './font-config';
+import { DEFAULT_STYLES, NO_NAMED_STYLES, StyleElement, styleColorHex, type NamedStyles, type ResolvedStyles } from './style-config';
 
 export interface DeviceModel {
   pages: PageConfig[];
@@ -46,16 +53,31 @@ export interface DeviceModel {
   fonts: FontTable;
   /** config.json "style" resolved per element (style-config.ts). */
   styles: ResolvedStyles;
+  /** config.json "style.styles": the named styles, by name. */
+  namedStyles: NamedStyles;
 }
 
 /** Valid key / display item name; the firmware enforces the same rule. */
 export const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,23}$/;
 
 /** fb.main.display methods whose first argument is an item id or name. */
-export const DISPLAY_NAME_METHODS = ['remove', 'get', 'setLabel', 'setValue', 'setUnit', 'setPosition', 'setPage', 'setIcon', 'setFont'];
+export const DISPLAY_NAME_METHODS = [
+  'remove', 'get', 'setLabel', 'setValue', 'setUnit', 'setPosition', 'setPage', 'setIcon', 'setFont', 'setStyle', 'setLabelStyle',
+];
 
 /** fb.main.list methods; the first argument is a list name (or its index in "lists"). */
-export const LIST_NAME_METHODS = ['next', 'prev', 'select', 'getSelected', 'count', 'setItems', 'setFont'];
+export const LIST_NAME_METHODS = ['next', 'prev', 'select', 'getSelected', 'count', 'setItems', 'setFont', 'setStyle', 'setFocusStyle'];
+
+/**
+ * The script calls that exist only when config.json has named styles
+ * ("style.styles"): fb.main.display / fb.main.list / a key's display
+ * methods, and fb.style.set.
+ */
+export const STYLE_METHODS = {
+  display: ['setStyle', 'setLabelStyle'],
+  list: ['setStyle', 'setFocusStyle'],
+  key: ['setStyle', 'setTopStyle'],
+} as const;
 
 /** fb.main.image methods; the first argument is an image name from "images". */
 export const IMAGE_NAME_METHODS = ['setIcon', 'setSrc'];
@@ -78,6 +100,13 @@ export interface ConfigNames {
   fonts?: string[];
   /** Config font ids (setFont(..., 2), \f{2}). */
   fontIds?: number[];
+  /**
+   * Named styles ("style.styles") with the properties each sets
+   * (setStyle(..., "style"), fb.style.set("style", "property", value));
+   * absent = the config has none: the device has no fb.style and no
+   * setStyle / setTopStyle / setLabelStyle / setFocusStyle.
+   */
+  styles?: Record<string, string[]>;
 }
 
 /**
@@ -155,7 +184,9 @@ export function connectorType(raw: unknown): ConnectorConfig['type'] {
   return 'empty';
 }
 
-export function mapButton(raw: unknown, fonts?: FontTable, styles: ResolvedStyles = DEFAULT_STYLES): ButtonConfig | null {
+export function mapButton(
+  raw: unknown, fonts?: FontTable, styles: ResolvedStyles = DEFAULT_STYLES, named: NamedStyles = NO_NAMED_STYLES,
+): ButtonConfig | null {
   if (!isObj(raw)) return null;
   const position = num(raw.position, NaN);
   if (!Number.isInteger(position) || position < 1) return null;
@@ -171,13 +202,24 @@ export function mapButton(raw: unknown, fonts?: FontTable, styles: ResolvedStyle
     ledColor: 'rgb(0,0,0)',
     ...(typeof raw.name === 'string' ? { name: raw.name } : {}),
     ...iconFields(raw, DEFAULT_BUTTON_ICON_SIZE),
-    // Keys without font fields draw in the style's key.label / key.toplabel font.
+    // Keys without font or named style fields draw in the style's key.label / key.toplabel font.
     ...(fonts && KEY_FONT_FIELDS.some(f => f in raw)
-      ? { labelFont: slotFont(fonts, raw, SLOTS.button, styles), topFont: slotFont(fonts, raw, SLOTS.buttonTop, styles) } : {}),
+      ? { labelFont: slotFont(fonts, raw, SLOTS.button, styles, named), topFont: slotFont(fonts, raw, SLOTS.buttonTop, styles, named) }
+      : {}),
+    ...namedField('labelStyle', raw, SLOTS.button.styleField, StyleElement.KeyLabel, named),
+    ...namedField('topStyle', raw, SLOTS.buttonTop.styleField, StyleElement.KeyTopLabel, named),
   };
 }
 
-const KEY_FONT_FIELDS = ['font', 'fontsize', 'topfont', 'topfontsize'];
+const KEY_FONT_FIELDS = ['font', 'fontsize', 'topfont', 'topfontsize', 'style', 'topstyle'];
+
+/** {[key]: the named style `field` of `raw` names}, or {} when the device takes none (font-config namedStyleOf). */
+function namedField<K extends string>(
+  key: K, raw: Obj, field: string, el: StyleElement, named: NamedStyles,
+): { [P in K]?: NonNullable<ReturnType<typeof namedStyleOf>> } {
+  const props = namedStyleOf(raw, field, el, named);
+  return (props ? { [key]: props } : {}) as { [P in K]?: NonNullable<ReturnType<typeof namedStyleOf>> };
+}
 
 /** "icon" + "iconsize" of a key or display item (valid icon names only). */
 function iconFields(raw: Obj, defaultSize: number): { icon?: string; iconSize?: number } {
@@ -187,7 +229,7 @@ function iconFields(raw: Obj, defaultSize: number): { icon?: string; iconSize?: 
 
 /** Display item; page 0 (or missing) means "every page". */
 export function mapDisplayItem(
-  raw: unknown, fonts?: FontTable, styles: ResolvedStyles = DEFAULT_STYLES,
+  raw: unknown, fonts?: FontTable, styles: ResolvedStyles = DEFAULT_STYLES, named: NamedStyles = NO_NAMED_STYLES,
 ): { page: number; item: DisplayItem } | null {
   if (!isObj(raw)) return null;
   const item: DisplayItem = {
@@ -206,9 +248,21 @@ export function mapDisplayItem(
     ...iconFields(raw, DEFAULT_DISPLAY_ICON_SIZE),
     ...(isIconName(raw.icon) && typeof raw.iconcolor === 'string' && HEX_COLOR_ANY.test(raw.iconcolor)
       ? { iconColor: normalizeHex(raw.iconcolor) } : {}),
-    ...(fonts ? { valueFont: slotFont(fonts, raw, SLOTS.value, styles), labelFont: slotFont(fonts, raw, SLOTS.caption, styles) } : {}),
+    ...(fonts ? displayFonts(fonts, raw, styles, named) : {}),
+    ...namedField('valueStyle', raw, SLOTS.value.styleField, StyleElement.DisplayValue, named),
+    ...namedField('captionStyle', raw, SLOTS.caption.styleField, StyleElement.DisplayCaption, named),
   };
   return { page: num(raw.page, 0), item };
+}
+
+/** The fonts of a display item's value, unit and caption (item fields, named styles, the style). */
+function displayFonts(fonts: FontTable, raw: Obj, styles: ResolvedStyles, named: NamedStyles): Pick<DisplayItem, 'valueFont' | 'unitFont' | 'labelFont'> {
+  const valueFont = slotFont(fonts, raw, SLOTS.value, styles, named);
+  return {
+    valueFont,
+    unitFont: itemUnitFont(fonts, raw, valueFont, styles, named),
+    labelFont: slotFont(fonts, raw, SLOTS.caption, styles, named),
+  };
 }
 
 function clampInt(v: number, lo: number, hi: number): number {
@@ -220,9 +274,13 @@ function hexColor(v: unknown, fallback: number | undefined): string {
 }
 
 /** A "lists" entry with defaults; null without a valid name (the firmware skips those). */
-export function mapList(raw: unknown, fonts?: FontTable, styles: ResolvedStyles = DEFAULT_STYLES): ListConfig | null {
+export function mapList(
+  raw: unknown, fonts?: FontTable, styles: ResolvedStyles = DEFAULT_STYLES, named: NamedStyles = NO_NAMED_STYLES,
+): ListConfig | null {
   if (!isObj(raw) || typeof raw.name !== 'string' || !NAME_PATTERN.test(raw.name)) return null;
   const d = LIST_DEFAULTS;
+  const style = namedStyleOf(raw, SLOTS.list.styleField, StyleElement.List, named);
+  const focus = namedStyleOf(raw, LIST_FOCUS_STYLE_FIELD, StyleElement.ListSelected, named);
   const items = Array.isArray(raw.items) ? raw.items.filter((i): i is string => typeof i === 'string') : [];
   const selected = items.length === 0 ? -1 : clampInt(num(raw.selected, d.selected), 0, items.length - 1);
   return {
@@ -235,11 +293,14 @@ export function mapList(raw: unknown, fonts?: FontTable, styles: ResolvedStyles 
     fontSize: clampInt(num(raw.fontsize ?? raw.fontSize, d.fontsize), 1, FONTSIZE_MAX),
     items,
     selected,
-    // The item's colours are local styles over the style's list / list.selected.
-    color: hexColor(raw.color, styles[StyleElement.List]?.color),
-    focusColor: hexColor(raw.focuscolor, styles[StyleElement.ListSelected]?.bgColor),
-    focusTextColor: hexColor(raw.focustextcolor, styles[StyleElement.ListSelected]?.color),
-    ...(fonts ? { font: slotFont(fonts, raw, SLOTS.list, styles) } : {}),
+    // The item's colours are local styles over its named styles ("style": the rows, "focusstyle":
+    // the selected row), over the style's list / list.selected.
+    color: hexColor(raw.color, style?.color ?? styles[StyleElement.List]?.color),
+    focusColor: hexColor(raw.focuscolor, focus?.bgColor ?? styles[StyleElement.ListSelected]?.bgColor),
+    focusTextColor: hexColor(raw.focustextcolor, focus?.color ?? styles[StyleElement.ListSelected]?.color),
+    ...(fonts ? { font: slotFont(fonts, raw, SLOTS.list, styles, named) } : {}),
+    ...(style ? { style } : {}),
+    ...(focus ? { focusStyle: focus } : {}),
   };
 }
 
@@ -286,22 +347,23 @@ export function configToModel(cfg: unknown): DeviceModel {
   const o: Obj = isObj(cfg) ? cfg : {};
   const fonts = fontTable(o);
   const styles = fontStyles(o, fonts);
+  const namedStyles = fontNamedStyles(o, fonts);
   // Every mapped entry keeps where it came from (`ref`), so the virtual device
   // and the editor can point at each other (config-locate.ts).
   const [buttonKey, buttonList] = firstArrayKey(o, 'buttons', 'mqttbuttons');
   const buttons = buttonList
-    .map((b, index) => withRef(mapButton(b, fonts, styles), 'button', buttonKey, index))
+    .map((b, index) => withRef(mapButton(b, fonts, styles, namedStyles), 'button', buttonKey, index))
     .filter((b): b is ButtonConfig => b !== null);
   const [itemKey, itemList] = firstArrayKey(o, 'displayitems', 'mqttdisplays');
   const items = itemList
     .map((d, index) => {
-      const mapped = mapDisplayItem(d, fonts, styles);
+      const mapped = mapDisplayItem(d, fonts, styles, namedStyles);
       if (mapped) mapped.item.ref = { kind: 'displayitem', list: itemKey, index };
       return mapped;
     })
     .filter((d): d is { page: number; item: DisplayItem } => d !== null);
   const lists = (Array.isArray(o.lists) ? o.lists : [])
-    .map((l, index) => withRef(mapList(l, fonts, styles), 'list', 'lists', index))
+    .map((l, index) => withRef(mapList(l, fonts, styles, namedStyles), 'list', 'lists', index))
     .filter((l): l is ListConfig => l !== null);
   const images = (Array.isArray(o.images) ? o.images : [])
     .map((m, index) => withRef(mapImage(m), 'image', 'images', index))
@@ -321,7 +383,7 @@ export function configToModel(cfg: unknown): DeviceModel {
     ...(images.length ? { images: images.filter(m => m.page < 1 || m.page === n) } : {}),
   }));
 
-  return { pages, connectors: mapConnectors(o), names: configNames(o), fonts, styles };
+  return { pages, connectors: mapConnectors(o), names: configNames(o), fonts, styles, namedStyles };
 }
 
 // The firmware reads both spellings of each list, in file order.
@@ -368,7 +430,14 @@ export function configNames(cfg: unknown): ConfigNames {
     icons: [...iconTable(o).keys()],
     // Without a "style.fonts" table: the system fonts only (validator SYSTEM_FONT_NAMES).
     ...(hasFontTable(o) ? fontNames(o) : {}),
+    ...namedStyleNames(o),
   };
+}
+
+/** ConfigNames.styles: present only when the config has named styles (then the device has the style calls). */
+function namedStyleNames(o: Obj): Pick<ConfigNames, 'styles'> {
+  const styles = styleNames(o);
+  return Object.keys(styles).length ? { styles } : {};
 }
 
 /**

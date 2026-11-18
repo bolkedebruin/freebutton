@@ -472,6 +472,10 @@ export interface FbMainDisplay {
     setIcon(idOrName: number | string, icon: string): boolean;
     /** Set the font of the value and unit (item by id or config.json name; the caption keeps its own; font "" restores config.json); false when there is no such item */
     setFont(idOrName: number | string, font: string | number, size: number): boolean;
+    /** Give the value and unit a named style of config.json "style.styles" (item by id or config.json name; "" takes the named style away; the item's own fields still win); false when there is no such item. Only on a device whose config.json has named styles. */
+    setStyle(idOrName: number | string, style: string): boolean;
+    /** Give the caption a named style of config.json "style.styles" (item by id or config.json name; "" takes the named style away); false when there is no such item. Only on a device whose config.json has named styles. */
+    setLabelStyle(idOrName: number | string, style: string): boolean;
 }
 
 export interface FbMainSide {
@@ -507,6 +511,10 @@ export interface FbSmallDisplay {
     setFont(font: string | number, size: number): void;
     /** Set the font of the top label (default: the style's key top label font, config.json "style.key.toplabel"; font "" restores config.json) */
     setTopFont(font: string | number, size: number): void;
+    /** Give the bottom label a named style of config.json "style.styles" ("" takes the named style away; the key's own "font" / "fontsize" still win). Only on a device whose config.json has named styles. */
+    setStyle(style: string): void;
+    /** Give the top label a named style of config.json "style.styles" ("" takes the named style away; the key's own "topfont" / "topfontsize" still win). Only on a device whose config.json has named styles. */
+    setTopStyle(style: string): void;
 }
 
 export interface FbMainList {
@@ -524,6 +532,10 @@ export interface FbMainList {
     setItems(nameOrIndex: string | number, items: string[]): boolean;
     /** Set the font of the items (default: the style's list font, config.json "style.list", at the list's "fontsize"; font "" restores config.json) */
     setFont(nameOrIndex: string | number, font: string | number, size: number): void;
+    /** Give the list a named style of config.json "style.styles" ("" takes the named style away; the list's own "font" / "fontsize" / "color" still win). Only on a device whose config.json has named styles. */
+    setStyle(nameOrIndex: string | number, style: string): void;
+    /** Give the selected row a named style of config.json "style.styles", which may set bg_color / bg_opa ("" takes the named style away; the list's own "focuscolor" / "focustextcolor" still win). Only on a device whose config.json has named styles. */
+    setFocusStyle(nameOrIndex: string | number, style: string): void;
 }
 
 export interface FbMainImage {
@@ -533,6 +545,11 @@ export interface FbMainImage {
     setSrc(nameOrIndex: string | number, key: string): void;
 }
 
+export interface FbStyle {
+    /** Change one value of a named style: every key, display item and list that uses the style is redrawn with it. Not saved: a script restart brings the values of config.json back. */
+    set(style: string, property: string, value: string | number): void;
+}
+
 export interface FbRoot {
     /** Key by its "name" in config.json: the same object as fb.main.left/right (FbMainSide) or fb.bars[i].left/right (FbSide). Throws ReferenceError for an unknown name. */
     key(name: string): FbSide | FbMainSide;
@@ -540,6 +557,8 @@ export interface FbRoot {
     readonly main: FbMain;
     /** Connected bar modules */
     readonly bars: FbBar[];
+    /** The named styles of config.json "style.styles" (present only when config.json has named styles) */
+    readonly style: FbStyle;
 }
 
 

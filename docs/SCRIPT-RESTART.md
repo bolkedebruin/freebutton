@@ -16,6 +16,8 @@ which puts what a script can change back to the state after boot.
 | Shown page | `showPage` | page 1 |
 | Key label, top label, icon, fonts | `fb.key(n).display.*` | the config values |
 | List items, selection, font | `fb.main.list.*` | the config `items`, `selected`, font |
+| Named style of a part | `setStyle`, `setTopStyle`, `setLabelStyle`, `setFocusStyle` | the config `style`, `topstyle`, `labelstyle`, `focusstyle` (none: no named style) |
+| Values of a named style | `fb.style.set` | the values of config.json `style.styles` |
 | Image | `fb.main.image.setIcon` / `setSrc` | the config `icon` / `src` |
 | LEDs | `led` / `backLed` `.setColor`, `.on`, `.off` | off (the firmware's own LED state) |
 
@@ -29,7 +31,10 @@ not script state and stay. Each text remembers its last writer:
   next message (a retained message is not delivered again).
 - The config topic wrote last: the text stays.
 
-Clocks, the style and the fonts are not reachable from a script.
+Clocks, the fonts, the roles and the elements of the style are not reachable
+from a script. Of the style a script reaches only the named styles
+(`style.styles`): which one a part uses, and the values of the properties a
+named style sets in config.json (not `text_font`, not `text_size`).
 
 ## Limits
 
@@ -41,6 +46,9 @@ Clocks, the style and the fonts are not reachable from a script.
 - An image keeps its config value in a small heap block from the script's
   first `setIcon` / `setSrc`. If that allocation fails (logged), the image
   shows nothing after a restart, until a reboot.
+- The named styles keep their config values in one heap block (24 bytes
+  per named style) from the script's first `fb.style.set` until the
+  restart. If that allocation fails the call throws and changes nothing.
 - Handlers, timers and MQTT subscriptions of the script are not part of
   this function (see `ScriptEngine`).
 - MQTT after a restart: the new script's subscriptions are sent to the

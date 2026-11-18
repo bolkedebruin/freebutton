@@ -3,6 +3,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h> /* as the real Arduino.h: malloc / free for the firmware sources */
 #include <string>
 #include "WString.h"
 #include "esp_system.h"

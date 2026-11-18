@@ -7,7 +7,7 @@ import { emulatorSession, type FaceInfo } from '../js/emulator-session.js';
 import type { Emulator } from '../js/emulator/index.js';
 import { drawScreenshot, saveCanvasPng } from '../js/screenshot.js';
 import './fb-virtual-info.js';
-import { getConfig, getConnectors, getFontTable, getPreviewState, loadDefaultConfig } from '../js/device-config.js';
+import { getConfig, getConnectors, getFontTable, getNamedStyles, getPreviewState, loadDefaultConfig } from '../js/device-config.js';
 import { positionsForConnector } from '../js/config-model.js';
 import { addItem, listKeyFor, removeItem, setItemProps, type PropValue } from '../js/config-edit.js';
 import { applyConfigEdit, ensureConfigOpen, readConfigItem } from '../js/config-session.js';
@@ -456,6 +456,16 @@ export class FbVirtualDevice extends LitElement {
         </select>`;
         break;
       }
+      case 'style': {
+        // A named style of "style.styles"; one the entry names that is not there (or not usable here) stays listed.
+        const options = field.styles ?? [];
+        control = html`<select id=${id} class=${FIELD_CLASS} data-field=${field.key} @change=${onChange}>
+          <option value="" ?selected=${text === ''}>None</option>
+          ${options.map(name => html`<option value=${name} ?selected=${name === text}>${name}</option>`)}
+          ${text !== '' && !options.includes(text) ? html`<option value=${text} selected>${text} (not usable here)</option>` : ''}
+        </select>`;
+        break;
+      }
       case 'select':
         control = html`<select id=${id} class=${FIELD_CLASS} data-field=${field.key} @change=${onChange}>
           ${text === '' || !field.options?.some(o => String(o.value) === text)
@@ -489,7 +499,7 @@ export class FbVirtualDevice extends LitElement {
         ${this._editable ? 'This entry is no longer in config.json.' : this._blockedHint}</p>`;
     }
     const name = typeof raw.name === 'string' ? raw.name : '';
-    const fields = itemFields(ref.kind, raw);
+    const fields = itemFields(ref.kind, raw, getNamedStyles());
     const hints = [...new Set(fields.map(f => f.hint).filter((h): h is string => !!h))];
     return html`
       <div class="flex items-center gap-2">

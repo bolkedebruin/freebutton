@@ -5,7 +5,7 @@ import { on, sameConfigRef } from '../js/app-state.js';
 import { nothing } from 'lit';
 import { getStyles } from '../js/device-config.js';
 import { SLOTS, styleFont } from '../js/font-config.js';
-import { StyleElement, type ResolvedStyles } from '../js/style-config.js';
+import { StyleElement, withNamedStyle, type ResolvedStyles } from '../js/style-config.js';
 import { iconView } from './icon-view.js';
 import { fontStyle, richText, textStyleCss } from './font-view.js';
 import { attachCanvas } from '../js/emulator/canvas.js';
@@ -150,7 +150,8 @@ export class FbButtonGrid extends LitElement {
 
   private _renderButton(btn: ButtonConfig, styles: ResolvedStyles) {
     const leftSide = this._isLeftSide(btn.position);
-    // Fields the key does not set: the style's key.label / key.toplabel.
+    // Fields the key does not set: its named styles ("style" / "topstyle"), else the style's
+    // key.label / key.toplabel.
     // Both labels take text markup (\c \s \f \a), as on the device.
     const labelFont: ItemFont = btn.labelFont ?? styleFont(styles, StyleElement.KeyLabel);
     const topFont: ItemFont = btn.topFont ?? styleFont(styles, StyleElement.KeyTopLabel);
@@ -199,14 +200,14 @@ export class FbButtonGrid extends LitElement {
           ` : html`
           ${btn.topLabel ? html`
             <div class="text-center leading-[1.3] whitespace-nowrap" data-top-label
-              style="${fontStyle(topFont, MINI_SCALE)} ${textStyleCss(styles[StyleElement.KeyTopLabel], MINI_SCALE)}">
+              style="${fontStyle(topFont, MINI_SCALE)} ${textStyleCss(withNamedStyle(styles[StyleElement.KeyTopLabel] ?? {}, btn.topStyle), MINI_SCALE)}">
               ${richText(btn.topLabel, topFont, SLOTS.buttonTop, MINI_SCALE)}
             </div>
           ` : ''}
           ${btn.icon
             ? iconView(btn.icon, btn.iconSize ?? 48, btn.iconSize ?? 48, undefined, MINI_SCALE)
             : html`<div class="leading-[1.3] whitespace-nowrap" data-label
-                style="${fontStyle(labelFont, MINI_SCALE)} ${textStyleCss(styles[StyleElement.KeyLabel], MINI_SCALE)}">${richText(btn.label, labelFont, SLOTS.button, MINI_SCALE)}</div>`}
+                style="${fontStyle(labelFont, MINI_SCALE)} ${textStyleCss(withNamedStyle(styles[StyleElement.KeyLabel] ?? {}, btn.labelStyle), MINI_SCALE)}">${richText(btn.label, labelFont, SLOTS.button, MINI_SCALE)}</div>`}
           `}
         </button>
       </div>

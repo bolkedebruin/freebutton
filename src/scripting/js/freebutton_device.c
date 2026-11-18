@@ -13,7 +13,9 @@
 #include "mquickjs.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "font_arg.h"
+#include "style_arg.h"
 
 // Import the hardware abstraction layer (ESP32 only)
 #ifdef ESP_PLATFORM
@@ -47,6 +49,8 @@ static inline int button_hw_set_font(int position, int face, int size, bool top)
 static inline int button_hw_restore_font(int position, bool top) { return -1; }
 static inline bool list_hw_set_font(int index, int face, int size) { return false; }
 static inline bool list_hw_restore_font(int index) { return false; }
+static inline int button_hw_set_style(int position, int ref, bool top) { return -1; }
+static inline bool list_hw_set_style(int index, int ref, bool focus) { return false; }
 #endif
 
 // Method IDs for the proxy dispatcher (encoded in params of JS_NewCFunctionParams)
@@ -97,6 +101,19 @@ enum {
     FB_METHOD_DITEM_SET_FONT = 35,
     // fb.main.list.setFont(nameOrIndex, font, size)
     FB_METHOD_LIST_SET_FONT = 36,
+    // Named styles (config "style.styles"); created only when the config
+    // has some (device_hardware.cpp).
+    // key display .setStyle(style) / .setTopStyle(style) (_p = key position)
+    FB_METHOD_DISP_SET_STYLE = 37,
+    FB_METHOD_DISP_SET_TOP_STYLE = 38,
+    // fb.main.display.setStyle(id, style) / .setLabelStyle(id, style)
+    FB_METHOD_DITEM_SET_STYLE = 39,
+    FB_METHOD_DITEM_SET_LABEL_STYLE = 40,
+    // fb.main.list.setStyle(nameOrIndex, style) / .setFocusStyle(nameOrIndex, style)
+    FB_METHOD_LIST_SET_STYLE = 41,
+    FB_METHOD_LIST_SET_FOCUS_STYLE = 42,
+    // fb.style.set(style, property, value)
+    FB_METHOD_STYLE_SET = 43,
 };
 
 /*
@@ -287,6 +304,79 @@ static JSValue fb_list_set_items(JSContext *ctx, int index, int argc, JSValue *a
 }
 
 /*
+ * fb.style.set(style, property, value): changes one value of a named style;
+ * every item that uses the style is restyled (by the LVGL task). value is a
+ * string or an integer, as in config.json. Only a property the style sets
+ * in config can be changed, and not text_font / text_size: TypeError, as for
+ * a value that is not valid. Nothing is allocated on the JS heap. The
+ * property name is copied to the stack before the value is read. A property
+ * or a string value with a NUL character in it is refused (TypeError): the
+ * firmware reads both as C strings and would see only the part before it.
+ * Each call waits for the LVGL lock (style_binding.cpp): the display task
+ * holds it for a whole render.
+ */
+static JSValue fb_style_set(JSContext *ctx, int argc, JSValue *argv)
+{
+    int ref = 0;
+    if (fb_style_arg(ctx, argc, argv, "fb.style.set", 1, &ref))
+        return JS_EXCEPTION;
+    if (ref == 0 || argc < 3 || !JS_IsString(ctx, argv[1]))
+        return JS_ThrowTypeError(ctx, "fb.style.set() requires a style name, a property name and a value");
+
+    char prop[24];  /* the longest property name is 17 characters */
+    {
+        JSCStringBuf buf;
+        size_t len;
+        const char *name = JS_ToCStringLen(ctx, &len, argv[1], &buf);
+        if (!name)
+            return JS_EXCEPTION;
+        if (strlen(name) != len)
+            return JS_ThrowTypeError(ctx, "fb.style.set(): the property name has a NUL character in it");
+        if (len >= sizeof(prop))
+            return JS_ThrowTypeError(ctx, "fb.style.set(): unknown property \"%.32s\"", name);
+        memcpy(prop, name, len);
+        prop[len] = '\0';
+    }
+
+    int r;
+    if (JS_IsString(ctx, argv[2])) {
+        JSCStringBuf buf;
+        size_t len;
+        const char *value = JS_ToCStringLen(ctx, &len, argv[2], &buf);
+        if (!value)
+            return JS_EXCEPTION;
+        if (strlen(value) != len)
+            return JS_ThrowTypeError(ctx, "fb.style.set(): the value has a NUL character in it");
+        r = style_hw_set_string(ref, prop, value);
+    } else if (JS_IsNumber(ctx, argv[2])) {
+        double d;
+        if (JS_ToNumber(ctx, &d, argv[2]))
+            return JS_EXCEPTION;
+        /* an integer, as config.json has it */
+        r = (d >= -2147483648.0 && d <= 2147483647.0 && d == (double)(int32_t)d)
+                ? style_hw_set_number(ref, prop, (int32_t)d)
+                : STYLE_HW_SET_BAD_VALUE;
+    } else {
+        return JS_ThrowTypeError(ctx, "fb.style.set(): the value must be a string or a number");
+    }
+
+    switch (r) {
+    case STYLE_HW_SET_OK:
+        return JS_UNDEFINED;
+    case STYLE_HW_SET_UNKNOWN:
+        return JS_ThrowTypeError(ctx, "fb.style.set(): unknown property \"%s\"", prop);
+    case STYLE_HW_SET_NOT_IN_STYLE:
+        return JS_ThrowTypeError(ctx, "fb.style.set(): the style does not set \"%s\" in config.json", prop);
+    case STYLE_HW_SET_FIXED:
+        return JS_ThrowTypeError(ctx, "fb.style.set(): \"%s\" cannot be changed by a script", prop);
+    case STYLE_HW_SET_NO_MEMORY:
+        return JS_ThrowOutOfMemory(ctx);
+    default:
+        return JS_ThrowTypeError(ctx, "fb.style.set(): not a valid value for \"%s\"", prop);
+    }
+}
+
+/*
  * Proxy dispatcher for fb object tree methods.
  *
  * Each method on the fb hierarchy (e.g. fb.bars[0].left.led.setColor) is a
@@ -385,6 +475,17 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
             return JS_ThrowInternalError(ctx, "failed to set font for button %d", pos);
         return JS_UNDEFINED;
     }
+    case FB_METHOD_DISP_SET_STYLE:
+    case FB_METHOD_DISP_SET_TOP_STYLE: {
+        const int top = method == FB_METHOD_DISP_SET_TOP_STYLE;
+        int ref = 0;
+        /* a key has no background: no style with bg_* */
+        if (fb_style_arg(ctx, argc, argv, top ? "setTopStyle" : "setStyle", 0, &ref))
+            return JS_EXCEPTION;
+        if (button_hw_set_style(pos, ref, top) != 0)
+            return JS_ThrowInternalError(ctx, "failed to set style for button %d", pos);
+        return JS_UNDEFINED;
+    }
     case FB_METHOD_DISP_GET_LABEL:
     case FB_METHOD_DISP_GET_TOP_LABEL: {
         char text[32];  /* >= a button label slot's text (26 B + NUL) */
@@ -419,6 +520,12 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         return js_freebutton_display_setIcon(ctx, this_val, argc, argv);
     case FB_METHOD_DITEM_SET_FONT:
         return js_freebutton_display_setFont(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_SET_STYLE:
+        return js_freebutton_display_setStyle(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_SET_LABEL_STYLE:
+        return js_freebutton_display_setLabelStyle(ctx, this_val, argc, argv);
+    case FB_METHOD_STYLE_SET:
+        return fb_style_set(ctx, argc, argv);
     case FB_METHOD_IMAGE_SET_ICON:
     case FB_METHOD_IMAGE_SET_SRC:
         return fb_image_set(ctx, method, argc, argv);
@@ -432,7 +539,9 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
     case FB_METHOD_LIST_GET_SELECTED:
     case FB_METHOD_LIST_COUNT:
     case FB_METHOD_LIST_SET_ITEMS:
-    case FB_METHOD_LIST_SET_FONT: {
+    case FB_METHOD_LIST_SET_FONT:
+    case FB_METHOD_LIST_SET_STYLE:
+    case FB_METHOD_LIST_SET_FOCUS_STYLE: {
         int index = 0;
         if (fb_list_arg(ctx, argc, argv, &index))
             return JS_EXCEPTION;
@@ -460,6 +569,16 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
                 list_hw_restore_font(index);
             else
                 list_hw_set_font(index, face, size);
+            return JS_UNDEFINED;
+        }
+        case FB_METHOD_LIST_SET_STYLE:
+        case FB_METHOD_LIST_SET_FOCUS_STYLE: {
+            const int focus = method == FB_METHOD_LIST_SET_FOCUS_STYLE;
+            int ref = 0;
+            if (fb_style_arg(ctx, argc - 1, argv + 1, focus ? "fb.main.list.setFocusStyle" : "fb.main.list.setStyle",
+                             1, &ref))
+                return JS_EXCEPTION;
+            list_hw_set_style(index, ref, focus);
             return JS_UNDEFINED;
         }
         default:

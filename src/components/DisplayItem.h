@@ -9,6 +9,7 @@
 #include "TopicHandler.h"
 #include "IconRef.h"
 #include "FontRef.h"
+#include "StyleRef.h"
 #include "ui/MainPage.h"
 #include "ui/PendingRender.h"
 #include "utils/TextSlot.h"
@@ -98,6 +99,12 @@ private:
     std::atomic<uint8_t> scriptWrote_{0};
     SlotOwner slotOwner() const { return {"DisplayItem", id}; }
 
+    // Config "style" (value + unit) and, below, "labelstyle" (caption):
+    // named styles (ui/ui_style.h ref, 0 = none). Written at config load
+    // only. (Each fills a one-byte gap of the layout: an item is no larger
+    // than before named styles.)
+    uint8_t configStyle_ = 0;
+
     // Config "x" / "y" / "page", next to the run-time x / y / page a script
     // changes (setPosition, setPage), and the item's place among the config
     // items (-1: a script made it). Written at config load only.
@@ -110,6 +117,8 @@ private:
     // shown and not found, until the script engine restarts. Its config
     // topics stay subscribed, so it comes back with current values.
     std::atomic<bool> parked_{false};
+    // Config "labelstyle" (caption), see configStyle_.
+    uint8_t configLabelStyle_ = 0;
 
     // Value + unit font now (fontref::pack): the configured one until a
     // script calls setFont() (any task); fontDirty_ has the LVGL task redraw.
@@ -118,6 +127,10 @@ private:
     // The configured label / unit were not drawn (no LVGL pool then): draw
     // the box again at the next render. LVGL task only.
     bool redraw_ = false;
+    // The named styles now: the configured ones until a script calls
+    // setStyle() (any task). A change sets fontDirty_ (a redraw).
+    std::atomic<uint8_t> style_{0};
+    std::atomic<uint8_t> labelStyle_{0};
     // "icon" / "iconsize" / "iconcolor", and the state for a DISPLAY_ICON
     // topic (DisplayItem.cpp). After the topics were parsed.
     void configureIcon(const JsonObject& data);
@@ -196,6 +209,8 @@ public:
         if (labelFontSize != 0) {
             obj.Add("labelfontsize", labelFontSize);
         }
+        styleref::write(obj, "style", configStyle_);
+        styleref::write(obj, "labelstyle", configLabelStyle_);
         obj.Add("align", alignment);
         obj.Add("width", width);
         obj.Add("label", label);
@@ -241,6 +256,10 @@ private:
         labelFontFace = fontref::parse(data["labelfont"], TAG, "labelfont");
         labelFontSize = data["labelfontsize"].isNull() ? labelFontSize : data["labelfontsize"].as<int>();
         font_.store(fontref::pack(fontFace, fontSize), std::memory_order_release);
+        configStyle_ = styleref::parse(data["style"], TAG, "style", STYLE_EL_DISPLAY_VALUE);
+        configLabelStyle_ = styleref::parse(data["labelstyle"], TAG, "labelstyle", STYLE_EL_DISPLAY_CAPTION);
+        style_.store(configStyle_, std::memory_order_release);
+        labelStyle_.store(configLabelStyle_, std::memory_order_release);
 
         alignment = data["align"].isNull() ? alignment : data["align"].as<int>();
         width = data["width"].isNull() ? width : data["width"].as<int>();
@@ -290,6 +309,11 @@ public:
     // Back to the configured "font" / "fontsize" (any task).
     void restoreFont() { setFont(fontFace, fontSize); }
 
+    // Named style of value and unit (caption: of the caption): a ui_style.h
+    // ref the caller resolved and checked (no bg_*), 0 = none. Any task:
+    // the LVGL task redraws.
+    void setStyle(uint8_t ref, bool caption);
+
     // Page (config "page"; 0 = every page). Any task: the LVGL task hides or
     // shows the box on its next tick (see ui/MainPage.h).
     void setPage(int newPage);
@@ -306,8 +330,8 @@ public:
 
     // Script engine restart (ConfigManager::restoreConfigState): everything a
     // script changed goes back to the config: texts and icon a script set
-    // (not those from the item's config topics), font, position, page, and a
-    // parked item is shown again. LVGL lock held, no script code running;
+    // (not those from the item's config topics), font, named styles,
+    // position, page, and a parked item is shown again. LVGL lock held, no script code running;
     // the LVGL task redraws on its next tick. The caller requests the render.
     void restoreConfigState();
 

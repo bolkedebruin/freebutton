@@ -1010,7 +1010,7 @@ export class Workspace {
       return null;
     }
     const model = configToModel(parsed);
-    setConfig(model.pages, model.connectors, model.names, model.fonts, model.styles);
+    setConfig(model.pages, model.connectors, model.names, model.fonts, model.styles, model.namedStyles);
     return parsed;
   }
 

@@ -3,6 +3,10 @@
 // error messages.
 import { describe, expect, it } from 'vitest';
 import {
+  configNamedStyles, namedFits, namedSetStatus, STYLE_NAMED_MAX, STYLE_SECTIONS, styleFontLayer, styleFontLocal,
+  stylePropertyNames, withNamedStyle,
+} from '../style-config';
+import {
   configStyles, DECOR_NONE, DECOR_STRIKETHROUGH, DECOR_UNDERLINE, DEFAULT_STYLES, emptySheet, FACE_SYSTEM,
   FACE_SYSTEM_BOLD, isTitleElement, mergeStyle, parseStyle, parseStyleColor, resolveStyles, setStyleNumber,
   setStyleString, setStyleValue, styleDefaults, styleElement, styleItemPx, styleRole, styleRoleOf, StyleAlign,
@@ -303,7 +307,7 @@ describe('parseStyle (config.json "style")', () => {
   });
 
   it('no style / not an object', () => {
-    expect(parseStyle({}, resolver)).toEqual({ sheet: emptySheet(), errors: [], present: false });
+    expect(parseStyle({}, resolver)).toEqual({ sheet: emptySheet(), named: [], errors: [], present: false });
     expect(parseStyle({ style: [] }, resolver).errors).toEqual([expect.stringContaining('"style" must be an object')]);
   });
 
@@ -318,13 +322,13 @@ describe('parseStyle (config.json "style")', () => {
       list: { selected: { bg_opa: 'full', text_letter_space: 200 }, text_font: 0 },
     } }, resolver, 'montserrat, montserrat_semibold or a "style.fonts" entry');
     expect(errors).toEqual([
-      'style.txt is not a style section (fonts, text, title, key, display, list)',
+      'style.txt is not a style section (fonts, text, title, key, display, list, styles)',
       expect.stringContaining('style.text.text_colour is not a style property (text_font, text_size, text_color,'),
       'style.text.text_size must be an integer 6..72 (px)',
       expect.stringContaining('style.title must be an object of style properties'),
       'style.key.label.text_font "roboto" is not a font (montserrat, montserrat_semibold or a "style.fonts" entry)',
       'style.key.bottom is not an element of "key" (label, toplabel)',
-      'style.display.caption.bg_color: bg_color and bg_opa are allowed in style.list.selected only',
+      'style.display.caption.bg_color: bg_color and bg_opa are allowed in style.list.selected and in a named style ("style.styles", for a list\'s "style" / "focusstyle") only',
       'style.display.value.text_align must be "left", "center" or "right"',
       'style.display.value.text_decor must be "none", "underline", "strikethrough" or "underline strikethrough"',
       'style.display.value.text_opa must be an integer 0..255',
@@ -352,5 +356,158 @@ describe('styleWarnings', () => {
     expect(styleWarnings({})).toEqual([expect.stringContaining('no "style"')]);
     expect(styleWarnings({ style: {}, fonts: [] })).toEqual([expect.stringContaining('move "fonts" into "style"')]);
     expect(styleWarnings(null)).toEqual([]);
+  });
+});
+
+// The same rules as the firmware's named styles (style_logic.h: style_logic_name_valid,
+// _named_check, _named_fits, _font_layer, _font_local, _named_set_*) and ConfigManager's walk.
+describe('named styles ("style.styles")', () => {
+  const E = StyleElement;
+  const parse = (styles: unknown) => parseStyle({ style: { styles } }, resolver, 'a font');
+
+  it('"styles" is a style section', () => {
+    expect(STYLE_SECTIONS).toContain('styles');
+    expect(parse({}).errors).toEqual([]);
+  });
+
+  it('takes flat property sets by name, in definition order; an empty style is one too', () => {
+    const { named, errors, sheet } = parse({
+      alarm: { text_color: '#ff0000' },
+      big: { text_font: 'montserrat_semibold', text_size: 48 },
+      picked: { bg_color: '#00c853', bg_opa: 200, text_color: '000000' },
+      all: { text_opa: 128, text_align: 'right', text_letter_space: -2, text_line_space: 4, text_decor: 'underline' },
+      empty: {},
+    });
+    expect(errors).toEqual([]);
+    expect(named).toEqual([
+      { name: 'alarm', props: { color: 0xff0000 } },
+      { name: 'big', props: { face: FACE_SYSTEM_BOLD, px: 48 } },
+      { name: 'picked', props: { bgColor: 0x00c853, bgOpa: 200, color: 0 } },
+      { name: 'all', props: { opa: 128, align: StyleAlign.Right, letterSpace: -2, lineSpace: 4, decor: DECOR_UNDERLINE } },
+      { name: 'empty', props: {} },
+    ]);
+    // Named styles are not part of the element sheet.
+    expect(sheet).toEqual(emptySheet());
+    expect([...configNamedStyles({ style: { styles: { a: {}, b: { text_size: 9 } } } }, resolver)]).toEqual([['a', {}], ['b', { px: 9 }]]);
+    expect(configNamedStyles({}, resolver).size).toBe(0);
+  });
+
+  it('names: [A-Za-z_][A-Za-z0-9_]{0,23}, case sensitive; a bad one is reported and skipped', () => {
+    const { named, errors } = parse({
+      ok_1: {}, _x: {}, Alarm: {}, alarm: {}, ['a'.repeat(24)]: {},
+      '1st': {}, 'has space': {}, 'dash-ed': {}, '': {}, ['a'.repeat(25)]: {},
+    });
+    expect(named.map(n => n.name)).toEqual(['ok_1', '_x', 'Alarm', 'alarm', 'a'.repeat(24)]);
+    expect(errors).toEqual([
+      'style.styles: "1st" is not a valid style name (1-24 letters, digits or _, not starting with a digit)',
+      expect.stringContaining('style.styles: "has space" is not a valid style name'),
+      expect.stringContaining('style.styles: "dash-ed" is not a valid style name'),
+      expect.stringContaining('style.styles: "" is not a valid style name'),
+      expect.stringContaining(`style.styles: "${'a'.repeat(25)}" is not a valid style name`),
+    ]);
+  });
+
+  it(`at most ${STYLE_NAMED_MAX}: the rest is reported once and left out; bad names and non-objects do not count`, () => {
+    const styles: Record<string, unknown> = { '9bad': {}, notobject: 4 };
+    for (let i = 1; i <= 18; i++) styles[`s${i}`] = { text_size: 6 + i };
+    const { named, errors } = parse(styles);
+    expect(named.map(n => n.name)).toEqual(Array.from({ length: 16 }, (_, i) => `s${i + 1}`));
+    expect(errors).toEqual([
+      expect.stringContaining('"9bad" is not a valid style name'),
+      expect.stringContaining('style.styles.notobject must be an object of style properties'),
+      'style.styles has 18 named styles; the device holds 16 ("s17" and the rest are left out)',
+    ]);
+    const exact: Record<string, unknown> = {};
+    for (let i = 1; i <= 16; i++) exact[`s${i}`] = {};
+    expect(parse(exact).errors).toEqual([]);
+  });
+
+  it('unknown properties and bad values inside a style are reported; the rest of the style applies', () => {
+    const { named, errors } = parse({
+      a: { text_color: 'red', text_size: 5, colour: '#fff', text_opa: 128, text_font: 'comic', selected: { bg_color: '#000000' } },
+      b: 'red',
+    });
+    expect(named).toEqual([{ name: 'a', props: { opa: 128 } }]);
+    expect(errors).toEqual([
+      'style.styles.a.text_color must be a colour "#rrggbb"',
+      'style.styles.a.text_size must be an integer 6..72 (px)',
+      expect.stringMatching(/^style\.styles\.a\.colour is not a style property \(text_font, .*bg_color, bg_opa\)$/),
+      'style.styles.a.text_font "comic" is not a font (a font)',
+      // Flat: no parts, no nested blocks.
+      expect.stringContaining('style.styles.a.selected is not a style property'),
+      expect.stringContaining('style.styles.b must be an object of style properties'),
+    ]);
+    expect(parseStyle({ style: { styles: [] } }, resolver).errors).toEqual([expect.stringContaining('style.styles must be an object of named styles')]);
+  });
+
+  it('namedFits: a style with bg_color or bg_opa is for a list only', () => {
+    const lists = [E.List, E.ListSelected];
+    const others = [E.KeyLabel, E.KeyTopLabel, E.DisplayValue, E.DisplayUnit, E.DisplayCaption];
+    for (const bg of [{ bgColor: 0 }, { bgOpa: 0 }, { bgColor: 1, color: 2 }]) {
+      for (const el of lists) expect(namedFits(bg, el)).toBe(true);
+      for (const el of others) expect(namedFits(bg, el)).toBe(false);
+    }
+    for (const el of [...lists, ...others]) {
+      expect(namedFits({ color: 1, px: 20 }, el)).toBe(true);
+      expect(namedFits({}, el)).toBe(true);
+      expect(namedFits(undefined, el)).toBe(true);
+    }
+  });
+
+  it('styleFontLayer: the named font and size over the element\'s; nothing else', () => {
+    const element = { face: 0, px: 14, color: 0xffffff };
+    expect(styleFontLayer(element, undefined)).toEqual(element);
+    expect(styleFontLayer(element, { color: 0xff0000 })).toEqual(element);
+    expect(styleFontLayer(element, { face: 3 })).toEqual({ face: 3, px: 14, color: 0xffffff });
+    expect(styleFontLayer(element, { px: 40 })).toEqual({ face: 0, px: 40, color: 0xffffff });
+    expect(styleFontLayer(element, { face: 3, px: 40, color: 1 })).toEqual({ face: 3, px: 40, color: 0xffffff });
+    // display.unit: a named font or size counts as set.
+    expect(styleFontLayer({ color: 0x999999 }, { px: 40 })).toEqual({ color: 0x999999, px: 40 });
+    // the item layer then goes over it as over the element
+    expect(styleItemPx(2, false, styleFontLayer(element, { px: 40 }).px!)).toBe(24);
+    expect(styleItemPx(0, false, styleFontLayer(element, { px: 40 }).px!)).toBe(40);
+  });
+
+  it('styleFontLocal: an item font or size, or a named style with exactly one of font / size', () => {
+    expect(styleFontLocal(true, undefined)).toBe(true);
+    expect(styleFontLocal(true, { face: 1, px: 20 })).toBe(true);
+    expect(styleFontLocal(false, undefined)).toBe(false);
+    expect(styleFontLocal(false, { color: 1 })).toBe(false);
+    expect(styleFontLocal(false, { face: 1 })).toBe(true);
+    expect(styleFontLocal(false, { px: 20 })).toBe(true);
+    expect(styleFontLocal(false, { face: 1, px: 20 })).toBe(false);
+  });
+
+  it('withNamedStyle: what the part shows, the named properties over the element\'s', () => {
+    const element = { face: 0, px: 14, color: 0xffffff };
+    expect(withNamedStyle(element, undefined)).toBe(element);
+    expect(withNamedStyle(element, { color: 0xff0000, decor: DECOR_STRIKETHROUGH })).toEqual({ face: 0, px: 14, color: 0xff0000, decor: DECOR_STRIKETHROUGH });
+    expect(element.color).toBe(0xffffff);
+  });
+
+  it('stylePropertyNames: what a style sets, in documentation order', () => {
+    expect(stylePropertyNames({ bgOpa: 1, color: 2, face: 0, px: 9 })).toEqual(['text_font', 'text_size', 'text_color', 'bg_opa']);
+    expect(stylePropertyNames({})).toEqual([]);
+  });
+
+  it('namedSetStatus (fb.style.set): only what the style sets, not its font or size, a value as in config', () => {
+    const has = ['text_font', 'text_color', 'text_opa', 'text_align', 'bg_color'];
+    expect(namedSetStatus(has, 'text_color', '#00ff00')).toBe('ok');
+    expect(namedSetStatus(has, 'text_color', '00ff00')).toBe('ok');
+    expect(namedSetStatus(has, 'bg_color', '#00ff00')).toBe('ok');
+    expect(namedSetStatus(has, 'text_opa', 0)).toBe('ok');
+    expect(namedSetStatus(has, 'text_align', 'center')).toBe('ok');
+    expect(namedSetStatus(has, 'text_color', 'green')).toBe('bad-value');
+    expect(namedSetStatus(has, 'text_color', 5)).toBe('bad-value');
+    expect(namedSetStatus(has, 'text_opa', 256)).toBe('bad-value');
+    expect(namedSetStatus(has, 'text_opa', 1.5)).toBe('bad-value');
+    expect(namedSetStatus(has, 'text_opa', '128')).toBe('bad-value');
+    expect(namedSetStatus(has, 'text_line_space', 4)).toBe('not-in-style');
+    expect(namedSetStatus(has, 'bg_opa', 4)).toBe('not-in-style');
+    expect(namedSetStatus([], 'text_color', '#ffffff')).toBe('not-in-style');
+    // The font and the size: never, whether the style sets them or not.
+    expect(namedSetStatus(has, 'text_font', 'montserrat')).toBe('fixed');
+    expect(namedSetStatus(has, 'text_size', 20)).toBe('fixed');
+    expect(namedSetStatus(has, 'colour', '#ffffff')).toBe('unknown');
   });
 });

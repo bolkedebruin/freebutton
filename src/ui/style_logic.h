@@ -33,7 +33,16 @@
 //     inheritable property of a non-MAIN part falls back to MAIN), then its
 //     own properties (its defaults, then "list.selected"), which win: the
 //     selected row keeps its black text when "list" sets a text_color.
-//   - bg_color / bg_opa exist on list.selected only.
+//   - bg_color / bg_opa: the element list.selected has them, and so may a
+//     named style, which then only a list can use ("style" / "focusstyle";
+//     style_logic_named_fits). No other element has a background.
+//
+// Named styles ("style.styles": {"alarm": {"text_color": "#ff0000"}, ...})
+// are layer 3a, between the element and the item: an item names one per
+// part (config "style" / "topstyle" / "labelstyle" / "focusstyle", or a
+// script). A named style is flat (properties only). The rules here: the
+// names, the font cascade with a named style in it, which element may use a
+// style that sets bg_*, and what a script may change at run time.
 //
 // Property names are LVGL's style property names. "text_size" (px) is the
 // one extension: LVGL's text_font is a font at one size, so text_font +
@@ -74,8 +83,8 @@ typedef enum { STYLE_DECOR_NONE = 0, STYLE_DECOR_UNDERLINE = 1, STYLE_DECOR_STRI
 #define STYLE_HAS_LETTER_SPACE (1u << 5) /* text_letter_space */
 #define STYLE_HAS_LINE_SPACE (1u << 6)   /* text_line_space */
 #define STYLE_HAS_DECOR (1u << 7)        /* text_decor */
-#define STYLE_HAS_BG_COLOR (1u << 8)     /* bg_color (list.selected only) */
-#define STYLE_HAS_BG_OPA (1u << 9)       /* bg_opa (list.selected only) */
+#define STYLE_HAS_BG_COLOR (1u << 8)     /* bg_color (list.selected, and named styles used by a list) */
+#define STYLE_HAS_BG_OPA (1u << 9)       /* bg_opa (list.selected, and named styles used by a list) */
 
 typedef struct {
     uint16_t has;
@@ -139,9 +148,14 @@ int style_logic_role(const char *name);
 
 typedef enum {
     STYLE_PROP_OK = 0,
-    STYLE_PROP_UNKNOWN,      /* not a property name (or not allowed here: bg_* outside list.selected) */
+    STYLE_PROP_UNKNOWN,      /* not a property name (or not allowed here: bg_* outside list.selected
+                              * and the named styles) */
     STYLE_PROP_BAD_VALUE,    /* wrong type or out of range */
     STYLE_PROP_UNKNOWN_FONT, /* text_font names no font */
+    /* style_logic_named_set_* (a script changes a named style) only: */
+    STYLE_PROP_NOT_IN_STYLE, /* the style does not set this property in config */
+    STYLE_PROP_FIXED,        /* text_font / text_size: not changed at run time */
+    STYLE_PROP_NO_MEMORY,    /* ui_style.h: the config values could not be kept */
 } style_prop_status_t;
 
 /* Resolves text_font: a font name (`len` bytes, not NUL-terminated) or,
@@ -153,7 +167,7 @@ typedef int (*style_font_resolver_t)(const char *name, size_t len, bool is_id, i
  * text_color / bg_color ("#rrggbb" or "rrggbb"), text_align
  * ("left"/"center"/"right"), text_decor ("none"/"underline"/
  * "strikethrough"/"underline strikethrough"). `allow_bg`: bg_* allowed
- * (list.selected). On an error `p` is unchanged. */
+ * (list.selected, a named style). On an error `p` is unchanged. */
 style_prop_status_t style_logic_set_string(style_props_t *p, const char *prop, const char *value, bool allow_bg,
                                            style_font_resolver_t resolve, void *ctx);
 
@@ -165,6 +179,104 @@ style_prop_status_t style_logic_set_number(style_props_t *p, const char *prop, i
 
 /* "#rrggbb" / "rrggbb" -> 0xRRGGBB; false when malformed. */
 bool style_logic_parse_color(const char *s, uint32_t *out);
+
+/* ---- named styles ("style.styles") ------------------------------------- */
+
+#define STYLE_NAMED_MAX 16 /* named styles a config may define */
+#define STYLE_NAME_MAX 24  /* docs/NAMES.md: [A-Za-z_][A-Za-z0-9_]{0,23} */
+
+/* A style name: 1..STYLE_NAME_MAX of [A-Za-z0-9_], not starting with a
+ * digit, case sensitive (`len` bytes, not NUL-terminated). */
+bool style_logic_name_valid(const char *name, size_t len);
+
+typedef enum {
+    STYLE_NAMED_OK = 0,
+    STYLE_NAMED_BAD_NAME, /* skipped: not a style name */
+    STYLE_NAMED_FULL,     /* skipped: STYLE_NAMED_MAX styles are defined already */
+} style_named_status_t;
+
+/* May "style.styles" define `name` as its next style, after `count`
+ * accepted ones? */
+style_named_status_t style_logic_named_check(const char *name, size_t len, size_t count);
+
+/* The names of the named styles, each stored once, in one block the caller
+ * owns: per name one length byte and its bytes (1 + len; no terminator),
+ * in definition order. A style is known by its index in that order.
+ *  add:  appends `name` at `used` bytes; returns the bytes used after it.
+ *        The caller has checked the name and the room (1 + len).
+ *  find: index of `name` among the `count` names, -1 when unknown.
+ *  get:  the name at `index` (*len set), NULL when index >= count. */
+size_t style_logic_names_add(char *block, size_t used, const char *name, size_t len);
+int style_logic_names_find(const char *block, size_t count, const char *name, size_t len);
+const char *style_logic_names_get(const char *block, size_t count, size_t index, size_t *len);
+
+/* A style that could not be made at boot (no room in the LVGL pool for its
+ * properties) is dropped: bit i of `dropped` = the style at index i. Such a
+ * style is unknown everywhere (config items, scripts), as if "style.styles"
+ * did not define it; the indexes of the others do not move.
+ *  ref:    the ref (index + 1) of `name` among the `count` names, 0 when
+ *          unknown or dropped.
+ *  usable: how many of the `count` styles are not dropped. */
+uint8_t style_logic_named_ref(const char *block, size_t count, uint16_t dropped, const char *name, size_t len);
+size_t style_logic_named_usable(size_t count, uint16_t dropped);
+
+/* May a part of element `el` use the named style `named`? A style that
+ * sets bg_color or bg_opa is for a list only (list, list.selected): keys
+ * and display items have no background of their own. */
+bool style_logic_named_fits(const style_props_t *named, style_element_t el);
+
+/* The font cascade of one part with a named style in it:
+ *   face = item field, else named text_font, else the element style's
+ *   px   = item fontsize (steps, title rule), else named text_size (px),
+ *          else the element style's
+ * font_layer gives `out` = `element` with the text_font / text_size that
+ * `named` sets (`named` NULL = no named style: `out` = `element`). The
+ * item layer then goes over `out` exactly as it went over the element
+ * (style_logic_item_px, box_logic.h). For display.unit, where "sets
+ * text_font" counts, a font or size of `named` counts as set.
+ * Only face, px and their has bits of `out` are meant to be read. */
+void style_logic_font_layer(const style_props_t *element, const style_props_t *named, style_props_t *out);
+
+/* Does the part need a local font (LVGL: over every added style)? Yes when
+ * the item sets a font or a size (as before named styles), and when the
+ * named style sets exactly one of text_font / text_size: the font instance
+ * then depends on the layer below. A named style with both holds its font
+ * in its own shared style; with neither the element style's applies.
+ * item_face FONT_FACE_NONE and item_fontsize 0 = the item sets none. */
+bool style_logic_font_local(int item_face, int item_fontsize, const style_props_t *named);
+
+/* Does list.selected keep a font of its own in its shared style? Only when
+ * its resolved font differs from the list's, i.e. "style.list.selected"
+ * sets a text_font or text_size of its own (`list`, `selected`: the
+ * resolved elements). Otherwise its style holds no font and the selected
+ * row has the rows' (LVGL: an inheritable property a non-MAIN part does not
+ * have comes from MAIN), so an item font on the list reaches it too. */
+bool style_logic_selected_own_font(const style_props_t *list, const style_props_t *selected);
+
+/* The font of a list's selected row (LV_PART_SELECTED), lowest first:
+ *   1. the rows' effective font (`rows_face`, `rows_px`: the item's "font" /
+ *      "fontsize" or a script's setFont, else the rows' named style, else
+ *      the list element; what LV_PART_MAIN shows);
+ *   2. list.selected's face and px, both, where that element keeps a font
+ *      of its own (style_logic_selected_own_font);
+ *   3. the text_font and / or text_size of `focus`, the selected row's
+ *      named style ("focusstyle"; NULL = none).
+ * *face and *px get the result. Returns true when the roller needs it as a
+ * local font on LV_PART_SELECTED: `focus` sets exactly one of text_font /
+ * text_size, so no shared style holds the instance. (With both, the named
+ * style holds it; with neither, list.selected's style or LV_PART_MAIN
+ * gives it.) */
+bool style_logic_list_selected_font(const style_props_t *list, const style_props_t *selected,
+                                    const style_props_t *focus, int rows_face, int rows_px, int *face, int *px);
+
+/* A script changes one value of a named style (fb.style.set): only a
+ * property the style sets in config (STYLE_PROP_NOT_IN_STYLE otherwise;
+ * adding one would allocate at run time), and not text_font / text_size
+ * (STYLE_PROP_FIXED: every user's font cascade would change). The value is
+ * checked as in config (style_logic_set_string / _set_number, bg_*
+ * allowed). On an error `p` is unchanged. */
+style_prop_status_t style_logic_named_set_string(style_props_t *p, const char *prop, const char *value);
+style_prop_status_t style_logic_named_set_number(style_props_t *p, const char *prop, int32_t value);
 
 #ifdef __cplusplus
 }

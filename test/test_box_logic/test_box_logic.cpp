@@ -149,6 +149,104 @@ void test_padding_table() {
     expect_padding(5, 1, true, 6, 12);
 }
 
+// A named style on a display item ("style": value and unit; "labelstyle":
+// caption) is the layer between the element style and the item fields
+// (style_logic_font_layer), as ui_box.c applies it.
+void test_named_style_fonts() {
+    const style_props_t value = props(STYLE_HAS_FONT | STYLE_HAS_SIZE, 0, 14);
+    const style_props_t caption = props(STYLE_HAS_FONT | STYLE_HAS_SIZE, 1, 14);
+    const style_props_t both = props(STYLE_HAS_FONT | STYLE_HAS_SIZE, 5, 48);
+    const style_props_t sizeOnly = props(STYLE_HAS_SIZE, 9, 20);
+    const style_props_t none = props(0, 9, 99);
+    style_props_t r;
+
+    // value: item, else named, else element
+    style_logic_font_layer(&value, &both, &r);
+    TEST_ASSERT_EQUAL_INT(5, box_logic_base_face(FONT_FACE_NONE, &r));
+    TEST_ASSERT_EQUAL_INT(48, box_logic_base_px(0, false, &r));
+    TEST_ASSERT_EQUAL_INT(6, box_logic_base_face(6, &r));
+    TEST_ASSERT_EQUAL_INT(24, box_logic_base_px(2, false, &r));
+    style_logic_font_layer(&value, &sizeOnly, &r);
+    TEST_ASSERT_EQUAL_INT(0, box_logic_base_face(FONT_FACE_NONE, &r));
+    TEST_ASSERT_EQUAL_INT(20, box_logic_base_px(0, false, &r));
+    style_logic_font_layer(&value, &none, &r);
+    TEST_ASSERT_EQUAL_INT(0, box_logic_base_face(FONT_FACE_NONE, &r));
+    TEST_ASSERT_EQUAL_INT(14, box_logic_base_px(0, false, &r));
+
+    // caption: the title rule stays the item's (step 2 = 18 px)
+    style_logic_font_layer(&caption, &both, &r);
+    TEST_ASSERT_EQUAL_INT(48, box_logic_base_px(0, true, &r));
+    TEST_ASSERT_EQUAL_INT(18, box_logic_base_px(2, true, &r));
+}
+
+// The unit: item, else named, else display.unit where it sets one, else the
+// value's.
+void test_named_style_unit_order() {
+    const style_props_t v = props(STYLE_HAS_FONT | STYLE_HAS_SIZE, 0, 32);
+    const style_props_t unitPlain = props(STYLE_HAS_COLOR, 7, 77);  // no font / size of its own
+    const style_props_t unitOwn = props(STYLE_HAS_FONT | STYLE_HAS_SIZE, 2, 12);
+    const style_props_t both = props(STYLE_HAS_FONT | STYLE_HAS_SIZE, 5, 48);
+    const style_props_t faceOnly = props(STYLE_HAS_FONT, 5, 99);
+    const style_props_t sizeOnly = props(STYLE_HAS_SIZE, 9, 20);
+    style_props_t u;
+
+    // no named style: as before
+    style_logic_font_layer(&unitPlain, nullptr, &u);
+    TEST_ASSERT_EQUAL_INT(0, box_logic_unit_face(FONT_FACE_NONE, &v, &u));
+    TEST_ASSERT_EQUAL_INT(32, box_logic_unit_px(0, &v, &u));
+    style_logic_font_layer(&unitOwn, nullptr, &u);
+    TEST_ASSERT_EQUAL_INT(2, box_logic_unit_face(FONT_FACE_NONE, &v, &u));
+    TEST_ASSERT_EQUAL_INT(12, box_logic_unit_px(0, &v, &u));
+
+    // named over display.unit
+    style_logic_font_layer(&unitOwn, &both, &u);
+    TEST_ASSERT_EQUAL_INT(5, box_logic_unit_face(FONT_FACE_NONE, &v, &u));
+    TEST_ASSERT_EQUAL_INT(48, box_logic_unit_px(0, &v, &u));
+    // named face only: the size from display.unit where it sets one, else the value's
+    style_logic_font_layer(&unitOwn, &faceOnly, &u);
+    TEST_ASSERT_EQUAL_INT(5, box_logic_unit_face(FONT_FACE_NONE, &v, &u));
+    TEST_ASSERT_EQUAL_INT(12, box_logic_unit_px(0, &v, &u));
+    style_logic_font_layer(&unitPlain, &faceOnly, &u);
+    TEST_ASSERT_EQUAL_INT(5, box_logic_unit_face(FONT_FACE_NONE, &v, &u));
+    TEST_ASSERT_EQUAL_INT(32, box_logic_unit_px(0, &v, &u));
+    // named size only: the face from display.unit where it sets one, else the value's
+    style_logic_font_layer(&unitPlain, &sizeOnly, &u);
+    TEST_ASSERT_EQUAL_INT(0, box_logic_unit_face(FONT_FACE_NONE, &v, &u));
+    TEST_ASSERT_EQUAL_INT(20, box_logic_unit_px(0, &v, &u));
+    style_logic_font_layer(&unitOwn, &sizeOnly, &u);
+    TEST_ASSERT_EQUAL_INT(2, box_logic_unit_face(FONT_FACE_NONE, &v, &u));
+    TEST_ASSERT_EQUAL_INT(20, box_logic_unit_px(0, &v, &u));
+
+    // the item over all of it
+    style_logic_font_layer(&unitOwn, &both, &u);
+    TEST_ASSERT_EQUAL_INT(6, box_logic_unit_face(6, &v, &u));
+    TEST_ASSERT_EQUAL_INT(24, box_logic_unit_px(2, &v, &u));
+}
+
+// Padding: the named text_size takes the place of display.value's size; an
+// item fontsize is unchanged.
+void test_named_style_padding() {
+    const style_props_t value = props(STYLE_HAS_FONT | STYLE_HAS_SIZE, 0, 14);
+    const style_props_t big = props(STYLE_HAS_SIZE, 0, 32);
+    const style_props_t same = props(STYLE_HAS_SIZE, 0, 14);
+    const style_props_t small = props(STYLE_HAS_SIZE, 0, 10);
+    const style_props_t faceOnly = props(STYLE_HAS_FONT, 5, 48);
+    style_props_t r;
+
+    style_logic_font_layer(&value, &big, &r);
+    TEST_ASSERT_EQUAL_INT(3, box_logic_padding_step(0, r.px));   // the named 32 px: step 3
+    TEST_ASSERT_EQUAL_INT(1, box_logic_padding_step(1, r.px));   // the item's step
+    TEST_ASSERT_EQUAL_INT(2, box_logic_padding_step(24, r.px));  // the item's px
+    style_logic_font_layer(&value, &same, &r);
+    TEST_ASSERT_EQUAL_INT(0, box_logic_padding_step(0, r.px));   // 14 px from a style: none, as before
+    style_logic_font_layer(&value, &small, &r);
+    TEST_ASSERT_EQUAL_INT(0, box_logic_padding_step(0, r.px));   // under 14 px: none
+    style_logic_font_layer(&value, &faceOnly, &r);
+    TEST_ASSERT_EQUAL_INT(0, box_logic_padding_step(0, r.px));   // no named size: display.value's 14
+    style_logic_font_layer(&value, nullptr, &r);
+    TEST_ASSERT_EQUAL_INT(0, box_logic_padding_step(0, r.px));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_span_keeps_the_base_without_escapes);
@@ -159,5 +257,8 @@ int main(int, char**) {
     RUN_TEST(test_unit_font);
     RUN_TEST(test_padding_step);
     RUN_TEST(test_padding_table);
+    RUN_TEST(test_named_style_fonts);
+    RUN_TEST(test_named_style_unit_order);
+    RUN_TEST(test_named_style_padding);
     return UNITY_END();
 }

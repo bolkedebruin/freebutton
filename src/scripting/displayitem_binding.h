@@ -96,6 +96,13 @@ bool displayitem_set_font(unsigned long id, int face, int size);
 bool displayitem_restore_font(unsigned long id);
 
 /*
+ * Named style of the item's value and unit (caption = false) or of its
+ * caption: a style_binding.h ref the caller resolved and checked, 0 = none.
+ * Returns false if the item was not found.
+ */
+bool displayitem_set_style(unsigned long id, int ref, bool caption);
+
+/*
  * Update display item position
  * Returns true if successful, false if item not found
  */

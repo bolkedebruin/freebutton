@@ -655,6 +655,143 @@ describe('MQuickJS Validator', () => {
         });
     });
 
+    describe('config.json named styles', () => {
+        const names = {
+            keys: ['light'], displayItems: ['temp'], lists: ['scenes'],
+            styles: { alarm: ['text_color', 'text_opa'], big: ['text_font', 'text_size'], picked: ['text_color', 'bg_color'], empty: [] as string[] },
+        };
+        const messages = (code: string, n: typeof names | Omit<typeof names, 'styles'> = names) => validateCode(code, n).errors.map(e => e.message);
+
+        it('accepts known styles, "" and what cannot be checked', () => {
+            expect(messages([
+                'fb.main.display.setStyle("temp", "alarm");',
+                'fb.main.display.setLabelStyle("temp", "big");',
+                'fb.main.display.setStyle(7, "");',
+                'fb.main.list.setStyle("scenes", "alarm");',
+                'fb.main.list.setFocusStyle("scenes", "picked");',
+                'fb.main.list.setStyle(0, "picked");',
+                'fb.key("light").display.setStyle("big");',
+                'fb.key("light").display.setTopStyle("");',
+                'fb.bars[0].left.display.setTopStyle("alarm");',
+                'var s = "x"; fb.main.display.setStyle("temp", s); fb.key("light").display.setStyle(s);',
+                'fb.style.set("alarm", "text_color", "#00ff00");',
+                'fb.style.set("alarm", "text_opa", 128);',
+                'fb.style.set("picked", "bg_color", "00c853");',
+                'var p = "text_color", v = 5; fb.style.set("alarm", p, v); fb.style.set(s, "anything", v); fb.style.set("alarm", "text_color", v);',
+            ].join('\n'))).toEqual([]);
+        });
+
+        it('reports an unknown style where the device throws ReferenceError', () => {
+            expect(messages([
+                'fb.main.display.setStyle("temp", "alarn");',
+                'fb.main.display.setLabelStyle("temp", "Alarm");',
+                'fb.main.list.setStyle("scenes", "nosuch");',
+                'fb.main.list.setFocusStyle("scenes", "nosuch");',
+                'fb.key("light").display.setStyle("nosuch");',
+                'fb.key("light").display.setTopStyle("nosuch");',
+                'fb.style.set("nosuch", "text_color", "#ffffff");',
+                'fb.style.set("", "text_color", "#ffffff");',
+            ].join('\n'))).toEqual([
+                'unknown style "alarn" in config.json', 'unknown style "Alarm" in config.json', 'unknown style "nosuch" in config.json',
+                'unknown style "nosuch" in config.json', 'unknown style "nosuch" in config.json', 'unknown style "nosuch" in config.json',
+                'unknown style "nosuch" in config.json', 'unknown style "" in config.json',
+            ]);
+            const result = validateCode('fb.main.display.setStyle("temp",\n  "alarn");', names);
+            expect(result.errors[0]).toMatchObject({ line: 2, column: 3 });
+            // The item and list names are still checked.
+            expect(messages('fb.main.display.setStyle("nope", "alarm"); fb.main.list.setFocusStyle("nolist", "picked");')).toEqual([
+                'unknown display item "nope" in config.json', 'unknown list "nolist" in config.json',
+            ]);
+        });
+
+        it('reports a style that is not a string', () => {
+            expect(messages('fb.main.display.setStyle("temp", 3); fb.key("light").display.setStyle(null); fb.style.set(1, "text_color", "#fff");')).toEqual([
+                'fb.main.display.setStyle(): the style must be a string (the name of a "style.styles" entry)',
+                'display.setStyle(): the style must be a string (the name of a "style.styles" entry)',
+                'fb.style.set(): the style must be a string (the name of a "style.styles" entry)',
+            ]);
+        });
+
+        it('reports a style with bg_* on a key or a display item; a list takes it', () => {
+            expect(messages([
+                'fb.main.display.setStyle("temp", "picked");',
+                'fb.main.display.setLabelStyle("temp", "picked");',
+                'fb.key("light").display.setStyle("picked");',
+                'fb.main.right.display.setTopStyle("picked");',
+                'fb.main.list.setStyle("scenes", "picked");',
+                'fb.main.list.setFocusStyle("scenes", "picked");',
+            ].join('\n'))).toEqual(Array(4).fill('style "picked" sets bg_color: it is for lists only (a key or display item has no background)'));
+        });
+
+        it('fb.style.set: only a property the style sets, not its font or size, a value as in config.json', () => {
+            expect(messages([
+                'fb.style.set("alarm", "text_align", "left");',
+                'fb.style.set("empty", "text_color", "#ffffff");',
+                'fb.style.set("big", "text_font", "montserrat");',
+                'fb.style.set("big", "text_size", 20);',
+                'fb.style.set("alarm", "text_size", 20);',
+                'fb.style.set("alarm", "colour", "#ffffff");',
+                'fb.style.set("alarm", "text_color", "red");',
+                'fb.style.set("alarm", "text_color", 5);',
+                'fb.style.set("alarm", "text_opa", 256);',
+                'fb.style.set("alarm", "text_opa", -1);',
+                'fb.style.set("alarm", "text_opa", "128");',
+                'fb.style.set("alarm", 3, 1);',
+                'var v = 1; fb.style.set("alarm", "bg_opa", v);',
+            ].join('\n'))).toEqual([
+                'style "alarm" does not set text_align in config.json: fb.style.set() changes only what the style sets (text_color, text_opa)',
+                'style "empty" does not set text_color in config.json: fb.style.set() changes only what the style sets',
+                'fb.style.set() cannot change text_font: use another named style for another font or size',
+                'fb.style.set() cannot change text_size: use another named style for another font or size',
+                'fb.style.set() cannot change text_size: use another named style for another font or size',
+                '"colour" is not a style property',
+                'text_color must be a colour "#rrggbb"',
+                'text_color must be a colour "#rrggbb"',
+                'text_opa must be an integer 0..255',
+                'text_opa must be an integer 0..255',
+                'text_opa must be an integer 0..255',
+                'fb.style.set(): the property must be a string ("text_color", ...)',
+                'style "alarm" does not set bg_opa in config.json: fb.style.set() changes only what the style sets (text_color, text_opa)',
+            ]);
+        });
+
+        it('fb.style.set: a literal true, false or null value is no string or number', () => {
+            expect(messages([
+                'fb.style.set("alarm", "text_color", true);',
+                'fb.style.set("alarm", "text_opa", false);',
+                'fb.style.set("alarm", "text_color", null);',
+                // whatever the property is, as on the device
+                'var p = "text_color"; fb.style.set("alarm", p, null);',
+                'fb.style.set("alarm", "text_align", true);',
+            ].join('\n'))).toEqual(Array(5).fill('fb.style.set(): the value must be a string or a number'));
+            // Not a literal of those: not judged.
+            expect(messages('var v = true; fb.style.set("alarm", "text_color", v); fb.style.set("alarm", "text_opa", 1); fb.style.set("alarm", "text_color", "#ffffff");')).toEqual([]);
+        });
+
+        it('without named styles in config.json the calls do not exist on the device', () => {
+            const { styles: _styles, ...plain } = names;
+            const expected = (call: string) => `${call}() needs named styles: config.json has no "style.styles", so the device does not have this call`;
+            expect(messages([
+                'fb.main.display.setStyle("temp", "alarm");',
+                'fb.main.display.setLabelStyle("temp", "");',
+                'fb.main.list.setStyle("scenes", "alarm");',
+                'fb.main.list.setFocusStyle(0, x);',
+                'fb.key("light").display.setStyle("alarm");',
+                'fb.main.left.display.setTopStyle("alarm");',
+                'fb.style.set("alarm", "text_color", "#ffffff");',
+            ].join('\n').replace('x)', '"a")'), plain)).toEqual([
+                expected('fb.main.display.setStyle'), expected('fb.main.display.setLabelStyle'), expected('fb.main.list.setStyle'),
+                expected('fb.main.list.setFocusStyle'), expected('display.setStyle'), expected('display.setTopStyle'), expected('fb.style.set'),
+            ]);
+            // The font calls and everything else are as before.
+            expect(messages('fb.key("light").display.setFont("montserrat", 2); fb.main.display.setValue("temp", "1");', plain)).toEqual([]);
+        });
+
+        it('skips the checks without a config.json', () => {
+            expect(validateCode('fb.style.set("x", "y", 1); fb.main.display.setStyle("a", "b");', null).valid).toBe(true);
+        });
+    });
+
     describe('config.json fonts', () => {
         const names = { keys: [], displayItems: ['temp'], lists: ['scenes'], fonts: ['montserrat', 'montserrat_semibold', 'mdi', 'roboto'], fontIds: [2] };
 

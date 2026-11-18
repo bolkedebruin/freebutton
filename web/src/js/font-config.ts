@@ -24,14 +24,17 @@
  * fontsize (label), topfont/topfontsize (top label); lists font/fontsize.
  * font = a name or an id; fontsize 1..5 = the legacy steps 14/24/32/48/72 px
  * (step 2 of a title = 18), 6..72 = px. What an item does not set comes from
- * the resolved style (style-config.ts).
+ * its named style ("style" / "topstyle" on keys, "style" / "labelstyle" on
+ * display items, "style" / "focusstyle" on lists: a name of "style.styles"),
+ * else from the resolved style (style-config.ts).
  */
 import {
   parseTextSpans, STEP_PX, TEXT_FONT_UNKNOWN, TextSizeKind, FONT_PX_MAX, FONT_PX_MIN, type FontResolver,
 } from './text-spans';
 import {
-  configStyles, DEFAULT_STYLES, FACE_SYSTEM, FACE_SYSTEM_BOLD, isTitleElement, parseStyle, styleItemPx, StyleElement,
-  styleWarnings, type ResolvedStyles,
+  configNamedStyles, configStyles, DEFAULT_STYLES, FACE_SYSTEM, FACE_SYSTEM_BOLD, isTitleElement, namedFits, NO_NAMED_STYLES,
+  parseStyle, styleFontLayer, styleItemPx, StyleElement, stylePropertyNames, styleWarnings, type NamedStyles,
+  type ResolvedStyles, type StyleProps,
 } from './style-config';
 
 export { FACE_SYSTEM, FACE_SYSTEM_BOLD };
@@ -232,17 +235,35 @@ export interface TextFont {
 export interface FontSlot {
   fontField: string;
   sizeField: string;
-  /** The element whose resolved style gives what the item does not set. */
+  /** The field that names the part's named style ("style.styles"). */
+  styleField: string;
+  /** The element whose resolved style gives what the item and its named style do not set. */
   element: StyleElement;
 }
 
 export const SLOTS = {
-  value: { fontField: 'font', sizeField: 'fontsize', element: StyleElement.DisplayValue },
-  caption: { fontField: 'labelfont', sizeField: 'labelfontsize', element: StyleElement.DisplayCaption },
-  button: { fontField: 'font', sizeField: 'fontsize', element: StyleElement.KeyLabel },
-  buttonTop: { fontField: 'topfont', sizeField: 'topfontsize', element: StyleElement.KeyTopLabel },
-  list: { fontField: 'font', sizeField: 'fontsize', element: StyleElement.List },
+  value: { fontField: 'font', sizeField: 'fontsize', styleField: 'style', element: StyleElement.DisplayValue },
+  caption: { fontField: 'labelfont', sizeField: 'labelfontsize', styleField: 'labelstyle', element: StyleElement.DisplayCaption },
+  button: { fontField: 'font', sizeField: 'fontsize', styleField: 'style', element: StyleElement.KeyLabel },
+  buttonTop: { fontField: 'topfont', sizeField: 'topfontsize', styleField: 'topstyle', element: StyleElement.KeyTopLabel },
+  list: { fontField: 'font', sizeField: 'fontsize', styleField: 'style', element: StyleElement.List },
 } as const satisfies Record<string, FontSlot>;
+
+/** A list's named style for its selected row (list.selected). */
+export const LIST_FOCUS_STYLE_FIELD = 'focusstyle';
+
+/**
+ * The named style an item field names, as the device takes it
+ * (src/components/StyleRef.h): none when the field is absent, "", not a
+ * string, names no style of "style.styles", or names a style with bg_* on a
+ * part without a background (a key, a display item).
+ */
+export function namedStyleOf(raw: Obj, field: string, el: StyleElement, named: NamedStyles): Readonly<StyleProps> | undefined {
+  const v = raw[field];
+  if (typeof v !== 'string' || v === '') return undefined;
+  const props = named.get(v);
+  return props && namedFits(props, el) ? props : undefined;
+}
 
 /** A fontsize field as a number (numeric strings too); NaN when it is none. */
 function sizeNumber(v: unknown): number {
@@ -259,30 +280,52 @@ export function styleFont(styles: ResolvedStyles, el: StyleElement): TextFont & 
   return { face: s.face ?? FACE_SYSTEM, px: s.px ?? 14, configured: false };
 }
 
-/**
- * The font an item's slot starts with: the item layer ("font" / "fontsize"
- * etc.) over the element's resolved style. `configured` = the item names a
- * config font that exists.
- */
-export function slotFont(
-  table: FontTable, raw: Obj, slot: FontSlot, styles: ResolvedStyles = DEFAULT_STYLES,
-): TextFont & { configured: boolean } {
-  const base = styleFont(styles, slot.element);
-  const face = slot.fontField in raw ? findFace(table, raw[slot.fontField]) : -1;
-  const size = raw[slot.sizeField] ?? (slot.sizeField === 'fontsize' ? raw.fontSize : undefined);
-  const px = styleItemPx(sizeNumber(size), isTitleElement(slot.element), base.px);
-  return { face: face >= 0 ? face : base.face, px, configured: face >= 0 };
+/** The item's own size field of a slot ("fontsize" also as "fontSize"). */
+function slotSize(raw: Obj, slot: FontSlot): unknown {
+  return raw[slot.sizeField] ?? (slot.sizeField === 'fontsize' ? raw.fontSize : undefined);
 }
 
 /**
- * The unit's font: the value's (`value`, after the item layer) unless
- * style.display.unit sets text_font / text_size.
+ * The font an item's slot starts with: the item layer ("font" / "fontsize"
+ * etc.) over the item's named style (`named`: the config's "style.styles"),
+ * over the element's resolved style (style_logic_font_layer, then
+ * box_logic_base_face / _px). `configured` = the item names a config font
+ * that exists.
+ */
+export function slotFont(
+  table: FontTable, raw: Obj, slot: FontSlot, styles: ResolvedStyles = DEFAULT_STYLES, named: NamedStyles = NO_NAMED_STYLES,
+): TextFont & { configured: boolean } {
+  const layered = styleFontLayer(styles[slot.element] ?? {}, namedStyleOf(raw, slot.styleField, slot.element, named));
+  const base = { face: layered.face ?? FACE_SYSTEM, px: layered.px ?? 14 };
+  const face = slot.fontField in raw ? findFace(table, raw[slot.fontField]) : -1;
+  const px = styleItemPx(sizeNumber(slotSize(raw, slot)), isTitleElement(slot.element), base.px);
+  return { face: face >= 0 ? face : base.face, px, configured: face >= 0 };
+}
+
+/** Which of a slot's font and size the item itself sets (the local layer). */
+export function itemFontSet(table: FontTable, raw: Obj, slot: FontSlot): { face: boolean; size: boolean } {
+  return {
+    face: slot.fontField in raw && findFace(table, raw[slot.fontField]) >= 0,
+    size: styleItemPx(sizeNumber(slotSize(raw, slot)), isTitleElement(slot.element), -1) !== -1,
+  };
+}
+
+/**
+ * The unit's font (box_logic_unit_face / _px): the item's "font" /
+ * "fontsize" where it sets them (`item`; then `value` has them), else the
+ * item's named style's (`named`), else style.display.unit's where "style"
+ * sets them, else the value's (`value`, after its own cascade).
  */
 export function unitFont(
   value: TextFont & { configured: boolean }, styles: ResolvedStyles = DEFAULT_STYLES,
+  named?: Readonly<StyleProps>, item: { face?: boolean; size?: boolean } = {},
 ): TextFont & { configured: boolean } {
-  const u = styles[StyleElement.DisplayUnit] ?? {};
-  return { face: u.face ?? value.face, px: u.px ?? value.px, configured: value.configured || u.face !== undefined };
+  const u = styleFontLayer(styles[StyleElement.DisplayUnit] ?? {}, named);
+  return {
+    face: item.face ? value.face : u.face ?? value.face,
+    px: item.size ? value.px : u.px ?? value.px,
+    configured: value.configured || u.face !== undefined,
+  };
 }
 
 /**
@@ -308,6 +351,44 @@ export function fontStyles(cfg: unknown, table: FontTable = fontTable(cfg)): Res
   return configStyles(cfg, fontResolver(table));
 }
 
+/** The named styles of a config ("style.styles"; style-config configNamedStyles with this config's fonts). */
+export function fontNamedStyles(cfg: unknown, table: FontTable = fontTable(cfg)): NamedStyles {
+  return configNamedStyles(cfg, fontResolver(table));
+}
+
+/**
+ * The font of a list's selected row (LV_PART_SELECTED), as the firmware's
+ * style_logic_list_selected_font (src/ui/style_logic.c), lowest first:
+ *  1. the rows' effective font (`font`: the list's, after its cascade of
+ *     item "font" / "fontsize", the rows' named style and the list style);
+ *  2. list.selected's face and px, both, where that element keeps a font of
+ *     its own: its resolved font differs from the list's, i.e.
+ *     "style.list.selected" sets a text_font or text_size (the element's
+ *     shared style then holds that one font, whatever the rows have);
+ *  3. the text_font and / or text_size of `focus`, the selected row's named
+ *     style ("focusstyle").
+ */
+export function listSelectedFont<T extends TextFont>(
+  font: T, styles: ResolvedStyles = DEFAULT_STYLES, focus?: Readonly<StyleProps>,
+): T {
+  const list = styles[StyleElement.List] ?? {};
+  const sel = styles[StyleElement.ListSelected] ?? {};
+  const own = sel.face !== undefined && sel.px !== undefined && (sel.face !== list.face || sel.px !== list.px);
+  return {
+    ...font,
+    face: focus?.face ?? (own ? sel.face! : font.face),
+    px: focus?.px ?? (own ? sel.px! : font.px),
+  };
+}
+
+/** The unit's font of a config display item (`value` = its slotFont of SLOTS.value). */
+export function itemUnitFont(
+  table: FontTable, raw: Obj, value: TextFont & { configured: boolean }, styles: ResolvedStyles, named: NamedStyles,
+): TextFont & { configured: boolean } {
+  return unitFont(value, styles, namedStyleOf(raw, SLOTS.value.styleField, StyleElement.DisplayValue, named),
+    itemFontSet(table, raw, SLOTS.value));
+}
+
 // ---- instance estimate --------------------------------------------------------
 
 const ITEM_LISTS = ['displayitems', 'mqttdisplays'];
@@ -322,14 +403,19 @@ function arraysOf(o: Obj, keys: string[]): Obj[] {
  * firmware screens (status bar / titles: the system fonts at 14 px), each
  * display item's value + unit and caption (inline \f / \s escapes in label
  * and unit included), each key's label and top label, each list (and its
- * selected row when the style gives that its own font); every pair expanded
- * by its fallback chain at the same px. The value text is set at runtime,
- * so only its base font counts. An estimate: modals and scripts can add more.
+ * selected row when the style or its named style gives that its own font),
+ * with the items' named styles in the cascade; and every named style that
+ * sets both text_font and text_size, used or not (the device fills each
+ * named style's own lv_style_t at boot, which creates that font:
+ * src/ui/ui_style.c fill_named). Every pair is expanded by its fallback
+ * chain at the same px. The value text is set at runtime, so only its base
+ * font counts. An estimate: modals and scripts can add more.
  */
 export function fontInstances(cfg: unknown): Set<string> {
   const o: Obj = isObj(cfg) ? cfg : {};
   const table = fontTable(o);
   const styles = fontStyles(o, table);
+  const named = fontNamedStyles(o, table);
   const resolver = fontResolver(table);
   const pairs = new Set<string>();
   const add = (f: TextFont) => {
@@ -343,24 +429,24 @@ export function fontInstances(cfg: unknown): Set<string> {
     for (const s of parseTextSpans(text, resolver).spans) add(spanFont(base, slot, s));
   };
   for (const item of arraysOf(o, ITEM_LISTS)) {
-    const value = slotFont(table, item, SLOTS.value, styles);
+    const value = slotFont(table, item, SLOTS.value, styles, named);
     add(value);
-    addText(item.unit, unitFont(value, styles), SLOTS.value);
-    addText(item.label, slotFont(table, item, SLOTS.caption, styles), SLOTS.caption);
+    addText(item.unit, itemUnitFont(table, item, value, styles, named), SLOTS.value);
+    addText(item.label, slotFont(table, item, SLOTS.caption, styles, named), SLOTS.caption);
   }
   for (const key of arraysOf(o, KEY_LISTS)) {
-    add(slotFont(table, key, SLOTS.button, styles));
-    if (key.toplabel ?? key.topLabel) add(slotFont(table, key, SLOTS.buttonTop, styles));
+    add(slotFont(table, key, SLOTS.button, styles, named));
+    if (key.toplabel ?? key.topLabel) add(slotFont(table, key, SLOTS.buttonTop, styles, named));
   }
-  const list = styles[StyleElement.List] ?? {};
-  const sel = styles[StyleElement.ListSelected] ?? {};
   for (const l of arraysOf(o, ['lists'])) {
-    const f = slotFont(table, l, SLOTS.list, styles);
+    const f = slotFont(table, l, SLOTS.list, styles, named);
     add(f);
     // list.selected with its own text_font / text_size (else it inherits the list's).
-    if (sel.face !== list.face || sel.px !== list.px) {
-      add({ face: sel.face !== list.face ? sel.face ?? f.face : f.face, px: sel.px !== list.px ? sel.px ?? f.px : f.px });
-    }
+    add(listSelectedFont(f, styles, namedStyleOf(l, LIST_FOCUS_STYLE_FIELD, StyleElement.ListSelected, named)));
+  }
+  // A named style with both a font and a size holds that instance itself, from boot.
+  for (const props of named.values()) {
+    if (props.face !== undefined && props.px !== undefined) add({ face: props.face, px: props.px });
   }
   return pairs;
 }
@@ -375,7 +461,9 @@ function describeRef(v: unknown): string {
  * Errors in "style" ("style.fonts" here, the text styles via style-config
  * parseStyle) and the item font fields (font / labelfont / topfont must
  * resolve; fontsize / labelfontsize / topfontsize integer 1..72; the lists'
- * fontsize is checked by fs-rules validateLists).
+ * fontsize is checked by fs-rules validateLists), and the items' named
+ * style fields (style / topstyle / labelstyle / focusstyle: a name of
+ * "style.styles"; one that sets bg_color / bg_opa on a list only).
  * Exported for tests; part of fs-rules validateConfigShape.
  */
 export function validateFonts(o: Obj): string[] {
@@ -486,8 +574,10 @@ export function validateFonts(o: Obj): string[] {
     }
   }
 
-  // The text styles (style.text, style.key.label, ...).
-  problems.push(...parseStyle(o, fontResolver(fontTable(o)), FONTS_HINT).errors);
+  // The text styles (style.text, style.key.label, ...) and the named styles (style.styles).
+  const parsed = parseStyle(o, fontResolver(fontTable(o)), FONTS_HINT);
+  problems.push(...parsed.errors);
+  const namedStyles = new Map(parsed.named.map(n => [n.name, n.props]));
 
   // Item references and sizes.
   const known = (v: unknown) => (typeof v === 'string' && names.has(v)) || (isFontId(v) && ids.has(v));
@@ -503,13 +593,31 @@ export function validateFonts(o: Obj): string[] {
       problems.push(`${at}.${field} must be an integer 1..${FONTSIZE_MAX} (1-5: the sizes 14/24/32/48/72 px, else px)`);
     }
   };
-  const groups: [string[], string[], string[]][] = [
-    [ITEM_LISTS, ['font', 'labelfont'], ['fontsize', 'labelfontsize']],
-    [KEY_LISTS, ['font', 'topfont'], ['fontsize', 'topfontsize']],
+  // A named style reference ("" = none, as an absent field): the device ignores what it cannot use.
+  const checkStyle = (at: string, field: string, v: unknown, el: StyleElement) => {
+    if (v === '' || v === null) return;
+    if (typeof v !== 'string') {
+      problems.push(`${at}.${field} must be the name of a "style.styles" entry`);
+      return;
+    }
+    const props = namedStyles.get(v);
+    if (!props) {
+      const have = namedStyles.size ? `"style.styles" has ${[...namedStyles.keys()].join(', ')}` : 'config.json has no "style.styles"';
+      problems.push(`${at}.${field} ${describeRef(v)} is not a named style (${have})`);
+    } else if (!namedFits(props, el)) {
+      const bg = stylePropertyNames(props).filter(p => p.startsWith('bg_')).join(' and ');
+      problems.push(`${at}.${field} ${describeRef(v)}: the style sets ${bg}, which only a list can use `
+        + '(a key or display item has no background); the device ignores the field');
+    }
+  };
+  const E = StyleElement;
+  const groups: [string[], string[], string[], [string, StyleElement][]][] = [
+    [ITEM_LISTS, ['font', 'labelfont'], ['fontsize', 'labelfontsize'], [['style', E.DisplayValue], ['labelstyle', E.DisplayCaption]]],
+    [KEY_LISTS, ['font', 'topfont'], ['fontsize', 'topfontsize'], [['style', E.KeyLabel], ['topstyle', E.KeyTopLabel]]],
     // lists' fontsize: fs-rules validateLists (same rule)
-    [['lists'], ['font'], []],
+    [['lists'], ['font'], [], [['style', E.List], [LIST_FOCUS_STYLE_FIELD, E.ListSelected]]],
   ];
-  for (const [lists, refFields, sizeFields] of groups) {
+  for (const [lists, refFields, sizeFields, styleFields] of groups) {
     for (const list of lists) {
       const arr = o[list];
       if (!Array.isArray(arr)) continue;
@@ -518,6 +626,7 @@ export function validateFonts(o: Obj): string[] {
         const at = `${list}[${i}]`;
         for (const f of refFields) if (f in e) checkRef(at, f, e[f]);
         for (const f of sizeFields) if (f in e) checkSize(at, f, e[f]);
+        for (const [f, el] of styleFields) if (f in e) checkStyle(at, f, e[f], el);
       });
     }
   }
@@ -535,7 +644,7 @@ function hasPrivateUse(s: string): boolean {
  * U+F0000, literal or \u{...}) in key labels, display captions / units and
  * list items: the device shows boxes for those.
  */
-function systemFallbackWarnings(o: Obj, table: FontTable, styles: ResolvedStyles): string[] {
+function systemFallbackWarnings(o: Obj, table: FontTable, styles: ResolvedStyles, named: NamedStyles): string[] {
   const resolver = fontResolver(table);
   const where = new Map<number, string[]>();
   const check = (at: string, text: unknown, base: TextFont & { configured: boolean }, slot: FontSlot) => {
@@ -554,18 +663,18 @@ function systemFallbackWarnings(o: Obj, table: FontTable, styles: ResolvedStyles
   };
   for (const listKey of KEY_LISTS) {
     arraysOf(o, [listKey]).forEach((k, i) => {
-      check(`${listKey}[${i}].label`, k.label, slotFont(table, k, SLOTS.button, styles), SLOTS.button);
-      check(`${listKey}[${i}].toplabel`, k.toplabel ?? k.topLabel, slotFont(table, k, SLOTS.buttonTop, styles), SLOTS.buttonTop);
+      check(`${listKey}[${i}].label`, k.label, slotFont(table, k, SLOTS.button, styles, named), SLOTS.button);
+      check(`${listKey}[${i}].toplabel`, k.toplabel ?? k.topLabel, slotFont(table, k, SLOTS.buttonTop, styles, named), SLOTS.buttonTop);
     });
   }
   for (const listKey of ITEM_LISTS) {
     arraysOf(o, [listKey]).forEach((d, i) => {
-      check(`${listKey}[${i}].label`, d.label, slotFont(table, d, SLOTS.caption, styles), SLOTS.caption);
-      check(`${listKey}[${i}].unit`, d.unit, unitFont(slotFont(table, d, SLOTS.value, styles), styles), SLOTS.value);
+      check(`${listKey}[${i}].label`, d.label, slotFont(table, d, SLOTS.caption, styles, named), SLOTS.caption);
+      check(`${listKey}[${i}].unit`, d.unit, itemUnitFont(table, d, slotFont(table, d, SLOTS.value, styles, named), styles, named), SLOTS.value);
     });
   }
   arraysOf(o, ['lists']).forEach((l, i) => {
-    const f = slotFont(table, l, SLOTS.list, styles);
+    const f = slotFont(table, l, SLOTS.list, styles, named);
     if (Array.isArray(l.items)) l.items.forEach((t, j) => check(`lists[${i}].items[${j}]`, t, f, SLOTS.list));
   });
   return [...where].map(([face, at]) => {
@@ -594,7 +703,7 @@ export function fontWarnings(cfg: unknown, bucketKeys: ReadonlySet<string> | nul
     }
   });
   const table = fontTable(o);
-  warnings.push(...systemFallbackWarnings(o, table, fontStyles(o, table)));
+  warnings.push(...systemFallbackWarnings(o, table, fontStyles(o, table), fontNamedStyles(o, table)));
   if (bucketKeys) {
     for (const f of table.faces) {
       if (f.system || bucketKeys.has(f.src)) continue;
@@ -607,6 +716,20 @@ export function fontWarnings(cfg: unknown, bucketKeys: ReadonlySet<string> | nul
       + `${FONTS_MAX_INSTANCES}, the rest draw the built-in font. Use fewer sizes or fonts.`);
   }
   return warnings;
+}
+
+/**
+ * The named styles of a config for script checks and completion: each name
+ * with the properties it sets (what fb.style.set may change; bg_* = a list
+ * style). Empty = no named styles: the device has no fb.style and no
+ * setStyle methods.
+ */
+export function styleNames(cfg: unknown): Record<string, string[]> {
+  // No prototype: a style may be named "constructor" or "__proto__", and a
+  // lookup of a name that is no style must not find an Object.prototype member.
+  const out = Object.create(null) as Record<string, string[]>;
+  for (const [name, props] of fontNamedStyles(cfg)) out[name] = stylePropertyNames(props);
+  return out;
 }
 
 /** Font names (system fonts included) and ids of a config, for script checks and completion. */

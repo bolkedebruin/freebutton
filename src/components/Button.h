@@ -12,6 +12,7 @@
 #include "ButtonEventPlan.h"
 #include "IconRef.h"
 #include "FontRef.h"
+#include "StyleRef.h"
 #include "ui/PendingRender.h"
 #include "utils/TextSlot.h"
 #include <atomic>
@@ -94,13 +95,28 @@ private:
     std::atomic<uint32_t> labelFont_{fontref::pack(FONT_FACE_NONE, 0)};
     std::atomic<uint32_t> topLabelFont_{fontref::pack(FONT_FACE_NONE, 0)};
     std::atomic<bool> fontDirty_{false};
-    // LVGL lock held, button exists.
-    void applyFonts();
+    // The named styles now (ui/ui_style.h ref, 0 = none) of the bottom and
+    // the top label: the configured ones until a script calls setStyle()
+    // (any task). A change sets fontDirty_: the fonts depend on them.
+    std::atomic<uint8_t> style_{0};
+    std::atomic<uint8_t> topStyle_{0};
+    // LVGL lock held, button exists. The named styles, the base fonts and
+    // the label fonts. true when a named style changed: the caller draws
+    // the texts again.
+    bool applyFonts();
+    // LVGL lock held, button exists: the texts and the icon as they are
+    // now, drawn again (a row of spans keeps the colour and font it was
+    // rendered with; the icon's tint is the label colour).
+    void redrawTexts();
 
     // Button position and device information
     uint32_t position_{0};
     uint8_t page_{1};
     uint8_t brokerId_{0};
+    // Config "style" (bottom label) and "topstyle" (top label). Written at
+    // config load only.
+    uint8_t configStyle_{0};
+    uint8_t configTopStyle_{0};
 
 public:
 
@@ -157,9 +173,14 @@ public:
         }
     }
 
+    // Named style of the bottom label (top: the top label): a ui_style.h
+    // ref the caller resolved and checked (no bg_*), 0 = none. Any task:
+    // the LVGL task applies it.
+    void setStyle(uint8_t ref, bool top);
+
     // Script engine restart (ConfigManager::restoreConfigState): label, top
-    // label and icon a script set (not those from the key's config topics)
-    // and the fonts go back to the config. LVGL lock held, no script code
+    // label and icon a script set (not those from the key's config topics),
+    // the fonts and the named styles go back to the config. LVGL lock held, no script code
     // running; the LVGL task draws on its next tick. The caller requests the
     // render.
     void restoreConfigState();
@@ -201,6 +222,8 @@ public:
         if (topFontSize_ != 0) {
             obj.Add("topfontsize", topFontSize_);
         }
+        styleref::write(obj, "style", configStyle_);
+        styleref::write(obj, "topstyle", configTopStyle_);
 
         // topics array
         {
@@ -272,6 +295,10 @@ private:
         topFontSize_ = data["topfontsize"] | 0;
         labelFont_.store(fontref::pack(fontFace_, fontSize_), std::memory_order_release);
         topLabelFont_.store(fontref::pack(topFontFace_, topFontSize_), std::memory_order_release);
+        configStyle_ = styleref::parse(data["style"], TAG, "style", STYLE_EL_KEY_LABEL);
+        configTopStyle_ = styleref::parse(data["topstyle"], TAG, "topstyle", STYLE_EL_KEY_TOPLABEL);
+        style_.store(configStyle_, std::memory_order_release);
+        topStyle_.store(configTopStyle_, std::memory_order_release);
 
         ESP_LOGI(TAG, "Configured Button %d at position %d", id, position_);
     }

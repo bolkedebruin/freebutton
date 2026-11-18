@@ -60,6 +60,12 @@ void requestPendingRenderLater();
 // LVGL task, LVGL lock held.
 void applyPendingRenders();
 
+// Work of the LVGL task that the widgets of a walk depend on (the named
+// styles a script changed, ui_style.h): `begin` runs before the first
+// applyPending() of a walk, `end` after the last. Plain function pointers,
+// set at config load with the LVGL lock held; nullptr = none.
+void setWalkHooks(void (*begin)(), void (*end)());
+
 } // namespace freebutton::ui
 
 #endif // FREEBUTTON_PENDINGRENDER_H

@@ -328,3 +328,86 @@ describe('style', () => {
     expect(model.styles[StyleElement.ListSelected]!.bgColor).toBe(0xffd700);
   });
 });
+
+describe('named styles ("style.styles")', () => {
+  const cfg = {
+    style: {
+      list: { text_color: '#111111', selected: { bg_color: '#222222', text_color: '#333333' } },
+      styles: {
+        alarm: { text_color: '#ff0000' }, big: { text_font: 'montserrat_semibold', text_size: 48 },
+        picked: { bg_color: '#00c853', text_color: '#000000' }, '1bad': {},
+      },
+    },
+    buttons: [
+      { position: 1, label: 'a', style: 'big', topstyle: 'alarm' },
+      { position: 2, label: 'b', style: 'picked', topstyle: 'nosuch' },
+      { position: 3, label: 'c' },
+    ],
+    displayitems: [{ name: 'co2', style: 'alarm', labelstyle: 'big', unit: 'ppm' }, { name: 'plain' }],
+    lists: [
+      { name: 'styled', items: ['a'], style: 'alarm', focusstyle: 'picked' },
+      { name: 'own', items: ['a'], style: 'alarm', focusstyle: 'picked', color: '0000ff', focuscolor: 'ff00ff', focustextcolor: 'ffffff' },
+      { name: 'none', items: ['a'] },
+    ],
+  };
+
+  it('the model carries the named styles and the names scripts can use', () => {
+    const model = configToModel(cfg);
+    expect([...model.namedStyles.keys()]).toEqual(['alarm', 'big', 'picked']);
+    expect(model.names.styles).toEqual({
+      alarm: ['text_color'], big: ['text_font', 'text_size'], picked: ['text_color', 'bg_color'],
+    });
+  });
+
+  it('names.styles is absent without named styles: the device has no style calls then', () => {
+    expect('styles' in configNames({})).toBe(false);
+    expect('styles' in configNames({ style: { styles: {} } })).toBe(false);
+    expect('styles' in configNames({ style: { styles: { '1bad': {} } } })).toBe(false);
+    expect(configNames({ style: { styles: { empty: {} } } }).styles).toEqual({ empty: [] });
+  });
+
+  it('keys: the named style gives the font and its other properties; one a key cannot use is left out', () => {
+    const [a, b, c] = configToModel(cfg).pages[0]!.buttons;
+    expect(a).toMatchObject({
+      labelFont: { face: 1, px: 48 }, topFont: { face: 1, px: 18 },
+      labelStyle: { face: 1, px: 48 }, topStyle: { color: 0xff0000 },
+    });
+    // bg_* on a key, and an unknown style: as without the fields.
+    expect(b!.labelStyle).toBeUndefined();
+    expect(b!.topStyle).toBeUndefined();
+    expect(b!.labelFont).toMatchObject({ face: 0, px: 32 });
+    expect(c!.labelFont).toBeUndefined();
+    expect(c!.labelStyle).toBeUndefined();
+  });
+
+  it('display items: "style" on the value and the unit, "labelstyle" on the caption', () => {
+    const [co2, plain] = configToModel(cfg).pages[0]!.displayItems;
+    expect(co2).toMatchObject({
+      valueStyle: { color: 0xff0000 }, captionStyle: { face: 1, px: 48 },
+      valueFont: { face: 0, px: 14 }, unitFont: { face: 0, px: 14 }, labelFont: { face: 1, px: 48 },
+    });
+    expect(plain!.valueStyle).toBeUndefined();
+    expect(plain!.captionStyle).toBeUndefined();
+    expect(plain).toMatchObject({ valueFont: { face: 0, px: 14 }, labelFont: { face: 1, px: 14 } });
+  });
+
+  it('lists: colours = the list\'s own, else its named styles\', else the style\'s', () => {
+    const [styled, own, none] = configToModel(cfg).pages[0]!.lists!;
+    expect(styled).toMatchObject({
+      color: '#ff0000', focusColor: '#00c853', focusTextColor: '#000000',
+      style: { color: 0xff0000 }, focusStyle: { bgColor: 0x00c853, color: 0 },
+    });
+    expect(own).toMatchObject({ color: '#0000ff', focusColor: '#ff00ff', focusTextColor: '#ffffff' });
+    expect(none).toMatchObject({ color: '#111111', focusColor: '#222222', focusTextColor: '#333333' });
+    expect(none!.style).toBeUndefined();
+    // A named text_color on "style" does not colour the selected row.
+    const rows = mapList({ name: 'l', items: ['a'], style: 'alarm' }, undefined, configToModel(cfg).styles, configToModel(cfg).namedStyles)!;
+    expect(rows).toMatchObject({ color: '#ff0000', focusTextColor: '#333333' });
+  });
+
+  it('the mappers without named styles given read no style fields', () => {
+    expect(mapButton({ position: 1, style: 'big' })!.labelStyle).toBeUndefined();
+    expect(mapDisplayItem({ style: 'alarm' })!.item.valueStyle).toBeUndefined();
+    expect(mapList({ name: 'l', style: 'alarm' })!.color).toBe('#808080');
+  });
+});

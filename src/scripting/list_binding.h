@@ -39,6 +39,11 @@ bool list_hw_set_font(int index, int face, int size);
 // Back to the configured font and size (JS setFont(list, "")).
 bool list_hw_restore_font(int index);
 
+// Named style of the rows (focus = false) or of the selected row: a
+// style_binding.h ref the caller resolved, 0 = none. false when there is no
+// list at index.
+bool list_hw_set_style(int index, int ref, bool focus);
+
 // Items for list_hw_items_commit(): a builder in the general heap.
 void* list_hw_items_new(void);
 // false when the builder is full (list::kMaxItems); the item is not added.

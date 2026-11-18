@@ -141,7 +141,7 @@ cxx() {  # <source> <object name>
 # include them.)
 FIRMWARE_CXX=(
     scripting/device_hardware.cpp scripting/sensor_binding.cpp scripting/displayitem_binding.cpp
-    scripting/list_binding.cpp scripting/image_binding.cpp scripting/led_hardware.cpp
+    scripting/list_binding.cpp scripting/style_binding.cpp scripting/image_binding.cpp scripting/led_hardware.cpp
     scripting/system_binding.cpp scripting/file_hardware.cpp
     components/ConfigManager.cpp components/DisplayItem.cpp components/Button.cpp components/List.cpp
     components/ImageItem.cpp components/Clock.cpp components/TopicHandler.cpp components/ButtonEventPlan.cpp

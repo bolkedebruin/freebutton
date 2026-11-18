@@ -3,6 +3,7 @@
  * Components use emit() and on() to communicate via typed custom events.
  * No central state object - each component manages its own state.
  */
+import type { StyleProps } from './style-config';
 
 export type LogLevel = 'log' | 'info' | 'warn' | 'error' | 'result' | 'input';
 
@@ -100,6 +101,12 @@ export interface DisplayItem {
   valueFont?: ItemFont;
   /** Caption font (config.json "labelfont"/"labelfontsize"); absent = the style's display.caption. */
   labelFont?: ItemFont;
+  /** Unit font (the item's, else its named style's, else the style's display.unit, else the value's); absent = from valueFont. */
+  unitFont?: ItemFont;
+  /** The named style ("style.styles") of the value and unit (config.json "style"): what it sets, over the style's elements. */
+  valueStyle?: Readonly<StyleProps>;
+  /** The named style of the caption (config.json "labelstyle"). */
+  captionStyle?: Readonly<StyleProps>;
 }
 
 /** A physical connector slot (config.json info.connectors). Keys: id*2+1, id*2+2. */
@@ -129,6 +136,9 @@ export interface ButtonConfig {
   labelFont?: ItemFont;
   /** Top label font (config.json "topfont"/"topfontsize"); absent = the style's key.toplabel. */
   topFont?: ItemFont;
+  /** The named styles ("style.styles") of the label and the top label (config.json "style" / "topstyle"). */
+  labelStyle?: Readonly<StyleProps>;
+  topStyle?: Readonly<StyleProps>;
 }
 
 /**
@@ -188,6 +198,9 @@ export interface ListConfig {
   color: string;
   focusColor: string;
   focusTextColor: string;
+  /** The named styles ("style.styles") of the rows and of the selected row (config.json "style" / "focusstyle"). */
+  style?: Readonly<StyleProps>;
+  focusStyle?: Readonly<StyleProps>;
 }
 
 /** The kinds of config.json entries the virtual device draws. */

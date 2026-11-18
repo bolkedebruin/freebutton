@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { fieldText, fieldValue, itemFields, type Field } from '../item-props';
+import type { NamedStyles } from '../style-config';
 
 const keys = (fields: Field[]) => fields.map(f => f.key);
 const field = (fields: Field[], key: string) => fields.find(f => f.key === key)!;
@@ -83,5 +84,35 @@ describe('item-props fieldText', () => {
     expect(fieldText(field(l, 'items'), ['a', 'b', 3])).toBe('a\nb');
     expect(fieldText(field(l, 'color'), 'FFD700')).toBe('#ffd700');
     expect(fieldText(field(l, 'color'), 'gold')).toBe('');
+  });
+});
+
+describe('item-props named styles', () => {
+  const styles: NamedStyles = new Map([['alarm', { color: 0xff0000 }], ['picked', { bgColor: 0x00c853 }], ['empty', {}]]);
+
+  it('no style fields without named styles (the lists above), unless the entry names one', () => {
+    expect(keys(itemFields('button', { style: 'gone' }))).toEqual(['label', 'font', 'fontsize', 'toplabel', 'topfont', 'topfontsize', 'style']);
+    expect(field(itemFields('button', { style: 'gone' }), 'style')).toMatchObject({ type: 'style', styles: [] });
+  });
+
+  it('with named styles: two per kind, after the fonts', () => {
+    expect(keys(itemFields('button', {}, styles))).toEqual(['label', 'font', 'fontsize', 'toplabel', 'topfont', 'topfontsize', 'style', 'topstyle']);
+    expect(keys(itemFields('displayitem', {}, styles)).slice(0, 6)).toEqual(['label', 'unit', 'font', 'fontsize', 'style', 'labelstyle']);
+    expect(keys(itemFields('list', {}, styles)).slice(0, 5)).toEqual(['items', 'font', 'fontsize', 'style', 'focusstyle']);
+    expect(keys(itemFields('image', {}, styles))).toEqual(['width', 'height', 'x', 'y', 'color']);
+  });
+
+  it('a style that sets bg_* is offered to a list only', () => {
+    for (const key of ['style', 'topstyle']) expect(field(itemFields('button', {}, styles), key).styles).toEqual(['alarm', 'empty']);
+    for (const key of ['style', 'labelstyle']) expect(field(itemFields('displayitem', {}, styles), key).styles).toEqual(['alarm', 'empty']);
+    for (const key of ['style', 'focusstyle']) expect(field(itemFields('list', {}, styles), key).styles).toEqual(['alarm', 'picked', 'empty']);
+  });
+
+  it('the value: the name; "None" removes the key', () => {
+    const f = field(itemFields('list', {}, styles), 'focusstyle');
+    expect(fieldValue(f, 'picked')).toBe('picked');
+    expect(fieldValue(f, '')).toBeUndefined();
+    expect(fieldText(f, 'picked')).toBe('picked');
+    expect(fieldText(f, undefined)).toBe('');
   });
 });

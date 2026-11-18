@@ -233,8 +233,9 @@ public:
      *
      * Restored: display items a script made (removed) or removed (shown
      * again), their texts, icon, font, position and page; key label, top
-     * label, icon and fonts; list items, selection and font; images; the
-     * shown page; LED pixels a script set. A text or icon that came from an
+     * label, icon and fonts; list items, selection and font; the named
+     * style of every part and the values of the named styles (fb.style.set);
+     * images; the shown page; LED pixels a script set. A text or icon that came from an
      * item's own config topic stays. See docs/SCRIPT-RESTART.md.
      *
      * Safe when no script ever ran and when called twice. Must not be called
@@ -353,9 +354,10 @@ private:
      * before the items are built (they resolve their font names at load and
      * build on the element styles), whatever the key order. Configures the
      * font registry with style.fonts (fonts_configure), then resolves the
-     * roles and elements into the shared element styles (ui_style_apply);
+     * roles and elements into the shared element styles (ui_style_apply),
+     * then loads the named styles of style.styles (ui_style_named_*);
      * LVGL lock taken here. Without "style": the system fonts and the
-     * firmware defaults.
+     * firmware defaults, and no named styles.
      */
     void loadStyle(const std::string& filename);
 
@@ -399,8 +401,8 @@ private:
 
 // Template method implementation must be in header
 // The regenerated config (GET /config) omits the IDE-level tables ("icons",
-// "style" with its fonts; items still name their fonts): it is not a
-// round-trip of config.json.
+// "style" with its fonts and named styles; items still name their fonts
+// and their named styles): it is not a round-trip of config.json.
 template<typename OutputStream>
 void ConfigManager::write(OutputStream &stream) {
     rapidjson::Writer<OutputStream> writer(stream);

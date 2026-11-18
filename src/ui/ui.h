@@ -18,16 +18,25 @@ void ui_box_delete(lv_obj_t* box);  // the box and its descriptor
 //  face / fontsize:                 value and unit ("font" / "fontsize")
 //  caption_face / caption_fontsize: caption ("labelfont" / "labelfontsize";
 //                                   legacy step 2 = 18 px)
+// And the named styles below that layer (ui_style.h ref, 0 = none):
+//  style:         value and unit ("style")
+//  caption_style: caption ("labelstyle")
+// (The two refs sit in the padding after the sizes: the struct stays 8 bytes.)
 typedef struct {
     int16_t face;
     uint8_t fontsize;
+    uint8_t style;
     int16_t caption_face;
     uint8_t caption_fontsize;
+    uint8_t caption_style;
 } ui_box_fonts_t;
 
 // Sets the fonts first, then draws caption, text and unit with them.
 // These four return false when a text was not drawn for lack of LVGL pool
-// (ui_text.h): the caller draws it again later.
+// (ui_text.h): the caller draws it again later. ui_box_update also when a
+// part could not take its named style for the same reason (the part is then
+// drawn without it, font, size and padding included): the caller calls
+// ui_box_update again later.
 bool ui_box_update(lv_obj_t* box, const char* caption, const char* text, const char* unit,
                    int x, int y, const ui_box_fonts_t* fonts, int width, int align, int boxtype);
 bool ui_box_set_caption(lv_obj_t* box, const char* caption);

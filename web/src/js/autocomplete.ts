@@ -157,7 +157,39 @@ const FONT_NAME_ARG = new RegExp(
     + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*set(?:Top)?Font\\s*\\()\\s*["']([A-Za-z0-9_]*)$`
 );
 
-const NAME_ARGS: [RegExp, Exclude<keyof ConfigNames, 'fontIds'>, string][] = [
+// Named style, any: second argument of fb.main.list.setStyle / setFocusStyle
+// and the first of fb.style.set.
+const STYLE_NAME_ARG = new RegExp(
+    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*list\\s*\\.\\s*set(?:Focus)?Style\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
+    + `|\\bfb\\s*\\.\\s*style\\s*\\.\\s*set\\s*\\()\\s*["']([A-Za-z0-9_]*)$`
+);
+
+// Named style for a part without a background: second argument of
+// fb.main.display.setStyle / setLabelStyle, the first of a key display's
+// setStyle / setTopStyle. A style that sets bg_color / bg_opa is for a list
+// only (the device throws TypeError), so it is not offered here.
+const TEXT_STYLE_NAME_ARG = new RegExp(
+    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*display\\s*\\.\\s*set(?:Label)?Style\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
+    + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*set(?:Top)?Style\\s*\\()\\s*["']([A-Za-z0-9_]*)$`
+);
+
+const BG_PROPERTIES = ['bg_color', 'bg_opa'];
+
+/** The properties of a named style, [] for a name that is none (own properties only: "constructor" is no style). */
+function styleProperties(names: ConfigNames | null, style: string): string[] {
+    const styles = names?.styles;
+    return styles && Object.prototype.hasOwnProperty.call(styles, style) ? styles[style] ?? [] : [];
+}
+
+// Property of a named style: the second argument of fb.style.set("style", "...
+// (group 1 = the style, group 2 = the property typed so far).
+const STYLE_PROPERTY_ARG = /\bfb\s*\.\s*style\s*\.\s*set\s*\(\s*["']([A-Za-z0-9_]*)["']\s*,\s*["']([a-z_]*)$/;
+
+type NameKind = Exclude<keyof ConfigNames, 'fontIds' | 'styles'>;
+
+const NAME_ARGS: [RegExp, NameKind | 'styles' | 'textStyles', string][] = [
+    [STYLE_NAME_ARG, 'styles', 'named style (config.json)'],
+    [TEXT_STYLE_NAME_ARG, 'textStyles', 'named style (config.json)'],
     [FONT_NAME_ARG, 'fonts', 'font (config.json)'],
     [ICON_NAME_ARG, 'icons', 'icon (config.json)'],
     [KEY_NAME_ARG, 'keys', 'key (config.json)'],
@@ -169,22 +201,37 @@ const NAME_ARGS: [RegExp, Exclude<keyof ConfigNames, 'fontIds'>, string][] = [
 /**
  * Key / display item / list names from config.json inside the name argument
  * of fb.key("..."), fb.main.display.setValue("...", ...) etc. and
- * fb.main.list.next("...") etc. Returns null when the cursor is not in such
- * an argument; no options without a config. Exported for testing.
+ * fb.main.list.next("...") etc.; font, icon and named style names in the
+ * arguments that take one; the properties a named style sets in the second
+ * argument of fb.style.set. Returns null when the cursor is not in such an
+ * argument; no options without a config. Exported for testing.
  */
 export function configNameCompletions(
     context: CompletionContext,
     names: ConfigNames | null = getConfigNames()
 ): CompletionResult | null {
     const before = context.state.doc.sliceString(Math.max(0, context.pos - 200), context.pos);
+    const property = before.match(STYLE_PROPERTY_ARG);
+    if (property) {
+        // What fb.style.set may change: the style's own properties, but its font and size.
+        const settable = styleProperties(names, property[1]!).filter(p => p !== 'text_font' && p !== 'text_size');
+        return {
+            from: context.pos - property[2]!.length,
+            options: settable.map(name => ({ label: name, type: 'property', detail: `property of style "${property[1]}"` })),
+            validFor: /^[a-z_]*$/
+        };
+    }
     for (const [pattern, kind, detail] of NAME_ARGS) {
         const match = before.match(pattern);
         if (!match) continue;
+        const known = kind === 'styles' ? Object.keys(names?.styles ?? {})
+            : kind === 'textStyles'
+                ? Object.keys(names?.styles ?? {}).filter(s => !styleProperties(names, s).some(p => BG_PROPERTIES.includes(p)))
+            // Fonts: the system fonts exist without a "style.fonts" table.
+            : names?.[kind] ?? (kind === 'fonts' && names ? SYSTEM_FONTS.map(f => f.name) : []);
         return {
             from: context.pos - match[1]!.length,
-            // Fonts: the system fonts exist without a "style.fonts" table.
-            options: (names?.[kind] ?? (kind === 'fonts' && names ? SYSTEM_FONTS.map(f => f.name) : []))
-                .map(name => ({ label: name, type: 'constant', detail })),
+            options: known.map(name => ({ label: name, type: 'constant', detail })),
             validFor: /^[A-Za-z0-9_-]*$/
         };
     }

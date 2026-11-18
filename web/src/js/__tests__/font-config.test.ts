@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { fontNamedStyles, itemUnitFont, listSelectedFont, namedStyleOf, styleNames } from '../font-config';
+import { DEFAULT_STYLES as DEFAULTS, StyleElement } from '../style-config';
 import {
   fontChain, fontInstances, fontNames, fontsizePx, fontStyles, fontTable, fontWarnings, findFace, hasFontTable,
   isSystemFontSrc, slotFont, spanFont, unitFont, validateFonts, FACE_SYSTEM, FACE_SYSTEM_BOLD, SLOTS, SYSTEM_FONTS,
@@ -387,5 +389,228 @@ describe('fontInstances and warnings', () => {
 
   it('fontNames lists the system fonts, config names and ids', () => {
     expect(fontNames(withFonts([{ id: 2, name: 'r', src: 'r.ttf' }]))).toEqual({ fonts: ['montserrat', 'montserrat_semibold', 'r'], fontIds: [2] });
+  });
+});
+
+describe('named styles ("style.styles") in the font cascade and the validation', () => {
+  const E = StyleElement;
+  const cfg = (rest: Record<string, unknown> = {}, style: Record<string, unknown> = {}) => ({
+    style: {
+      fonts: [{ name: 'r', src: 'r.ttf' }],
+      styles: {
+        face: { text_font: 'r' }, size: { text_size: 20 }, both: { text_font: 'montserrat_semibold', text_size: 40 },
+        colour: { text_color: '#ff0000' }, bar: { bg_color: '#00ff00' }, barOpa: { bg_opa: 9, text_size: 18 }, empty: {},
+      },
+      ...style,
+    },
+    ...rest,
+  });
+  const fontOf = (c: Record<string, unknown>, raw: Record<string, unknown>, slot: keyof typeof SLOTS) => {
+    const t = fontTable(c);
+    const f = slotFont(t, raw, SLOTS[slot], fontStyles(c, t), fontNamedStyles(c, t));
+    return `${t.faces[f.face]!.name} ${f.px}`;
+  };
+
+  it('namedStyleOf: the style a field names, as the device takes it', () => {
+    const named = fontNamedStyles(cfg());
+    expect(namedStyleOf({ style: 'size' }, 'style', E.KeyLabel, named)).toEqual({ px: 20 });
+    expect(namedStyleOf({ style: 'empty' }, 'style', E.KeyLabel, named)).toEqual({});
+    for (const raw of [{}, { style: '' }, { style: 'nosuch' }, { style: 'Size' }, { style: 3 }, { style: null }, { style: ['size'] }]) {
+      expect(namedStyleOf(raw, 'style', E.KeyLabel, named), JSON.stringify(raw)).toBeUndefined();
+    }
+    // bg_*: a list only.
+    expect(namedStyleOf({ style: 'bar' }, 'style', E.DisplayValue, named)).toBeUndefined();
+    expect(namedStyleOf({ topstyle: 'barOpa' }, 'topstyle', E.KeyTopLabel, named)).toBeUndefined();
+    expect(namedStyleOf({ style: 'bar' }, 'style', E.List, named)).toEqual({ bgColor: 0x00ff00 });
+    expect(namedStyleOf({ focusstyle: 'bar' }, 'focusstyle', E.ListSelected, named)).toEqual({ bgColor: 0x00ff00 });
+  });
+
+  it('slotFont: face = item, else named, else element; px likewise', () => {
+    const c = cfg();
+    // key label: element montserrat 32
+    expect(fontOf(c, {}, 'button')).toBe('montserrat 32');
+    expect(fontOf(c, { style: 'colour' }, 'button')).toBe('montserrat 32');
+    expect(fontOf(c, { style: 'face' }, 'button')).toBe('r 32');
+    expect(fontOf(c, { style: 'size' }, 'button')).toBe('montserrat 20');
+    expect(fontOf(c, { style: 'both' }, 'button')).toBe('montserrat_semibold 40');
+    expect(fontOf(c, { style: 'both', fontsize: 2 }, 'button')).toBe('montserrat_semibold 24');
+    expect(fontOf(c, { style: 'both', font: 'r' }, 'button')).toBe('r 40');
+    expect(fontOf(c, { style: 'both', font: 'r', fontsize: 9 }, 'button')).toBe('r 9');
+    // each slot reads its own field
+    expect(fontOf(c, { style: 'both' }, 'buttonTop')).toBe('montserrat_semibold 18');
+    expect(fontOf(c, { topstyle: 'both' }, 'buttonTop')).toBe('montserrat_semibold 40');
+    // a title's step 2 is 18 px, over a named size too
+    expect(fontOf(c, { topstyle: 'both', topfontsize: 2 }, 'buttonTop')).toBe('montserrat_semibold 18');
+    expect(fontOf(c, { labelstyle: 'size' }, 'caption')).toBe('montserrat_semibold 20');
+    expect(fontOf(c, { style: 'size' }, 'caption')).toBe('montserrat_semibold 14');
+    expect(fontOf(c, { style: 'face' }, 'value')).toBe('r 14');
+    expect(fontOf(c, { style: 'size' }, 'list')).toBe('montserrat 20');
+    // a style the part cannot use, or that is not there: as without the field
+    expect(fontOf(c, { style: 'barOpa' }, 'button')).toBe('montserrat 32');
+    expect(fontOf(c, { style: 'barOpa' }, 'list')).toBe('montserrat 18');
+    expect(fontOf(c, { style: 'nosuch' }, 'button')).toBe('montserrat 32');
+    // no named styles given: the element's
+    expect(slotFont(fontTable(c), { style: 'both' }, SLOTS.button)).toEqual({ face: FACE_SYSTEM, px: 32, configured: false });
+  });
+
+  it('the unit: the item, else the named style, else display.unit where it sets one, else the value\'s', () => {
+    const unit = (c: Record<string, unknown>, raw: Record<string, unknown>) => {
+      const t = fontTable(c);
+      const styles = fontStyles(c, t);
+      const named = fontNamedStyles(c, t);
+      const u = itemUnitFont(t, raw, slotFont(t, raw, SLOTS.value, styles, named), styles, named);
+      return `${t.faces[u.face]!.name} ${u.px}`;
+    };
+    const plain = cfg();
+    const own = cfg({}, { display: { unit: { text_font: 'r', text_size: 10 } } });
+    expect(unit(plain, {})).toBe('montserrat 14');
+    expect(unit(plain, { style: 'both' })).toBe('montserrat_semibold 40');
+    expect(unit(own, {})).toBe('r 10');
+    // the named style goes over display.unit, property by property
+    expect(unit(own, { style: 'both' })).toBe('montserrat_semibold 40');
+    expect(unit(own, { style: 'size' })).toBe('r 20');
+    expect(unit(own, { style: 'face' })).toBe('r 10');
+    expect(unit(own, { style: 'colour' })).toBe('r 10');
+    // the item's font / fontsize are the value's and the unit's
+    expect(unit(own, { fontsize: 3 })).toBe('r 32');
+    expect(unit(own, { font: 'montserrat' })).toBe('montserrat 10');
+    expect(unit(own, { style: 'both', font: 'montserrat', fontsize: 2 })).toBe('montserrat 24');
+    // unitFont itself, as the preview calls it
+    const value = { face: 0, px: 24, configured: false };
+    expect(unitFont(value, DEFAULTS)).toEqual(value);
+    expect(unitFont(value, DEFAULTS, { px: 40 })).toEqual({ face: 0, px: 40, configured: false });
+    expect(unitFont(value, DEFAULTS, { face: 1, px: 40 }, { size: true })).toEqual({ face: 1, px: 24, configured: true });
+  });
+
+  // The firmware's rule (style_logic_list_selected_font, test/test_style_logic): the same cases.
+  it('listSelectedFont: the rows\' font, list.selected\'s own over it, the focus style\'s font / size on top', () => {
+    const font = { face: 0, px: 32, configured: false };
+    expect(listSelectedFont(font)).toEqual(font);
+    expect(listSelectedFont(font, DEFAULTS, { color: 1 })).toEqual(font);
+    expect(listSelectedFont(font, DEFAULTS, { px: 18 })).toEqual({ ...font, px: 18 });
+    expect(listSelectedFont(font, DEFAULTS, { face: 1, px: 18 })).toEqual({ ...font, face: 1, px: 18 });
+    // The rows have an item font (face 2 at 24 px): a focus style with one of the two keeps the other.
+    const rows = { face: 2, px: 24, configured: true };
+    expect(listSelectedFont(rows)).toEqual(rows);
+    expect(listSelectedFont(rows, DEFAULTS, { face: 5 })).toEqual({ ...rows, face: 5 });
+    expect(listSelectedFont(rows, DEFAULTS, { px: 48 })).toEqual({ ...rows, px: 48 });
+    expect(listSelectedFont(rows, DEFAULTS, { face: 5, px: 48 })).toEqual({ ...rows, face: 5, px: 48 });
+    // list.selected with a size of its own keeps its font: face and px both, whatever the rows have.
+    const styles = fontStyles({ style: { list: { selected: { text_size: 40 } } } });
+    expect(listSelectedFont(font, styles)).toEqual({ ...font, px: 40 });
+    expect(listSelectedFont(rows, styles)).toEqual({ ...rows, face: 0, px: 40 });
+    expect(listSelectedFont(font, styles, { px: 18 })).toEqual({ ...font, px: 18 });
+    expect(listSelectedFont(rows, styles, { px: 18 })).toEqual({ ...rows, face: 0, px: 18 });
+    expect(listSelectedFont(rows, styles, { face: 5 })).toEqual({ ...rows, face: 5, px: 40 });
+    // list.selected that names the list's own font and size has none of its own.
+    const same = fontStyles({ style: { list: { text_size: 30, selected: { text_size: 30 } } } });
+    expect(listSelectedFont(rows, same)).toEqual(rows);
+  });
+
+  it('validateFonts: the six references must name a style of "style.styles"', () => {
+    const good = cfg({
+      buttons: [{ position: 1, style: 'both', topstyle: 'colour' }, { position: 2, style: '', topstyle: 'empty' }],
+      displayitems: [{ style: 'size', labelstyle: 'face' }],
+      lists: [{ name: 'l', style: 'bar', focusstyle: 'barOpa' }, { name: 'm', style: 'colour', focusstyle: 'colour' }],
+    });
+    expect(validateFonts(good)).toEqual([]);
+
+    const bad = cfg({
+      buttons: [{ position: 1, style: 'nosuch', topstyle: 'Colour' }],
+      mqttbuttons: [{ position: 2, style: 3 }],
+      displayitems: [{ style: ['size'], labelstyle: 'missing' }],
+      lists: [{ name: 'l', style: 'gone', focusstyle: true }],
+    });
+    const have = '("style.styles" has face, size, both, colour, bar, barOpa, empty)';
+    expect(validateFonts(bad)).toEqual([
+      'displayitems[0].style must be the name of a "style.styles" entry',
+      `displayitems[0].labelstyle "missing" is not a named style ${have}`,
+      `buttons[0].style "nosuch" is not a named style ${have}`,
+      `buttons[0].topstyle "Colour" is not a named style ${have}`,
+      'mqttbuttons[0].style must be the name of a "style.styles" entry',
+      `lists[0].style "gone" is not a named style ${have}`,
+      'lists[0].focusstyle must be the name of a "style.styles" entry',
+    ]);
+    // Without "style.styles" every reference is one to an undefined style.
+    expect(validateFonts({ style: {}, buttons: [{ position: 1, style: 'alarm' }] })).toEqual([
+      'buttons[0].style "alarm" is not a named style (config.json has no "style.styles")',
+    ]);
+    expect(validateFonts({ lists: [{ name: 'l', focusstyle: 'picked' }] })).toEqual([
+      'lists[0].focusstyle "picked" is not a named style (config.json has no "style.styles")',
+    ]);
+  });
+
+  it('validateFonts: a style that sets bg_color / bg_opa on a key or a display item', () => {
+    const c = cfg({
+      buttons: [{ position: 1, style: 'bar', topstyle: 'barOpa' }],
+      displayitems: [{ style: 'bar', labelstyle: 'bar' }],
+      lists: [{ name: 'l', style: 'bar', focusstyle: 'barOpa' }],
+    });
+    expect(validateFonts(c)).toEqual([
+      expect.stringMatching(/^displayitems\[0\]\.style "bar": the style sets bg_color, which only a list can use .*the device ignores the field$/),
+      expect.stringMatching(/^displayitems\[0\]\.labelstyle "bar": the style sets bg_color, which only a list can use/),
+      expect.stringMatching(/^buttons\[0\]\.style "bar": the style sets bg_color, which only a list can use/),
+      expect.stringMatching(/^buttons\[0\]\.topstyle "barOpa": the style sets bg_opa, which only a list can use/),
+    ]);
+  });
+
+  it('validateFonts: includes the problems inside "style.styles"; a style left out is an undefined one', () => {
+    const styles: Record<string, unknown> = { '2bad': {}, a: { text_color: 'red', nope: 1 } };
+    for (let i = 1; i <= 16; i++) styles[`s${i}`] = {};
+    expect(validateFonts({ style: { styles }, buttons: [{ position: 1, style: '2bad', topstyle: 's16' }] })).toEqual([
+      expect.stringContaining('style.styles: "2bad" is not a valid style name'),
+      'style.styles.a.text_color must be a colour "#rrggbb"',
+      expect.stringContaining('style.styles.a.nope is not a style property'),
+      'style.styles has 17 named styles; the device holds 16 ("s16" and the rest are left out)',
+      expect.stringContaining('buttons[0].style "2bad" is not a named style ("style.styles" has a, s1, '),
+      expect.stringContaining('buttons[0].topstyle "s16" is not a named style'),
+    ]);
+  });
+
+  it('fontInstances: a named style with a font and a size counts, used or not; the others where an item uses them', () => {
+    const unused = cfg({ buttons: [{ position: 1, label: 'a' }] });
+    // "both" (montserrat_semibold 40): the device creates its font at boot. "face", "size" and
+    // "barOpa" set one of the two: no font until a part uses them.
+    expect([...fontInstances(unused)].sort()).toEqual(['montserrat@14', 'montserrat@32', 'montserrat_semibold@14', 'montserrat_semibold@40']);
+    expect([...fontInstances({ ...unused, style: { ...(unused as { style: object }).style, styles: {} } })].sort())
+      .toEqual(['montserrat@14', 'montserrat@32', 'montserrat_semibold@14']);
+    // With a fallback chain the style's font counts once per face of the chain.
+    expect([...fontInstances({
+      style: { fonts: [{ name: 'a', src: 'a.ttf', fallback: 'montserrat' }], styles: { s: { text_font: 'a', text_size: 21 } } },
+    })].sort()).toEqual(['a@21', 'montserrat@14', 'montserrat@21', 'montserrat_semibold@14']);
+    const used = cfg({
+      buttons: [{ position: 1, label: 'a', toplabel: 't', style: 'both', topstyle: 'size' }],
+      displayitems: [{ label: 'c', unit: 'u', style: 'face', labelstyle: 'both' }],
+      lists: [{ name: 'l', style: 'size', focusstyle: 'barOpa' }],
+    });
+    expect([...fontInstances(used)].sort()).toEqual([
+      'montserrat@14', 'montserrat@18', 'montserrat@20', 'montserrat_semibold@14', 'montserrat_semibold@20',
+      'montserrat_semibold@40', 'r@14',
+    ]);
+    // A style a key cannot use adds nothing.
+    expect(fontInstances(cfg({ buttons: [{ position: 1, label: 'a', style: 'barOpa' }] }))).toEqual(fontInstances(unused));
+  });
+
+  it('styleNames: each named style with the properties it sets', () => {
+    expect(styleNames(cfg())).toEqual({
+      face: ['text_font'], size: ['text_size'], both: ['text_font', 'text_size'], colour: ['text_color'], bar: ['bg_color'],
+      barOpa: ['text_size', 'bg_opa'], empty: [],
+    });
+    expect(styleNames({})).toEqual({});
+    expect(styleNames({ style: { styles: {} } })).toEqual({});
+  });
+
+  it('styleNames: a style may have the name of an Object.prototype member; a name that is no style is not found', () => {
+    // As config.json gives it: JSON.parse makes "__proto__" an own property.
+    const config = JSON.parse('{"style":{"styles":{"__proto__":{"text_color":"#ff0000"},"constructor":{"text_opa":9},"toString":{}}}}');
+    const names = styleNames(config);
+    expect(Object.keys(names).sort()).toEqual(['__proto__', 'constructor', 'toString']);
+    expect(names['__proto__']).toEqual(['text_color']);
+    expect(names.constructor).toEqual(['text_opa']);
+    expect(names.toString).toEqual([]);
+    // No inherited members: a lookup of any other name gives nothing.
+    const plain = styleNames({ style: { styles: { alarm: { text_color: '#ff0000' } } } });
+    for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf']) expect(plain[name], name).toBeUndefined();
+    expect(Object.keys(plain)).toEqual(['alarm']);
   });
 });

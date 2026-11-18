@@ -146,6 +146,15 @@ describe('config-edit setItemProps: properties', () => {
     expect(out).toContain('      "y": 0,\n      "width": 50,\n      "align": 1,');
   });
 
+  it('puts the named style fields next to the fonts they go with', () => {
+    const out = edited(MODERN, d => setItemProps(d, ref, { style: 'alarm', labelstyle: 'muted' }));
+    expect(Object.keys(JSON.parse(out).displayitems[0])).toEqual([
+      'name', 'page', 'x', 'y', 'width', 'align', 'boxtype', 'fontsize', 'style', 'labelstyle',
+    ]);
+    // Removing them again gives the file back.
+    expect(edited(out, d => setItemProps(d, ref, { style: undefined, labelstyle: undefined }))).toBe(MODERN);
+  });
+
   it('sets text, font, size, alignment, width and colour', () => {
     const out = edited(MODERN, d => setItemProps(d, ref, {
       label: 'Buiten', unit: '°C', font: 'pacifico', fontsize: 48, align: 3, width: 30, iconcolor: '#ff0000',

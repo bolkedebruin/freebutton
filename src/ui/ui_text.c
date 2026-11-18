@@ -10,6 +10,7 @@
 #include "ui_text.h"
 #include "text_spans.h"
 #include "style_logic.h"
+#include "ui_style.h"
 #include "box_logic.h"
 #include "fonts/fonts.h"
 #include "lvgl.h"
@@ -81,8 +82,29 @@ void ui_text_stats(uint32_t *collapsed, uint32_t *skipped) {
     *skipped = g_skipped;
 }
 
-bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_style, const int base_face,
-                    const int base_px, const bool title) {
+uint8_t ui_text_named(lv_obj_t *obj) { return (uint8_t)(uintptr_t)lv_obj_get_user_data(obj); }
+
+/* The part's named style on the element itself. obj already carries the
+ * element style, and a style added later wins among added styles, so the
+ * named style goes over it. The ref obj carries now is its user data (see
+ * ui_text.h): only a change touches the object. */
+bool ui_text_set_named(lv_obj_t *obj, const uint8_t named) {
+    uint8_t carried = ui_text_named(obj);
+    if (carried == named) {
+        return true;
+    }
+    const bool attached = ui_style_named_attach(obj, &carried, named, 0);
+    lv_obj_set_user_data(obj, (void *)(uintptr_t)carried);
+    return attached;
+}
+
+bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_style, const uint8_t named,
+                    const int base_face, const int base_px, const bool title) {
+    /* The span labels get the style obj carries: when the pool had no room
+     * to add `named` to obj, the whole text is drawn without it. */
+    ui_text_set_named(obj, named);
+    const lv_style_t *named_style = ui_style_named_get(ui_text_named(obj));
+
     /* clear out any existing references */
     lv_obj_clean(obj);
 
@@ -158,6 +180,11 @@ bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
             break;
         }
         lv_obj_add_style(label, default_style, 0);
+        if (named_style != NULL) {
+            /* after the element style (it wins); 8 bytes of the label's
+             * pool share checked above */
+            lv_obj_add_style(label, named_style, 0);
+        }
         lv_obj_set_style_text_font(label, ui_text_span_font(s, base_face, base_px, title), 0);
         lv_obj_set_style_text_color(label, s->has_color ? lv_color_hex(s->color) : base_color, 0);
 

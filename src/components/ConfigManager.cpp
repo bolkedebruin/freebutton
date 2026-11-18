@@ -142,13 +142,13 @@ void parseStyleProps(const JsonObjectConst block, style_props_t& p, const bool a
     }
 }
 
-// config.json "style" minus "fonts" -> sheet (layers 2 and 3).
+// config.json "style" minus "fonts" and "styles" -> sheet (layers 2 and 3).
 void parseStyleSheet(const JsonObjectConst style, style_sheet_t& sheet) {
     static constexpr auto TAG = "ConfigManager";
     for (const auto kv : style) {
         const char* key = kv.key().c_str();
-        if (std::strcmp(key, "fonts") == 0) {
-            continue;
+        if (std::strcmp(key, "fonts") == 0 || std::strcmp(key, "styles") == 0) {
+            continue;  // the font table and the named styles: loadStyle()
         }
         const auto block = kv.value();
         if (!block.is<JsonObjectConst>()) {
@@ -191,6 +191,134 @@ void parseStyleSheet(const JsonObjectConst style, style_sheet_t& sheet) {
             parseStyleProps(el.value().as<JsonObjectConst>(), sheet.element[e], false, where, nullptr);
         }
     }
+}
+
+// config.json "style.styles" (name -> properties): calls fn(name, length,
+// properties) for each entry the table takes, in file order. An entry that
+// is not taken (a bad name, not an object, more than STYLE_NAMED_MAX) is
+// skipped, with a warning when `warn`. Walked twice by parseNamedStyles(): to
+// size the table, then to fill it.
+template <typename Fn>
+void forEachNamedStyle(const JsonObjectConst styles, const bool warn, Fn&& fn) {
+    static constexpr auto TAG = "ConfigManager";
+    size_t count = 0;
+    for (const auto kv : styles) {
+        const char* name = kv.key().c_str();
+        const size_t len = kv.key().size();
+        const style_named_status_t st = style_logic_named_check(name, len, count);
+        if (st == STYLE_NAMED_BAD_NAME) {
+            if (warn) {
+                ESP_LOGW(TAG, "style.styles: \"%.32s\" is not a style name (letters, digits, _; not starting with "
+                              "a digit; max %d), skipped", name, STYLE_NAME_MAX);
+            }
+            continue;
+        }
+        if (st == STYLE_NAMED_FULL) {
+            if (warn) {
+                ESP_LOGW(TAG, "style.styles: more than %d styles, \"%s\" and the rest are left out", STYLE_NAMED_MAX,
+                         name);
+            }
+            break;
+        }
+        if (!kv.value().is<JsonObjectConst>()) {
+            if (warn) {
+                ESP_LOGW(TAG, "style.styles.%s is not an object, skipped", name);
+            }
+            continue;
+        }
+        fn(name, len, kv.value().as<JsonObjectConst>());
+        count++;
+    }
+}
+
+// config.json "style.styles" -> the named-style table (ui/ui_style.h), after
+// the fonts (text_font names) and before the items (they refer to the
+// styles by name). In two steps, so that the style document is gone before
+// anything is made in the LVGL pool (loadStyle): parseNamedStyles() sizes
+// the table, allocates it and parses the properties into it (plain data);
+// applyNamedStyles() then fills the lv_style_t of each. Both take the LVGL
+// lock. Without named styles nothing is allocated; a previous table is
+// freed either way. Returns the number of styles in the table.
+size_t parseNamedStyles(const JsonVariantConst styles) {
+    static constexpr auto TAG = "ConfigManager";
+    auto& display = FreeButton::getLvglDisplay();
+    size_t count = 0;
+    size_t nameBytes = 0;
+    const bool isObject = styles.is<JsonObjectConst>();
+    if (!isObject && !styles.isNull()) {
+        ESP_LOGW(TAG, "style.styles is not an object, ignored");
+    }
+    if (isObject) {
+        forEachNamedStyle(styles.as<JsonObjectConst>(), false, [&](const char*, const size_t len, JsonObjectConst) {
+            count++;
+            nameBytes += 1 + len;
+        });
+    }
+    display.lock();
+    const bool allocated = ui_style_named_alloc(count, nameBytes);
+    // The LVGL task refills a style a script changed, before the widgets
+    // of that walk draw (fb.style.set).
+    ui::setWalkHooks(allocated && count > 0 ? ui_style_named_refresh : nullptr,
+                     allocated && count > 0 ? ui_style_named_refresh_done : nullptr);
+    display.unlock();
+    if (!allocated) {
+        ESP_LOGE(TAG, "style.styles: no memory for %u named styles, the device runs without them",
+                 static_cast<unsigned>(count));
+        return 0;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    // Parsed straight into the table (no copy). Names and properties are
+    // plain data until applyNamedStyles(); no item exists yet.
+    forEachNamedStyle(styles.as<JsonObjectConst>(), true,
+                      [](const char* name, const size_t len, const JsonObjectConst block) {
+        style_props_t* props = ui_style_named_add(name, len);
+        if (props == nullptr) {
+            return;  // cannot happen: the table was sized by the same walk
+        }
+        char where[8 + STYLE_NAME_MAX];
+        std::snprintf(where, sizeof(where), "styles.%s", name);
+        parseStyleProps(block, *props, true, where, nullptr);
+    });
+    return count;
+}
+
+// The second step: `count` = what parseNamedStyles() returned (0: nothing to
+// do). A style that finds no room in the LVGL pool is dropped; one log line
+// names them all.
+void applyNamedStyles(const size_t count) {
+    static constexpr auto TAG = "ConfigManager";
+    if (count == 0) {
+        return;
+    }
+    auto& display = FreeButton::getLvglDisplay();
+    display.lock();
+    const uint16_t dropped = ui_style_named_apply();
+    display.unlock();
+    if (dropped != 0) {
+        // Up to STYLE_NAMED_MAX names, each with ", ".
+        char names[STYLE_NAMED_MAX * (STYLE_NAME_MAX + 2) + 1];
+        size_t at = 0;
+        for (size_t i = 0; i < count; i++) {
+            size_t len = 0;
+            const char* name = (dropped & (1u << i)) ? ui_style_named_name(static_cast<uint8_t>(i + 1), &len) : nullptr;
+            if (name == nullptr || at + len + 3 > sizeof(names)) {
+                continue;
+            }
+            if (at > 0) {
+                names[at++] = ',';
+                names[at++] = ' ';
+            }
+            std::memcpy(names + at, name, len);
+            at += len;
+        }
+        names[at] = '\0';
+        ESP_LOGE(TAG, "style.styles: dropped for lack of LVGL memory (the pool is too low to hold their "
+                      "properties): %s. Items and scripts that name them get \"unknown style\"", names);
+    }
+    ESP_LOGI(TAG, "Loaded %u named styles (%u bytes)", static_cast<unsigned>(ui_style_named_count()),
+             static_cast<unsigned>(ui_style_named_bytes()));
 }
 
 } // namespace
@@ -367,12 +495,20 @@ void ConfigManager::loadStyle(const std::string& filename) {
     if (found) {
         parseStyleSheet(style, sheet);
     }
-    doc.clear();
     style_props_t resolved[STYLE_EL_COUNT];
     style_logic_resolve(&sheet, resolved);
+    // style.styles (layer 3a): its table is sized, allocated and parsed while
+    // the document is still there. Without named styles this allocates
+    // nothing.
+    const size_t namedStyles = parseNamedStyles(found ? style["styles"] : JsonVariantConst());
+    // The document goes before the styles are applied: ui_style_apply and
+    // applyNamedStyles create font instances (FreeType faces, glyph caches),
+    // and the document must not sit on the heap during that peak.
+    doc.clear();
     display.lock();
     ui_style_apply(resolved);
     display.unlock();
+    applyNamedStyles(namedStyles);
 }
 
 void ConfigManager::clear() {
@@ -504,7 +640,8 @@ bool ConfigManager::removeDisplayItem(unsigned long id) {
 // destructor of a script-made item, outside it, takes the LVGL lock;
 // 2. the LVGL lock, once, for all display items and keys (only stores and
 // flags; the LVGL task draws afterwards; inside it the text slots' writer
-// spinlock per reset slot); 3. the lists' items mutex, per list.
+// spinlock per reset slot), also for the named styles' values; 3. the
+// lists' items mutex, per list.
 // No heap is allocated; memory is only given back.
 void ConfigManager::restoreConfigState() {
     // 1. Items a script made go, one at a time: taken out under the lock,
@@ -552,6 +689,9 @@ void ConfigManager::restoreConfigState() {
         for (auto& button : buttons) {
             button->restoreConfigState();
         }
+        // The values fb.style.set changed: the config's again (frees the
+        // copy; the LVGL task refills the styles in its next walk).
+        ui_style_named_restore();
         display.unlock();
     }
 

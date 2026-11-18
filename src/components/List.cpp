@@ -34,24 +34,44 @@ public:
     ItemsLock& operator=(const ItemsLock&) = delete;
 };
 
-// Font and line spacing of a roller (LVGL lock held). The item layer: a
-// config / script font or size is a local font (the face, else the list
-// style's, at fontsize 1..5 = step (14/24/32/48/72), FONT_PX_MIN..MAX = px,
-// else the style's px); without one the list style's font applies. The
+// Font and line spacing of a roller (LVGL lock held), after its named styles
+// were added. The rows (LV_PART_MAIN): a config / script font or size is a
+// local font (the face, else the named style's, else the list style's, at
+// fontsize 1..5 = step (14/24/32/48/72), FONT_PX_MIN..MAX = px, else the
+// named style's text_size, else the list style's px). So is the font of a
+// named style that sets only one of text_font / text_size. Without one the
+// shared styles' font applies. The selected row (LV_PART_SELECTED) has no
+// item font of its own and follows the rows' (LVGL takes a font the part
+// does not have from LV_PART_MAIN), unless list.selected or its named style
+// holds one. A named style with only one of the two gives it a local font,
+// which hides LV_PART_MAIN's: it is built on the rows' face and px, so the
+// selected row keeps following them (style_logic_list_selected_font). The
 // line space is a quarter of the line height, as before "style", unless the
-// list style sets text_line_space.
-void applyFont(lv_obj_t* roller, const uint32_t packed) {
+// list style or the rows' named style sets text_line_space.
+void applyFont(lv_obj_t* roller, const uint32_t packed, const uint8_t style, const uint8_t focusStyle) {
     const int face = fontref::face(packed);
     const int size = fontref::size(packed);
     const style_props_t* r = ui_style_resolved(STYLE_EL_LIST);
-    if (face == FONT_FACE_NONE && size == 0) {
+    const style_props_t* n = ui_style_named_props(style);
+    // The rows' face and px, whichever layer holds them.
+    style_props_t base;
+    style_logic_font_layer(r, n, &base);
+    const int rowsFace = face == FONT_FACE_NONE ? base.face : face;
+    const int rowsPx = style_logic_item_px(size, false, base.px);
+    if (!style_logic_font_local(face, size, n)) {
         lv_obj_remove_local_style_prop(roller, LV_STYLE_TEXT_FONT, LV_PART_MAIN);
     } else {
-        lv_obj_set_style_text_font(roller, fonts_get(face == FONT_FACE_NONE ? r->face : face,
-                                                     style_logic_item_px(size, false, r->px)),
-                                   LV_PART_MAIN);
+        lv_obj_set_style_text_font(roller, fonts_get(rowsFace, rowsPx), LV_PART_MAIN);
     }
-    if (r->has & STYLE_HAS_LINE_SPACE) {
+    int selectedFace = 0;
+    int selectedPx = 0;
+    if (!style_logic_list_selected_font(r, ui_style_resolved(STYLE_EL_LIST_SELECTED), ui_style_named_props(focusStyle),
+                                        rowsFace, rowsPx, &selectedFace, &selectedPx)) {
+        lv_obj_remove_local_style_prop(roller, LV_STYLE_TEXT_FONT, LV_PART_SELECTED);
+    } else {
+        lv_obj_set_style_text_font(roller, fonts_get(selectedFace, selectedPx), LV_PART_SELECTED);
+    }
+    if ((r->has & STYLE_HAS_LINE_SPACE) || (n != nullptr && (n->has & STYLE_HAS_LINE_SPACE))) {
         lv_obj_remove_local_style_prop(roller, LV_STYLE_TEXT_LINE_SPACE, LV_PART_MAIN);
     } else {
         const lv_font_t* font = lv_obj_get_style_text_font(roller, LV_PART_MAIN);
@@ -108,6 +128,10 @@ void List::configure(const ArduinoJson::JsonObject& data) {
     fontSize_ = data["fontsize"] | fontSize_;
     fontFace_ = fontref::parse(data["font"], TAG, "font");
     font_.store(fontref::pack(fontFace_, fontSize_), std::memory_order_release);
+    configStyle_ = styleref::parse(data["style"], TAG, "style", STYLE_EL_LIST);
+    configFocusStyle_ = styleref::parse(data["focusstyle"], TAG, "focusstyle", STYLE_EL_LIST_SELECTED);
+    style_.store(configStyle_, std::memory_order_release);
+    focusStyle_.store(configFocusStyle_, std::memory_order_release);
     page_ = data["page"] | page_;
     color_ = configColor(data, "color");
     focusColor_ = configColor(data, "focuscolor");
@@ -195,6 +219,12 @@ void List::setFont(const int face, const int size) {
     requestRender();
 }
 
+void List::setStyle(const uint8_t ref, const bool focus) {
+    (focus ? focusStyle_ : style_).store(ref, std::memory_order_release);
+    fontDirty_.store(true, std::memory_order_release);
+    requestRender();
+}
+
 void List::restoreConfigState() {
     std::string scriptOptions;  // freed outside the lock
     {
@@ -213,6 +243,11 @@ void List::restoreConfigState() {
     }
     if (font_.load(std::memory_order_acquire) != fontref::pack(fontFace_, fontSize_)) {
         restoreFont();
+    }
+    const bool styleChanged = style_.exchange(configStyle_, std::memory_order_acq_rel) != configStyle_;
+    const bool focusChanged = focusStyle_.exchange(configFocusStyle_, std::memory_order_acq_rel) != configFocusStyle_;
+    if (styleChanged || focusChanged) {
+        fontDirty_.store(true, std::memory_order_release);
     }
     requestRender();
 }
@@ -237,10 +272,15 @@ bool List::applyPending() {
             return false;
         }
     }
-    if (!created && fontDirty_.exchange(false, std::memory_order_acq_rel)) {
+    // Also when a script changed a value of a named style the list uses
+    // (fb.style.set): LVGL restyles the roller itself, but its height was
+    // computed from the old line space.
+    const bool restyled = ui_style_named_changed(style_.load(std::memory_order_acquire)) ||
+                          ui_style_named_changed(focusStyle_.load(std::memory_order_acquire));
+    if (!created && (fontDirty_.exchange(false, std::memory_order_acq_rel) || restyled)) {
         // The row height follows the font: the roller lays out again with
         // the visible row count it has.
-        applyFont(roller_, font_.load(std::memory_order_acquire));
+        applyStyles();
         lv_roller_set_visible_row_count(roller_, static_cast<uint32_t>(rows_));
     }
     if (created || itemsDirty_.exchange(false, std::memory_order_acq_rel)) {
@@ -262,6 +302,25 @@ bool List::applyPending() {
         }
     }
     return false;
+}
+
+// LVGL lock held, roller exists. The named styles go on after the element
+// styles (createRoller), so they win over them; the item's colours are local
+// styles and win over both.
+void List::applyStyles() {
+    const uint8_t style = style_.load(std::memory_order_acquire);
+    const uint8_t focusStyle = focusStyle_.load(std::memory_order_acquire);
+    bool attached = ui_style_named_attach(roller_, &styleCarried_, style, LV_PART_MAIN);
+    attached = ui_style_named_attach(roller_, &focusStyleCarried_, focusStyle, LV_PART_SELECTED) && attached;
+    // The font cascade follows what the roller carries (a style that found
+    // no room in the LVGL pool is not there).
+    applyFont(roller_, font_.load(std::memory_order_acquire), styleCarried_, focusStyleCarried_);
+    if (!attached) {
+        // Again in a later walk (applyPending), not at once: that would
+        // spin while the pool stays low.
+        fontDirty_.store(true, std::memory_order_release);
+        ui::requestPendingRenderLater();
+    }
 }
 
 // LVGL lock held.
@@ -290,7 +349,10 @@ void List::createRoller() {
     lv_obj_add_style(r, ui_style_get(STYLE_EL_LIST), LV_PART_MAIN);
     lv_obj_add_style(r, ui_style_get(STYLE_EL_LIST_SELECTED), LV_PART_SELECTED);
     fontDirty_.store(false, std::memory_order_release);
-    applyFont(r, font_.load(std::memory_order_acquire));
+    roller_ = r;
+    styleCarried_ = 0;
+    focusStyleCarried_ = 0;
+    applyStyles();
     if (color_ != kNoColor) {
         lv_obj_set_style_text_color(r, lv_color_hex(color_), LV_PART_MAIN);
     }
@@ -307,7 +369,6 @@ void List::createRoller() {
     lv_obj_set_width(r, width_ * kScreenWidth / 100);
     lv_roller_set_visible_row_count(r, static_cast<uint32_t>(rows_));
     lv_obj_remove_flag(r, LV_OBJ_FLAG_CLICKABLE);
-    roller_ = r;
 }
 
 // LVGL lock held.

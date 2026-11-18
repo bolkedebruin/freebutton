@@ -62,8 +62,9 @@ const LIST_KEYS: Record<ConfigItemKind, string[]> = {
  */
 const KEY_ORDER = [
   'displayitemid', 'name', 'position', 'page', 'x', 'y', 'width', 'height', 'rows', 'align', 'boxtype',
-  'fontsize', 'font', 'labelfontsize', 'labelfont', 'label', 'toplabel', 'topfontsize', 'topfont', 'unit',
-  'icon', 'src', 'iconsize', 'iconcolor', 'color', 'focuscolor', 'focustextcolor', 'items', 'selected',
+  'fontsize', 'font', 'style', 'labelfontsize', 'labelfont', 'labelstyle', 'label', 'toplabel', 'topfontsize', 'topfont',
+  'topstyle', 'unit', 'icon', 'src', 'iconsize', 'iconcolor', 'color', 'focuscolor', 'focustextcolor', 'focusstyle',
+  'items', 'selected',
 ];
 
 /** Older spellings the firmware still reads: the key the file has is the one updated. */

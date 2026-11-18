@@ -639,6 +639,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.display.setFont(${1:idOrName}, ${2:font}, ${3:size})"
       },
       {
+        "label": "fb.main.display.setStyle",
+        "type": "method",
+        "detail": "(idOrName: number | string, style: string) → boolean",
+        "info": "Give the value and unit a named style of config.json \"style.styles\" (item by id or config.json name; \"\" takes the named style away; the item's own fields still win); false when there is no such item. Only on a device whose config.json has named styles.",
+        "apply": "fb.main.display.setStyle(${1:idOrName}, ${2:style})"
+      },
+      {
+        "label": "fb.main.display.setLabelStyle",
+        "type": "method",
+        "detail": "(idOrName: number | string, style: string) → boolean",
+        "info": "Give the caption a named style of config.json \"style.styles\" (item by id or config.json name; \"\" takes the named style away); false when there is no such item. Only on a device whose config.json has named styles.",
+        "apply": "fb.main.display.setLabelStyle(${1:idOrName}, ${2:style})"
+      },
+      {
         "label": "fb.main.left.button.onClick",
         "type": "method",
         "detail": "(callback: () => boolean | void) → void",
@@ -707,6 +721,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(font: string | number, size: number) → void",
         "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
         "apply": "fb.main.left.display.setTopFont(${1:font}, ${2:size})"
+      },
+      {
+        "label": "fb.main.left.display.setStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Give the bottom label a named style of config.json \"style.styles\" (\"\" takes the named style away; the key's own \"font\" / \"fontsize\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.main.left.display.setStyle(${1:style})"
+      },
+      {
+        "label": "fb.main.left.display.setTopStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Give the top label a named style of config.json \"style.styles\" (\"\" takes the named style away; the key's own \"topfont\" / \"topfontsize\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.main.left.display.setTopStyle(${1:style})"
       },
       {
         "label": "fb.main.right.button.onClick",
@@ -779,6 +807,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.right.display.setTopFont(${1:font}, ${2:size})"
       },
       {
+        "label": "fb.main.right.display.setStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Give the bottom label a named style of config.json \"style.styles\" (\"\" takes the named style away; the key's own \"font\" / \"fontsize\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.main.right.display.setStyle(${1:style})"
+      },
+      {
+        "label": "fb.main.right.display.setTopStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Give the top label a named style of config.json \"style.styles\" (\"\" takes the named style away; the key's own \"topfont\" / \"topfontsize\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.main.right.display.setTopStyle(${1:style})"
+      },
+      {
         "label": "fb.main.list.next",
         "type": "method",
         "detail": "(nameOrIndex: string | number) → number",
@@ -826,6 +868,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(nameOrIndex: string | number, font: string | number, size: number) → void",
         "info": "Set the font of the items (default: the style's list font, config.json \"style.list\", at the list's \"fontsize\"; font \"\" restores config.json)",
         "apply": "fb.main.list.setFont(${1:nameOrIndex}, ${2:font}, ${3:size})"
+      },
+      {
+        "label": "fb.main.list.setStyle",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number, style: string) → void",
+        "info": "Give the list a named style of config.json \"style.styles\" (\"\" takes the named style away; the list's own \"font\" / \"fontsize\" / \"color\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.main.list.setStyle(${1:nameOrIndex}, ${2:style})"
+      },
+      {
+        "label": "fb.main.list.setFocusStyle",
+        "type": "method",
+        "detail": "(nameOrIndex: string | number, style: string) → void",
+        "info": "Give the selected row a named style of config.json \"style.styles\", which may set bg_color / bg_opa (\"\" takes the named style away; the list's own \"focuscolor\" / \"focustextcolor\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.main.list.setFocusStyle(${1:nameOrIndex}, ${2:style})"
       },
       {
         "label": "fb.main.image.setIcon",
@@ -954,6 +1010,20 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.bars[n].left.display.setTopFont(${1:font}, ${2:size})"
       },
       {
+        "label": "fb.bars[n].left.display.setStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Give the bottom label a named style of config.json \"style.styles\" (\"\" takes the named style away; the key's own \"font\" / \"fontsize\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.bars[n].left.display.setStyle(${1:style})"
+      },
+      {
+        "label": "fb.bars[n].left.display.setTopStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Give the top label a named style of config.json \"style.styles\" (\"\" takes the named style away; the key's own \"topfont\" / \"topfontsize\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.bars[n].left.display.setTopStyle(${1:style})"
+      },
+      {
         "label": "fb.bars[n].right.led.setColor",
         "type": "method",
         "detail": "(r: number, g: number, b: number) → void",
@@ -1064,6 +1134,27 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "detail": "(font: string | number, size: number) → void",
         "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
         "apply": "fb.bars[n].right.display.setTopFont(${1:font}, ${2:size})"
+      },
+      {
+        "label": "fb.bars[n].right.display.setStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Give the bottom label a named style of config.json \"style.styles\" (\"\" takes the named style away; the key's own \"font\" / \"fontsize\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.bars[n].right.display.setStyle(${1:style})"
+      },
+      {
+        "label": "fb.bars[n].right.display.setTopStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Give the top label a named style of config.json \"style.styles\" (\"\" takes the named style away; the key's own \"topfont\" / \"topfontsize\" still win). Only on a device whose config.json has named styles.",
+        "apply": "fb.bars[n].right.display.setTopStyle(${1:style})"
+      },
+      {
+        "label": "fb.style.set",
+        "type": "method",
+        "detail": "(style: string, property: string, value: string | number) → void",
+        "info": "Change one value of a named style: every key, display item and list that uses the style is redrawn with it. Not saved: a script restart brings the values of config.json back.",
+        "apply": "fb.style.set(${1:style}, ${2:property}, ${3:value})"
       }
     ]
   }

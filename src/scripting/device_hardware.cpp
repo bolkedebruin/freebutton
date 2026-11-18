@@ -14,6 +14,7 @@
 
 extern freebutton::ConfigManager configManager;
 #include "drivers/ButtonLed.h"
+#include "style_binding.h"
 #include <esp_log.h>
 
 extern "C" {
@@ -68,7 +69,18 @@ void device_hw_init_fb(void* ctx) {
         IMAGE_SET_ICON = 31, IMAGE_SET_SRC = 32,
         DISP_SET_FONT = 33, DISP_SET_TOP_FONT = 34,
         DITEM_SET_FONT = 35, LIST_SET_FONT = 36,
+        DISP_SET_STYLE = 37, DISP_SET_TOP_STYLE = 38,
+        DITEM_SET_STYLE = 39, DITEM_SET_LABEL_STYLE = 40,
+        LIST_SET_STYLE = 41, LIST_SET_FOCUS_STYLE = 42,
+        STYLE_SET = 43,
     };
+
+    // The named-style methods (setStyle, ..., fb.style) exist only when
+    // config.json has named styles ("style.styles"): seven closures, one
+    // object and their property names of JS heap, nothing otherwise. A
+    // script that calls one on a device without named styles gets the
+    // engine's "not a function" error.
+    const bool namedStyles = style_hw_count() > 0;
 
     const int P = FB_PROXY_FUNC_IDX;
 
@@ -111,6 +123,10 @@ void device_hw_init_fb(void* ctx) {
     setMethod(disp_proto, "setIcon",     DISP_SET_ICON);
     setMethod(disp_proto, "setFont",     DISP_SET_FONT);
     setMethod(disp_proto, "setTopFont",  DISP_SET_TOP_FONT);
+    if (namedStyles) {
+        setMethod(disp_proto, "setStyle",    DISP_SET_STYLE);
+        setMethod(disp_proto, "setTopStyle", DISP_SET_TOP_STYLE);
+    }
 
     JSValue* disp_items_proto = JS_PushGCRef(c, &disp_items_proto_ref);
     *disp_items_proto = JS_NewObject(c);
@@ -124,6 +140,10 @@ void device_hw_init_fb(void* ctx) {
     setMethod(disp_items_proto, "setUnit",     DITEM_SET_UNIT);
     setMethod(disp_items_proto, "setIcon",     DITEM_SET_ICON);
     setMethod(disp_items_proto, "setFont",     DITEM_SET_FONT);
+    if (namedStyles) {
+        setMethod(disp_items_proto, "setStyle",      DITEM_SET_STYLE);
+        setMethod(disp_items_proto, "setLabelStyle", DITEM_SET_LABEL_STYLE);
+    }
     setMethod(disp_items_proto, "setPosition", DITEM_SET_POSITION);
     setMethod(disp_items_proto, "setPage",     DITEM_SET_PAGE);
     setMethod(disp_items_proto, "showPage",    DITEM_SHOW_PAGE);
@@ -219,6 +239,10 @@ void device_hw_init_fb(void* ctx) {
                 setMethod(list_obj, "count",       LIST_COUNT);
                 setMethod(list_obj, "setItems",    LIST_SET_ITEMS);
                 setMethod(list_obj, "setFont",     LIST_SET_FONT);
+                if (namedStyles) {
+                    setMethod(list_obj, "setStyle",      LIST_SET_STYLE);
+                    setMethod(list_obj, "setFocusStyle", LIST_SET_FOCUS_STYLE);
+                }
                 JS_SetPropertyStr(c, *main_obj, "list", *list_obj);
                 JS_PopGCRef(c, &list_ref);
             }
@@ -259,6 +283,15 @@ void device_hw_init_fb(void* ctx) {
     // fb.key(name): a key by its config.json name (one closure, ~16 B; the
     // names stay in the firmware's name table, see NameTable.h).
     setMethod(fb, "key", FB_KEY);
+    // fb.style.set(style, property, value): only with named styles.
+    if (namedStyles) {
+        JSGCRef style_ref;
+        JSValue* style_obj = JS_PushGCRef(c, &style_ref);
+        *style_obj = JS_NewObject(c);
+        setMethod(style_obj, "set", STYLE_SET);
+        JS_SetPropertyStr(c, *fb, "style", *style_obj);
+        JS_PopGCRef(c, &style_ref);
+    }
     JS_SetPropertyStr(c, *global, "fb", *fb);
 
     // LIFO

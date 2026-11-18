@@ -75,6 +75,15 @@ bool list_hw_restore_font(const int index) {
     return true;
 }
 
+bool list_hw_set_style(const int index, const int ref, const bool focus) {
+    auto* l = listAt(index);
+    if (l == nullptr) {
+        return false;
+    }
+    l->setStyle(static_cast<uint8_t>(ref), focus);
+    return true;
+}
+
 void* list_hw_items_new(void) {
     return new (std::nothrow) ItemsBuilder();
 }

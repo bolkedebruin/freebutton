@@ -4,8 +4,8 @@ import type { ConfigRef, DisplayItem, ImageConfig, ItemFont, ListConfig } from '
 import { on, sameConfigRef } from '../js/app-state.js';
 import { nothing } from 'lit';
 import { getStyles } from '../js/device-config.js';
-import { fontsizePx, SLOTS, styleFont, unitFont } from '../js/font-config.js';
-import { StyleElement, styleItemPx, type ResolvedStyles } from '../js/style-config.js';
+import { fontsizePx, listSelectedFont, SLOTS, styleFont, unitFont } from '../js/font-config.js';
+import { StyleElement, styleItemPx, withNamedStyle, type ResolvedStyles } from '../js/style-config.js';
 import { iconView } from './icon-view.js';
 import { fontStyle, richText, styleColorCss, textStyleCss } from './font-view.js';
 import { attachCanvas } from '../js/emulator/canvas.js';
@@ -559,14 +559,11 @@ export class FbTftDisplay extends LitElement {
   private _renderList(list: ListConfig, styles: ResolvedStyles) {
     const base = styleFont(styles, StyleElement.List);
     const font = list.font ?? { ...base, px: fontsizePx(list.fontSize, base.px) };
-    // list.selected: the list's font unless the style gives the selected row its own.
-    const ls = styles[StyleElement.List] ?? {};
-    const sel = styles[StyleElement.ListSelected] ?? {};
-    const selFont: ItemFont = {
-      face: sel.face !== undefined && sel.face !== ls.face ? sel.face : font.face,
-      px: sel.px !== undefined && sel.px !== ls.px ? sel.px : font.px,
-      configured: font.configured,
-    };
+    // list.selected: the list's font unless the style or the list's "focusstyle" gives the selected row its own.
+    const selFont: ItemFont = listSelectedFont(font, styles, list.focusStyle);
+    // The list's named styles ("style" / "focusstyle") over the style's list / list.selected.
+    const ls = withNamedStyle(styles[StyleElement.List] ?? {}, list.style);
+    const sel = withNamedStyle(styles[StyleElement.ListSelected] ?? {}, list.focusStyle);
     const selCss = selFont.face !== font.face || selFont.px !== font.px ? fontStyle(selFont, SCREEN_SCALE) : '';
     const { color: _c, ...selText } = sel;
     const { color: _l, ...listText } = ls;
@@ -662,14 +659,18 @@ export class FbTftDisplay extends LitElement {
   /** The screen drawn here from the config model: the same layout, approximate (the browser's text). */
   private _renderModel() {
     const styles = getStyles();
-    const caption = styles[StyleElement.DisplayCaption];
-    const valueStyle = styles[StyleElement.DisplayValue];
-    const unitStyle = styles[StyleElement.DisplayUnit];
+    const captionEl = styles[StyleElement.DisplayCaption] ?? {};
+    const valueEl = styles[StyleElement.DisplayValue] ?? {};
+    const unitEl = styles[StyleElement.DisplayUnit] ?? {};
     return html`
           ${this.displayItems.map(item => {
             // Caption, value and unit in the item's fonts and sizes; markup
             // (\f \s \c \a) as on the device (text-spans.ts).
             const valueFont = this._valueFont(item, styles);
+            // The item's named styles ("labelstyle"; "style" on the value and the unit) over the elements.
+            const caption = withNamedStyle(captionEl, item.captionStyle);
+            const valueStyle = withNamedStyle(valueEl, item.valueStyle);
+            const unitStyle = withNamedStyle(unitEl, item.valueStyle);
             const value = this._isTimeItem(item) ? this.timeStr : (item.value ?? '');
             return html`
             <div class="fb-item absolute cursor-pointer" data-display-item=${item.name ?? item.id ?? ''}
@@ -685,7 +686,7 @@ export class FbTftDisplay extends LitElement {
                 ${item.icon ? html`<span class="mr-[4px] mb-[2px] flex">${iconView(item.icon, item.iconSize ?? 32, item.iconSize ?? 32, item.iconColor, SCREEN_SCALE)}</span>` : ''}
                 <div class="leading-[1.2] min-w-0" data-value>
                   ${richText(value, valueFont, SLOTS.value, SCREEN_SCALE)}${item.unit
-                    ? html`<span data-unit style=${textStyleCss(unitStyle, SCREEN_SCALE)}>${richText(item.unit, unitFont(valueFont, styles), SLOTS.value, SCREEN_SCALE)}</span>` : ''}
+                    ? html`<span data-unit style=${textStyleCss(unitStyle, SCREEN_SCALE)}>${richText(item.unit, item.unitFont ?? unitFont(valueFont, styles), SLOTS.value, SCREEN_SCALE)}</span>` : ''}
                 </div>
               </div>
             </div>

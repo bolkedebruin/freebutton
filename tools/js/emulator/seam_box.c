@@ -21,22 +21,28 @@ lv_obj_t *fbe_box_part(lv_obj_t *box, const int part) {
 }
 
 /* The font a part's text has where its markup names none: the expressions of
- * ui_box_set_caption(), ui_box_set_text() and ui_box_set_hint() above. */
+ * ui_box_set_caption(), ui_box_set_text() and ui_box_set_hint() above (the
+ * item's font, else the named style the part carries, else the element
+ * style's). */
 const lv_font_t *fbe_box_part_font(lv_obj_t *box, const int part) {
     const box_dsc_t *b = lv_obj_get_user_data(box);
     if (b == NULL) return NULL;
-    const style_props_t *v = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
+    style_props_t r;
     if (part == FBE_BOX_CAPTION) {
-        const style_props_t *r = ui_style_resolved(STYLE_EL_DISPLAY_CAPTION);
-        return fonts_get(box_logic_base_face(b->fonts.caption_face, r),
-                         box_logic_base_px(b->fonts.caption_fontsize, true, r));
+        style_logic_font_layer(ui_style_resolved(STYLE_EL_DISPLAY_CAPTION),
+                               ui_style_named_props(ui_text_named(b->title)), &r);
+        return fonts_get(box_logic_base_face(b->fonts.caption_face, &r),
+                         box_logic_base_px(b->fonts.caption_fontsize, true, &r));
     }
     if (part == FBE_BOX_VALUE) {
-        return fonts_get(box_logic_base_face(b->fonts.face, v), box_logic_base_px(b->fonts.fontsize, false, v));
+        style_logic_font_layer(ui_style_resolved(STYLE_EL_DISPLAY_VALUE), ui_style_named_props(ui_text_named(b->text)),
+                               &r);
+        return fonts_get(box_logic_base_face(b->fonts.face, &r), box_logic_base_px(b->fonts.fontsize, false, &r));
     }
     if (part == FBE_BOX_UNIT) {
-        const style_props_t *u = ui_style_resolved(STYLE_EL_DISPLAY_UNIT);
-        return fonts_get(box_logic_unit_face(b->fonts.face, v, u), box_logic_unit_px(b->fonts.fontsize, v, u));
+        const style_props_t *v = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
+        style_logic_font_layer(ui_style_resolved(STYLE_EL_DISPLAY_UNIT), ui_style_named_props(ui_text_named(b->hint)), &r);
+        return fonts_get(box_logic_unit_face(b->fonts.face, v, &r), box_logic_unit_px(b->fonts.fontsize, v, &r));
     }
     return NULL;
 }

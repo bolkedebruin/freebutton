@@ -16,14 +16,19 @@
  * font given to setFont / setTopFont must be a font of it (built-ins
  * included), and a \f{font} escape in a string passed to
  * fb.main.display.setValue / setLabel / setUnit should name one (warning).
+ * The named-style calls (setStyle / setTopStyle / setLabelStyle /
+ * setFocusStyle, fb.style.set) need named styles in config.json
+ * ("style.styles"): the device has them only then; a style given to them
+ * must be one of those.
  */
 
 import * as acorn from 'acorn';
 import type { Node } from 'acorn';
 import stdlib from './stdlib.json';
-import { DISPLAY_NAME_METHODS, IMAGE_NAME_METHODS, LIST_NAME_METHODS, type ConfigNames } from './config-model';
+import { DISPLAY_NAME_METHODS, IMAGE_NAME_METHODS, LIST_NAME_METHODS, STYLE_METHODS, type ConfigNames } from './config-model';
 import { getConfigNames } from './device-config';
 import { SYSTEM_FONTS, FONTSIZE_MAX } from './font-config';
+import { namedSetStatus, styleValueRule } from './style-config';
 import { parseTextSpans, TEXT_FONT_UNKNOWN } from './text-spans';
 
 export interface ValidationError {
@@ -717,6 +722,120 @@ function checkFontArgs(node: any, names: ConfigNames, errors: ValidationError[])
 }
 
 /**
+ * Named styles (config.json "style.styles"): fb.main.display.setStyle /
+ * setLabelStyle(item, style), fb.main.list.setStyle / setFocusStyle(list,
+ * style), <side>.display.setStyle / setTopStyle(style) (a key's display)
+ * and fb.style.set(style, property, value).
+ *  - Without named styles in config.json the device has none of them (the
+ *    engine's "not a function" error): every such call is an error.
+ *  - A literal style must be a named style ("" = none; the device throws
+ *    ReferenceError), a string (TypeError), and on a key or a display item
+ *    not one that sets bg_color / bg_opa (TypeError).
+ *  - fb.style.set: a literal property must be one the style sets in
+ *    config.json, not text_font / text_size, and a literal value one that
+ *    config.json takes for it: a string or a number, never true / false /
+ *    null (TypeError).
+ * A key's display is recognised as checkFontArgs recognises it for setFont /
+ * setTopFont: any `<expr>.display.setStyle(...)` that is not fb.main's. The
+ * receiver is not traced back to fb.key() / fb.bars, so a user object with a
+ * `display.setStyle` of its own is checked as a key too.
+ */
+function checkStyleArgs(node: any, names: ConfigNames, errors: ValidationError[]): void {
+    const callee = node.callee;
+    if (callee?.type !== 'MemberExpression' || callee.computed || callee.property?.type !== 'Identifier') return;
+    const method: string = callee.property.name;
+    const isSet = method === 'set' && isMember(callee.object, 'fb', 'style');
+    let call: string;
+    let arg: any;
+    /** A style with bg_* is refused here (a key, a display item). */
+    let noBackground = false;
+    if (isSet) {
+        call = 'fb.style.set';
+        arg = node.arguments?.[0];
+    } else if (isMainMethod(callee, 'display', [...STYLE_METHODS.display])) {
+        call = `fb.main.display.${method}`;
+        arg = node.arguments?.[1];
+        noBackground = true;
+    } else if (isMainMethod(callee, 'list', [...STYLE_METHODS.list])) {
+        call = `fb.main.list.${method}`;
+        arg = node.arguments?.[1];
+    } else if ((STYLE_METHODS.key as readonly string[]).includes(method) && isMember(callee.object, null, 'display')
+        && !isMember(callee.object.object, 'fb', 'main')) {
+        call = `display.${method}`;
+        arg = node.arguments?.[0];
+        noBackground = true;
+    } else {
+        return;
+    }
+    const styles = names.styles;
+    if (!styles) {
+        errors.push({
+            message: `${call}() needs named styles: config.json has no "style.styles", so the device does not have this call`,
+            ...locOf(callee.property)
+        });
+        return;
+    }
+    if (arg?.type !== 'Literal') return;
+    if (typeof arg.value !== 'string') {
+        errors.push({ message: `${call}(): the style must be a string (the name of a "style.styles" entry)`, ...locOf(arg) });
+        return;
+    }
+    // "" = no named style on the part; fb.style.set has no such style.
+    if (arg.value === '' && !isSet) return;
+    const has = Object.prototype.hasOwnProperty.call(styles, arg.value) ? styles[arg.value]! : null;
+    if (!has) {
+        errors.push({ message: `unknown style "${arg.value}" in config.json`, ...locOf(arg) });
+        return;
+    }
+    if (noBackground && has.some(p => p.startsWith('bg_'))) {
+        errors.push({
+            message: `style "${arg.value}" sets ${has.filter(p => p.startsWith('bg_')).join(' and ')}: it is for lists only (a key or display item has no background)`,
+            ...locOf(arg)
+        });
+    }
+    if (!isSet) return;
+    // A literal true / false / null as the value: the device takes a string or a
+    // number only and throws TypeError, whatever the property is.
+    const literalValue = node.arguments?.[2];
+    if (literalValue?.type === 'Literal' && !literalValue.regex
+        && (typeof literalValue.value === 'boolean' || literalValue.value === null)) {
+        errors.push({ message: 'fb.style.set(): the value must be a string or a number', ...locOf(literalValue) });
+        return;
+    }
+    const prop = node.arguments?.[1];
+    if (prop?.type !== 'Literal') return;
+    if (typeof prop.value !== 'string') {
+        errors.push({ message: 'fb.style.set(): the property must be a string ("text_color", ...)', ...locOf(prop) });
+        return;
+    }
+    const valueNode = node.arguments?.[2];
+    const number = literalNumber(valueNode);
+    const value: string | number | null = number !== null ? number
+        : valueNode?.type === 'Literal' && typeof valueNode.value === 'string' ? valueNode.value : null;
+    // Without a literal value: the property alone (any valid value stands in).
+    const settable = has.filter(p => p !== 'text_font' && p !== 'text_size');
+    switch (namedSetStatus(has, prop.value, value ?? (prop.value.endsWith('_color') ? '#000000' : 0))) {
+        case 'unknown':
+            errors.push({ message: `"${prop.value}" is not a style property`, ...locOf(prop) });
+            break;
+        case 'fixed':
+            errors.push({ message: `fb.style.set() cannot change ${prop.value}: use another named style for another font or size`, ...locOf(prop) });
+            break;
+        case 'not-in-style':
+            errors.push({
+                message: `style "${arg.value}" does not set ${prop.value} in config.json: fb.style.set() changes only what the style sets`
+                    + (settable.length ? ` (${settable.join(', ')})` : ''),
+                ...locOf(prop)
+            });
+            break;
+        case 'ok':
+            break;
+        default:
+            if (value !== null) errors.push({ message: `${prop.value} ${styleValueRule(prop.value)}`, ...locOf(valueNode) });
+    }
+}
+
+/**
  * fb.key("x") / fb.main.display.<DISPLAY_NAME_METHODS>("x", ...) /
  * fb.main.list.<LIST_NAME_METHODS>("x", ...) / fb.main.image.<IMAGE_NAME_METHODS>("x", ...):
  * a string literal name must be in config.json, and so must an icon name
@@ -729,6 +848,7 @@ function checkConfigName(node: any, names: ConfigNames, errors: ValidationError[
     let known: string[];
     checkIconName(node, names, errors);
     checkFontArgs(node, names, errors);
+    checkStyleArgs(node, names, errors);
     if (isMember(callee, 'fb', 'key')) {
         what = 'key';
         known = names.keys;

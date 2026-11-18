@@ -25,6 +25,7 @@ src/components/List.h
 src/components/ListLogic.h
 src/components/NameTable.h
 src/components/SlotReset.h
+src/components/StyleRef.h
 src/components/TopicHandler.cpp
 src/components/TopicHandler.h
 src/components/Topics.h
@@ -85,6 +86,7 @@ src/scripting/js/freebutton_system.c
 src/scripting/js/js_reset.h
 src/scripting/js/mqtt_topic_match.h
 src/scripting/js/stdlib_export.c
+src/scripting/js/style_arg.h
 src/scripting/led_hardware.cpp
 src/scripting/led_hardware.h
 src/scripting/list_binding.cpp
@@ -94,6 +96,8 @@ src/scripting/mqtt_binding.h
 src/scripting/mquickjs_stdlib.c
 src/scripting/sensor_binding.cpp
 src/scripting/sensor_binding.h
+src/scripting/style_binding.cpp
+src/scripting/style_binding.h
 src/scripting/system_binding.cpp
 src/scripting/system_binding.h
 src/ui/LvglRoom.h

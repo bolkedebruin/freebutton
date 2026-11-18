@@ -302,7 +302,9 @@ void sendKey(freebutton::Button& button, const int order) {
         // A text in one format is its label; one in several formats a row of
         // labels beside it (ui_button.c set_markup).
         json.key("label");
-        // The text's own font: the one a script set (ui_button_set_fonts), else the style's.
+        // The text's own font: the label's local one (ui_button_set_fonts: an item font, or a
+        // named style with one of font / size), else its base (ui_button_set_base_fonts: the
+        // item's, else the named style's, else the element style's, Button::applyFonts).
         emu::writeText(json, b->rich_text ? b->rich_text : b->text, slotText(button.labelSlot_, button.label),
                        b->rich_text != nullptr, b->text_font ? b->text_font : fonts_get(b->text_face, b->text_px));
         json.key("topLabel");
@@ -341,14 +343,20 @@ void sendList(freebutton::List& list, const int index) {
     json.key("roller");
     if (lv_obj_t* r = list.roller_) {
         const lv_font_t* font = lv_obj_get_style_text_font(r, LV_PART_MAIN);
+        lv_obj_update_layout(r);  // the height follows the font, the line space and the row count
         json.beginObject();
         json.key("x").value(static_cast<int>(lv_obj_get_style_x(r, LV_PART_MAIN)));
         json.key("y").value(static_cast<int>(lv_obj_get_style_y(r, LV_PART_MAIN)));
         json.key("width").value(static_cast<int>(lv_obj_get_style_width(r, LV_PART_MAIN)));
+        json.key("height").value(static_cast<int>(lv_obj_get_height(r)));
         json.key("rows").value(static_cast<int>(list.rows_));
         json.key("selected").value(static_cast<int>(lv_roller_get_selected(r)));
         json.key("font");
         emu::writeFont(json, font);
+        // The selected row's own font, as LVGL resolves it (LV_PART_SELECTED: a local font, its
+        // named style, list.selected, else the rows').
+        json.key("selectedFont");
+        emu::writeFont(json, lv_obj_get_style_text_font(r, LV_PART_SELECTED));
         json.key("lineSpace").value(static_cast<int>(lv_obj_get_style_text_line_space(r, LV_PART_MAIN)));
         json.key("color").value(emu::hexColor(lv_obj_get_style_text_color(r, LV_PART_MAIN)));
         json.key("selectedBg").value(emu::hexColor(lv_obj_get_style_bg_color(r, LV_PART_SELECTED)));

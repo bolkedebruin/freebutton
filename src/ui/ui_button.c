@@ -82,6 +82,8 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
     b->text_face = (int16_t)ui_style_resolved(STYLE_EL_KEY_LABEL)->face;
     b->text_px = (int16_t)ui_style_resolved(STYLE_EL_KEY_LABEL)->px;
     b->icon_shown = false;
+    b->title_style = b->text_style = 0;
+    b->style_pending = false;
 
 	lv_obj_set_size(cont, 160, 80);
 	lv_obj_center(cont);
@@ -153,6 +155,7 @@ static size_t set_markup(button_dsc_t * b, const bool title, const char * raw)
     const style_element_t el = title ? STYLE_EL_KEY_TOPLABEL : STYLE_EL_KEY_LABEL;
     const int face = title ? b->title_face : b->text_face;
     const int px = title ? b->title_px : b->text_px;
+    const uint8_t named = title ? b->title_style : b->text_style;
     const bool hidden = !title && b->icon_shown;
 
     char in[UI_BUTTON_TEXT_MAX + 1];
@@ -180,7 +183,13 @@ static size_t set_markup(button_dsc_t * b, const bool title, const char * raw)
             }
         }
         if (*rich != NULL) {
-            ui_render_text(*rich, in, ui_style_get(el), face, px, title);
+            /* `named` is what the label carries, and face / px follow it
+             * (Button::applyFonts). A row the pool has no room to add it
+             * to is drawn without its colour for now. */
+            if (!ui_text_set_named(*rich, named)) {
+                b->style_pending = true;
+            }
+            ui_render_text(*rich, in, ui_style_get(el), ui_text_named(*rich), face, px, title);
             lv_obj_set_hidden(*rich, hidden);
             lv_obj_set_hidden(label, true);
             return parsed.text_len;
@@ -253,6 +262,50 @@ void ui_button_set_base_fonts(lv_obj_t* button, const int text_face, const int t
     b->text_px = (int16_t)text_px;
     b->title_face = (int16_t)title_face;
     b->title_px = (int16_t)title_px;
+}
+
+/* The named style on a label, after its element style (ui_button_create),
+ * so it wins over it. The ref the label carries now is its user data (0 on
+ * a new label): only a change touches the object. Returns that ref: `named`,
+ * or 0 when the LVGL pool had no room to add it (*pending set; nothing is
+ * tried again here, see ui_button_styles_pending). */
+static uint8_t set_label_style(lv_obj_t* label, const uint8_t named, bool* pending)
+{
+    if (!ui_text_set_named(label, named)) {
+        *pending = true;
+    }
+    return ui_text_named(label);
+}
+
+bool ui_button_set_styles(lv_obj_t* button, const uint8_t text_style, const uint8_t title_style)
+{
+    button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
+    if (b == NULL) {
+        return false;
+    }
+    /* A style that was pending: the texts are set again either way (a row
+     * of spans may have been the one without its style). */
+    const bool was_pending = b->style_pending;
+    b->style_pending = false;
+    const uint8_t text = set_label_style(b->text, text_style, &b->style_pending);
+    const uint8_t title = set_label_style(b->title, title_style, &b->style_pending);
+    const bool changed = b->text_style != text || b->title_style != title;
+    b->text_style = text;
+    b->title_style = title;
+    return changed || was_pending;
+}
+
+void ui_button_get_styles(lv_obj_t* button, uint8_t* text_style, uint8_t* title_style)
+{
+    const button_dsc_t* b = (const button_dsc_t*)lv_obj_get_user_data(button);
+    *text_style = b != NULL ? b->text_style : 0;
+    *title_style = b != NULL ? b->title_style : 0;
+}
+
+bool ui_button_styles_pending(lv_obj_t* button)
+{
+    const button_dsc_t* b = (const button_dsc_t*)lv_obj_get_user_data(button);
+    return b != NULL && b->style_pending;
 }
 
 void ui_button_set_fonts(lv_obj_t* button, const lv_font_t* text_font, const lv_font_t* title_font)

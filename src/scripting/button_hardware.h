@@ -40,6 +40,11 @@ int button_hw_set_font(int position, int face, int size, bool top);
 // Back to the configured font and size of that label (JS setFont("")).
 int button_hw_restore_font(int position, bool top);
 
+// Named style of the bottom label (top = false) or the top label: a
+// style_binding.h ref the caller resolved and checked, 0 = none. Returns 0
+// on success, -1 when there is no such button.
+int button_hw_set_style(int position, int ref, bool top);
+
 // What the button at position shows as label / top label (last runtime text,
 // else the configured one), NUL-terminated into out. Returns 0, or -1 when
 // there is no such button (out is then "").

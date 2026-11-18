@@ -104,8 +104,11 @@ bool DisplayItem::applyPending() {
         if (!buildBox()) {
             return false;  // no LVGL memory now; the next render request retries
         }
-    } else if (fontChanged || redraw_) {
-        drawConfigured();  // the new font; the slots below render over it
+    } else if (fontChanged || redraw_ ||
+               // a script changed a value of a named style the item uses (fb.style.set)
+               ui_style_named_changed(style_.load(std::memory_order_acquire)) ||
+               ui_style_named_changed(labelStyle_.load(std::memory_order_acquire))) {
+        drawConfigured();  // the new font or style; the slots below render over it
     }
     // A text that could not be drawn (the LVGL pool was too low just then,
     // e.g. while a page is built) is not lost: its slot is marked not applied
@@ -157,8 +160,10 @@ void DisplayItem::drawConfigured() {
     const ui_box_fonts_t fonts = {
         .face = static_cast<int16_t>(fontref::face(font)),
         .fontsize = clampSize(fontref::size(font)),
+        .style = style_.load(std::memory_order_acquire),
         .caption_face = static_cast<int16_t>(labelFontFace),
         .caption_fontsize = clampSize(labelFontSize),
+        .caption_style = labelStyle_.load(std::memory_order_acquire),
     };
     redraw_ = !draw_box(box, label.c_str(), "", unit.c_str(), x, y, &fonts, adjustedWidth, alignment, boxType);
     valueSlot_.invalidate();
@@ -251,6 +256,12 @@ void DisplayItem::restoreConfigState() {
     if (font_.exchange(configured, std::memory_order_acq_rel) != configured) {
         redraw = true;
     }
+    if (style_.exchange(configStyle_, std::memory_order_acq_rel) != configStyle_) {
+        redraw = true;
+    }
+    if (labelStyle_.exchange(configLabelStyle_, std::memory_order_acq_rel) != configLabelStyle_) {
+        redraw = true;
+    }
     parked_.store(false, std::memory_order_release);
     if (redraw) {
         redraw_ = true;  // a shown box: drawConfigured() in the next applyPending()
@@ -302,6 +313,12 @@ void DisplayItem::setDisplayUnit(const std::string_view text) {
 
 void DisplayItem::setFont(const int face, const int size) {
     font_.store(fontref::pack(face, size), std::memory_order_release);
+    fontDirty_.store(true, std::memory_order_release);
+    ui::requestPendingRender();
+}
+
+void DisplayItem::setStyle(const uint8_t ref, const bool caption) {
+    (caption ? labelStyle_ : style_).store(ref, std::memory_order_release);
     fontDirty_.store(true, std::memory_order_release);
     ui::requestPendingRender();
 }

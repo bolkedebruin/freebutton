@@ -17,6 +17,9 @@
  *   display.setUnit(id, unit)    - Set display item unit
  *   display.setIcon(id, name)    - Set display item icon ("" hides it)
  *   display.setFont(id, font, size) - Set the font of value and unit
+ *   display.setStyle(id, style)  - Set the named style of value and unit
+ *   display.setLabelStyle(id, style) - Set the named style of the caption
+ *       (both exist only when config.json has named styles, "style.styles")
  *   display.setPosition(id, x, y) - Set display item position
  *   display.setPage(id, page)    - Set display item page
  *   display.showPage(page)       - Show a page of the main display
@@ -27,6 +30,7 @@
 #include <stdlib.h>
 #include "mquickjs.h"
 #include "font_arg.h"
+#include "style_arg.h"
 
 /* ESP32-specific includes */
 #ifdef ESP_PLATFORM
@@ -57,6 +61,7 @@ static inline bool displayitem_set_unit(unsigned long id, const char* u) { retur
 static inline int displayitem_set_icon(unsigned long id, const char* n, size_t len) { return 0; }
 static inline bool displayitem_set_font(unsigned long id, int face, int size) { return false; }
 static inline bool displayitem_restore_font(unsigned long id) { return false; }
+static inline bool displayitem_set_style(unsigned long id, int ref, bool caption) { return false; }
 static inline bool displayitem_set_position(unsigned long id, int x, int y) { return false; }
 static inline bool displayitem_set_page(unsigned long id, int p) { return false; }
 static inline bool displayitem_show_page(int p) { return p >= 1; }
@@ -388,6 +393,53 @@ JSValue js_freebutton_display_setFont(JSContext *ctx, JSValue *this_val, int arg
     if (r == FB_FONT_RESTORE)
         return JS_NewBool(displayitem_restore_font((unsigned long)id));
     return JS_NewBool(displayitem_set_font((unsigned long)id, face, size));
+}
+
+/* setStyle (caption = 0) / setLabelStyle (caption = 1). */
+static JSValue display_set_style(JSContext *ctx, int argc, JSValue *argv, int caption)
+{
+    const char *what = caption ? "display.setLabelStyle" : "display.setStyle";
+    int id = 0;
+    int ref = 0;
+
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "%s() requires id and style arguments", what);
+    }
+    if (displayitem_arg_id(ctx, &id, argv[0]))
+        return JS_EXCEPTION;
+    /* a display item has no background: no style with bg_* */
+    if (fb_style_arg(ctx, argc - 1, argv + 1, what, 0, &ref))
+        return JS_EXCEPTION;
+    return JS_NewBool(displayitem_set_style((unsigned long)id, ref, caption != 0));
+}
+
+/**
+ * @jsapi display.setStyle
+ * @description Give the display item's value and unit a named style of
+ *        config.json "style.styles"; "" takes the named style away. The
+ *        item's own fields (font, fontsize) and text markup still apply on
+ *        top of it. Exists only when the config has named styles.
+ * @param {number|string} id - Display item ID, or its config name
+ * @param {string} style - A style name, or "" for none
+ * @returns {boolean} True if successful, false if the item does not exist
+ */
+JSValue js_freebutton_display_setStyle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return display_set_style(ctx, argc, argv, 0);
+}
+
+/**
+ * @jsapi display.setLabelStyle
+ * @description Give the display item's caption a named style of config.json
+ *        "style.styles"; "" takes the named style away. Exists only when
+ *        the config has named styles.
+ * @param {number|string} id - Display item ID, or its config name
+ * @param {string} style - A style name, or "" for none
+ * @returns {boolean} True if successful, false if the item does not exist
+ */
+JSValue js_freebutton_display_setLabelStyle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return display_set_style(ctx, argc, argv, 1);
 }
 
 /**

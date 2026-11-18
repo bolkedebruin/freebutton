@@ -56,7 +56,10 @@ function drawnItem(pages: readonly PageConfig[], item: ItemState): DisplayItem {
     x: item.x, y: item.y, width: item.width, height: 0, type: 'text',
     fontSize: item.fontSize, align: item.align, id: String(item.id),
   };
-  const { icon: _configuredIcon, ...rest } = base;
+  // The unit's font is the one the device chose (below): its cascade has the item's own font
+  // and size, the named style a script may have given the item, and the style. Not the
+  // configured one; while the box is not drawn the component derives it from the value's.
+  const { icon: _configuredIcon, unitFont: _configuredUnitFont, ...rest } = base;
   return {
     ...rest,
     x: item.x,
@@ -68,6 +71,8 @@ function drawnItem(pages: readonly PageConfig[], item: ItemState): DisplayItem {
     ...(item.font ? { valueFont: scriptFont(item.font, base.valueFont) } : {}),
     ...(item.box?.caption.font
       ? { labelFont: scriptFont({ face: item.box.caption.font.face, size: item.box.caption.font.px }, base.labelFont) } : {}),
+    ...(item.box?.unit.font
+      ? { unitFont: scriptFont({ face: item.box.unit.font.face, size: item.box.unit.font.px }, base.unitFont) } : {}),
   };
 }
 

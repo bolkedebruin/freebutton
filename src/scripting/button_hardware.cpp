@@ -153,6 +153,16 @@ int button_hw_restore_font(int position, bool top) {
     return 0;
 }
 
+int button_hw_set_style(int position, int ref, bool top) {
+    auto* button = configManager.getButtonByPosition(position);
+    if (!button) {
+        ESP_LOGW(TAG, "Button at position %d not found", position);
+        return -1;
+    }
+    button->setStyle(static_cast<uint8_t>(ref), top);
+    return 0;
+}
+
 // Get button count from config.h
 int button_hw_get_count() {
     return BUTTON_COUNT;

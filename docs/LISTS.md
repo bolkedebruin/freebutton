@@ -28,6 +28,8 @@ items and the selection.
 | `color` | `808080` | Text colour of the rows that are not selected. |
 | `focuscolor` | `ffd700` | Colour of the selection bar (the gold of captions and top labels). |
 | `focustextcolor` | `000000` | Text colour of the selected item. |
+| `style` | | The name of a named style (`style.styles`, see `docs/STYLE.md`, Named styles) for the rows. The fields `fontsize` and `color` win over it. |
+| `focusstyle` | | The name of a named style for the selected row. It is the only place where `bg_color` and `bg_opa` of a named style show: `bg_color` is the colour of the selection bar. The fields `focuscolor` and `focustextcolor` win over it. A `focusstyle` with only `text_font` or only `text_size` takes the other one from the rows. |
 
 ## Script API
 

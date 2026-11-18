@@ -311,6 +311,34 @@ describe('overlayPages: the running device in the preview model', () => {
     expect(pages[0]!.images![0]).toMatchObject({ name: 'weather', icon: 'sun' });
   });
 
+  it('the unit has the font the device chose: the item\'s own, its named style\'s, also one a script gave it', async () => {
+    const cfg = {
+      ...BASIC_CONFIG,
+      style: { display: { unit: { text_size: 10 } }, styles: { big: { text_font: 'montserrat_semibold', text_size: 40 }, face: { text_font: 'montserrat_semibold' } } },
+      displayitems: [
+        // "fontsize" is the unit's too, over display.unit's size; the named face is the value's and the unit's.
+        { name: 'sized', x: 0, y: 0, width: 40, page: 1, fontsize: 3, style: 'face', label: 'A', unit: 'u' },
+        // No item font: the unit has the named style's font and size, not display.unit's and not the value's.
+        { name: 'styled', x: 50, y: 0, width: 40, page: 1, style: 'big', label: 'B', unit: 'u' },
+        { name: 'plain', x: 0, y: 50, width: 40, page: 1, label: 'C', unit: 'u' },
+      ],
+    };
+    const { emu } = await makeEmulator({ config: cfg as never });
+    emu.render();
+    const model = configToModel(cfg);
+    const unitFonts = () => Object.fromEntries(overlayPages(model.pages, emu.state)[0]!.displayItems.map(i => [i.name, i.unitFont && `${i.unitFont.face} ${i.unitFont.px}`]));
+    expect(unitFonts()).toEqual({ sized: '1 32', styled: '1 40', plain: '0 10' });
+    // As the device drew them.
+    for (const name of ['sized', 'styled', 'plain']) {
+      const drawn = emu.state.item(name)!.box!.unit.font!;
+      expect(unitFonts()[name], name).toBe(`${drawn.face} ${drawn.px}`);
+    }
+    // A script takes a style away and gives one: the configured unit font would be wrong now.
+    emu.eval('fb.main.display.setStyle("styled", ""); fb.main.display.setStyle("plain", "big"); fb.main.display.setFont("sized", "montserrat", 20)');
+    emu.render();
+    expect(unitFonts()).toEqual({ sized: '0 20', styled: '0 10', plain: '1 40' });
+  });
+
   it('carries what a script changed, and leaves the model alone', async () => {
     const { emu } = await makeEmulator();
     const model = configToModel(BASIC_CONFIG);

@@ -165,7 +165,7 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00001/btn_a00001.js')))('devi
     expect(s.key('windowOpen')!.display!.label.runs[0]).toMatchObject({ text: 'Open' });
     // The analog clock of page 1 runs; the list of scenes is on another page.
     expect(s.clocks).toMatchObject([{ page: 1, width: 180, height: 180, shown: true }]);
-    expect(s.lists[0]).toMatchObject({ name: 'scenes', items: ['Bed Time', 'Evening'], roller: null });
+    expect(s.lists[0]).toMatchObject({ name: 'scenes', items: ['Ochtend', 'Vertrek', 'Diner', 'Avond', 'Bedtijd'], roller: null });
     // The firmware announces itself to Home Assistant and listens for its presses; nothing else is subscribed.
     expect(emu.broker(0).subscriptions.map(x => x.topic)).toEqual([
       'homeassistant/status', ...[1, 2, 3, 4, 5, 6, 7, 8].map(n => `buttonplus/virt_btn_0a1b2c/button_${n}/set`),

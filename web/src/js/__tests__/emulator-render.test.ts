@@ -631,12 +631,44 @@ describe('golden images: the real device configs with their scripts', () => {
         clock.advance(3000);
         expect(emu.state.shownPage).toBe(2);
         expectGolden(emu, 'main', `${real.device}-run-main-page2`);
+
+        // Page 3, the weather forecast: now (from the current condition and the
+        // outside temperature above) and three days, today first (the clock's Thursday).
+        emu.broker(0).inject('home/weather/forecast/daily3',
+          'do|rainy|10|6|70|3.2;vr|partlycloudy|7|2|20|0.4;za|sunny|5|-1|0|0');
+        emu.click(2);
+        clock.advance(3000);
+        expect(emu.state.shownPage).toBe(3);
+        expectGolden(emu, 'main', `${real.device}-run-main-page3`);
+
+        // Page 4, the scenes: the title and the list, opened on the scene for the
+        // hour (10:10, "Vertrek"), after the roller's animation. The six keys
+        // show their role on this page (the script changes them 150 ms later).
+        emu.click(2);
+        clock.advance(3000);
+        expect(emu.state.shownPage).toBe(4);
+        expectGolden(emu, 'main', `${real.device}-run-main-page4`);
+        const keys = emu.displays().filter(display => display.kind === 'key');
+        expect(keys).toHaveLength(6);
+        for (const key of keys) expectGolden(emu, key.id, `${real.device}-run-${key.id}-page4`);
+
+        // Page 5, good morning: Home Assistant asks for it (the page keys do not
+        // reach it). Date and time are the injected clock's.
+        emu.broker(0).inject('buttonplus/btn_a00001/display/morning', 'show');
+        clock.advance(3000);
+        expect(emu.state.shownPage).toBe(5);
+        expectGolden(emu, 'main', `${real.device}-run-main-page5`);
+        // The keys have their own labels again.
+        for (const display of real.shots) {
+          if (display !== 'main') expectGolden(emu, display, `${real.device}-run-${display}`);
+        }
       }
       expect(problems).toEqual([]);
       const stats = emu.stats();
       expect(stats).toMatchObject({ textSkipped: 0, textCollapsed: 0 });
-      // The pool is as tight as on the device: these configs leave 10 to 25 KB of its 59 KB.
-      expect(stats.lvglLowest).toBeGreaterThan(8_000);
+      // The pool is as tight as on the device: these configs leave 10 to 25 KB of its 59 KB
+      // (btn_a00001: 9.6 KB up to its battery page, 7.9 KB on its filled forecast page).
+      expect(stats.lvglLowest).toBeGreaterThan(7_000);
       expect(stats.lvglLowest).toBeLessThan(30_000);
     });
   }

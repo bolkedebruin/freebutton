@@ -13,7 +13,7 @@
 import { emit, type PageConfig, type DisplayItem, type ButtonConfig, type ConnectorConfig, type PreviewState } from './app-state';
 import { mapConnectors, type ConfigNames, type DeviceModel } from './config-model';
 import { fontTable, type FontTable } from './font-config';
-import { DEFAULT_STYLES, type ResolvedStyles } from './style-config';
+import { DEFAULT_STYLES, NO_NAMED_STYLES, type NamedStyles, type ResolvedStyles } from './style-config';
 
 const defaultConfig: PageConfig[] = [
   {
@@ -54,6 +54,8 @@ const SYSTEM_FONT_TABLE = fontTable({});
 let storedFonts: FontTable = SYSTEM_FONT_TABLE;
 // Resolved "style" of the stored config.json (the defaults without one).
 let storedStyles: ResolvedStyles = DEFAULT_STYLES;
+// Named styles ("style.styles") of the stored config.json.
+let storedNamedStyles: NamedStyles = NO_NAMED_STYLES;
 
 function effectiveConnectors(): ConnectorConfig[] {
   if (hardwareConnectors.length > 0) return hardwareConnectors;
@@ -105,6 +107,11 @@ export function getStyles(): ResolvedStyles {
   return draft ? draft.styles : storedStyles;
 }
 
+/** The named styles ("style.styles") of what the preview shows, by name. */
+export function getNamedStyles(): NamedStyles {
+  return draft ? draft.namedStyles : storedNamedStyles;
+}
+
 /** Stored config (config.json as saved/loaded). A draft preview stays on top until cleared. */
 export function setConfig(
   config: PageConfig[],
@@ -112,12 +119,14 @@ export function setConfig(
   names: ConfigNames | null = null,
   fonts: FontTable = SYSTEM_FONT_TABLE,
   styles: ResolvedStyles = DEFAULT_STYLES,
+  namedStyles: NamedStyles = NO_NAMED_STYLES,
 ): void {
   currentConfig = config;
   configConnectors = connectors;
   configNames = names;
   storedFonts = fonts;
   storedStyles = styles;
+  storedNamedStyles = namedStyles;
   isSample = false;
   currentConnectors = effectiveConnectors();
   publish();

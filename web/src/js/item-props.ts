@@ -4,7 +4,9 @@
  * (DisplayItem.h, List.cpp, ImageItem.cpp, Button.h `configure`), with the
  * ranges it accepts.
  *
- *   itemFields(kind, raw)       the fields, in the order shown
+ *   itemFields(kind, raw, named) the fields, in the order shown (the named
+ *                               style fields only when config.json has named
+ *                               styles, or the entry names one)
  *   fieldValue(field, input)    what the user entered -> the value written
  *                               (undefined: the key is removed and the
  *                               firmware's default or the style applies)
@@ -14,8 +16,9 @@ import type { PropValue } from './config-edit';
 import { LIST_MAX_ROWS } from './config-model';
 import { ALIGN_OPTIONS } from './display-geometry';
 import { FONTSIZE_MAX } from './font-config';
+import { namedFits, NO_NAMED_STYLES, StyleElement, type NamedStyles } from './style-config';
 
-export type FieldType = 'text' | 'lines' | 'number' | 'font' | 'select' | 'color';
+export type FieldType = 'text' | 'lines' | 'number' | 'font' | 'style' | 'select' | 'color';
 
 export interface Field {
   /** The key in config.json. */
@@ -27,6 +30,8 @@ export interface Field {
   max?: number;
   /** select */
   options?: Array<{ value: number; label: string }>;
+  /** style: the named styles to choose from (those with bg_color / bg_opa only for a list). */
+  styles?: string[];
   /** color: written as "#rrggbb" (true) or "rrggbb" (lists, as docs/LISTS.md). */
   hash?: boolean;
   /** Shown under the field. */
@@ -47,6 +52,11 @@ function size(key: string, label: string): Field {
   return { key, label, type: 'number', min: 1, max: FONTSIZE_MAX, half: true, unset: 'style', hint: SIZE_HINT };
 }
 
+/** A named style ("style.styles") of one part; a key or display item cannot use one that sets bg_*. */
+function named(key: string, label: string, styles: NamedStyles, el: StyleElement): Field {
+  return { key, label, type: 'style', half: true, styles: [...styles].filter(([, p]) => namedFits(p, el)).map(([name]) => name) };
+}
+
 function percent(key: string, label: string, min = 0, unset?: string): Field {
   return { key, label, type: 'number', min, max: 100, half: true, ...(unset ? { unset } : {}) };
 }
@@ -56,14 +66,22 @@ export const KIND_LABEL: Record<ConfigItemKind, string> = {
   displayitem: 'Display item', list: 'List', image: 'Image', button: 'Key',
 };
 
-/** The fields of an entry of `kind`; `raw` = its own keys (a field can depend on them). */
-export function itemFields(kind: ConfigItemKind, raw: Record<string, unknown> = {}): Field[] {
+/**
+ * The fields of an entry of `kind`; `raw` = its own keys (a field can depend
+ * on them); `styles` = the config's named styles.
+ */
+export function itemFields(kind: ConfigItemKind, raw: Record<string, unknown> = {}, styles: NamedStyles = NO_NAMED_STYLES): Field[] {
+  const E = StyleElement;
+  // A named style field: when there are named styles to choose, or the entry has the key.
+  const style = (key: string, label: string, el: StyleElement): Field[] =>
+    styles.size > 0 || key in raw ? [named(key, label, styles, el)] : [];
   switch (kind) {
     case 'displayitem':
       return [
         { key: 'label', label: 'Label', type: 'text' },
         { key: 'unit', label: 'Unit', type: 'text' },
         font('font', 'Font'), size('fontsize', 'Size'),
+        ...style('style', 'Style', E.DisplayValue), ...style('labelstyle', 'Label style', E.DisplayCaption),
         { key: 'align', label: 'Align', type: 'select', options: ALIGN_OPTIONS, half: true },
         percent('width', 'Width %', 0, '100'),
         // x / y are offsets from the align corner: negative from the right or the bottom.
@@ -76,6 +94,7 @@ export function itemFields(kind: ConfigItemKind, raw: Record<string, unknown> = 
       return [
         { key: 'items', label: 'Items (one per line)', type: 'lines' },
         font('font', 'Font'), size('fontsize', 'Size'),
+        ...style('style', 'Style', E.List), ...style('focusstyle', 'Selected style', E.ListSelected),
         percent('width', 'Width %', 1, '50'),
         { key: 'rows', label: 'Rows', type: 'number', min: 1, max: LIST_MAX_ROWS, half: true, unset: '3' },
         percent('x', 'X %', 0, '0'), percent('y', 'Y %', 0, '0'),
@@ -97,6 +116,7 @@ export function itemFields(kind: ConfigItemKind, raw: Record<string, unknown> = 
         font('font', 'Font'), size('fontsize', 'Size'),
         { key: 'toplabel', label: 'Top label', type: 'text' },
         font('topfont', 'Top font'), size('topfontsize', 'Top size'),
+        ...style('style', 'Style', E.KeyLabel), ...style('topstyle', 'Top style', E.KeyTopLabel),
       ];
   }
 }
@@ -111,7 +131,7 @@ export function fieldValue(field: Field, input: string): PropValue | null {
       return input;
     case 'lines':
       return input.split(/\r?\n/).map(l => l.trim()).filter(l => l !== '');
-    case 'font':
+    case 'font': case 'style':
       return input === '' ? undefined : input;
     case 'select': {
       const n = Number(input);

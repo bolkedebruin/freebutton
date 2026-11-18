@@ -21,17 +21,40 @@
 /*
  * Replace obj's children with `text` (LVGL lock held). Each span label gets
  * `default_style` (the element's shared style, ui_style.h) and a local font.
- *  base_face: fonts.h face of the text: the item's font, else the style's.
- *  base_px:   px of the text: the item's fontsize, else the style's
- *             (style_logic_item_px).
+ *  named:     ref of the part's named style (ui_style.h), 0 = none. It goes
+ *             on obj itself (the base colour of the spans is read there) and
+ *             on each span label, after the element style, so it wins over
+ *             it. obj is kept by the caller across calls and the labels are
+ *             made again on every call; which named style obj carries is
+ *             kept in obj's user data, which therefore belongs to this
+ *             file (NULL on a new object). Without room in the LVGL pool
+ *             the style is not added and the text is drawn without it. A
+ *             caller that computes base_face / base_px from the named style
+ *             calls ui_text_set_named() first, computes them from
+ *             ui_text_named() (what obj carries) and passes that ref here,
+ *             so that the font and the colour are those of one look.
+ *  base_face: fonts.h face of the text: the item's font, else the named
+ *             style's, else the element style's.
+ *  base_px:   px of the text: the item's fontsize, else the named style's
+ *             text_size, else the element style's (style_logic_font_layer,
+ *             style_logic_item_px).
  *  title:     a title element (the caption): \s2 = 18 px, as before.
  * A span's \f font or \s size replaces the base for that span.
  * Returns false when the text was not drawn: the LVGL pool is too low now
  * (its reserve, see ui_text.c). The element is then empty; draw it again
  * later (DisplayItem does, through requestPendingRenderLater()).
  */
-bool ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * default_style,
+bool ui_render_text(lv_obj_t * obj, const char * text, const lv_style_t * default_style, uint8_t named,
                     int base_face, int base_px, bool title);
+
+/* Have obj (an element ui_render_text draws into) carry the named style
+ * `named` (0 = none), where it carries another now. LVGL lock held. false:
+ * the LVGL pool has no room to add it now (ui_style_named_attach); obj then
+ * carries none, and the caller tries again later. */
+bool ui_text_set_named(lv_obj_t * obj, uint8_t named);
+
+/* The ref of the named style obj carries now (0 = none). */
+uint8_t ui_text_named(lv_obj_t * obj);
 
 /* Since boot: texts drawn in one format, and texts not drawn, for lack of pool. */
 void ui_text_stats(uint32_t * collapsed, uint32_t * skipped);

@@ -75,7 +75,7 @@ void style_logic_resolve(const style_sheet_t *sheet, style_props_t out[STYLE_EL_
     if (sheet) {
         for (int el = 0; el < STYLE_EL_COUNT; el++) {
             if (el == STYLE_EL_LIST_SELECTED) continue;
-            /* bg_* belongs to list.selected only (style_logic_set_*) */
+            /* among the elements bg_* belongs to list.selected only (style_logic_set_*) */
             uint16_t role_mask = (uint16_t)~STYLE_HAS_BG;
             /* the unit's font and size are the value's unless the unit
              * element sets them */
@@ -282,4 +282,111 @@ style_prop_status_t style_logic_set_number(style_props_t *p, const char *prop, i
     }
     p->has |= info->bit;
     return STYLE_PROP_OK;
+}
+
+/* ---- named styles ------------------------------------------------------------ */
+
+bool style_logic_name_valid(const char *name, const size_t len) {
+    /* the rule of every config name (docs/NAMES.md) */
+    return len <= STYLE_NAME_MAX && font_logic_valid_name(name, len);
+}
+
+style_named_status_t style_logic_named_check(const char *name, const size_t len, const size_t count) {
+    if (!style_logic_name_valid(name, len)) return STYLE_NAMED_BAD_NAME;
+    if (count >= STYLE_NAMED_MAX) return STYLE_NAMED_FULL;
+    return STYLE_NAMED_OK;
+}
+
+size_t style_logic_names_add(char *block, size_t used, const char *name, const size_t len) {
+    block[used++] = (char)(uint8_t)len;
+    memcpy(block + used, name, len);
+    return used + len;
+}
+
+int style_logic_names_find(const char *block, const size_t count, const char *name, const size_t len) {
+    if (!block || !name) return -1;
+    size_t at = 0;
+    for (size_t i = 0; i < count; i++) {
+        const size_t n = (uint8_t)block[at];
+        if (n == len && memcmp(block + at + 1, name, len) == 0) return (int)i;
+        at += 1 + n;
+    }
+    return -1;
+}
+
+const char *style_logic_names_get(const char *block, const size_t count, const size_t index, size_t *len) {
+    if (!block || index >= count) return NULL;
+    size_t at = 0;
+    for (size_t i = 0; i < index; i++) at += 1 + (uint8_t)block[at];
+    if (len) *len = (uint8_t)block[at];
+    return block + at + 1;
+}
+
+uint8_t style_logic_named_ref(const char *block, const size_t count, const uint16_t dropped, const char *name,
+                              const size_t len) {
+    const int i = style_logic_names_find(block, count, name, len);
+    if (i < 0 || i >= STYLE_NAMED_MAX || (dropped & (1u << i))) return 0;
+    return (uint8_t)(i + 1);
+}
+
+size_t style_logic_named_usable(const size_t count, const uint16_t dropped) {
+    size_t n = 0;
+    for (size_t i = 0; i < count && i < STYLE_NAMED_MAX; i++) {
+        if (!(dropped & (1u << i))) n++;
+    }
+    return n;
+}
+
+bool style_logic_named_fits(const style_props_t *named, const style_element_t el) {
+    if (el == STYLE_EL_LIST || el == STYLE_EL_LIST_SELECTED) return true;
+    return !named || (named->has & STYLE_HAS_BG) == 0;
+}
+
+void style_logic_font_layer(const style_props_t *element, const style_props_t *named, style_props_t *out) {
+    *out = *element;
+    if (named) merge_masked(out, named, STYLE_HAS_FONT_SIZE);
+}
+
+bool style_logic_font_local(const int item_face, const int item_fontsize, const style_props_t *named) {
+    if (item_face != FONT_FACE_NONE || item_fontsize != 0) return true;
+    if (!named) return false;
+    const uint16_t fs = (uint16_t)(named->has & STYLE_HAS_FONT_SIZE);
+    return fs == STYLE_HAS_FONT || fs == STYLE_HAS_SIZE;
+}
+
+bool style_logic_selected_own_font(const style_props_t *list, const style_props_t *selected) {
+    return (selected->has & STYLE_HAS_FONT_SIZE) == STYLE_HAS_FONT_SIZE &&
+           (selected->face != list->face || selected->px != list->px);
+}
+
+bool style_logic_list_selected_font(const style_props_t *list, const style_props_t *selected,
+                                    const style_props_t *focus, const int rows_face, const int rows_px, int *face,
+                                    int *px) {
+    const bool own = style_logic_selected_own_font(list, selected);
+    *face = own ? selected->face : rows_face;
+    *px = own ? selected->px : rows_px;
+    const uint16_t fs = focus ? (uint16_t)(focus->has & STYLE_HAS_FONT_SIZE) : 0;
+    if (fs & STYLE_HAS_FONT) *face = focus->face;
+    if (fs & STYLE_HAS_SIZE) *px = focus->px;
+    return fs == STYLE_HAS_FONT || fs == STYLE_HAS_SIZE;
+}
+
+/* What a script may change: STYLE_PROP_OK when `prop` is a property `p`
+ * sets and it is not the font or the size. */
+static style_prop_status_t named_settable_(const style_props_t *p, const char *prop) {
+    const prop_info_t *info = prop_(prop, true);
+    if (!info) return STYLE_PROP_UNKNOWN;
+    if (info->bit & STYLE_HAS_FONT_SIZE) return STYLE_PROP_FIXED;
+    if (!(p->has & info->bit)) return STYLE_PROP_NOT_IN_STYLE;
+    return STYLE_PROP_OK;
+}
+
+style_prop_status_t style_logic_named_set_string(style_props_t *p, const char *prop, const char *value) {
+    const style_prop_status_t st = named_settable_(p, prop);
+    return st != STYLE_PROP_OK ? st : style_logic_set_string(p, prop, value, true, NULL, NULL);
+}
+
+style_prop_status_t style_logic_named_set_number(style_props_t *p, const char *prop, const int32_t value) {
+    const style_prop_status_t st = named_settable_(p, prop);
+    return st != STYLE_PROP_OK ? st : style_logic_set_number(p, prop, value, true, NULL, NULL);
 }

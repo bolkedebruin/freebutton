@@ -231,7 +231,7 @@ describe('FreeButton Autocomplete', () => {
 
         it('has generated completion data for the fb.main.list methods', () => {
             const labels = freebuttonAPI.fb!.methods.map(m => m.label).filter(l => l.startsWith('fb.main.list.'));
-            expect(labels).toEqual(['next', 'prev', 'select', 'getSelected', 'count', 'setItems', 'setFont'].map(m => `fb.main.list.${m}`));
+            expect(labels).toEqual(['next', 'prev', 'select', 'getSelected', 'count', 'setItems', 'setFont', 'setStyle', 'setFocusStyle'].map(m => `fb.main.list.${m}`));
             const setFont = freebuttonAPI.fb!.methods.find(m => m.label === 'fb.main.list.setFont');
             expect(setFont?.apply).toBe('fb.main.list.setFont(${1:nameOrIndex}, ${2:font}, ${3:size})');
             expect(setFont?.info).toContain('font "" restores config.json');
@@ -251,6 +251,66 @@ describe('FreeButton Autocomplete', () => {
             expect(labelsOf(configNameCompletions(createContext('fb.key(1).display.setFont("'), names))).toEqual(['montserrat', 'montserrat_semibold']);
             // The first argument of fb.main.display.setFont is the item.
             expect(labelsOf(configNameCompletions(createContext('fb.main.display.setFont("'), withFonts))).toEqual(['volume', 'clock']);
+        });
+
+        it('has generated completion data for the named-style calls', () => {
+            const byLabel = (label: string) => freebuttonAPI.fb!.methods.filter(m => m.label === label);
+            expect(byLabel('fb.style.set')[0]?.apply).toBe('fb.style.set(${1:style}, ${2:property}, ${3:value})');
+            expect(byLabel('fb.main.display.setStyle')[0]?.apply).toBe('fb.main.display.setStyle(${1:idOrName}, ${2:style})');
+            expect(byLabel('fb.main.display.setLabelStyle')[0]?.apply).toBe('fb.main.display.setLabelStyle(${1:idOrName}, ${2:style})');
+            expect(byLabel('fb.main.list.setFocusStyle')[0]?.apply).toBe('fb.main.list.setFocusStyle(${1:nameOrIndex}, ${2:style})');
+            const labels = freebuttonAPI.fb!.methods.map(m => m.label);
+            expect(labels.filter(l => /\.display\.setTopStyle$/.test(l)).length).toBeGreaterThanOrEqual(1);
+            // every one says that it needs named styles in config.json
+            const styleMethods = freebuttonAPI.fb!.methods.filter(m => /\.set(Top|Label|Focus)?Style$/.test(m.label));
+            expect(styleMethods.length).toBeGreaterThanOrEqual(6);
+            for (const m of styleMethods) expect(m.info, m.label).toContain('config.json has named styles');
+        });
+
+        it('suggests named styles for setStyle / setTopStyle / setLabelStyle / setFocusStyle and fb.style.set', () => {
+            const withStyles = { ...names, styles: { alarm: ['text_color', 'text_opa'], big: ['text_font', 'text_size'], picked: ['bg_color'] } };
+            for (const code of [
+                'fb.main.list.setStyle(0, "', 'fb.main.list.setFocusStyle("scenes", "', 'fb.style.set("',
+            ]) {
+                const result = configNameCompletions(createContext(code), withStyles);
+                expect(labelsOf(result), code).toEqual(['alarm', 'big', 'picked']);
+                expect(result?.options[0]?.detail).toBe('named style (config.json)');
+            }
+            // A key and a display item have no background: a style that sets bg_* is not offered
+            // (the device throws TypeError for it), as in the item popover.
+            const withBg = { ...withStyles, styles: { ...withStyles.styles, dim: ['text_color', 'bg_opa'] } };
+            for (const code of [
+                'fb.main.display.setStyle("volume", "', 'fb.main.display.setLabelStyle(3, "',
+                'fb.key("sceneUp").display.setStyle("', 'k.display.setTopStyle("',
+            ]) {
+                const result = configNameCompletions(createContext(code), withBg);
+                expect(labelsOf(result), code).toEqual(['alarm', 'big']);
+                expect(result?.options[0]?.detail).toBe('named style (config.json)');
+            }
+            expect(labelsOf(configNameCompletions(createContext('fb.main.list.setStyle(0, "'), withBg))).toEqual(['alarm', 'big', 'picked', 'dim']);
+            // The first argument of the main display's and the list's calls is the item or the list.
+            expect(labelsOf(configNameCompletions(createContext('fb.main.display.setStyle("'), withStyles))).toEqual(['volume', 'clock']);
+            expect(labelsOf(configNameCompletions(createContext('fb.main.display.setLabelStyle("'), withStyles))).toEqual(['volume', 'clock']);
+            expect(labelsOf(configNameCompletions(createContext('fb.main.list.setFocusStyle("'), withStyles))).toEqual(['scenes', 'rooms']);
+            // No named styles in config.json: nothing to offer.
+            expect(labelsOf(configNameCompletions(createContext('fb.style.set("'), names))).toEqual([]);
+        });
+
+        it('suggests the properties fb.style.set can change: what the style sets, but its font and size', () => {
+            const withStyles = { ...names, styles: { alarm: ['text_color', 'text_opa'], big: ['text_font', 'text_size'] } };
+            const result = configNameCompletions(createContext('fb.style.set("alarm", "text_'), withStyles);
+            expect(labelsOf(result)).toEqual(['text_color', 'text_opa']);
+            expect(result?.from).toBe('fb.style.set("alarm", "'.length);
+            expect(labelsOf(configNameCompletions(createContext('fb.style.set("big", "'), withStyles))).toEqual([]);
+            expect(labelsOf(configNameCompletions(createContext('fb.style.set("nosuch", "'), withStyles))).toEqual([]);
+            // A name that is an Object.prototype member is no style: nothing to offer, and no exception.
+            for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf']) {
+                expect(labelsOf(configNameCompletions(createContext(`fb.style.set("${name}", "`), withStyles)), name).toEqual([]);
+            }
+            // ... unless config.json has a style of that name.
+            const odd = { ...names, styles: Object.assign(Object.create(null), { constructor: ['text_color'] }) };
+            expect(labelsOf(configNameCompletions(createContext('fb.style.set("constructor", "'), odd))).toEqual(['text_color']);
+            expect(labelsOf(configNameCompletions(createContext('fb.key("sceneUp").display.setStyle("'), odd))).toEqual(['constructor']);
         });
 
         it('works with the closing quote already inserted', () => {

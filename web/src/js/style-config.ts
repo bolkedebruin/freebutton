@@ -10,7 +10,8 @@
  *     "title": {"text_font": "montserrat_semibold", "text_color": "#ffd700"},
  *     "key":     {"label": {...}, "toplabel": {...}},                      elements
  *     "display": {"value": {...}, "unit": {...}, "caption": {...}},
- *     "list":    {..., "selected": {...}}
+ *     "list":    {..., "selected": {...}},
+ *     "styles":  {"alarm": {"text_color": "#ff0000"}, ...}             named styles
  *   }
  *
  * Layers, lowest first (LVGL: theme < added styles < local styles):
@@ -18,6 +19,11 @@
  *   2. the element's role ("text": key.label, display.value, display.unit,
  *      list; "title": key.toplabel, display.caption)
  *   3. the element ("key.label", ...)
+ *   3a. a named style ("style.styles"), chosen per part by the item ("style",
+ *      "topstyle", "labelstyle", "focusstyle") or by a script. Flat: properties
+ *      only. bg_color / bg_opa make it a style for lists only (namedFits).
+ *      Its font goes through the font cascade (styleFontLayer): face = item,
+ *      else named, else element; px likewise.
  *   4. the item (config "font"/"fontsize"/"topfont"/..., list "color"/
  *      "focuscolor"/"focustextcolor", JS setFont, \f \s \c markup): local
  *      styles, applied by font-config slotFont / the previews, not here.
@@ -81,9 +87,9 @@ export interface StyleProps {
   lineSpace?: number;
   /** DECOR_* bits. */
   decor?: number;
-  /** bg_color (list.selected only). */
+  /** bg_color (the element list.selected, and named styles, which then only a list can use). */
   bgColor?: number;
-  /** bg_opa (list.selected only). */
+  /** bg_opa (the element list.selected, and named styles, which then only a list can use). */
   bgOpa?: number;
 }
 
@@ -216,6 +222,9 @@ export function styleRole(name: string): number {
 
 export type StylePropStatus = 'ok' | 'unknown' | 'bad-value' | 'unknown-font';
 
+/** fb.style.set only (style_logic_named_set_*): not a property of the style in config; text_font / text_size. */
+export type NamedSetStatus = StylePropStatus | 'not-in-style' | 'fixed';
+
 /** The property names, in documentation order. */
 export const STYLE_PROPERTIES = [
   'text_font', 'text_size', 'text_color', 'text_opa', 'text_align', 'text_letter_space', 'text_line_space',
@@ -332,7 +341,95 @@ const BAD_VALUE: Record<string, string> = {
   text_decor: 'must be "none", "underline", "strikethrough" or "underline strikethrough"',
 };
 
-export const STYLE_SECTIONS = ['fonts', 'text', 'title', 'key', 'display', 'list'] as const;
+export const STYLE_SECTIONS = ['fonts', 'text', 'title', 'key', 'display', 'list', 'styles'] as const;
+
+// ---- named styles ("style.styles") ---------------------------------------------------
+
+/** Named styles a config may define (STYLE_NAMED_MAX). */
+export const STYLE_NAMED_MAX = 16;
+/** A style name (style_logic_name_valid; docs/NAMES.md), case sensitive. */
+export const STYLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,23}$/;
+
+/** A named style the device takes: its name and what it sets (an empty style is one too). */
+export interface NamedStyle {
+  name: string;
+  props: StyleProps;
+}
+
+/** The named styles of a config by name, in definition order. */
+export type NamedStyles = ReadonlyMap<string, Readonly<StyleProps>>;
+
+export const NO_NAMED_STYLES: NamedStyles = new Map();
+
+/** The style sets bg_color or bg_opa. */
+export function styleHasBg(p: Readonly<StyleProps>): boolean {
+  return p.bgColor !== undefined || p.bgOpa !== undefined;
+}
+
+/**
+ * May a part of element `el` use the named style (style_logic_named_fits)?
+ * A style that sets bg_color or bg_opa is for a list only (list,
+ * list.selected): keys and display items have no background of their own.
+ */
+export function namedFits(named: Readonly<StyleProps> | undefined, el: StyleElement): boolean {
+  if (el === StyleElement.List || el === StyleElement.ListSelected) return true;
+  return !named || !styleHasBg(named);
+}
+
+/**
+ * The font cascade with a named style in it (style_logic_font_layer):
+ * `element` with the text_font / text_size that `named` sets. The item
+ * layer then goes over the result as it went over the element.
+ */
+export function styleFontLayer(element: Readonly<StyleProps>, named: Readonly<StyleProps> | undefined): StyleProps {
+  const out = { ...element };
+  if (named?.face !== undefined) out.face = named.face;
+  if (named?.px !== undefined) out.px = named.px;
+  return out;
+}
+
+/**
+ * Does the part need a local font (style_logic_font_local)? Yes when the
+ * item sets a font or a size, and when the named style sets exactly one of
+ * text_font / text_size (the font instance then depends on the layer below).
+ */
+export function styleFontLocal(itemSetsFont: boolean, named: Readonly<StyleProps> | undefined): boolean {
+  if (itemSetsFont) return true;
+  return !!named && (named.face !== undefined) !== (named.px !== undefined);
+}
+
+/** A resolved style with every property of a named style over it (what LVGL shows for a part that has both). */
+export function withNamedStyle(element: Readonly<StyleProps>, named: Readonly<StyleProps> | undefined): Readonly<StyleProps> {
+  return named ? mergeStyle({ ...element }, named) : element;
+}
+
+const PROP_KEY: Record<string, keyof StyleProps> = {
+  text_font: 'face', text_size: 'px', text_color: 'color', text_opa: 'opa', text_align: 'align',
+  text_letter_space: 'letterSpace', text_line_space: 'lineSpace', text_decor: 'decor', bg_color: 'bgColor', bg_opa: 'bgOpa',
+};
+
+/** The property names (STYLE_PROPERTIES) a style sets, in documentation order. */
+export function stylePropertyNames(p: Readonly<StyleProps>): string[] {
+  return STYLE_PROPERTIES.filter(name => p[PROP_KEY[name]!] !== undefined);
+}
+
+/**
+ * What fb.style.set(style, prop, value) does with a named style that sets
+ * `has` (stylePropertyNames) in config (style_logic_named_set_string /
+ * _set_number): only a property the style has, not text_font / text_size,
+ * and a value as in config.json. The device throws TypeError for all but 'ok'.
+ */
+export function namedSetStatus(has: readonly string[], prop: string, value: string | number): NamedSetStatus {
+  if (!known(prop, true)) return 'unknown';
+  if (prop === 'text_font' || prop === 'text_size') return 'fixed';
+  if (!has.includes(prop)) return 'not-in-style';
+  return setStyleValue({}, prop, value, true, () => -1);
+}
+
+/** For messages: what a value of a property must be ("must be a colour ..."). */
+export function styleValueRule(prop: string): string {
+  return BAD_VALUE[prop] ?? 'has a bad value';
+}
 
 type Obj = Record<string, unknown>;
 
@@ -343,6 +440,8 @@ function isObj(v: unknown): v is Obj {
 export interface ParsedStyle {
   /** What the device applies: every valid property (invalid ones are skipped, as ConfigManager does). */
   sheet: StyleSheet;
+  /** "style.styles": the named styles the device takes, in definition order (bad names, non-objects and those past STYLE_NAMED_MAX left out). */
+  named: NamedStyle[];
   /** Problems, with their JSON path ("style.key.label.text_size ..."). */
   errors: string[];
   /** config.json has a "style" object. */
@@ -350,17 +449,21 @@ export interface ParsedStyle {
 }
 
 /**
- * config.json "style" -> the sheet the device builds, plus every problem
- * (unknown section, element or property, a bad value, an unknown font).
+ * config.json "style" -> the sheet and the named styles the device builds,
+ * plus every problem (unknown section, element or property, a bad value, an
+ * unknown font, a bad style name, more than STYLE_NAMED_MAX named styles).
  * `fontsHint` names the fonts in the unknown-font message.
  * "style.fonts" is font-config's (validateFonts); it is skipped here.
  */
 export function parseStyle(cfg: unknown, resolve: FontResolver, fontsHint = 'a "style.fonts" entry'): ParsedStyle {
   const sheet = emptySheet();
   const errors: string[] = [];
+  const named: NamedStyle[] = [];
   const style = isObj(cfg) ? cfg.style : undefined;
-  if (style === undefined) return { sheet, errors, present: false };
-  if (!isObj(style)) return { sheet, errors: ['"style" must be an object ({"text": {...}, "key": {...}, ...})'], present: false };
+  if (style === undefined) return { sheet, named, errors, present: false };
+  if (!isObj(style)) {
+    return { sheet, named, errors: ['"style" must be an object ({"text": {...}, "key": {...}, ...})'], present: false };
+  }
 
   const props = (target: StyleProps, at: string, body: Obj, allowBg: boolean, skip?: string) => {
     for (const [prop, value] of Object.entries(body)) {
@@ -369,7 +472,7 @@ export function parseStyle(cfg: unknown, resolve: FontResolver, fontsHint = 'a "
       if (status === 'ok') continue;
       if (status === 'unknown') {
         errors.push(BG_PROPERTIES.has(prop)
-          ? `${at}.${prop}: bg_color and bg_opa are allowed in style.list.selected only`
+          ? `${at}.${prop}: bg_color and bg_opa are allowed in style.list.selected and in a named style ("style.styles", for a list's "style" / "focusstyle") only`
           : `${at}.${prop} is not a style property (${STYLE_PROPERTIES.filter(p => allowBg || !BG_PROPERTIES.has(p)).join(', ')})`);
       } else if (status === 'unknown-font') {
         errors.push(`${at}.${prop} ${JSON.stringify(value)} is not a font (${fontsHint})`);
@@ -413,16 +516,44 @@ export function parseStyle(cfg: unknown, resolve: FontResolver, fontsHint = 'a "
         const s = body(`${at}.selected`, b.selected);
         if (s) props(sheet.element[StyleElement.ListSelected]!, `${at}.selected`, s, true);
       }
+    } else if (section === 'styles') {
+      // As ConfigManager forEachNamedStyle: a bad name or a non-object is skipped, the 17th ends the walk.
+      if (!isObj(value)) {
+        errors.push(`${at} must be an object of named styles ({"alarm": {"text_color": "#ff0000"}, ...})`);
+        continue;
+      }
+      const names = Object.keys(value);
+      for (const name of names) {
+        if (!STYLE_NAME_PATTERN.test(name)) {
+          errors.push(`${at}: ${JSON.stringify(name)} is not a valid style name (1-24 letters, digits or _, not starting with a digit)`);
+          continue;
+        }
+        if (named.length >= STYLE_NAMED_MAX) {
+          const valid = names.filter(n => STYLE_NAME_PATTERN.test(n) && isObj(value[n])).length;
+          errors.push(`${at} has ${valid} named styles; the device holds ${STYLE_NAMED_MAX} ("${name}" and the rest are left out)`);
+          break;
+        }
+        const b = body(`${at}.${name}`, value[name]);
+        if (!b) continue;
+        const target: StyleProps = {};
+        props(target, `${at}.${name}`, b, true);
+        named.push({ name, props: target });
+      }
     } else {
       errors.push(`${at} is not a style section (${STYLE_SECTIONS.join(', ')})`);
     }
   }
-  return { sheet, errors, present: true };
+  return { sheet, named, errors, present: true };
 }
 
 /** The resolved styles (layers 1-3) of a config: what the device draws items without fields with. */
 export function configStyles(cfg: unknown, resolve: FontResolver): StyleProps[] {
   return resolveStyles(parseStyle(cfg, resolve).sheet);
+}
+
+/** The named styles ("style.styles") of a config, as the device takes them. */
+export function configNamedStyles(cfg: unknown, resolve: FontResolver): NamedStyles {
+  return new Map(parseStyle(cfg, resolve).named.map(n => [n.name, n.props]));
 }
 
 /**

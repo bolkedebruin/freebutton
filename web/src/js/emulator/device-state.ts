@@ -169,7 +169,13 @@ export interface ListState {
   font: FontChoice | null;
   /** The roller, in pixels; null while the list's page is not shown. */
   roller: {
-    x: number; y: number; width: number; rows: number; selected: number; font: FontState; lineSpace: number;
+    x: number; y: number; width: number;
+    /** As laid out: the rows' line height and line space times the visible rows. */
+    height: number;
+    rows: number; selected: number; font: FontState;
+    /** The selected row's font as the device resolves it (its named style, list.selected, else the rows'). */
+    selectedFont: FontState;
+    lineSpace: number;
     color: string; selectedBg: string; selectedColor: string;
   } | null;
 }

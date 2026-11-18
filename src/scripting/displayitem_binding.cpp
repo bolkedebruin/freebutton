@@ -204,6 +204,17 @@ bool displayitem_restore_font(unsigned long id)
     return true;
 }
 
+bool displayitem_set_style(unsigned long id, int ref, bool caption)
+{
+    freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
+    if (!item) {
+        ESP_LOGW(TAG, "DisplayItem %lu not found", id);
+        return false;
+    }
+    item->setStyle(static_cast<uint8_t>(ref), caption);
+    return true;
+}
+
 bool displayitem_set_position(unsigned long id, int x, int y)
 {
     freebutton::DisplayItem* item = configManager.findDisplayItemById(id);

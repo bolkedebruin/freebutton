@@ -141,8 +141,15 @@ bool Button::applyPending() {
     if (!button) {
         return false;  // createButton() requests a render once the button exists
     }
+    bool restyled = false;
     if (fontDirty_.exchange(false, std::memory_order_acq_rel)) {
-        applyFonts();
+        restyled = applyFonts();
+    }
+    // A script changed a value of a named style this key uses (fb.style.set).
+    restyled = restyled || ui_style_named_changed(style_.load(std::memory_order_acquire)) ||
+               ui_style_named_changed(topStyle_.load(std::memory_order_acquire));
+    if (restyled) {
+        redrawTexts();
     }
     if (redrawConfigured_ != 0) {
         // restoreConfigState() reset these slots: the configured text again.
@@ -165,6 +172,14 @@ bool Button::applyPending() {
             return true;
         });
     }
+    // A named style the LVGL pool had no room for (a label, or a row of
+    // spans drawn just now): the key shows without it, font included, and
+    // applyFonts() runs again in a later walk. Not at once: that would spin
+    // while the pool stays low.
+    if (ui_button_styles_pending(button)) {
+        fontDirty_.store(true, std::memory_order_release);
+        ui::requestPendingRenderLater();
+    }
     return again;
 }
 
@@ -182,39 +197,57 @@ void Button::invalidatePending() {
 
 namespace {
 
-// A label's font (the item layer): nullptr without one (face FONT_FACE_NONE
-// and no size: the shared style), else the face (the style's when none) at
-// the size (the style's when none; a legacy step on the top label: 2 = 18
-// px). LVGL lock held.
-const lv_font_t* labelFont(const uint32_t packed, const style_element_t el) {
+// The font of a label below its markup: the item's "font" / "fontsize" (a
+// legacy step on the top label: 2 = 18 px), else the named style's
+// text_font / text_size, else the element style's. `local`: the label needs
+// that font as a local style (the item sets one, or the named style sets
+// only one of font and size); else the shared styles give it.
+struct LabelFont {
+    int face;
+    int px;
+    bool local;
+};
+
+LabelFont labelFont(const uint32_t packed, const uint8_t named, const style_element_t el) {
     const int face = fontref::face(packed);
     const int size = fontref::size(packed);
-    if (face == FONT_FACE_NONE && size == 0) {
-        return nullptr;
-    }
-    const style_props_t* r = ui_style_resolved(el);
-    return fonts_get(face == FONT_FACE_NONE ? r->face : face,
-                     style_logic_item_px(size, el == STYLE_EL_KEY_TOPLABEL, r->px));
+    const style_props_t* n = ui_style_named_props(named);
+    style_props_t r;
+    style_logic_font_layer(ui_style_resolved(el), n, &r);
+    return {face == FONT_FACE_NONE ? r.face : face, style_logic_item_px(size, el == STYLE_EL_KEY_TOPLABEL, r.px),
+            style_logic_font_local(face, size, n)};
 }
 
 } // namespace
 
-// LVGL lock held, button exists.
-void Button::applyFonts() {
+// LVGL lock held, button exists. The named styles first: the fonts follow
+// what the labels carry then (a style that found no room in the LVGL pool is
+// not there, and its font and size must not show without its colour).
+bool Button::applyFonts() {
+    const bool restyled = ui_button_set_styles(button, style_.load(std::memory_order_acquire),
+                                               topStyle_.load(std::memory_order_acquire));
+    uint8_t style = 0;
+    uint8_t topStyle = 0;
+    ui_button_get_styles(button, &style, &topStyle);
+    const LabelFont text = labelFont(labelFont_.load(std::memory_order_acquire), style, STYLE_EL_KEY_LABEL);
+    const LabelFont title = labelFont(topLabelFont_.load(std::memory_order_acquire), topStyle, STYLE_EL_KEY_TOPLABEL);
     // What a span of a text with markup starts from: the label's face and px.
-    const auto base = [](const uint32_t packed, const style_element_t el, int& face, int& px) {
-        const style_props_t* r = ui_style_resolved(el);
-        const int f = fontref::face(packed);
-        face = f == FONT_FACE_NONE ? r->face : f;
-        px = style_logic_item_px(fontref::size(packed), el == STYLE_EL_KEY_TOPLABEL, r->px);
-    };
-    int textFace = 0, textPx = 0, titleFace = 0, titlePx = 0;
-    base(labelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_LABEL, textFace, textPx);
-    base(topLabelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_TOPLABEL, titleFace, titlePx);
-    ui_button_set_base_fonts(button, textFace, textPx, titleFace, titlePx);
-    ui_button_set_fonts(button,
-                        labelFont(labelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_LABEL),
-                        labelFont(topLabelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_TOPLABEL));
+    ui_button_set_base_fonts(button, text.face, text.px, title.face, title.px);
+    ui_button_set_fonts(button, text.local ? fonts_get(text.face, text.px) : nullptr,
+                        title.local ? fonts_get(title.face, title.px) : nullptr);
+    return restyled;
+}
+
+// LVGL lock held, button exists.
+void Button::redrawTexts() {
+    char text[kLabelTextBytes];
+    currentTopLabel(text);
+    ui_button_set_title(button, text);
+    currentLabel(text);
+    ui_button_set_text(button, text);
+    if (IconState* s = icon_.get()) {
+        s->name.invalidate();
+    }
 }
 
 void Button::setLabelFont(const int face, const int size) {
@@ -225,6 +258,12 @@ void Button::setLabelFont(const int face, const int size) {
 
 void Button::setTopLabelFont(const int face, const int size) {
     topLabelFont_.store(fontref::pack(face, size), std::memory_order_release);
+    fontDirty_.store(true, std::memory_order_release);
+    ui::requestPendingRender();
+}
+
+void Button::setStyle(const uint8_t ref, const bool top) {
+    (top ? topStyle_ : style_).store(ref, std::memory_order_release);
     fontDirty_.store(true, std::memory_order_release);
     ui::requestPendingRender();
 }
@@ -255,7 +294,9 @@ void Button::restoreConfigState() {
     const uint32_t configuredTopFont = fontref::pack(topFontFace_, topFontSize_);
     const bool labelChanged = labelFont_.exchange(configuredFont, std::memory_order_acq_rel) != configuredFont;
     const bool topChanged = topLabelFont_.exchange(configuredTopFont, std::memory_order_acq_rel) != configuredTopFont;
-    if (labelChanged || topChanged) {
+    const bool styleChanged = style_.exchange(configStyle_, std::memory_order_acq_rel) != configStyle_;
+    const bool topStyleChanged = topStyle_.exchange(configTopStyle_, std::memory_order_acq_rel) != configTopStyle_;
+    if (labelChanged || topChanged || styleChanged || topStyleChanged) {
         fontDirty_.store(true, std::memory_order_release);
     }
 }

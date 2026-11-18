@@ -16,9 +16,25 @@ typedef struct {
 	/* The value's icon; NULL while the item has none (created on demand) */
 	lv_obj_t* icon;
 
-    /* The fonts of value + unit and of the caption (ui_box_fonts_t) */
+    /* The fonts and named styles of value + unit and of the caption
+     * (ui_box_fonts_t) */
     ui_box_fonts_t fonts;
 } box_dsc_t;
+
+/* A part does not carry the named style it was given: the LVGL pool had no
+ * room to add it (ui_box_set_fonts). The parts are drawn with the styles
+ * they carry; ui_box_update() reports it and the caller calls it again
+ * later. (Computed, not kept: the descriptor stays 28 bytes.) */
+static bool part_pending(lv_obj_t* part, const uint8_t want)
+{
+	return ui_text_named(part) != want && ui_style_named_get(want) != NULL;
+}
+
+static bool styles_pending(const box_dsc_t* b)
+{
+	return part_pending(b->title, b->fonts.caption_style) || part_pending(b->text, b->fonts.style) ||
+	       part_pending(b->hint, b->fonts.style);
+}
 
 
 static lv_style_t style_box;
@@ -89,8 +105,10 @@ lv_obj_t* ui_box_create(lv_obj_t* parent)
     /* The fonts before ui_box_set_fonts(): the style's */
     b->fonts.face = FONT_FACE_NONE;
     b->fonts.fontsize = 0;
+    b->fonts.style = 0;
     b->fonts.caption_face = FONT_FACE_NONE;
     b->fonts.caption_fontsize = 0;
+    b->fonts.caption_style = 0;
 	lv_obj_set_user_data(box, b);
 
 	b->main = box;
@@ -141,6 +159,10 @@ bool ui_box_update(lv_obj_t* box, const char* caption, const char* text, const c
 	bool drawn = ui_box_set_caption(box, caption);
 	drawn = ui_box_set_text(box, text) && drawn;
 	drawn = ui_box_set_hint(box, unit) && drawn;
+	const box_dsc_t* b = lv_obj_get_user_data(box);
+	if (b != NULL && styles_pending(b)) {
+		drawn = false; /* a named style found no room: again later */
+	}
 	lv_obj_set_align(box, align == 0 ? LV_ALIGN_TOP_LEFT : align);
 
 	lv_obj_set_pos(box, x * 320 / 100, y * 240 / 100);
@@ -152,12 +174,15 @@ bool ui_box_update(lv_obj_t* box, const char* caption, const char* text, const c
 bool ui_box_set_caption(lv_obj_t* box, const char* caption)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
-	/* Its own font: "labelfont" / "labelfontsize", else display.caption
-	 * (by default system bold 14; legacy step 2 = 18 px) */
-	const style_props_t* r = ui_style_resolved(STYLE_EL_DISPLAY_CAPTION);
-	const bool drawn = ui_render_text(b->title, caption, ui_style_get(STYLE_EL_DISPLAY_CAPTION),
-	                                  box_logic_base_face(b->fonts.caption_face, r),
-	                                  box_logic_base_px(b->fonts.caption_fontsize, true, r), true);
+	/* Its own font: "labelfont" / "labelfontsize", else the named style's
+	 * ("labelstyle"), else display.caption (by default system bold 14;
+	 * legacy step 2 = 18 px) */
+	const uint8_t named = ui_text_named(b->title); /* what ui_box_set_fonts() could add */
+	style_props_t r;
+	style_logic_font_layer(ui_style_resolved(STYLE_EL_DISPLAY_CAPTION), ui_style_named_props(named), &r);
+	const bool drawn = ui_render_text(b->title, caption, ui_style_get(STYLE_EL_DISPLAY_CAPTION), named,
+	                                  box_logic_base_face(b->fonts.caption_face, &r),
+	                                  box_logic_base_px(b->fonts.caption_fontsize, true, &r), true);
     /* An empty caption takes no room: hidden flex children get no column
      * gap either (the theme's ~8 px per gap pushed text past the box). */
     lv_obj_set_hidden(b->title, caption == NULL || caption[0] == '\0');
@@ -167,23 +192,29 @@ bool ui_box_set_caption(lv_obj_t* box, const char* caption)
 bool ui_box_set_text(lv_obj_t* box, const char* text)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
-	const style_props_t* r = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
-	return ui_render_text(b->text, text, ui_style_get(STYLE_EL_DISPLAY_VALUE),
-	                      box_logic_base_face(b->fonts.face, r),
-	                      box_logic_base_px(b->fonts.fontsize, false, r), false);
+	/* "font" / "fontsize", else the named style's ("style"), else display.value */
+	const uint8_t named = ui_text_named(b->text);
+	style_props_t r;
+	style_logic_font_layer(ui_style_resolved(STYLE_EL_DISPLAY_VALUE), ui_style_named_props(named), &r);
+	return ui_render_text(b->text, text, ui_style_get(STYLE_EL_DISPLAY_VALUE), named,
+	                      box_logic_base_face(b->fonts.face, &r),
+	                      box_logic_base_px(b->fonts.fontsize, false, &r), false);
 }
 
 bool ui_box_set_hint(lv_obj_t* box, const char* hint)
 {
 	const box_dsc_t* b = lv_obj_get_user_data(box);
 	/* The item's "font" / "fontsize" are the value's and the unit's; without
-	 * them the unit has display.unit's font / size where "style" sets them,
+	 * them the unit has the named style's ("style": the value's and the
+	 * unit's too), else display.unit's font / size where "style" sets them,
 	 * else the value's. */
+	const uint8_t named = ui_text_named(b->hint);
 	const style_props_t* v = ui_style_resolved(STYLE_EL_DISPLAY_VALUE);
-	const style_props_t* u = ui_style_resolved(STYLE_EL_DISPLAY_UNIT);
-	const int face = box_logic_unit_face(b->fonts.face, v, u);
-	const int px = box_logic_unit_px(b->fonts.fontsize, v, u);
-	const bool drawn = ui_render_text(b->hint, hint, ui_style_get(STYLE_EL_DISPLAY_UNIT), face, px, false);
+	style_props_t u;
+	style_logic_font_layer(ui_style_resolved(STYLE_EL_DISPLAY_UNIT), ui_style_named_props(named), &u);
+	const int face = box_logic_unit_face(b->fonts.face, v, &u);
+	const int px = box_logic_unit_px(b->fonts.fontsize, v, &u);
+	const bool drawn = ui_render_text(b->hint, hint, ui_style_get(STYLE_EL_DISPLAY_UNIT), named, face, px, false);
     /* An empty unit takes no room (see ui_box_set_caption). */
     lv_obj_set_hidden(b->hint, hint == NULL || hint[0] == '\0');
     return drawn;
@@ -200,7 +231,19 @@ void ui_box_set_fonts(lv_obj_t* box, const ui_box_fonts_t* fonts, int boxtype)
 
 	int caption_pad;
 	int box_pad;
-	const int step = box_logic_padding_step(fonts->fontsize, ui_style_resolved(STYLE_EL_DISPLAY_VALUE)->px);
+	/* The named styles go on the parts here, once per call, and nowhere
+	 * else: caption, value and unit are then drawn with what they carry
+	 * (font cascade, colour) and the padding below follows the same. A
+	 * style the LVGL pool had no room for is not there. */
+	ui_text_set_named(b->title, fonts->caption_style);
+	ui_text_set_named(b->text, fonts->style);
+	ui_text_set_named(b->hint, fonts->style);
+
+	/* The value's size below the item's: the named style's text_size takes
+	 * the place of display.value's. */
+	style_props_t r;
+	style_logic_font_layer(ui_style_resolved(STYLE_EL_DISPLAY_VALUE), ui_style_named_props(ui_text_named(b->text)), &r);
+	const int step = box_logic_padding_step(fonts->fontsize, r.px);
 	if (box_logic_padding(step, boxtype, &caption_pad, &box_pad)) {
 		lv_obj_set_style_pad_bottom(b->title, caption_pad, 0);
 		lv_obj_set_style_pad_bottom(b->main, box_pad, 0);

@@ -31,6 +31,7 @@
 #include "ArduinoJson.h"
 #include "ListLogic.h"
 #include "FontRef.h"
+#include "StyleRef.h"
 #include "json/JsonWriter.h"
 #include "ui/PendingRender.h"
 
@@ -63,8 +64,11 @@ public:
     void setFont(int face, int size);
     // Back to the configured "font" / "fontsize".
     void restoreFont() { setFont(fontFace_, fontSize_); }
+    // Named style of the rows (focus: of the selected row): a ui_style.h
+    // ref the caller resolved, 0 = none. Any task: the LVGL task applies it.
+    void setStyle(uint8_t ref, bool focus);
     // Script engine restart (ConfigManager::restoreConfigState): the config
-    // items, selection and font again. Any task, no script code running;
+    // items, selection, font and named styles again. Any task, no script code running;
     // the LVGL task renders on its next tick.
     void restoreConfigState();
 
@@ -91,6 +95,7 @@ private:
     void configure(const ArduinoJson::JsonObject& data);
     void createRoller();   // LVGL lock held
     void deleteRoller();   // LVGL lock held
+    void applyStyles();    // LVGL lock held, roller exists: named styles, font, row height
     void requestRender();
 
     // Configuration (written before attach(), read-only afterwards).
@@ -122,13 +127,26 @@ private:
     bool itemsReplaced_ = false;
     // Config "selected" (clamped). Written at config load only.
     int16_t configSelected_ = -1;
+    // Config "style" (the rows, LV_PART_MAIN) and "focusstyle" (the selected
+    // row, LV_PART_SELECTED): named styles (ui/ui_style.h ref, 0 = none).
+    // Written at config load only.
+    uint8_t configStyle_ = 0;
+    uint8_t configFocusStyle_ = 0;
     // The font now (fontref::pack): the configured one until setFont().
     std::atomic<uint32_t> font_{fontref::pack(FONT_FACE_NONE, 0)};
     std::atomic<bool> fontDirty_{false};
+    // The named styles now: the configured ones until setStyle(). A change
+    // sets fontDirty_ (the font and the row height depend on them).
+    std::atomic<uint8_t> style_{0};
+    std::atomic<uint8_t> focusStyle_{0};
 
     lv_obj_t* roller_ = nullptr;  // LVGL lock held
     bool linked_ = false;         // LVGL lock held
     bool buildFailed_ = false;    // LVGL lock held; logged once
+    // The named styles the roller carries now (0 for a new roller). LVGL
+    // lock held.
+    uint8_t styleCarried_ = 0;
+    uint8_t focusStyleCarried_ = 0;
 };
 
 template<typename OutputStream>
@@ -144,6 +162,8 @@ void List::toJson(json::JsonWriter<OutputStream>::ScopedObject& obj) const {
     if (fontFace_ != FONT_FACE_NONE) {
         obj.Add("font", fonts_face_name(fontFace_));
     }
+    styleref::write(obj, "style", configStyle_);
+    styleref::write(obj, "focusstyle", configFocusStyle_);
     obj.Add("selected", selected());
     char hex[7];
     const auto addColor = [&](const char* key, const unsigned long c) {

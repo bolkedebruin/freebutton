@@ -25,6 +25,13 @@ typedef struct {
     int16_t title_face, title_px; /**< base font of the top label's spans (ui_button_set_base_fonts) */
     int16_t text_face, text_px;
     bool icon_shown;              /**< the icon replaces the bottom text */
+    /* Named styles of the two parts (ui_style.h ref, 0 = none): what the
+     * two labels carry (ui_button_set_styles(); also each label's user
+     * data), and what a row of spans is given. style_pending: a label or a
+     * row could not take its style for lack of LVGL pool.
+     * (Three bytes of the struct's padding.) */
+    uint8_t title_style, text_style;
+    bool style_pending;
 } button_dsc_t;
 
 /**
@@ -66,12 +73,42 @@ void ui_button_set_text(lv_obj_t *button, const char *text);
 void ui_button_set_base_fonts(lv_obj_t *button, int text_face, int text_px, int title_face, int title_px);
 
 /**
+ * @brief The named styles of the bottom and the top label (ui_style.h ref,
+ *        0 = none): added to the labels after the key.label / key.toplabel
+ *        style, and to the rows of spans when the texts are set. Call it
+ *        before the texts are set (LVGL lock held).
+ *        A style the LVGL pool has no room for is not added: see
+ *        ui_button_get_styles() and ui_button_styles_pending().
+ * @return true when the caller has to set the texts again (a row of spans
+ *         is drawn with the style it was rendered with): a label's style
+ *         changed, or a style was pending before this call.
+ */
+bool ui_button_set_styles(lv_obj_t *button, uint8_t text_style, uint8_t title_style);
+
+/**
+ * @brief The named styles the two labels carry now (ui_style.h ref, 0 =
+ *        none): what ui_button_set_styles() asked for, except a style the
+ *        LVGL pool had no room for. The caller computes the labels' fonts
+ *        from these, so that font and colour are those of one look.
+ */
+void ui_button_get_styles(lv_obj_t *button, uint8_t *text_style, uint8_t *title_style);
+
+/**
+ * @brief True when a label or a row of spans could not take its named style
+ *        for lack of LVGL pool since the last ui_button_set_styles(): the
+ *        caller calls ui_button_set_styles() again later (once per walk of
+ *        the pending renders at most) and sets the texts again.
+ */
+bool ui_button_styles_pending(lv_obj_t *button);
+
+/**
  * @brief Fonts of the bottom label and the top label (LVGL lock held)
  * @param button Button object created with ui_button_create()
  * @param text_font Bottom label font (a local style), or NULL for the
- *        shared key.label style (ui_style.h)
+ *        shared key.label style, or the label's named style where that holds a
+ *        font (ui_style.h)
  * @param title_font Top label font, or NULL for the shared key.toplabel
- *        style
+ *        style (or the named style)
  */
 void ui_button_set_fonts(lv_obj_t *button, const lv_font_t *text_font, const lv_font_t *title_font);
 
