@@ -58,6 +58,8 @@ public:
     int publish(const char* topic, const char* payload, size_t length, int qos, int retain) const;
     void subscribe(std::string_view topic, int qos, MqttSubscriber* subscriber);
     void unsubscribe(std::string_view topic);
+    // Only this subscriber leaves the topic; the others keep receiving.
+    void unsubscribe(std::string_view topic, MqttSubscriber* subscriber);
     void unsubscribe(MqttSubscriber* subscriber);
 
     // Connection state

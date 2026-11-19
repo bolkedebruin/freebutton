@@ -12,6 +12,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,11 +34,10 @@ int list_hw_move(int index, int step);
 // false when there is no list at index or item is out of range.
 bool list_hw_select(int index, int item);
 
-// Font of the items: a fonts.h face (resolved by the caller) and a fontsize
-// (1..5 = step, else px). false when there is no list at index.
-bool list_hw_set_font(int index, int face, int size);
-// Back to the configured font and size (JS setFont(list, "")).
-bool list_hw_restore_font(int index);
+// The list's style list (style_binding.h: refs the caller resolved), or,
+// with `restore`, the list config.json gives it. false when there is no
+// list at index.
+bool list_hw_set_styles(int index, uint32_t list, bool restore);
 
 // Items for list_hw_items_commit(): a builder in the general heap.
 void* list_hw_items_new(void);

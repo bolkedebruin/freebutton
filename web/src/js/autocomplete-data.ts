@@ -534,18 +534,18 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
   "fb": {
     "methods": [
       {
-        "label": "fb.key",
+        "label": "fb.button",
         "type": "method",
         "detail": "(name: string) → FbSide | FbMainSide",
-        "info": "Key by its \"name\" in config.json: the same object as fb.main.left/right (FbMainSide) or fb.bars[i].left/right (FbSide). Throws ReferenceError for an unknown name.",
-        "apply": "fb.key(${1:name})"
+        "info": "Button by its \"name\" in config.json: the same object as fb.main.left/right (FbMainSide) or fb.bars[i].left/right (FbSide). Throws ReferenceError for an unknown name.",
+        "apply": "fb.button(${1:name})"
       },
       {
         "label": "fb.main.display.create",
         "type": "method",
-        "detail": "(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number) → number",
+        "detail": "(x: number, y: number, width: number, boxType: number, styles: string, alignment: number, label: string, unit: string, round: number, page: number) → number",
         "info": "Create a display item; returns its id",
-        "apply": "fb.main.display.create(${1:x}, ${2:y}, ${3:width}, ${4:boxType}, ${5:fontSize}, ${6:alignment}, ${7:label}, ${8:unit}, ${9:round}, ${10:page})"
+        "apply": "fb.main.display.create(${1:x}, ${2:y}, ${3:width}, ${4:boxType}, ${5:styles}, ${6:alignment}, ${7:label}, ${8:unit}, ${9:round}, ${10:page})"
       },
       {
         "label": "fb.main.display.remove",
@@ -565,7 +565,7 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "label": "fb.main.display.get",
         "type": "method",
         "detail": "(idOrName: number | string) → object",
-        "info": "Get a display item by id or config.json name",
+        "info": "Get a display item by id or config.json name: id, x, y, width, boxType, style (its styles now, names joined by a space), alignment, label, unit, round, page; null when there is none",
         "apply": "fb.main.display.get(${1:idOrName})"
       },
       {
@@ -632,11 +632,25 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.display.setIcon(${1:idOrName}, ${2:icon})"
       },
       {
-        "label": "fb.main.display.setFont",
+        "label": "fb.main.display.setStyle",
         "type": "method",
-        "detail": "(idOrName: number | string, font: string | number, size: number) → boolean",
-        "info": "Set the font of the value and unit (item by id or config.json name; the caption keeps its own; font \"\" restores config.json); false when there is no such item",
-        "apply": "fb.main.display.setFont(${1:idOrName}, ${2:font}, ${3:size})"
+        "detail": "(idOrName: number | string, styles: string) → boolean",
+        "info": "Give the item a list of styles (item by id or config.json name): the value takes their main blocks, the caption their \"title\" blocks, the unit their \"unit\" blocks, the icon their \"icon\" colour. \"\" gives it the styles of config.json again. false when there is no such item",
+        "apply": "fb.main.display.setStyle(${1:idOrName}, ${2:styles})"
+      },
+      {
+        "label": "fb.main.display.addStyle",
+        "type": "method",
+        "detail": "(idOrName: number | string, style: string) → boolean",
+        "info": "Add one style as the last of the item's styles, so that it wins (item by id or config.json name); a style the item has moves to the end. A fifth style: RangeError, nothing changes. false when there is no such item",
+        "apply": "fb.main.display.addStyle(${1:idOrName}, ${2:style})"
+      },
+      {
+        "label": "fb.main.display.removeStyle",
+        "type": "method",
+        "detail": "(idOrName: number | string, style: string) → boolean",
+        "info": "Take one style out of the item's styles, also one config.json gave it (item by id or config.json name); a style the item does not have: nothing changes. false when there is no such item",
+        "apply": "fb.main.display.removeStyle(${1:idOrName}, ${2:style})"
       },
       {
         "label": "fb.main.left.button.onClick",
@@ -695,18 +709,25 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.left.display.setIcon(${1:icon})"
       },
       {
-        "label": "fb.main.left.display.setFont",
+        "label": "fb.main.left.display.setStyle",
         "type": "method",
-        "detail": "(font: string | number, size: number) → void",
-        "info": "Set the font of the bottom label (default: the style's key label font, config.json \"style.key.label\"; font \"\" restores config.json)",
-        "apply": "fb.main.left.display.setFont(${1:font}, ${2:size})"
+        "detail": "(styles: string) → void",
+        "info": "Give the button a list of styles: the label takes their main blocks, the top label their \"title\" blocks, the icon their \"icon\" colour. \"\" gives it the styles of config.json again. A button without an entry in config.json \"buttons\": InternalError",
+        "apply": "fb.main.left.display.setStyle(${1:styles})"
       },
       {
-        "label": "fb.main.left.display.setTopFont",
+        "label": "fb.main.left.display.addStyle",
         "type": "method",
-        "detail": "(font: string | number, size: number) → void",
-        "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
-        "apply": "fb.main.left.display.setTopFont(${1:font}, ${2:size})"
+        "detail": "(style: string) → void",
+        "info": "Add one style as the last of the button's styles, so that it wins; a style the button has moves to the end. A fifth style: RangeError, nothing changes",
+        "apply": "fb.main.left.display.addStyle(${1:style})"
+      },
+      {
+        "label": "fb.main.left.display.removeStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Take one style out of the button's styles, also one config.json gave it; a style the button does not have: nothing changes",
+        "apply": "fb.main.left.display.removeStyle(${1:style})"
       },
       {
         "label": "fb.main.right.button.onClick",
@@ -765,18 +786,25 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.right.display.setIcon(${1:icon})"
       },
       {
-        "label": "fb.main.right.display.setFont",
+        "label": "fb.main.right.display.setStyle",
         "type": "method",
-        "detail": "(font: string | number, size: number) → void",
-        "info": "Set the font of the bottom label (default: the style's key label font, config.json \"style.key.label\"; font \"\" restores config.json)",
-        "apply": "fb.main.right.display.setFont(${1:font}, ${2:size})"
+        "detail": "(styles: string) → void",
+        "info": "Give the button a list of styles: the label takes their main blocks, the top label their \"title\" blocks, the icon their \"icon\" colour. \"\" gives it the styles of config.json again. A button without an entry in config.json \"buttons\": InternalError",
+        "apply": "fb.main.right.display.setStyle(${1:styles})"
       },
       {
-        "label": "fb.main.right.display.setTopFont",
+        "label": "fb.main.right.display.addStyle",
         "type": "method",
-        "detail": "(font: string | number, size: number) → void",
-        "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
-        "apply": "fb.main.right.display.setTopFont(${1:font}, ${2:size})"
+        "detail": "(style: string) → void",
+        "info": "Add one style as the last of the button's styles, so that it wins; a style the button has moves to the end. A fifth style: RangeError, nothing changes",
+        "apply": "fb.main.right.display.addStyle(${1:style})"
+      },
+      {
+        "label": "fb.main.right.display.removeStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Take one style out of the button's styles, also one config.json gave it; a style the button does not have: nothing changes",
+        "apply": "fb.main.right.display.removeStyle(${1:style})"
       },
       {
         "label": "fb.main.list.next",
@@ -821,11 +849,11 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.main.list.setItems(${1:nameOrIndex}, ${2:items})"
       },
       {
-        "label": "fb.main.list.setFont",
+        "label": "fb.main.list.setStyle",
         "type": "method",
-        "detail": "(nameOrIndex: string | number, font: string | number, size: number) → void",
-        "info": "Set the font of the items (default: the style's list font, config.json \"style.list\", at the list's \"fontsize\"; font \"\" restores config.json)",
-        "apply": "fb.main.list.setFont(${1:nameOrIndex}, ${2:font}, ${3:size})"
+        "detail": "(nameOrIndex: string | number, styles: string) → void",
+        "info": "Give the list a list of styles: the rows take their main blocks (color, font, line-height, background-color of the whole roller), the selected row their \"selected\" blocks. \"\" gives it the styles of config.json again. A list has no addStyle / removeStyle",
+        "apply": "fb.main.list.setStyle(${1:nameOrIndex}, ${2:styles})"
       },
       {
         "label": "fb.main.image.setIcon",
@@ -940,18 +968,25 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.bars[n].left.display.setIcon(${1:icon})"
       },
       {
-        "label": "fb.bars[n].left.display.setFont",
+        "label": "fb.bars[n].left.display.setStyle",
         "type": "method",
-        "detail": "(font: string | number, size: number) → void",
-        "info": "Set the font of the bottom label (default: the style's key label font, config.json \"style.key.label\"; font \"\" restores config.json)",
-        "apply": "fb.bars[n].left.display.setFont(${1:font}, ${2:size})"
+        "detail": "(styles: string) → void",
+        "info": "Give the button a list of styles: the label takes their main blocks, the top label their \"title\" blocks, the icon their \"icon\" colour. \"\" gives it the styles of config.json again. A button without an entry in config.json \"buttons\": InternalError",
+        "apply": "fb.bars[n].left.display.setStyle(${1:styles})"
       },
       {
-        "label": "fb.bars[n].left.display.setTopFont",
+        "label": "fb.bars[n].left.display.addStyle",
         "type": "method",
-        "detail": "(font: string | number, size: number) → void",
-        "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
-        "apply": "fb.bars[n].left.display.setTopFont(${1:font}, ${2:size})"
+        "detail": "(style: string) → void",
+        "info": "Add one style as the last of the button's styles, so that it wins; a style the button has moves to the end. A fifth style: RangeError, nothing changes",
+        "apply": "fb.bars[n].left.display.addStyle(${1:style})"
+      },
+      {
+        "label": "fb.bars[n].left.display.removeStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Take one style out of the button's styles, also one config.json gave it; a style the button does not have: nothing changes",
+        "apply": "fb.bars[n].left.display.removeStyle(${1:style})"
       },
       {
         "label": "fb.bars[n].right.led.setColor",
@@ -1052,18 +1087,32 @@ export const freebuttonAPI: FreebuttonAPIDefinition = {
         "apply": "fb.bars[n].right.display.setIcon(${1:icon})"
       },
       {
-        "label": "fb.bars[n].right.display.setFont",
+        "label": "fb.bars[n].right.display.setStyle",
         "type": "method",
-        "detail": "(font: string | number, size: number) → void",
-        "info": "Set the font of the bottom label (default: the style's key label font, config.json \"style.key.label\"; font \"\" restores config.json)",
-        "apply": "fb.bars[n].right.display.setFont(${1:font}, ${2:size})"
+        "detail": "(styles: string) → void",
+        "info": "Give the button a list of styles: the label takes their main blocks, the top label their \"title\" blocks, the icon their \"icon\" colour. \"\" gives it the styles of config.json again. A button without an entry in config.json \"buttons\": InternalError",
+        "apply": "fb.bars[n].right.display.setStyle(${1:styles})"
       },
       {
-        "label": "fb.bars[n].right.display.setTopFont",
+        "label": "fb.bars[n].right.display.addStyle",
         "type": "method",
-        "detail": "(font: string | number, size: number) → void",
-        "info": "Set the font of the top label (default: the style's key top label font, config.json \"style.key.toplabel\"; font \"\" restores config.json)",
-        "apply": "fb.bars[n].right.display.setTopFont(${1:font}, ${2:size})"
+        "detail": "(style: string) → void",
+        "info": "Add one style as the last of the button's styles, so that it wins; a style the button has moves to the end. A fifth style: RangeError, nothing changes",
+        "apply": "fb.bars[n].right.display.addStyle(${1:style})"
+      },
+      {
+        "label": "fb.bars[n].right.display.removeStyle",
+        "type": "method",
+        "detail": "(style: string) → void",
+        "info": "Take one style out of the button's styles, also one config.json gave it; a style the button does not have: nothing changes",
+        "apply": "fb.bars[n].right.display.removeStyle(${1:style})"
+      },
+      {
+        "label": "fb.style.set",
+        "type": "method",
+        "detail": "(style: string, property: string, value: string | number) → void",
+        "info": "Set one value of a style: every button, display item and list that uses the style is drawn again with it. Of \"button\", \"displayitem\" and \"list\" too: every item of the kind. A property the style does not set in config.json is added. Not saved: a script restart brings the values of config.json back and takes added properties away. Each call waits for the display task (up to a whole redraw): change one property per event, or switch styles with setStyle / addStyle. No room in the LVGL memory for a property more: InternalError (out of memory), nothing changes",
+        "apply": "fb.style.set(${1:style}, ${2:property}, ${3:value})"
       }
     ]
   }

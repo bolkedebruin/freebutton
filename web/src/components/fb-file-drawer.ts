@@ -179,7 +179,7 @@ export class FbFileDrawer extends LitElement {
           <span class="shrink-0 text-gray-200">${editable ? this._fileIcon() : kind === 'svg' ? this._imageIcon() : this._unknownIcon()}</span>
           <span class="flex-1 min-w-0">
             <span class="block text-xs text-text-default truncate">
-              ${file.key}${editable && file.key === ws.currentKey && ws.dirty ? html`<span class="text-status-orange ml-1" title="Unsaved changes">●</span>` : ''}
+              ${file.key}${editable && file.key === ws.currentKey && ws.dirty ? html`<span class="text-purple-80 ml-1" title="Unsaved changes" data-testid="dirty-file">●</span>` : ''}
             </span>
             <span class="block text-[10px] text-gray-200 truncate">${meta.join(' · ')}</span>
           </span>
@@ -204,7 +204,7 @@ export class FbFileDrawer extends LitElement {
         <span class="shrink-0 text-gray-200">${this._fileIcon()}</span>
         <div class="flex-1 min-w-0">
           <div class="text-xs text-text-default truncate">${ws.currentKey}</div>
-          <div class="text-[10px] text-status-orange">not saved yet</div>
+          <div class="text-[10px] text-purple-80">not saved yet</div>
         </div>
       </div>
     `;

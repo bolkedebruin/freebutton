@@ -129,6 +129,13 @@ void copyCredentials(char akid[kAccessKeyIdLen + 1], char secret[kSecretLen + 1]
 // New credentials (persisted); the old ones stop working immediately.
 bool rotateCredentials();
 
+// Response headers a cross-origin script may read (CORS).
+inline constexpr const char* kExposeHeaders =
+    "ETag, x-amz-checksum-crc32, x-freebutton-reboot-required, x-freebutton-auth, Date, x-amz-date, "
+    "x-fb-media-total, x-fb-media-used, x-fb-media-free, x-fb-media-reclaimable, "
+    "x-fb-media-erase-sectors, x-fb-media-erase-page-max, x-fb-media-dir-generation, "
+    "x-fb-fs-total, x-fb-fs-used";
+
 }  // namespace fbauth
 
 #endif  // FREEBUTTON_AUTH_H

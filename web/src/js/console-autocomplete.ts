@@ -20,31 +20,45 @@ let state: AutocompleteState = {
     wordStart: 0
 };
 
+type ConsoleInput = HTMLTextAreaElement | HTMLInputElement;
+
+// The input in use and its dropdown. There is one per console (the device's
+// and the virtual device's); only the one being typed in shows completions.
 let dropdown: HTMLElement | null = null;
-let inputElement: HTMLTextAreaElement | HTMLInputElement | null = null;
+let inputElement: ConsoleInput | null = null;
+const dropdowns = new Map<ConsoleInput, HTMLElement>();
+
+/** Make `input` the one the completions belong to; another input's dropdown closes. */
+function activate(input: ConsoleInput): void {
+    if (inputElement === input) return;
+    hideDropdown();
+    inputElement = input;
+    dropdown = dropdowns.get(input) ?? null;
+}
 
 /**
- * Initialize autocomplete for the console input
+ * Initialize autocomplete for a console input (each console has its own)
  */
-export function initConsoleAutocomplete(input: HTMLTextAreaElement | HTMLInputElement): void {
-    inputElement = input;
-
+export function initConsoleAutocomplete(input: ConsoleInput): void {
     // Create dropdown element
-    dropdown = document.createElement('div');
-    dropdown.className = 'console-autocomplete';
-    dropdown.style.display = 'none';
-    input.parentElement?.appendChild(dropdown);
+    const list = document.createElement('div');
+    list.className = 'console-autocomplete';
+    list.style.display = 'none';
+    input.parentElement?.appendChild(list);
+    dropdowns.set(input, list);
+    if (!inputElement) activate(input);
 
     // Event listeners
-    input.addEventListener('input', handleInput);
-    input.addEventListener('keydown', handleKeydown as EventListener);
+    input.addEventListener('input', () => { activate(input); handleInput(); });
+    input.addEventListener('keydown', ((e: KeyboardEvent) => { if (inputElement === input) handleKeydown(e); }) as EventListener);
     input.addEventListener('blur', () => {
         // Delay hide to allow click on dropdown
-        setTimeout(hideDropdown, 150);
+        setTimeout(() => { if (inputElement === input) hideDropdown(); }, 150);
     });
 
     // Click handler for dropdown items
-    dropdown.addEventListener('mousedown', (e) => {
+    list.addEventListener('mousedown', (e) => {
+        activate(input);
         const target = e.target as HTMLElement;
         const item = target.closest('.autocomplete-item') as HTMLElement;
         if (item) {

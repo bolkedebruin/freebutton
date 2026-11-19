@@ -12,8 +12,20 @@ What this gives:
   `x-amz-content-sha256` carries its SHA-256 (S3 PUT).
 - **Replay protection**: `x-amz-date` must be within +-15 minutes of the
   device clock; a presigned URL is valid from 15 minutes before `X-Amz-Date`
-  until `X-Amz-Date + X-Amz-Expires` (max 604800 s). Inside that window a
-  captured request can be replayed.
+  until `X-Amz-Date + X-Amz-Expires` (max 604800 s; the console WebSocket's
+  URL at most 300 s). Inside that window a captured **read** (GET, HEAD) can
+  be replayed. A request that changes something is accepted **once**: every
+  other method, and the console WebSocket's upgrade. The device remembers the
+  newest 32 such signatures; when one leaves that memory, everything signed
+  at or before its time is refused as well (`ReplayCache`, `AuthLogic.h`). A
+  repeated signature gets `403 RequestReplayed`, on the S3 API `503 SlowDown`
+  (an S3 client that repeats a request within the same second signs it
+  identically; it then waits and signs again).
+- **Uploads**: the multipart body of `POST /upload` and
+  `POST /api/bytecode/upload` is not covered by `x-amz-content-sha256`, so
+  the URL must carry `sha256=<hex SHA-256 of the file>`. The query string is
+  signed, and the device only accepts the file when what arrived has that
+  hash (a firmware image is otherwise not made bootable, a script not stored).
 
 What it does **not** give: **confidentiality**. Bodies and responses cross the
 network in clear text, including `GET /config` (WiFi and MQTT passwords) and
@@ -21,7 +33,9 @@ uploaded scripts. Anyone on the network can read them; they cannot forge or
 alter signed requests.
 
 If the device clock is not set (year < 2025, no NTP), the time window is not
-checked; the signature still is (and replays are then not limited).
+checked; the signature still is. The device then refuses requests signed at or
+before the last time it knew (stored in NVS at most every 10 minutes, and only
+while its clock was set), so an old capture does not work after a power cut.
 
 ## Credentials
 
@@ -129,7 +143,6 @@ Signature required (anything else gets 403):
 | `POST /api/reboot` | no body: `UNSIGNED-PAYLOAD` or the empty-body hash |
 | `POST /upload` (firmware / filesystem image, multipart) | `UNSIGNED-PAYLOAD` |
 | `POST /ota_update` | no body |
-| `POST /updatefirmware` | no body |
 | `POST /resetWifi` (now POST only) | no body |
 | `POST /api/bytecode/upload` (multipart) | `UNSIGNED-PAYLOAD` |
 | `GET /config` (contains secrets) | no body |
@@ -149,13 +162,13 @@ itself is not integrity-protected by the signature (the firmware image has
 its own checksum, a filesystem image its LittleFS magic).
 
 Anonymous: `GET /api/version`, `GET /api/device`, `GET /api/bytecode/list`,
-`GET /api/bytecode/next_address`, the `/upgrade` page (its own unsigned form
-post to `/upload` now gets 403: use the IDE or `tools/scripts/ota_fs.py` with
-signing), static
+`GET /api/bytecode/next_address`, static
 files (`/www`), the captive portal (`/`, `/scan`, `/connect` in AP mode),
 and CORS preflights (`OPTIONS`). The former `/bytecode` dev page (its upload was refused) and its file
 `bytecode_upload.html` were removed. The former `/ws-test` page was removed: it
-could not sign the WebSocket upgrade.
+could not sign the WebSocket upgrade. The former `/upgrade` page was removed:
+its form could not sign the upload (use the IDE, or `tools/scripts/ota_fs.py`
+for a filesystem image).
 
 The S3 API (`S3Server`) verifies with the same API (see below). Anonymous
 there: reads of the buckets `web`, `examples`, `fonts` and ListBuckets;

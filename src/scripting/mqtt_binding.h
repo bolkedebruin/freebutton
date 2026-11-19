@@ -61,6 +61,12 @@ int mqtt_binding_subscribe(uint8_t brokerId, const char* topic, int qos);
  */
 int mqtt_binding_unsubscribe(uint8_t brokerId, const char* topic);
 
+/**
+ * A message that could not be given to its script callback (script heap or
+ * stack full): counted with the messages the queue dropped.
+ */
+void mqtt_binding_count_drop(void);
+
 /*
  * Check if broker is connected
  *

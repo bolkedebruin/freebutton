@@ -18,7 +18,7 @@ export function initReplBridge(): void {
   ws.onConsole((message: string) => {
     const clean = message.replace(/\n$/, '');
     if (clean) {
-      emit('console-line', { text: clean, type: 'log' });
+      emit('console-line', { to: 'device', text: clean, type: 'log' });
     }
   });
 
@@ -26,7 +26,7 @@ export function initReplBridge(): void {
   // can show where an auto-connect actually connected to.
   ws.onConnect(() => {
     emit('connection-change', { connected: true, url: ws.connectionBaseUrl });
-    emit('console-line', { text: `Connected to ${ws.connectionBaseUrl}`, type: 'info' });
+    emit('console-line', { to: 'device', text: `Connected to ${ws.connectionBaseUrl}`, type: 'info' });
   });
 
   // A refused WebSocket upgrade (403) is indistinguishable from an offline
@@ -34,10 +34,10 @@ export function initReplBridge(): void {
   let credentialHintShown = false;
   ws.onDisconnect(() => {
     emit('connection-change', { connected: false, url: '' });
-    emit('console-line', { text: 'Disconnected from device', type: 'info' });
+    emit('console-line', { to: 'device', text: 'Disconnected from device', type: 'info' });
     if (!ws.everOpened && !credentialHintShown && !getCredentials(ws.connectionBaseUrl)) {
       credentialHintShown = true;
-      emit('console-line', {
+      emit('console-line', { to: 'device',
         text: 'If the device requires access credentials, enter them in Settings → Device access.',
         type: 'info',
       });
@@ -66,18 +66,20 @@ export function initReplBridge(): void {
 
   // Handle eval requests from console input
   on('console-eval', async (e) => {
+    // Only lines typed in the device's console; the virtual device's are evaluated in the page (emulator-session.ts).
+    if (e.detail.target !== 'device') return;
     const code = e.detail.code;
     if (!ws.isConnected) {
-      emit('console-line', { text: 'Not connected to device', type: 'error' });
+      emit('console-line', { to: 'device', text: 'Not connected to device', type: 'error' });
       return;
     }
     const result = await ws.evaluate(code);
     if (result.success) {
       if (result.value && result.value !== 'undefined') {
-        emit('console-line', { text: result.value, type: 'result' });
+        emit('console-line', { to: 'device', text: result.value, type: 'result' });
       }
     } else {
-      emit('console-line', { text: result.error || 'Unknown error', type: 'error' });
+      emit('console-line', { to: 'device', text: result.error || 'Unknown error', type: 'error' });
     }
   });
 }

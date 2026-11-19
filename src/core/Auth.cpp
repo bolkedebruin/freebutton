@@ -48,12 +48,12 @@ constexpr const char* kProtected[] = {
     "/api/reboot",          // POST
     "/upload",              // POST multipart: firmware / filesystem image
     "/ota_update",          // POST: apply the upload (reboot)
-    "/updatefirmware",      // POST: remote OTA
     "/resetWifi",           // POST: forget WiFi + reboot
     "/api/bytecode/upload", // POST multipart
     "/config",              // GET: contains secrets (WiFi / MQTT passwords)
     "/ws/repl",             // GET: WebSocket upgrade (presigned URL)
     "/api/screenshot",      // POST: repaint + write the displays to LittleFS
+    "/api/heap/mark",       // POST: restart the heapLow measurement of /api/device
     "/api/bench",           // POST: repaint the displays N times (render timing)
 };
 
@@ -160,6 +160,33 @@ struct RequestView {
     size_t contentLength() const { return r->contentLength(); }
 };
 
+// --- replay and last known time (async_tcp task only) ----------------------
+constexpr const char* kReplUrl = "/ws/repl";
+constexpr uint32_t kMaxReplExpires = 300;
+constexpr const char* kNvsMark = "mark";
+constexpr uint32_t kMarkStep = 600;  // seconds between writes of the mark: flash wear
+
+ReplayCache s_replay;
+uint32_t s_mark = 0;  // newest time of an accepted request that NVS knows of
+
+void loadMark() {
+    nvs_handle_t h;
+    if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+    nvs_get_u32(h, kNvsMark, &s_mark);
+    nvs_close(h);
+}
+
+// Only called with a valid device clock, so a client with a wrong clock
+// cannot push the mark into the future.
+void rememberTime(int64_t t) {
+    if (t <= static_cast<int64_t>(s_mark) + kMarkStep || t > 0xFFFFFFFFLL) return;
+    s_mark = static_cast<uint32_t>(t);
+    nvs_handle_t h;
+    if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+    if (nvs_set_u32(h, kNvsMark, s_mark) == ESP_OK) nvs_commit(h);
+    nvs_close(h);
+}
+
 bool isProtected(const String& url) {
     for (const char* p : kProtected) {
         const size_t n = strlen(p);
@@ -177,14 +204,22 @@ bool isProtected(const String& url) {
 // and claims the empty-body hash.
 bool checkProtected(AsyncWebServerRequest* request, Result& res) {
     if (!verifyRequest(request, res)) return false;
-    if (res.payload == Payload::Unsigned) return true;
-    if (res.payload == Payload::Sha256 && request->contentLength() == 0) {
-        uint8_t empty[32];
-        fromHex(kEmptySha256, empty, 32);
-        if (digestEqual(empty, res.payloadSha256, 32)) return true;
-        res.status = Status::SignatureDoesNotMatch;
-        res.message = "x-amz-content-sha256 does not match the empty body";
+    // A console URL is made when it is used: one that stays valid for long
+    // is only useful to someone else.
+    if (res.presigned && res.expires > kMaxReplExpires && request->url() == kReplUrl) {
+        res.status = Status::AccessDenied;
+        res.message = "X-Amz-Expires of the console URL must be at most 300";
         return false;
+    }
+    switch (bodylessPayload(res, request->contentLength())) {
+        case Bodyless::Ok:
+            return true;
+        case Bodyless::HashMismatch:
+            res.status = Status::SignatureDoesNotMatch;
+            res.message = "x-amz-content-sha256 does not match the empty body";
+            return false;
+        case Bodyless::HasBody:
+            break;
     }
     res.status = Status::AccessDenied;
     res.message = "this endpoint does not check body hashes: sign the body as UNSIGNED-PAYLOAD";
@@ -227,9 +262,6 @@ bool isCrossOrigin(AsyncWebServerRequest* request) {
              strcmp(origin.c_str() + 7, host.c_str()) == 0);
 }
 
-constexpr const char* kExposeHeaders =
-    "x-freebutton-auth, Date, x-amz-date, ETag, x-amz-checksum-crc32, x-freebutton-reboot-required";
-
 void corsMiddleware(AsyncWebServerRequest* request, ArMiddlewareNext next) {
     if (!isCrossOrigin(request)) {
         next();
@@ -250,7 +282,7 @@ void corsMiddleware(AsyncWebServerRequest* request, ArMiddlewareNext next) {
     }
     next();
     if (AsyncWebServerResponse* response = request->getResponse()) {
-        // Do not replace what a handler set itself (S3, /api/device).
+        // Do not replace what a handler set itself.
         response->addHeader("Access-Control-Allow-Origin", "*", false);
         response->addHeader("Access-Control-Expose-Headers", kExposeHeaders, false);
     }
@@ -284,6 +316,7 @@ void init() {
     }
     installCredentials(akid, secret);
     memset(secret, 0, sizeof secret);
+    loadMark();
 }
 
 bool rotateCredentials() {
@@ -325,7 +358,27 @@ bool verifyRequest(AsyncWebServerRequest* request, Result& result) {
     const time_t now = time(nullptr);
     cfg.now = now >= kClockValidFrom ? static_cast<int64_t>(now) : 0;
     const RequestView req{request};
-    return verify<Sha256>(req, cfg, signingKey, result) == Status::Ok;
+    if (verify<Sha256>(req, cfg, signingKey, result) != Status::Ok) return false;
+
+    // The device clock is not set (no time check was possible): at least
+    // nothing older than the last time it knew is accepted.
+    if (cfg.now == 0 && s_mark != 0 && result.signedAt <= static_cast<int64_t>(s_mark)) {
+        result.status = Status::RequestTimeTooSkewed;
+        result.message = "x-amz-date is older than the device's last known time";
+        return false;
+    }
+    // Whatever changes something is accepted once (AuthLogic.h, Replay):
+    // every method but GET and HEAD, and the console WebSocket's upgrade.
+    const auto method = request->method();
+    if ((method != HTTP_GET && method != HTTP_HEAD) || request->url() == kReplUrl) {
+        if (s_replay.check(result.signature, result.signedAt) != ReplayCache::Verdict::Fresh) {
+            result.status = Status::RequestReplayed;
+            result.message = "this signed request was used before: sign it again";
+            return false;
+        }
+    }
+    if (cfg.now > 0) rememberTime(result.signedAt < cfg.now ? result.signedAt : cfg.now);
+    return true;
 }
 
 void addDeniedHeaders(AsyncWebServerResponse* response) {

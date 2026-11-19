@@ -4,9 +4,10 @@ The device draws its UI with these TrueType files, rendered by LVGL
 `tiny_ttf` from the media store (S3 bucket `fonts`, see
 [docs/MEDIA-STORE.md](../../docs/MEDIA-STORE.md)). `medium.ttf` and
 `semibold.ttf` are the two system fonts of the font registry
-(`src/ui/fonts/fonts.c`): they always exist, the firmware screens use them,
-and an S3 DELETE of them is refused. `icons.ttf` is an ordinary font file
-that config.json names in `"style"."fonts"` (the factory config calls it
+(`src/ui/fonts/fonts.c`): they always exist, and an S3 DELETE of them is
+refused. The firmware's own screens (modals, progress bar) do not use them:
+they use the Montserrat 12 that is compiled into the firmware. `icons.ttf` is an ordinary font file
+that config.json names in its top-level `"fonts"` (the factory config calls it
 `mdi` and makes it the fallback of the system fonts; see
 [docs/STYLE.md](../../docs/STYLE.md)). Upload a file under the same key to
 replace a font; the device reloads its fonts 1.5 s after the last upload or
@@ -16,7 +17,7 @@ LVGL's built-in Montserrat 12.
 | Key | Font | Source | License |
 |---|---|---|---|
 | `medium.ttf` | system font `montserrat` (UI text; protected) | Montserrat Medium 8.000 | SIL OFL 1.1 ([OFL-Montserrat.txt](OFL-Montserrat.txt)) |
-| `semibold.ttf` | system font `montserrat_semibold` (captions, key top labels; protected) | Montserrat SemiBold 8.000 | SIL OFL 1.1 ([OFL-Montserrat.txt](OFL-Montserrat.txt)) |
+| `semibold.ttf` | system font `montserrat_semibold` (captions, button top labels; protected) | Montserrat SemiBold 8.000 | SIL OFL 1.1 ([OFL-Montserrat.txt](OFL-Montserrat.txt)) |
 | `icons.ttf` | none by itself; `mdi` in the factory config (Material Design Icons) | Material Design Icons webfont 7.4.47 | Apache 2.0 ([LICENSE-MaterialDesignIcons.txt](LICENSE-MaterialDesignIcons.txt), [LICENSE-Apache-2.0.txt](LICENSE-Apache-2.0.txt)) |
 
 ## Provenance

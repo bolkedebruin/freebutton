@@ -10,7 +10,7 @@ const TEXT = `{
     { "position": 1, "label": "Light" },
     { "position": 2, "label": "Fan", "topics": [ { "topic": "a/b" } ] }
   ],
-  "mqttdisplays": [
+  "displayitems": [
     { "x": 0, "y": 0, "label": "Temp" },
     { "x": 50, "y": 0, "label": "Hum", "page": 2 }
   ],
@@ -27,7 +27,7 @@ describe('config-locate itemAt', () => {
     const s = state();
     expect(itemAt(s, TEXT.indexOf('"Light"'))).toEqual({ kind: 'button', list: 'buttons', index: 0 });
     expect(itemAt(s, TEXT.indexOf('"Fan"'))).toEqual({ kind: 'button', list: 'buttons', index: 1 });
-    expect(itemAt(s, TEXT.indexOf('"Hum"'))).toEqual({ kind: 'displayitem', list: 'mqttdisplays', index: 1 });
+    expect(itemAt(s, TEXT.indexOf('"Hum"'))).toEqual({ kind: 'displayitem', list: 'displayitems', index: 1 });
     expect(itemAt(s, TEXT.indexOf('"modes"'))).toEqual({ kind: 'list', list: 'lists', index: 0 });
     expect(itemAt(s, TEXT.indexOf('"logo"'))).toEqual({ kind: 'image', list: 'images', index: 0 });
   });
@@ -55,13 +55,13 @@ describe('config-locate rangeOf', () => {
     const s = state();
     const r = rangeOf(s, { list: 'buttons', index: 1 })!;
     expect(TEXT.slice(r.from, r.to)).toBe('{ "position": 2, "label": "Fan", "topics": [ { "topic": "a/b" } ] }');
-    const d = rangeOf(s, { list: 'mqttdisplays', index: 0 })!;
+    const d = rangeOf(s, { list: 'displayitems', index: 0 })!;
     expect(TEXT.slice(d.from, d.to)).toBe('{ "x": 0, "y": 0, "label": "Temp" }');
   });
 
   it('returns null for an entry that is not there', () => {
     expect(rangeOf(state(), { list: 'buttons', index: 9 })).toBeNull();
-    expect(rangeOf(state(), { list: 'displayitems', index: 0 })).toBeNull();
+    expect(rangeOf(state(), { list: 'brokers', index: 0 })).toBeNull();
   });
 
   it('agrees with the refs configToModel sets', () => {

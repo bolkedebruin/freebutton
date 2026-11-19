@@ -8,7 +8,7 @@
 // once (media_open) and every size of that face reads the same mapping.
 //
 //   faces      the two system faces, montserrat / montserrat_semibold
-//              (medium.ttf, semibold.ttf), plus config.json "style.fonts"
+//              (medium.ttf, semibold.ttf), plus config.json "fonts"
 //              (fonts_configure)
 //   instances  a face at one px, made on first use by fonts_get(), kept
 //              until reboot in a static table at a stable address

@@ -456,7 +456,7 @@ Nothing is linked until something calls `media_init()`.
 LVGL `tiny_ttf` (stb_truetype) renders from the mapped TTF
 (`lv_tiny_ttf_create_data_ex`). Default fonts are committed in
 `media/fonts/` (the upstream files, unmodified) and uploaded to the bucket
-`fonts` (keys below). config.json `"style"."fonts"` can add fonts from other
+`fonts` (keys below). config.json `"fonts"` (a top-level array) can add fonts from other
 keys in the bucket ([STYLE.md](STYLE.md)). A missing or invalid font falls
 back to LVGL's built-in Montserrat 12, the only compiled font.
 
@@ -466,10 +466,12 @@ back to LVGL's built-in Montserrat 12, the only compiled font.
 | `semibold.ttf` | system font `montserrat_semibold`: titles, semibold (Montserrat SemiBold, 198 KB). Protected |
 | `icons.ttf` | an ordinary font file: Material Design Icons. The factory config names it `mdi`, the fallback of the system fonts |
 
-- The two system fonts exist without a config entry, and the firmware
-  screens (modals, progress bar, LVGL theme) use them directly. S3 DELETE of
+- The two system fonts exist without a config entry. The firmware's own
+  screens (modals, progress bar, LVGL theme) do not use them: they use the
+  font that is compiled into the firmware (`LV_FONT_DEFAULT`, Montserrat
+  12), so they stay legible without any font file. S3 DELETE of
   `medium.ttf` or `semibold.ttf` answers 403; PUT is allowed (checked by
-  `ttf_check`), so they can be updated. A `"style"."fonts"` entry with a
+  `ttf_check`), so they can be updated. A `"fonts"` entry with a
   system name may set `id`, `fallback` and `lineheight`, not `src`.
 - A font has a fallback only when config.json gives it one; no font name is
   special in the firmware.

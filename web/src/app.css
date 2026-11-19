@@ -100,7 +100,8 @@
   fb-app, fb-navbar, fb-nav-item, fb-editor-pane, fb-toolbar,
   fb-code-editor, fb-status-bar, fb-right-pane, fb-virtual-device,
   fb-tft-display, fb-button-grid, fb-console-pane, fb-console-output,
-  fb-console-input, fb-resize-handle, fb-file-drawer, fb-settings-modal {
+  fb-console-input, fb-resize-handle, fb-file-drawer, fb-settings-modal,
+  fb-emulator-panel, fb-virtual-info {
     display: block;
   }
 
@@ -228,6 +229,41 @@
    inside the Fonts view): the wheel goes on to the outer area. */
 .custom-scrollbar.scroll-chain {
   overscroll-behavior: auto;
+}
+
+/* === Virtual device: items that can be moved ===
+   No text selection or touch scrolling while one is dragged; a focus ring
+   for the keyboard (arrow keys move the item). */
+.fb-item {
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+/* An icon inside an item is not picked up by the browser's own image drag. */
+.fb-item img, .fb-item svg {
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+.fb-item:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 1px;
+  z-index: 5;
+}
+
+/* === Virtual device: a script runs in it ===
+   The face's border glows softly in the theme's purple, with a slow pulse;
+   steady for readers who asked for less motion. Nothing when idle. */
+.fb-device-running {
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(175, 139, 255, 0.55), 0 0 14px 2px rgba(175, 139, 255, 0.28);
+  animation: fb-device-glow 3.6s ease-in-out infinite;
+}
+@keyframes fb-device-glow {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(175, 139, 255, 0.45), 0 0 10px 1px rgba(175, 139, 255, 0.18); }
+  50% { box-shadow: 0 0 0 1px rgba(175, 139, 255, 0.7), 0 0 18px 3px rgba(175, 139, 255, 0.36); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fb-device-running { animation: none; }
 }
 
 /* === Device Card Flip === */

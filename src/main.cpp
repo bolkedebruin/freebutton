@@ -18,15 +18,14 @@
 #include "drivers/LvglDisplay.h"
 #include "ui/ProgressBar.h"
 #include "scripting/ScriptEngine.h"
+#include "scripting/WebSocketREPL.h"
 #include "scripting/BytecodeRegistry.h"
 #include "scripting/mqtt_binding.h"
 #include "media/media_store.h"
 
-// Forward declaration - avoid include order issues with ESPAsyncWebServer
-namespace Scripting {
-    void cleanupWebSocketClients();
-    void processWebSocketRepl();
-}
+#ifdef FB_HEAP_PROBE
+void heapProbeStart();   // src/debug/heap_probe.cpp
+#endif
 
 using namespace FreeButton;
 
@@ -181,16 +180,29 @@ void setup() {
         ESP_LOGE(TAG, "Failed to initialize ScriptEngine");
     }
 
+    // The script has subscribed: retained values and live messages arrive
+    // from now on, and loop() is not running yet. Deliver them during these
+    // pauses, or the queue (2 KB) overflows and retained values are lost.
+    const auto pauseDelivering = [scriptEngineReady](const uint32_t ms) {
+        for (uint32_t waited = 0; waited < ms; waited += 10) {
+            if (scriptEngineReady) MqttBinding::processPending();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    };
+
     progressBar->update(90, "Finalizing setup...");
-    vTaskDelay(pdMS_TO_TICKS(500)); // Brief pause to show final progress
+    pauseDelivering(500); // Brief pause to show final progress
 
     progressBar->update(100, "Ready!");
-    vTaskDelay(pdMS_TO_TICKS(1000)); // Show completion
+    pauseDelivering(1000); // Show completion
 
     // Hide progress bar and show main application screen with DisplayItems
     progressBar->hide();
 
     ESP_LOGI(TAG, "main UI loaded");
+#ifdef FB_HEAP_PROBE
+    heapProbeStart();
+#endif
 }
 
 void loop() {

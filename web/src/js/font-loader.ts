@@ -2,7 +2,7 @@
  * The device's fonts in the browser, for the previews of the virtual device.
  *
  * For every face of the font table the preview shows (device-config
- * getFontTable: the system fonts + config.json "style.fonts"), the TTF is read from the
+ * getFontTable: the system fonts + config.json "fonts"), the TTF is read from the
  * device's `fonts` bucket with an S3 GetObject (device-storage
  * getObjectBytes; a plain fetch of /fonts/x.ttf would hit the IDE's own
  * static files) and registered as `new FontFace("fb-<name>", bytes)` in
@@ -86,6 +86,16 @@ export class FontLoader {
   /** Keys of bucket `fonts` as last listed; null = not listed (no device, old firmware). */
   bucketKeys(): ReadonlySet<string> | null {
     return this.listing ? new Set(this.listing.keys()) : null;
+  }
+
+  /**
+   * Keys of bucket `fonts`, listed now when they were not yet (the one
+   * listing this loader makes; resolves after the faces it is loading).
+   * Null: no device, or it could not be listed.
+   */
+  async listedKeys(): Promise<ReadonlySet<string> | null> {
+    await this.refresh();
+    return this.bucketKeys();
   }
 
   /** Whether "fb-<face>" is registered (with the file the table names). */
@@ -250,7 +260,7 @@ export const fontLoader = new FontLoader({
   get: (base, key) => getObjectBytes(base, key, FONTS_BUCKET),
   cache: indexedDbFontCache(),
   register: registerFontFace,
-  log: (text) => emit('console-line', { text, type: 'warn' }),
+  log: (text) => emit('console-line', { to: 'device', text, type: 'warn' }),
 });
 
 /** Keys of the device's fonts bucket as last listed (null = unknown). For the config linter. */

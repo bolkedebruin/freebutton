@@ -149,8 +149,8 @@ export class FbEditorPane extends LitElement {
       <div class="flex items-center gap-2 px-4 h-8 shrink-0 bg-bg-default border-b border-border-default text-xs font-mono" data-testid="file-header">
         ${this._view === 'editor' ? html`
           <span class="text-text-default truncate" data-testid="current-file">/${ws.currentKey}</span>
-          ${ws.dirty ? html`<span class="text-status-orange" title="Unsaved changes">● unsaved</span>` : ''}
-          ${!ws.dirty && ws.isNew ? html`<span class="text-status-orange">new (not saved yet)</span>` : ''}
+          ${ws.dirty ? html`<span class="text-purple-80" title="Unsaved changes" data-testid="dirty-header">● unsaved</span>` : ''}
+          ${!ws.dirty && ws.isNew ? html`<span class="text-purple-80">new (not saved yet)</span>` : ''}
           <span class="flex-1"></span>
           <span class="text-gray-200">${where}</span>
         ` : html`
@@ -159,7 +159,7 @@ export class FbEditorPane extends LitElement {
           <button class="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-gray-100 hover:text-text-default hover:bg-white/10"
             title="Back to the open file" data-testid="back-to-editor"
             @click=${() => this._showEditor()}>
-            ← /${ws.currentKey}${ws.dirty ? html`<span class="text-status-orange" title="Unsaved changes">●</span>` : ''}
+            ← /${ws.currentKey}${ws.dirty ? html`<span class="text-purple-80" title="Unsaved changes">●</span>` : ''}
           </button>
         `}
       </div>
@@ -209,6 +209,9 @@ export class FbEditorPane extends LitElement {
     const keys: Array<[string, string]> = [
       ['Ctrl/Cmd + S', 'Save the open file'],
       ['Ctrl/Cmd + Enter', `Deploy /${MAIN_SCRIPT_KEY} to the device`],
+      ['Ctrl/Cmd + Shift + Enter', `Run /${MAIN_SCRIPT_KEY} in the virtual device (again, when it runs)`],
+      ['Ctrl/Cmd + Shift + .', 'Stop the virtual device'],
+      ['Ctrl/Cmd + L', 'Clear the console that is shown'],
       ['Ctrl/Cmd + Space', 'Completions for the fb API'],
       ['Ctrl/Cmd + F', 'Find in the open file'],
     ];

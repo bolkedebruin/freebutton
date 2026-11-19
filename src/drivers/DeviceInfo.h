@@ -21,6 +21,13 @@ struct DeviceInfo {
     size_t heapFree;     // internal heap free now
     size_t heapTotal;    // internal heap total
     size_t heapMinFree;  // internal heap low-water mark since boot
+    size_t heapLow = 0;  // the same since the last POST /api/heap/mark (since boot when never marked)
+    // Downloads (core/StreamStats.h): now, and since boot.
+    uint8_t dlSending = 0;
+    uint8_t dlWaiting = 0;
+    uint8_t dlWaitingMax = 0;
+    uint32_t dlServed = 0;
+    uint32_t dlStalled = 0;
     size_t lvglFree;     // LVGL allocator free bytes
     size_t lvglTotal;    // LVGL allocator total bytes
     uint32_t textSkipped = 0;    // since boot: texts not drawn at first for lack of LVGL pool (drawn again later)
@@ -77,6 +84,10 @@ public:
     static size_t getTotalHeap();
 
     static size_t getMinFreeHeap();
+    static size_t getLowFreeHeap();
+    // Starts a new measurement for heapLow: its low-water mark is now the
+    // free heap. heapMinFree keeps the lowest value since boot.
+    static void markHeapLow();
 
     // Fills lvglFree/lvglTotal from the LVGL allocator monitor (0 if unavailable).
     static void getLvglMemory(size_t& freeBytes, size_t& totalBytes);

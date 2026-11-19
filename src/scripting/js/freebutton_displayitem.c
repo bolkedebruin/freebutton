@@ -5,7 +5,7 @@
  * through the FreeButton UI system.
  *
  * JavaScript API:
- *   display.create(x, y, width, boxType, fontSize, alignment, label, unit, round, page)
+ *   display.create(x, y, width, boxType, styles, alignment, label, unit, round, page)
  *       - Create a new display item, returns ID
  *   (id: a display item id, or the item's config.json "name")
  *   display.remove(id)           - Remove a display item
@@ -16,7 +16,9 @@
  *   display.setValue(id, value)  - Set display item value
  *   display.setUnit(id, unit)    - Set display item unit
  *   display.setIcon(id, name)    - Set display item icon ("" hides it)
- *   display.setFont(id, font, size) - Set the font of value and unit
+ *   display.setStyle(id, styles) - Set the item's styles (config.json "styles")
+ *   display.addStyle(id, style)  - Add one style as the last of the item's styles
+ *   display.removeStyle(id, style) - Take one style out of the item's styles
  *   display.setPosition(id, x, y) - Set display item position
  *   display.setPage(id, page)    - Set display item page
  *   display.showPage(page)       - Show a page of the main display
@@ -26,7 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "mquickjs.h"
-#include "font_arg.h"
+#include "style_arg.h"
 
 /* ESP32-specific includes */
 #ifdef ESP_PLATFORM
@@ -42,12 +44,13 @@
 #define ESP_LOGW(tag, ...)
 typedef struct {
     unsigned long id;
-    int x, y, width, boxType, fontSize, alignment;
+    int x, y, width, boxType, alignment;
+    uint32_t styles;
     const char* label;
     const char* unit;
     int round, page;
 } DisplayItemInfo;
-static inline unsigned long displayitem_create(int x, int y, int w, int bt, int fs, int al, const char* l, const char* u, int r, int p) { return 0; }
+static inline unsigned long displayitem_create(int x, int y, int w, int bt, uint32_t styles, int al, const char* l, const char* u, int r, int p) { return 0; }
 static inline bool displayitem_remove(unsigned long id) { return false; }
 static inline int displayitem_count(void) { return 0; }
 static inline const DisplayItemInfo* displayitem_get_info(unsigned long id) { return NULL; }
@@ -55,8 +58,9 @@ static inline bool displayitem_set_label(unsigned long id, const char* l) { retu
 static inline bool displayitem_set_value(unsigned long id, const char* v) { return false; }
 static inline bool displayitem_set_unit(unsigned long id, const char* u) { return false; }
 static inline int displayitem_set_icon(unsigned long id, const char* n, size_t len) { return 0; }
-static inline bool displayitem_set_font(unsigned long id, int face, int size) { return false; }
-static inline bool displayitem_restore_font(unsigned long id) { return false; }
+static inline bool displayitem_set_styles(unsigned long id, uint32_t list, bool restore) { return false; }
+static inline int displayitem_add_style(unsigned long id, int ref) { return 0; }
+static inline int displayitem_remove_style(unsigned long id, int ref) { return 0; }
 static inline bool displayitem_set_position(unsigned long id, int x, int y) { return false; }
 static inline bool displayitem_set_page(unsigned long id, int p) { return false; }
 static inline bool displayitem_show_page(int p) { return p >= 1; }
@@ -104,7 +108,7 @@ static int displayitem_arg_id(JSContext *ctx, int *id, JSValue val)
  * @param {number} y - Y position
  * @param {number} width - Width of the display item
  * @param {number} boxType - Box type (0-3)
- * @param {number} fontSize - Font size
+ * @param {string} styles - Style names of config.json "styles", separated by spaces ("" for none)
  * @param {number} alignment - Text alignment (0=left, 1=center, 2=right)
  * @param {string} label - Label text
  * @param {string} unit - Unit text
@@ -115,20 +119,23 @@ static int displayitem_arg_id(JSContext *ctx, int *id, JSValue val)
 JSValue js_freebutton_display_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int x = 0, y = 0, width = 100, boxType = 0;
-    int fontSize = 14, alignment = 0, round = 0, page = 1;
+    int alignment = 0, round = 0, page = 1;
+    uint32_t styles = 0;
+    int noStyles = 0;
     const char *label = "";
     const char *unit = "";
     JSCStringBuf labelBuf, unitBuf;
 
     if (argc < 10) {
-        return JS_ThrowTypeError(ctx, "display.create() requires 10 arguments: x, y, width, boxType, fontSize, alignment, label, unit, round, page");
+        return JS_ThrowTypeError(ctx, "display.create() requires 10 arguments: x, y, width, boxType, styles, alignment, label, unit, round, page");
     }
 
     if (JS_ToInt32(ctx, &x, argv[0])) return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &y, argv[1])) return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &width, argv[2])) return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &boxType, argv[3])) return JS_EXCEPTION;
-    if (JS_ToInt32(ctx, &fontSize, argv[4])) return JS_EXCEPTION;
+    /* the style names: resolved to refs here, before the texts are read */
+    if (fb_style_list_arg(ctx, argv[4], "display.create", &styles, &noStyles)) return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &alignment, argv[5])) return JS_EXCEPTION;
 
     size_t labelLen, unitLen;
@@ -141,7 +148,7 @@ JSValue js_freebutton_display_create(JSContext *ctx, JSValue *this_val, int argc
     if (JS_ToInt32(ctx, &round, argv[8])) return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &page, argv[9])) return JS_EXCEPTION;
 
-    unsigned long id = displayitem_create(x, y, width, boxType, fontSize, alignment, label, unit, round, page);
+    unsigned long id = displayitem_create(x, y, width, boxType, styles, alignment, label, unit, round, page);
 
     if (id == 0) {
         return JS_ThrowInternalError(ctx, "Failed to create display item");
@@ -186,7 +193,7 @@ JSValue js_freebutton_display_count(JSContext *ctx, JSValue *this_val, int argc,
  * @jsapi display.get
  * @description Get display item information by ID
  * @param {number|string} id - Display item ID, or its config name
- * @returns {object} Display item info with properties: id, x, y, width, boxType, fontSize, alignment, label, unit, round, page
+ * @returns {object} Display item info with properties: id, x, y, width, boxType, style, alignment, label, unit, round, page
  */
 JSValue js_freebutton_display_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
@@ -204,22 +211,50 @@ JSValue js_freebutton_display_get(JSContext *ctx, JSValue *this_val, int argc, J
         return JS_NULL;
     }
 
-    /* Create a JavaScript object with display item information */
-    JSValue obj = JS_NewObject(ctx);
+    /* The object under construction is kept in a GC ref: the engine's
+     * collector moves objects, and every call below allocates (the property
+     * key, the property table, a string value), so a plain JSValue local
+     * would point at the object's old place after the first of them. Each
+     * value is made first, then *obj is read for the call (never both in
+     * one argument list: the order of evaluation is not defined). */
+    JSGCRef obj_ref;
+    JSValue *obj = JS_PushGCRef(ctx, &obj_ref);
+    JSValue v;
+    *obj = JS_NewObject(ctx);
+    if (JS_IsException(*obj)) {
+        JS_PopGCRef(ctx, &obj_ref);
+        return JS_EXCEPTION;
+    }
 
-    JS_SetPropertyStr(ctx, obj, "id", JS_NewInt32(ctx, (int32_t)info->id));
-    JS_SetPropertyStr(ctx, obj, "x", JS_NewInt32(ctx, info->x));
-    JS_SetPropertyStr(ctx, obj, "y", JS_NewInt32(ctx, info->y));
-    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, info->width));
-    JS_SetPropertyStr(ctx, obj, "boxType", JS_NewInt32(ctx, info->boxType));
-    JS_SetPropertyStr(ctx, obj, "fontSize", JS_NewInt32(ctx, info->fontSize));
-    JS_SetPropertyStr(ctx, obj, "alignment", JS_NewInt32(ctx, info->alignment));
-    JS_SetPropertyStr(ctx, obj, "label", JS_NewString(ctx, info->label ? info->label : ""));
-    JS_SetPropertyStr(ctx, obj, "unit", JS_NewString(ctx, info->unit ? info->unit : ""));
-    JS_SetPropertyStr(ctx, obj, "round", JS_NewInt32(ctx, info->round));
-    JS_SetPropertyStr(ctx, obj, "page", JS_NewInt32(ctx, info->page));
+    v = JS_NewInt32(ctx, (int32_t)info->id);
+    JS_SetPropertyStr(ctx, *obj, "id", v);
+    v = JS_NewInt32(ctx, info->x);
+    JS_SetPropertyStr(ctx, *obj, "x", v);
+    v = JS_NewInt32(ctx, info->y);
+    JS_SetPropertyStr(ctx, *obj, "y", v);
+    v = JS_NewInt32(ctx, info->width);
+    JS_SetPropertyStr(ctx, *obj, "width", v);
+    v = JS_NewInt32(ctx, info->boxType);
+    JS_SetPropertyStr(ctx, *obj, "boxType", v);
+    {
+        /* the item's styles now, as config.json writes a "style" field */
+        char names[STYLE_HW_LIST_TEXT_MAX];
+        style_hw_list_text(info->styles, names, sizeof(names));
+        v = JS_NewString(ctx, names);
+        JS_SetPropertyStr(ctx, *obj, "style", v);
+    }
+    v = JS_NewInt32(ctx, info->alignment);
+    JS_SetPropertyStr(ctx, *obj, "alignment", v);
+    v = JS_NewString(ctx, info->label ? info->label : "");
+    JS_SetPropertyStr(ctx, *obj, "label", v);
+    v = JS_NewString(ctx, info->unit ? info->unit : "");
+    JS_SetPropertyStr(ctx, *obj, "unit", v);
+    v = JS_NewInt32(ctx, info->round);
+    JS_SetPropertyStr(ctx, *obj, "round", v);
+    v = JS_NewInt32(ctx, info->page);
+    JS_SetPropertyStr(ctx, *obj, "page", v);
 
-    return obj;
+    return JS_PopGCRef(ctx, &obj_ref);
 }
 
 /**
@@ -232,13 +267,22 @@ JSValue js_freebutton_display_getAll(JSContext *ctx, JSValue *this_val, int argc
     unsigned long ids[MAX_DISPLAY_ITEMS];
     int count = displayitem_get_all_ids(ids, MAX_DISPLAY_ITEMS);
 
-    JSValue arr = JS_NewArray(ctx, count);
-
-    for (int i = 0; i < count; i++) {
-        JS_SetPropertyUint32(ctx, arr, i, JS_NewInt32(ctx, (int32_t)ids[i]));
+    /* In a GC ref: storing an element may allocate, and the collector
+     * moves the array (see display.get). */
+    JSGCRef arr_ref;
+    JSValue *arr = JS_PushGCRef(ctx, &arr_ref);
+    *arr = JS_NewArray(ctx, count);
+    if (JS_IsException(*arr)) {
+        JS_PopGCRef(ctx, &arr_ref);
+        return JS_EXCEPTION;
     }
 
-    return arr;
+    for (int i = 0; i < count; i++) {
+        JSValue v = JS_NewInt32(ctx, (int32_t)ids[i]);
+        JS_SetPropertyUint32(ctx, *arr, i, v);
+    }
+
+    return JS_PopGCRef(ctx, &arr_ref);
 }
 
 /**
@@ -361,33 +405,81 @@ JSValue js_freebutton_display_setIcon(JSContext *ctx, JSValue *this_val, int arg
 }
 
 /**
- * @jsapi display.setFont
- * @description Set the font of the display item's value and unit (config
- *        "font" / "fontsize"); the caption keeps its own. Font and size
- *        escapes in the text still apply on top of it.
+ * @jsapi display.setStyle
+ * @description Give the display item a list of styles of config.json
+ *        "styles"; "" gives it the list of config.json again. The value
+ *        takes their main blocks, the caption their "title" blocks, the
+ *        unit their "unit" blocks. Text markup still applies on top.
  * @param {number|string} id - Display item ID, or its config name
- * @param {string|number} font - A config.json "style.fonts" name or id, or a system font (montserrat, montserrat_semibold); "" = back to the font and size of config.json (or the style's)
- * @param {number} size - 1..5 = the legacy steps (14/24/32/48/72 px), 6..72 = px (ignored for "")
+ * @param {string} styles - Up to four style names separated by spaces, or ""
  * @returns {boolean} True if successful, false if the item does not exist
  */
-JSValue js_freebutton_display_setFont(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_freebutton_display_setStyle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int id = 0;
-    int face = 0;
-    int size = 0;
+    uint32_t list = 0;
+    int restore = 0;
 
     if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "display.setFont() requires id, font and size arguments");
+        return JS_ThrowTypeError(ctx, "display.setStyle() requires id and styles arguments");
     }
-
     if (displayitem_arg_id(ctx, &id, argv[0]))
         return JS_EXCEPTION;
-    const int r = fb_font_args(ctx, argc - 1, argv + 1, "display.setFont", &face, &size);
-    if (r < 0)
+    if (fb_style_list_arg(ctx, argv[1], "display.setStyle", &list, &restore))
         return JS_EXCEPTION;
-    if (r == FB_FONT_RESTORE)
-        return JS_NewBool(displayitem_restore_font((unsigned long)id));
-    return JS_NewBool(displayitem_set_font((unsigned long)id, face, size));
+    return JS_NewBool(displayitem_set_styles((unsigned long)id, list, restore != 0));
+}
+
+/**
+ * @jsapi display.addStyle
+ * @description Add one style of config.json "styles" as the last of the
+ *        item's styles, so that it wins over the others. A style the item
+ *        has already moves to the end. A fifth style throws a RangeError
+ *        and changes nothing.
+ * @param {number|string} id - Display item ID, or its config name
+ * @param {string} style - A style name
+ * @returns {boolean} True if successful, false if the item does not exist
+ */
+JSValue js_freebutton_display_addStyle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    int id = 0;
+    int ref = 0;
+
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "display.addStyle() requires id and style arguments");
+    }
+    if (displayitem_arg_id(ctx, &id, argv[0]))
+        return JS_EXCEPTION;
+    if (fb_style_name_arg(ctx, argv[1], "display.addStyle", &ref))
+        return JS_EXCEPTION;
+    const int result = displayitem_add_style((unsigned long)id, ref);
+    if (result < 0)
+        return JS_ThrowRangeError(ctx, "display.addStyle(): an item has at most 4 styles");
+    return JS_NewBool(result == 1);
+}
+
+/**
+ * @jsapi display.removeStyle
+ * @description Take one style out of the item's styles, also one that
+ *        config.json gave it. A style the item does not have: nothing
+ *        changes.
+ * @param {number|string} id - Display item ID, or its config name
+ * @param {string} style - A style name
+ * @returns {boolean} True if successful, false if the item does not exist
+ */
+JSValue js_freebutton_display_removeStyle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    int id = 0;
+    int ref = 0;
+
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "display.removeStyle() requires id and style arguments");
+    }
+    if (displayitem_arg_id(ctx, &id, argv[0]))
+        return JS_EXCEPTION;
+    if (fb_style_name_arg(ctx, argv[1], "display.removeStyle", &ref))
+        return JS_EXCEPTION;
+    return JS_NewBool(displayitem_remove_style((unsigned long)id, ref) == 1);
 }
 
 /**

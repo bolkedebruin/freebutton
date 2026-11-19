@@ -13,14 +13,14 @@
 import { emit, type PageConfig, type DisplayItem, type ButtonConfig, type ConnectorConfig, type PreviewState } from './app-state';
 import { mapConnectors, type ConfigNames, type DeviceModel } from './config-model';
 import { fontTable, type FontTable } from './font-config';
-import { DEFAULT_STYLES, type ResolvedStyles } from './style-config';
+import { DEFAULT_CONFIG_STYLES, type ConfigStyles } from './style-config';
 
 const defaultConfig: PageConfig[] = [
   {
     number: 1,
     displayItems: [
-      { x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: 'time', fontSize: 42 },
-      { x: 0, y: 50, width: 100, height: 50, type: 'number', label: 'Button+ Likes', value: '67005', fontSize: 18 },
+      { x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: 'time', valueFont: { face: 0, px: 42 } },
+      { x: 0, y: 50, width: 100, height: 50, type: 'number', label: 'Button+ Likes', value: '67005', valueFont: { face: 0, px: 18 } },
     ],
     buttons: [
       { position: 5, label: 'Tolomeo', topLabel: '', ledOn: true, ledColor: 'rgb(255,0,0)', page: 1 },
@@ -52,8 +52,8 @@ let configNames: ConfigNames | null = null;
 // Font table of the stored config.json (the system fonts only without one).
 const SYSTEM_FONT_TABLE = fontTable({});
 let storedFonts: FontTable = SYSTEM_FONT_TABLE;
-// Resolved "style" of the stored config.json (the defaults without one).
-let storedStyles: ResolvedStyles = DEFAULT_STYLES;
+// The styles of the stored config.json (the built-in look without "styles").
+let storedStyles: ConfigStyles = DEFAULT_CONFIG_STYLES;
 
 function effectiveConnectors(): ConnectorConfig[] {
   if (hardwareConnectors.length > 0) return hardwareConnectors;
@@ -98,10 +98,10 @@ export function getFontTable(): FontTable {
 }
 
 /**
- * Resolved config.json "style" (style-config.ts) of what the preview shows:
- * the fonts, sizes and colours of items that do not set their own.
+ * config.json "styles" (style-config.ts) of what the preview shows: the
+ * look of each kind, and the styles an item can name.
  */
-export function getStyles(): ResolvedStyles {
+export function getStyles(): ConfigStyles {
   return draft ? draft.styles : storedStyles;
 }
 
@@ -111,7 +111,7 @@ export function setConfig(
   connectors: ConnectorConfig[] = [],
   names: ConfigNames | null = null,
   fonts: FontTable = SYSTEM_FONT_TABLE,
-  styles: ResolvedStyles = DEFAULT_STYLES,
+  styles: ConfigStyles = DEFAULT_CONFIG_STYLES,
 ): void {
   currentConfig = config;
   configConnectors = connectors;

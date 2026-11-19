@@ -44,9 +44,10 @@ std::string toJson(const DeviceInfo& info) {
     // IPv6, a 32-char SSID and 6-digit memory figures) plus <= 106 B of
     // topology (mainConnector + 4 connectors) and <= 70 B of build identity
     // (commit, dirty, model) and <= 110 B of script status (scriptStarts,
-    // scriptError up to 63 chars), so 640 never reallocates unless the
-    // error text needs many escapes.
-    out.reserve(640);
+    // scriptError up to 63 chars) and <= 110 B of heapLow and the download
+    // counters, so 768 never reallocates unless the error text needs many
+    // escapes.
+    out.reserve(768);
     out += '{';
     appendString(out, "deviceName", info.deviceName);   out += ',';
     appendString(out, "ipv4", info.ipv4Address);         out += ',';
@@ -63,6 +64,12 @@ std::string toJson(const DeviceInfo& info) {
     appendNumber(out, "heapFree", static_cast<long long>(info.heapFree));       out += ',';
     appendNumber(out, "heapTotal", static_cast<long long>(info.heapTotal));     out += ',';
     appendNumber(out, "heapMinFree", static_cast<long long>(info.heapMinFree)); out += ',';
+    appendNumber(out, "heapLow", static_cast<long long>(info.heapLow)); out += ',';
+    appendNumber(out, "dlSending", info.dlSending);       out += ',';
+    appendNumber(out, "dlWaiting", info.dlWaiting);       out += ',';
+    appendNumber(out, "dlWaitingMax", info.dlWaitingMax); out += ',';
+    appendNumber(out, "dlServed", info.dlServed);         out += ',';
+    appendNumber(out, "dlStalled", info.dlStalled);       out += ',';
     appendNumber(out, "lvglFree", static_cast<long long>(info.lvglFree));       out += ',';
     appendNumber(out, "lvglTotal", static_cast<long long>(info.lvglTotal));  out += ',';
     appendNumber(out, "textSkipped", static_cast<long long>(info.textSkipped));     out += ',';

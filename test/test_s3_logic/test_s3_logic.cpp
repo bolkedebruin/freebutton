@@ -284,6 +284,16 @@ void test_content_types() {
     TEST_ASSERT_EQUAL_STRING("application/octet-stream", s3::contentTypeFor("fonts/a.bin", 11));
     TEST_ASSERT_EQUAL_STRING("font/ttf", s3::contentTypeFor("medium.ttf", 10));
     TEST_ASSERT_EQUAL_STRING("font/otf", s3::contentTypeFor("medium.otf", 10));
+    // One table with the static files (TextLogic.h): what bucket web holds unpacked.
+    TEST_ASSERT_EQUAL_STRING("text/html", s3::contentTypeFor("index.html", 10));
+    TEST_ASSERT_EQUAL_STRING("text/css", s3::contentTypeFor("assets/index.css", 16));
+    TEST_ASSERT_EQUAL_STRING("application/wasm", s3::contentTypeFor("assets/mquickjs.wasm", 20));
+    TEST_ASSERT_EQUAL_STRING("font/woff2", s3::contentTypeFor("fonts/inter.woff2", 17));
+    TEST_ASSERT_EQUAL_STRING("image/png", s3::contentTypeFor("icon.png", 8));
+    TEST_ASSERT_EQUAL_STRING("application/json", s3::contentTypeFor("assets/ide.js.map", 17));
+    // S3 serves a gzip as the object it is, whatever it holds.
+    TEST_ASSERT_EQUAL_STRING("application/gzip", s3::contentTypeFor("index.html.gz", 13));
+    TEST_ASSERT_EQUAL_STRING("application/gzip", s3::contentTypeFor("assets/ide-DXPoTqIV.js.gz", 25));
 }
 
 // --- escaping / encoding -------------------------------------------------------

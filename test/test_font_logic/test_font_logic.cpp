@@ -2,7 +2,8 @@
 // Native tests for the font registry's pure rules (src/ui/fonts/font_logic.c):
 // config entry validation, the face table merge (the two system faces +
 // config), fallback resolution with the cycle / depth cut (explicit
-// fallbacks only), "fontsize" -> px, the instance budget and the line box.
+// fallbacks only), size step -> px (the \\s markup), the instance budget and the
+// line box.
 //
 #include <unity.h>
 

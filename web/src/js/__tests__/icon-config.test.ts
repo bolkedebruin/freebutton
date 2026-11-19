@@ -32,7 +32,8 @@ describe('config.json icons validation', () => {
   const ok = {
     icons: { rain: '/icons/rain.svg', 'sun-2': 'icons/sun.svg' },
     buttons: [{ position: 1, icon: 'rain', iconsize: 48 }, { position: 2, icon: '' }],
-    displayitems: [{ displayitemid: 1, icon: 'sun-2', iconsize: 32, iconcolor: '#ffd45f' }],
+    displayitems: [{ displayitemid: 1, icon: 'sun-2', iconsize: 32, style: 'sunny' }],
+    styles: { sunny: { icon: { color: '#ffd45f' } } },
     images: [
       { name: 'radar', page: 1, x: 10, y: 20, width: 120, height: 80, icon: 'rain', color: '00ff00' },
       { name: 'photo', width: 64, height: 64, src: 'photo.bin' },
@@ -54,18 +55,19 @@ describe('config.json icons validation', () => {
     ]);
   });
 
-  it('checks icon references, sizes and colours on keys and display items', () => {
+  it('checks icon references and sizes on buttons and display items; "iconcolor" is a removed key', () => {
     expect(validateIcons({
       icons: { rain: '/icons/rain.svg' },
       buttons: [{ position: 1, icon: 'snow', iconsize: 0 }, { position: 2, icon: 3, iconsize: 2.5 }],
-      mqttdisplays: [{ icon: 'rain', iconsize: 321, iconcolor: 'red' }, { icon: 'rain', iconsize: 320, iconcolor: 'FFD45F' }],
+      displayitems: [{ icon: 'rain', iconsize: 321, iconcolor: 'red' }, { icon: 'rain', iconsize: 320 }],
     })).toEqual([
       'buttons[0].icon "snow" is not in "icons"',
       'buttons[1].icon must be a string (an icon name from "icons")',
       'buttons[1].iconsize must be an integer <= 320 (<= 0: the default)',
-      'mqttdisplays[0].iconsize must be an integer <= 320 (<= 0: the default)',
-      'mqttdisplays[0].iconcolor must be a colour "#rrggbb"',
+      'displayitems[0].iconsize must be an integer <= 320 (<= 0: the default)',
     ]);
+    expect(validateConfigShape({ icons: { rain: '/icons/rain.svg' }, displayitems: [{ icon: 'rain', iconcolor: '#ff0000' }] }))
+      .toEqual(['"iconcolor" is no longer read: use a style with "icon": {"color"} (displayitems[0])']);
     expect(validateIcons({ buttons: [{ position: 1, icon: 'rain' }] })).toEqual(['buttons[0].icon "rain" is not in "icons"']);
   });
 
@@ -114,7 +116,14 @@ describe('config model with icons', () => {
     expect(mapButton({ position: 1, icon: 'rain', iconsize: 24 })).toMatchObject({ icon: 'rain', iconSize: 24 });
     expect(mapButton({ position: 1, icon: 'rain', iconsize: -3 })).toMatchObject({ iconSize: 48 });
     expect(mapButton({ position: 1, icon: 'bad name' })?.icon).toBeUndefined();
-    expect(mapDisplayItem({ icon: 'sun', iconcolor: 'FFD45F' })?.item).toMatchObject({ icon: 'sun', iconSize: 32, iconColor: '#ffd45f' });
+    expect(mapDisplayItem({ icon: 'sun' })?.item).toMatchObject({ icon: 'sun', iconSize: 32 });
+    // The tint: "icon.color" of the item's styles, else of its kind; none: the icon's own colours in the preview.
+    const styles = configToModel({ styles: { button: { icon: { color: '#00ff00' } }, sunny: { icon: { color: '#FFD45F' } }, red: { color: '#ff0000' } } }).styles;
+    expect(mapDisplayItem({ icon: 'sun', style: 'sunny' }, styles)?.item.iconColor).toBe('#ffd45f');
+    expect(mapDisplayItem({ icon: 'sun', style: 'red' }, styles)?.item.iconColor).toBeUndefined();
+    expect(mapDisplayItem({ icon: 'sun', iconcolor: '#ff0000' })?.item.iconColor).toBeUndefined();
+    expect(mapButton({ position: 1, icon: 'rain' }, styles)?.iconColor).toBe('#00ff00');
+    expect(mapButton({ position: 1, icon: 'rain', style: 'sunny' }, styles)?.iconColor).toBe('#ffd45f');
   });
 
   it('maps images onto their pages', () => {

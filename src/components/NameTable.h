@@ -1,10 +1,10 @@
 //
-// NameTable - names from config.json for display items and keys
+// NameTable - names from config.json for display items and buttons
 //
-// config.json may give a display item ("mqttdisplays") or a key ("buttons")
-// a "name"; scripts then address it by that name:
+// config.json may give a display item ("displayitems") or a button
+// ("buttons") a "name"; scripts then address it by that name:
 //   fb.main.display.setValue("volume", "15%")
-//   fb.key("sceneUp").button.onClick(...)
+//   fb.button("sceneUp").button.onClick(...)
 //
 // The names live here, in the general heap, never in the JS heap: a script's
 // string literal stays in the bytecode (mapped from flash) and the binding
@@ -14,7 +14,7 @@
 // so 6 + len bytes per name, nothing for unnamed elements.
 //
 // One namespace per Kind: display item names are unique among display items,
-// key names among keys, list names among lists, image names among images;
+// button names among buttons (Kind::Key), list names among lists, image names among images;
 // different kinds may share a name.
 //
 // Written only while config.json loads at boot, before the script runs;

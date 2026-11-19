@@ -8,7 +8,7 @@
 #include "mqtt/Component.h"
 #include "TopicHandler.h"
 #include "IconRef.h"
-#include "FontRef.h"
+#include "StyleRef.h"
 #include "ui/MainPage.h"
 #include "ui/PendingRender.h"
 #include "utils/TextSlot.h"
@@ -37,15 +37,7 @@ public:
     int width;
     int boxType;
 
-    int fontSize;
     int alignment;
-
-    // Config "font" / "fontsize" (value + unit) and "labelfont" /
-    // "labelfontsize" (caption): the local layer over the display.* styles
-    // (ui/ui_style.h). FONT_FACE_NONE and size 0 = the style's.
-    int fontFace = FONT_FACE_NONE;
-    int labelFontFace = FONT_FACE_NONE;
-    int labelFontSize = 0;
 
     std::string label;
     std::string unit;
@@ -79,12 +71,12 @@ private:
     TextSlot<kCaptionSlotBytes> captionSlot_;
     TextSlot<kUnitSlotBytes> unitSlot_;
 
-    // Icon left of the value (config "icon" / "iconsize" / "iconcolor",
-    // MQTT DISPLAY_ICON, JS setIcon). Allocated only for items that have
-    // one; its image object only while the box exists and an icon is shown.
+    // Icon left of the value (config "icon" / "iconsize", MQTT
+    // DISPLAY_ICON, JS setIcon). Allocated only for items that have one;
+    // its image object only while the box exists and an icon is shown. Its
+    // tint is the "icon" colour of the item's styles (ui_box_icon_color).
     IconHolder icon_;
     int configuredIconSize_ = icon::kDisplayDefaultSize;
-    uint32_t configuredIconColor_ = icon::kNoColor;
 
     // Which texts a script wrote last (kScript* bits). A script setter sets
     // the bit after it stored the text, a message on the item's own config
@@ -98,6 +90,11 @@ private:
     std::atomic<uint8_t> scriptWrote_{0};
     SlotOwner slotOwner() const { return {"DisplayItem", id}; }
 
+    // Config "style" (styleref::store): the item's style list. Written at
+    // config load only; for an item a script made, the list it was created
+    // with.
+    uint8_t configStyle_[STYLE_ITEM_MAX]{};
+
     // Config "x" / "y" / "page", next to the run-time x / y / page a script
     // changes (setPosition, setPage), and the item's place among the config
     // items (-1: a script made it). Written at config load only.
@@ -110,15 +107,15 @@ private:
     // shown and not found, until the script engine restarts. Its config
     // topics stay subscribed, so it comes back with current values.
     std::atomic<bool> parked_{false};
-
-    // Value + unit font now (fontref::pack): the configured one until a
-    // script calls setFont() (any task); fontDirty_ has the LVGL task redraw.
-    std::atomic<uint32_t> font_{fontref::pack(FONT_FACE_NONE, 0)};
-    std::atomic<bool> fontDirty_{false};
+    // The item's styles now (ui/ui_style.h list): the configured ones until
+    // a script calls setStyles() (any task). styleDirty_ has the LVGL task
+    // redraw.
+    std::atomic<uint32_t> style_{0};
+    std::atomic<bool> styleDirty_{false};
     // The configured label / unit were not drawn (no LVGL pool then): draw
     // the box again at the next render. LVGL task only.
     bool redraw_ = false;
-    // "icon" / "iconsize" / "iconcolor", and the state for a DISPLAY_ICON
+    // "icon" / "iconsize", and the state for a DISPLAY_ICON
     // topic (DisplayItem.cpp). After the topics were parsed.
     void configureIcon(const JsonObject& data);
     // LVGL lock held, box exists: shows dsc as the value's icon.
@@ -133,7 +130,9 @@ private:
 
 public:
 
-    DisplayItem(int x, int y, int width, int boxtype, int fontSize, int alignment,
+    // styles: the item's style list (a script's display.create; config
+    // items get theirs in configure()).
+    DisplayItem(int x, int y, int width, int boxtype, style_list_t styles, int alignment,
                 std::string  label, std::string  unit, int round, int page,
                 std::vector<Topic> topicConfigs);
 
@@ -184,18 +183,7 @@ public:
         obj.Add("y", y);
         obj.Add("page", page);
         obj.Add("boxtype", boxType);
-        if (fontSize != 0) {
-            obj.Add("fontsize", fontSize);
-        }
-        if (fontFace != FONT_FACE_NONE) {
-            obj.Add("font", fonts_face_name(fontFace));
-        }
-        if (labelFontFace != FONT_FACE_NONE) {
-            obj.Add("labelfont", fonts_face_name(labelFontFace));
-        }
-        if (labelFontSize != 0) {
-            obj.Add("labelfontsize", labelFontSize);
-        }
+        styleref::write(obj, configStyle_);
         obj.Add("align", alignment);
         obj.Add("width", width);
         obj.Add("label", label);
@@ -207,11 +195,6 @@ public:
                 obj.Add("icon", static_cast<const char*>(name));
             }
             obj.Add("iconsize", static_cast<int>(s->size));
-            if (s->color != icon::kNoColor) {
-                char hex[8];
-                snprintf(hex, sizeof(hex), "#%06lx", static_cast<unsigned long>(s->color));
-                obj.Add("iconcolor", static_cast<const char*>(hex));
-            }
         }
 
         // Serialize topics array
@@ -236,11 +219,9 @@ private:
         y = data["y"].isNull() ? y : data["y"].as<int>();
 
         boxType = data["boxtype"].isNull() ? boxType : data["boxtype"].as<int>();
-        fontSize = data["fontsize"].isNull() ? fontSize : data["fontsize"].as<int>();
-        fontFace = fontref::parse(data["font"], TAG, "font");
-        labelFontFace = fontref::parse(data["labelfont"], TAG, "labelfont");
-        labelFontSize = data["labelfontsize"].isNull() ? labelFontSize : data["labelfontsize"].as<int>();
-        font_.store(fontref::pack(fontFace, fontSize), std::memory_order_release);
+        const style_list_t list = styleref::parse(data["style"], TAG);
+        styleref::store(configStyle_, list);
+        style_.store(list, std::memory_order_release);
 
         alignment = data["align"].isNull() ? alignment : data["align"].as<int>();
         width = data["width"].isNull() ? width : data["width"].as<int>();
@@ -283,12 +264,17 @@ public:
     using SetIconResult = freebutton::SetIconResult;
     SetIconResult setIconName(std::string_view name);
 
-    // Font of value and unit (a fonts.h face, FONT_FACE_NONE = the style's;
-    // size 1..5 = step, else px, 0 = the style's). Any task: the LVGL task
-    // redraws.
-    void setFont(int face, int size);
-    // Back to the configured "font" / "fontsize" (any task).
-    void restoreFont() { setFont(fontFace, fontSize); }
+    // The item's style list: refs the caller resolved (ui/ui_style.h). Any
+    // task: the LVGL task redraws.
+    void setStyles(style_list_t list);
+    // One style (a ref, 0 = none: nothing changes) as the last of the
+    // list, or out of it; any task. addStyle: false, and nothing changed,
+    // when it would be a fifth style.
+    bool addStyle(uint8_t ref);
+    void removeStyle(uint8_t ref);
+    // The list now, and the configured one (see configStyle_).
+    style_list_t styles() const { return style_.load(std::memory_order_acquire); }
+    style_list_t configStyles() const { return styleref::load(configStyle_); }
 
     // Page (config "page"; 0 = every page). Any task: the LVGL task hides or
     // shows the box on its next tick (see ui/MainPage.h).
@@ -306,8 +292,8 @@ public:
 
     // Script engine restart (ConfigManager::restoreConfigState): everything a
     // script changed goes back to the config: texts and icon a script set
-    // (not those from the item's config topics), font, position, page, and a
-    // parked item is shown again. LVGL lock held, no script code running;
+    // (not those from the item's config topics), the style list,
+    // position, page, and a parked item is shown again. LVGL lock held, no script code running;
     // the LVGL task redraws on its next tick. The caller requests the render.
     void restoreConfigState();
 

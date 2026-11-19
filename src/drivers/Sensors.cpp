@@ -21,19 +21,24 @@ Adafruit_BME280 bme;
 class SensorMqttComponent : public MqttPublisher {
 private:
     int sensorId;
-    std::string topicPrefix;
+    std::string stateTopic;  // "<prefix>/state"
 
 public:
     SensorMqttComponent(const int id, const std::string& prefix)
-        : sensorId(id), topicPrefix(prefix) {
-        // Add this sensor's topic as a publication
-        addPublication(0, prefix + "/state", 0, false); // Will be updated with actual broker ID
+        : sensorId(id), stateTopic(prefix + "/state") {
+        // No publication entry: publishSensorValue() sends to the stored
+        // topic itself (an entry would hold the topic a second time).
     }
 
+    // Every second for every sensor: no heap. The topic is kept, the value
+    // is formatted on the stack (as std::to_string did: "%f").
     void publishSensorValue(const uint8_t brokerId, const float value) const {
-        const std::string topic = topicPrefix + "/state";
-        const std::string data = std::to_string(value);
-        MqttPublisher::publish(brokerId, topic, data, 0, false);
+        const auto* broker = MqttBrokerRegistry::getBroker(brokerId);
+        if (!broker) return;
+        char data[48];
+        const int n = snprintf(data, sizeof data, "%f", static_cast<double>(value));
+        if (n <= 0 || n >= static_cast<int>(sizeof data)) return;
+        broker->publish(stateTopic.c_str(), data, static_cast<size_t>(n), 0, 0);
     }
 
     [[nodiscard]] const std::string getComponentType() const override {

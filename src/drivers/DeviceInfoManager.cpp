@@ -1,3 +1,4 @@
+#include "scripting/WebSocketREPL.h"
 #include "DeviceInfoManager.h"
 #include "DeviceInfo.h"
 #include "LvglDisplay.h"
@@ -77,7 +78,9 @@ static void modalCheckTimerCallback(lv_timer_t* timer) {
         rotateRequested = false;
         // NVS write (a few ms) on the LVGL task: the factory-button task's
         // stack is too small for it, and this is a rare, deliberate action.
-        setHint(fbauth::rotateCredentials() ? "New keys. Old keys no longer work." : "Rotation failed (NVS)");
+        const bool rotated = fbauth::rotateCredentials();
+        if (rotated) Scripting::WebSocketREPL::getInstance().requestCloseAll();
+        setHint(rotated ? "New keys. Old keys no longer work." : "Rotation failed (NVS)");
         if (shown == Screen::Credentials && screen) {
             showCredentials(screen);  // rebuild with the new pair
         }

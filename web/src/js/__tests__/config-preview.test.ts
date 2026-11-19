@@ -229,7 +229,7 @@ describe('live config.json preview', () => {
     }
   }
 
-  it('the virtual device shows a subtle hint while previewing unsaved edits', async () => {
+  it('the virtual device shows the draft and says nothing about it: not "unsaved", not "invalid JSON" (the editor marks that)', async () => {
     const { ed } = await openConfig();
     const el = document.createElement('fb-virtual-device') as HTMLElement & { updateComplete: Promise<boolean> };
     document.body.appendChild(el);
@@ -239,13 +239,21 @@ describe('live config.json preview', () => {
     type(ed, EDITED);
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
     await settled(el);
-    expect(el.querySelector('[data-testid="preview-hint"]')?.getAttribute('data-state')).toBe('live');
-    expect(el.textContent).toContain('Dicht');
+    // A valid draft, not saved: drawn, and nothing on the device says "unsaved".
+    expect(getPreviewState()).toBe('live');
+    expect(el.querySelector('[data-testid="preview-hint"]')).toBeNull();
+    expect(el.textContent).not.toMatch(/unsaved/i);
+    expect(label(3)).toBe('Dicht');
+    // The draft is what is laid out: its display item, by its id (labels are data and are not shown).
+    expect(el.querySelector('fb-tft-display [data-outline]')?.textContent?.trim()).toBe('#temp');
 
     type(ed, '{');
     vi.advanceTimersByTime(PREVIEW_DEBOUNCE_MS);
     await settled(el);
-    expect(el.querySelector('[data-testid="preview-hint"]')?.getAttribute('data-state')).toBe('stale');
-    expect(el.textContent).toContain('Dicht');
+    expect(getPreviewState()).toBe('stale');
+    expect(el.querySelector('[data-testid="preview-hint"]')).toBeNull();
+    expect(el.textContent).not.toMatch(/unsaved|invalid/i);
+    // The last valid draft stays.
+    expect(el.querySelector('fb-tft-display [data-outline]')?.textContent?.trim()).toBe('#temp');
   });
 });

@@ -5,6 +5,7 @@ import { emit } from '../app-state';
 import { getConfig, getConfigNames, getConnectors, loadDefaultConfig } from '../device-config';
 import { virtualFS } from '../virtual-fs';
 import { MAIN_SCRIPT_TEMPLATE } from '../fs-rules';
+import { styleNames } from '../font-config';
 
 function sdkError(name: string, status: number) {
   const err = new Error(name) as Error & { $metadata: { httpStatusCode: number } };
@@ -174,6 +175,31 @@ describe('workspace on a device', () => {
     expect(dev.calls.slice(-2)).toEqual(['PutObject scripts/main.js', 'ListObjectsV2']);
   });
 
+  it('a file changed on the device since it was opened: Save asks, and "no" leaves the device\'s version', async () => {
+    const dev = fakeDevice({ 'scripts/main.js': 'print("opened");' });
+    const ed = await start(fakeEditor(), false);
+    type(ed, 'print("mine");');
+    // Another tab or a deploy writes the file.
+    dev.files.set('scripts/main.js', 'print("theirs");');
+    expect(await ws.save()).toBe(false);
+    expect(confirms[confirms.length - 1]).toContain('is not the version this editor opened');
+    expect(dev.files.get('scripts/main.js')).toBe('print("theirs");');
+    expect(ws.snapshot().dirty).toBe(true);
+  });
+
+  it('a file changed on the device: "yes" saves; the next Save does not ask again, nor does one of an unchanged file', async () => {
+    const dev = fakeDevice({ 'scripts/main.js': 'print("opened");' });
+    const ed = await start();
+    type(ed, 'print("mine");');
+    dev.files.set('scripts/main.js', 'print("theirs");');
+    expect(await ws.save()).toBe(true);
+    expect(confirms.filter(m => m.includes('is not the version'))).toHaveLength(1);
+    expect(dev.files.get('scripts/main.js')).toBe('print("mine");');
+    type(ed, 'print("mine 2");');
+    expect(await ws.save()).toBe(true);
+    expect(confirms.filter(m => m.includes('is not the version'))).toHaveLength(1);
+  });
+
   it('save-request events save the open file', async () => {
     const dev = fakeDevice({});
     const ed = await start();
@@ -203,7 +229,7 @@ describe('workspace on a device', () => {
     let suggested = 0;
     const handler = () => { suggested++; };
     window.addEventListener('reboot-suggested', handler);
-    type(ed, JSON.stringify({ buttons: [{ position: 8, label: 'Dicht', topLabel: 'Oud' }] }));
+    type(ed, JSON.stringify({ buttons: [{ position: 8, label: 'Dicht', toplabel: 'Oud' }] }));
     expect(await ws.save()).toBe(true);
     window.removeEventListener('reboot-suggested', handler);
     expect(suggested).toBe(1);
@@ -215,14 +241,32 @@ describe('workspace on a device', () => {
     const dev = fakeDevice({ 'config.json': CONFIG });
     const ed = await start();
     await ws.open('config.json');
-    type(ed, JSON.stringify({ buttons: [{ position: 8, name: 'up' }], mqttdisplays: [{ displayitemid: '1', name: 'up' }] }));
+    type(ed, JSON.stringify({ buttons: [{ position: 8, name: 'up' }], displayitems: [{ displayitemid: '1', name: 'up' }] }));
     expect(await ws.save()).toBe(true);
-    expect(getConfigNames()).toEqual({ keys: ['up'], displayItems: ['up'], lists: [], images: [], icons: [] });
+    // Exactly these: the names of the config, and the styles of the kinds, which are always there
+    // (with what fb.style.set can set for each).
+    expect(getConfigNames()).toEqual({ keys: ['up'], displayItems: ['up'], lists: [], images: [], icons: [], styles: styleNames({}) });
+    expect(Object.keys(getConfigNames()!.styles!)).toEqual(['button', 'displayitem', 'list']);
 
     type(ed, JSON.stringify({ buttons: [{ position: 7, name: 'up' }, { position: 8, name: 'up' }] }));
     expect(await ws.save()).toBe(false);
     expect(ws.snapshot().message).toMatch(/Not saved: config\.json: buttons\[1\]\.name "up" is already used by buttons\[0\]/);
-    expect(dev.files.get('config.json')).toContain('mqttdisplays');
+    expect(dev.files.get('config.json')).toContain('displayitems');
+  });
+
+  it('a config with a key that is no longer read is not saved', async () => {
+    const dev = fakeDevice({ 'config.json': CONFIG });
+    const ed = await start();
+    await ws.open('config.json');
+    type(ed, JSON.stringify({ buttons: [{ position: 8, label: 'Dicht', topLabel: 'Oud', fontsize: 3 }] }));
+    expect(await ws.save()).toBe(false);
+    expect(ws.snapshot().message).toBe(
+      'Not saved: config.json: "topLabel" is no longer read: use "toplabel" (buttons[0]); '
+      + '"fontsize" is no longer read: use a style with "font-size" (buttons[0])');
+    type(ed, JSON.stringify({ mqttbuttons: [{ position: 8, label: 'Dicht' }] }));
+    expect(await ws.save()).toBe(false);
+    expect(ws.snapshot().message).toBe('Not saved: config.json: "mqttbuttons" is no longer read: use "buttons"');
+    expect(dev.files.get('config.json')).toBe(CONFIG);
   });
 
   it('asks before discarding unsaved changes when switching files', async () => {

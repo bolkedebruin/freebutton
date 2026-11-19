@@ -445,12 +445,12 @@ export interface FbMain {
 
 export interface FbMainDisplay {
     /** Create a display item; returns its id */
-    create(x: number, y: number, width: number, boxType: number, fontSize: number, alignment: number, label: string, unit: string, round: number, page: number): number;
+    create(x: number, y: number, width: number, boxType: number, styles: string, alignment: number, label: string, unit: string, round: number, page: number): number;
     /** Remove a display item (by id or config.json name) */
     remove(idOrName: number | string): boolean;
     /** Get number of display items */
     count(): number;
-    /** Get a display item by id or config.json name */
+    /** Get a display item by id or config.json name: id, x, y, width, boxType, style (its styles now, names joined by a space), alignment, label, unit, round, page; null when there is none */
     get(idOrName: number | string): object;
     /** Get all display items */
     getAll(): Array;
@@ -470,8 +470,12 @@ export interface FbMainDisplay {
     getShownPage(): number;
     /** Show an icon from config.json "icons" before the value ("" hides it; item by id or config.json name); false when there is no such item */
     setIcon(idOrName: number | string, icon: string): boolean;
-    /** Set the font of the value and unit (item by id or config.json name; the caption keeps its own; font "" restores config.json); false when there is no such item */
-    setFont(idOrName: number | string, font: string | number, size: number): boolean;
+    /** Give the item a list of styles (item by id or config.json name): the value takes their main blocks, the caption their "title" blocks, the unit their "unit" blocks, the icon their "icon" colour. "" gives it the styles of config.json again. false when there is no such item */
+    setStyle(idOrName: number | string, styles: string): boolean;
+    /** Add one style as the last of the item's styles, so that it wins (item by id or config.json name); a style the item has moves to the end. A fifth style: RangeError, nothing changes. false when there is no such item */
+    addStyle(idOrName: number | string, style: string): boolean;
+    /** Take one style out of the item's styles, also one config.json gave it (item by id or config.json name); a style the item does not have: nothing changes. false when there is no such item */
+    removeStyle(idOrName: number | string, style: string): boolean;
 }
 
 export interface FbMainSide {
@@ -503,10 +507,12 @@ export interface FbSmallDisplay {
     getTopLabel(): string;
     /** Show an icon from config.json "icons" instead of the bottom label ("" shows the label again) */
     setIcon(icon: string): void;
-    /** Set the font of the bottom label (default: the style's key label font, config.json "style.key.label"; font "" restores config.json) */
-    setFont(font: string | number, size: number): void;
-    /** Set the font of the top label (default: the style's key top label font, config.json "style.key.toplabel"; font "" restores config.json) */
-    setTopFont(font: string | number, size: number): void;
+    /** Give the button a list of styles: the label takes their main blocks, the top label their "title" blocks, the icon their "icon" colour. "" gives it the styles of config.json again. A button without an entry in config.json "buttons": InternalError */
+    setStyle(styles: string): void;
+    /** Add one style as the last of the button's styles, so that it wins; a style the button has moves to the end. A fifth style: RangeError, nothing changes */
+    addStyle(style: string): void;
+    /** Take one style out of the button's styles, also one config.json gave it; a style the button does not have: nothing changes */
+    removeStyle(style: string): void;
 }
 
 export interface FbMainList {
@@ -522,8 +528,8 @@ export interface FbMainList {
     count(nameOrIndex: string | number): number;
     /** Replace the items (no newlines in an item); the selection is clamped to the new items */
     setItems(nameOrIndex: string | number, items: string[]): boolean;
-    /** Set the font of the items (default: the style's list font, config.json "style.list", at the list's "fontsize"; font "" restores config.json) */
-    setFont(nameOrIndex: string | number, font: string | number, size: number): void;
+    /** Give the list a list of styles: the rows take their main blocks (color, font, line-height, background-color of the whole roller), the selected row their "selected" blocks. "" gives it the styles of config.json again. A list has no addStyle / removeStyle */
+    setStyle(nameOrIndex: string | number, styles: string): void;
 }
 
 export interface FbMainImage {
@@ -533,13 +539,20 @@ export interface FbMainImage {
     setSrc(nameOrIndex: string | number, key: string): void;
 }
 
+export interface FbStyle {
+    /** Set one value of a style: every button, display item and list that uses the style is drawn again with it. Of "button", "displayitem" and "list" too: every item of the kind. A property the style does not set in config.json is added. Not saved: a script restart brings the values of config.json back and takes added properties away. Each call waits for the display task (up to a whole redraw): change one property per event, or switch styles with setStyle / addStyle. No room in the LVGL memory for a property more: InternalError (out of memory), nothing changes */
+    set(style: string, property: string, value: string | number): void;
+}
+
 export interface FbRoot {
-    /** Key by its "name" in config.json: the same object as fb.main.left/right (FbMainSide) or fb.bars[i].left/right (FbSide). Throws ReferenceError for an unknown name. */
-    key(name: string): FbSide | FbMainSide;
+    /** Button by its "name" in config.json: the same object as fb.main.left/right (FbMainSide) or fb.bars[i].left/right (FbSide). Throws ReferenceError for an unknown name. */
+    button(name: string): FbSide | FbMainSide;
     /** Main display unit */
     readonly main: FbMain;
     /** Connected bar modules */
     readonly bars: FbBar[];
+    /** The styles of config.json "styles", and "button", "displayitem" and "list": the looks of the kinds */
+    readonly style: FbStyle;
 }
 
 

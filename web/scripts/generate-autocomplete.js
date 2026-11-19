@@ -156,7 +156,7 @@ function generateAutocomplete() {
             }
         }
 
-        // Build fb completions from root methods (fb.key) and properties
+        // Build fb completions from root methods (fb.button) and properties
         const methods = [];
         for (const method of (root && root.methods) || []) {
             const label = `fb.${method.name}`;

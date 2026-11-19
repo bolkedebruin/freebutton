@@ -50,6 +50,27 @@ let currentKind: FileKind = 'js';
 // Set when the open file is config.json, so the JSON linter adds shape checks.
 let currentIsConfig = false;
 
+/** A run-time error of the script in the virtual device (1-based line and column). */
+export interface RuntimeError {
+    line: number;
+    column?: number;
+    message: string;
+}
+
+let runtimeError: RuntimeError | null = null;
+
+/**
+ * Mark (or with null: unmark) the line where the script running in the
+ * virtual device failed. Only shown while a script is the open file; it goes
+ * away when the text changes (the positions are those of the text that ran).
+ * It is not a validation error: Save and Deploy are not held back by it.
+ */
+export function showRuntimeError(error: RuntimeError | null): void {
+    if (error === runtimeError) return;
+    runtimeError = error;
+    if (editorView && currentKind === 'js') forceLinting(editorView);
+}
+
 /**
  * MQuickJS linter - validates code as you type
  */
@@ -125,6 +146,17 @@ const mquickjsLinter = linter((view) => {
             // Line number out of range, skip this error
             console.warn('Linter error:', e);
         }
+    }
+
+    // An error of the script running in the virtual device, until the text changes.
+    if (runtimeError) {
+        const lineNo = Math.min(Math.max(1, runtimeError.line), view.state.doc.lines);
+        const line = view.state.doc.line(lineNo);
+        const from = Math.min(line.to, line.from + Math.max(0, (runtimeError.column ?? 1) - 1));
+        diagnostics.push({
+            from: from === line.to && line.length > 0 ? line.from : from,
+            to: line.to, severity: 'error', message: runtimeError.message, source: 'virtual device',
+        });
     }
 
     return diagnostics;
@@ -312,7 +344,7 @@ export function initEditor(parent: HTMLElement): EditorView {
 let relintListening = false;
 
 /**
- * The script linter checks fb.key("x") etc. against the loaded config.json:
+ * The script linter checks fb.button("x") etc. against the loaded config.json:
  * lint the open script again when its key / display item names change.
  */
 function relintOnConfigNames(): void {
@@ -337,7 +369,10 @@ function createState(doc: string, kind: FileKind): EditorState {
 /** Notify listeners (workspace dirty tracking) whenever the document changes. */
 function docChangeExtension() {
     return EditorView.updateListener.of((update: ViewUpdate) => {
-        if (update.docChanged) emit('editor-doc-change');
+        if (update.docChanged) {
+            runtimeError = null;
+            emit('editor-doc-change');
+        }
     });
 }
 
@@ -352,6 +387,7 @@ export function openDocument(content: string, kind: FileKind, opts: { isConfig?:
     }
     currentKind = kind;
     currentIsConfig = !!opts.isConfig;
+    runtimeError = null;
     editorView.setState(createState(content, kind));
     // setState is not a transaction, so update listeners don't see it.
     emit('editor-doc-change');
@@ -372,6 +408,39 @@ export function revealConfigItem(ref: Pick<ConfigRef, 'list' | 'index'>): boolea
         effects: EditorView.scrollIntoView(range.from, { y: 'start', yMargin: 48 }),
     });
     editorView.focus();
+    return true;
+}
+
+/** The editor's state while config.json is the open file; null otherwise. */
+export function configState(): EditorState | null {
+    return editorView && currentIsConfig ? editorView.state : null;
+}
+
+/**
+ * Apply text changes to the open config.json (an edit made on the virtual
+ * device, config-edit.ts) as one transaction: one step for undo, the file
+ * becomes dirty and the preview follows like after typing. The cursor goes
+ * to the first change (or `at`, a position in the text before the change)
+ * and the view scrolls only when that is not visible; the editor does not
+ * take the focus. False when config.json is not the open file.
+ */
+export function applyConfigChanges(
+    changes: Array<{ from: number; to: number; insert: string }>,
+    opts: { at?: number; userEvent?: string } = {},
+): boolean {
+    if (!editorView || !currentIsConfig) return false;
+    const set = editorView.state.changes(changes);
+    const at = changes.length > 0 ? changes[0].from : opts.at;
+    const pos = at === undefined ? undefined : set.mapPos(Math.min(at, editorView.state.doc.length), 1);
+    if (changes.length === 0 && pos === undefined) return true;
+    editorView.dispatch({
+        changes: set,
+        ...(pos === undefined ? {} : {
+            selection: EditorSelection.cursor(pos),
+            effects: EditorView.scrollIntoView(pos, { y: 'nearest', yMargin: 48 }),
+        }),
+        userEvent: opts.userEvent ?? 'input.device',
+    });
     return true;
 }
 

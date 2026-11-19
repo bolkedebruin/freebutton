@@ -3,7 +3,7 @@ import type { ItemFont } from '../js/app-state.js';
 import { getFontTable } from '../js/device-config.js';
 import { fontResolver, spanFont, type FontSlot, type FontTable } from '../js/font-config.js';
 import { fontCss } from '../js/font-loader.js';
-import { DECOR_STRIKETHROUGH, DECOR_UNDERLINE, StyleAlign, styleColorHex, type StyleProps } from '../js/style-config.js';
+import { DECOR_LINE_THROUGH, DECOR_UNDERLINE, StyleAlign, styleBgOpa, styleColorHex, type StyleProps } from '../js/style-config.js';
 import { parseTextSpans, spanColorHex, TextAlign } from '../js/text-spans.js';
 
 /**
@@ -23,7 +23,7 @@ export function fontStyle(font: ItemFont, scale: number, table: FontTable = getF
   return `font-family: ${css.family}; font-weight: ${css.weight}; font-size: ${cssPx(font.px * scale)};${lh}`;
 }
 
-/** A style colour with its text_opa / bg_opa as CSS. */
+/** A style colour with its opacity (0..255) as CSS. */
 export function styleColorCss(color: number, opa?: number): string {
   if (opa === undefined || opa >= 255) return styleColorHex(color);
   return `rgba(${(color >> 16) & 255}, ${(color >> 8) & 255}, ${color & 255}, ${Math.round(opa / 255 * 1000) / 1000})`;
@@ -33,11 +33,16 @@ const STYLE_ALIGN_CSS: Record<number, string> = {
   [StyleAlign.Left]: 'left', [StyleAlign.Center]: 'center', [StyleAlign.Right]: 'right',
 };
 
+/** A background-color value (0xAARRGGBB) as CSS. */
+export function styleBgCss(bg: number): string {
+  return styleColorCss(bg & 0xffffff, styleBgOpa(bg));
+}
+
 /**
- * Inline style for the text properties of a resolved style (style-config)
- * other than font and size: text_color with text_opa, text_align,
- * text_letter_space (device px x `scale`), text_decor. text_line_space is
- * not drawn (one-line texts).
+ * Inline style for the properties of a part's look (style-config
+ * lookupPart) other than font and size: color with opacity, text-align,
+ * letter-spacing (device px x `scale`), text-decoration. line-height and
+ * background-color are the list's to draw.
  */
 export function textStyleCss(p: Readonly<StyleProps> | undefined, scale: number): string {
   if (!p) return '';
@@ -46,7 +51,7 @@ export function textStyleCss(p: Readonly<StyleProps> | undefined, scale: number)
   if (p.align !== undefined && STYLE_ALIGN_CSS[p.align]) css += `text-align: ${STYLE_ALIGN_CSS[p.align]}; `;
   if (p.letterSpace) css += `letter-spacing: ${cssPx(p.letterSpace * scale)}; `;
   if (p.decor) {
-    const lines = [p.decor & DECOR_UNDERLINE ? 'underline' : '', p.decor & DECOR_STRIKETHROUGH ? 'line-through' : ''];
+    const lines = [p.decor & DECOR_UNDERLINE ? 'underline' : '', p.decor & DECOR_LINE_THROUGH ? 'line-through' : ''];
     css += `text-decoration: ${lines.filter(Boolean).join(' ')}; `;
   }
   return css.trimEnd();
@@ -70,6 +75,7 @@ export function richText(text: string, base: ItemFont, slot: FontSlot, scale: nu
   return html`<span data-rich style=${align ? `display: block; text-align: ${align};` : ''}>${spans.map(s => {
     const f = spanFont(base, slot, s);
     const color = s.color !== null ? ` color: ${spanColorHex(s.color)};` : '';
-    return html`<span style="${fontStyle({ ...f, configured: true }, scale, table)}${color}">${out.slice(s.offset, s.offset + s.len)}</span>`;
+    return html`<span style="${fontStyle(f, scale, table)}${color}">${out.slice(s.offset, s.offset + s.len)}</span>`;
   })}</span>`;
 }
+

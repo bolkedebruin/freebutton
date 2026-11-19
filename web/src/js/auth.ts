@@ -313,7 +313,12 @@ export async function signRequest(request: HttpRequest, creds: DeviceCredentials
   });
 }
 
-async function sha256Hex(data: Uint8Array): Promise<string> {
+/**
+ * SHA-256 as lowercase hex. An upload URL carries it ("sha256=<hex>") so that
+ * the signature, which covers the URL but not a multipart body, also covers
+ * the file.
+ */
+export async function sha256Hex(data: Uint8Array): Promise<string> {
   const hash = new Sha256Js();
   hash.update(data);
   return toHex(await hash.digest());
@@ -496,7 +501,8 @@ async function signedFetchNow(
     const sentAt = Date.now();
     const sig = await signatureHeaders(url, method, body, creds, creds ? signingDate(sentAt) : undefined);
     if (sig) for (const [k, v] of Object.entries(sig)) headers.set(k, v);
-    const res = await fetchImpl(request ?? String(input), { ...init, method, headers });
+    // Never from the browser's HTTP cache (see http-cache.ts).
+    const res = await fetchImpl(request ?? String(input), { cache: 'no-store', ...init, method, headers });
     return { res, sentAt };
   };
 

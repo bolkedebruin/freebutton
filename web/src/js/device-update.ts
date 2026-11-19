@@ -11,7 +11,7 @@
  * Both requests are signed like every other write. A multipart body is sent
  * as UNSIGNED-PAYLOAD (the device cannot hash it), see auth.ts payloadHash.
  */
-import { signatureHeaders } from './auth';
+import { sha256Hex, signatureHeaders } from './auth';
 import { sleep as defaultSleep } from './sleep';
 
 export type UpdateKind = 'firmware' | 'filesystem';
@@ -107,8 +107,11 @@ export async function updateDevice(
   form.append('updateType', kind);
   form.append('updateFile', file, file.name ?? (kind === 'firmware' ? 'firmware.bin' : 'littlefs.bin'));
   try {
-    const headers = (await sign(absolute('/upload'), 'POST', form)) ?? {};
-    const res = await (deps.upload ?? xhrUpload)(`${base}/upload`, form, headers,
+    // The signature covers the URL, not the multipart body: the URL carries
+    // the file's hash, and the device only accepts a file that has it.
+    const path = `/upload?sha256=${await sha256Hex(new Uint8Array(await file.arrayBuffer()))}`;
+    const headers = (await sign(absolute(path), 'POST', form)) ?? {};
+    const res = await (deps.upload ?? xhrUpload)(`${base}${path}`, form, headers,
       (percent) => onProgress({ phase: 'uploading', percent }));
     if (res.status !== 200) {
       return end({ phase: 'failed', message: `The device refused the upload (HTTP ${res.status}${res.text ? ': ' + res.text.trim() : ''}). The device is unchanged.` });

@@ -13,7 +13,8 @@
 #include "mquickjs.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include "font_arg.h"
+#include <string.h>
+#include "style_arg.h"
 
 // Import the hardware abstraction layer (ESP32 only)
 #ifdef ESP_PLATFORM
@@ -43,61 +44,14 @@ static inline int image_hw_find(const char* name, size_t len) { return -1; }
 static inline bool image_hw_exists(int index) { return false; }
 static inline int image_hw_set_icon(int index, const char* name, size_t len) { return -1; }
 static inline int image_hw_set_src(int index, const char* key, size_t len) { return -1; }
-static inline int button_hw_set_font(int position, int face, int size, bool top) { return -1; }
-static inline int button_hw_restore_font(int position, bool top) { return -1; }
-static inline bool list_hw_set_font(int index, int face, int size) { return false; }
-static inline bool list_hw_restore_font(int index) { return false; }
+static inline int button_hw_set_styles(int position, uint32_t list, bool restore) { return -1; }
+static inline int button_hw_add_style(int position, int ref) { return -1; }
+static inline int button_hw_remove_style(int position, int ref) { return -1; }
+static inline bool list_hw_set_styles(int index, uint32_t list, bool restore) { return false; }
 #endif
 
-// Method IDs for the proxy dispatcher (encoded in params of JS_NewCFunctionParams)
-enum {
-    FB_METHOD_LED_SET_COLOR = 0,
-    FB_METHOD_LED_ON = 1,
-    FB_METHOD_LED_OFF = 2,
-    FB_METHOD_BTN_ON_CLICK = 3,
-    FB_METHOD_BTN_ON_LONG_PRESS = 4,
-    FB_METHOD_BTN_ON_RELEASE = 5,
-    FB_METHOD_DISP_SET_LABEL = 6,
-    FB_METHOD_DISP_SET_TOP_LABEL = 7,
-    // Display item methods (forward argc/argv directly, no _p extraction)
-    FB_METHOD_DITEM_CREATE = 8,
-    FB_METHOD_DITEM_REMOVE = 9,
-    FB_METHOD_DITEM_COUNT = 10,
-    FB_METHOD_DITEM_GET = 11,
-    FB_METHOD_DITEM_GET_ALL = 12,
-    FB_METHOD_DITEM_SET_LABEL = 13,
-    FB_METHOD_DITEM_SET_VALUE = 14,
-    FB_METHOD_DITEM_SET_UNIT = 15,
-    FB_METHOD_DITEM_SET_POSITION = 16,
-    FB_METHOD_DITEM_SET_PAGE = 17,
-    FB_METHOD_DISP_GET_LABEL = 18,
-    FB_METHOD_DISP_GET_TOP_LABEL = 19,
-    FB_METHOD_DITEM_SHOW_PAGE = 20,
-    FB_METHOD_DITEM_GET_SHOWN_PAGE = 21,
-    // fb.key(name): the key object of a config.json key name
-    FB_METHOD_KEY = 22,
-    // fb.main.list.*(nameOrIndex, ...): main-display lists (config "lists")
-    FB_METHOD_LIST_NEXT = 23,
-    FB_METHOD_LIST_PREV = 24,
-    FB_METHOD_LIST_SELECT = 25,
-    FB_METHOD_LIST_GET_SELECTED = 26,
-    FB_METHOD_LIST_COUNT = 27,
-    FB_METHOD_LIST_SET_ITEMS = 28,
-    // key display .setIcon(name) (_p = key position)
-    FB_METHOD_DISP_SET_ICON = 29,
-    // fb.main.display.setIcon(id, name)
-    FB_METHOD_DITEM_SET_ICON = 30,
-    // fb.main.image.*(nameOrIndex, value): main-display images (config "images")
-    FB_METHOD_IMAGE_SET_ICON = 31,
-    FB_METHOD_IMAGE_SET_SRC = 32,
-    // key display .setFont(font, size) / .setTopFont(font, size) (_p = key position)
-    FB_METHOD_DISP_SET_FONT = 33,
-    FB_METHOD_DISP_SET_TOP_FONT = 34,
-    // fb.main.display.setFont(id, font, size)
-    FB_METHOD_DITEM_SET_FONT = 35,
-    // fb.main.list.setFont(nameOrIndex, font, size)
-    FB_METHOD_LIST_SET_FONT = 36,
-};
+// Method ids of the proxy dispatcher (the parameter of each method closure)
+#include "fb_method_ids.h"
 
 /*
  * Topology query bindings (registered on __fb global via stdlib)
@@ -121,24 +75,24 @@ JSValue js_freebutton_device_mainConnector(JSContext *ctx, JSValue *this_val, in
 }
 
 /*
- * fb.key(name) result: the existing key object for a 1-based key position,
- * the same object as fb.main.left / .right or fb.bars[i].left / .right
- * (device_hw_init_fb builds them: position = connector * 2 + 1 (left) or
+ * fb.button(name) result: the existing side object for a 1-based button
+ * position, the same object as fb.main.left / .right or fb.bars[i].left /
+ * .right (device_hw_init_fb builds them: position = connector * 2 + 1 (left) or
  * + 2 (right); bars are numbered by the BAR connectors in connector order).
  * No object is created: the tree is walked by property reads (each read
  * makes a short-lived property-name string, garbage right after; call
- * fb.key() once at setup and keep the result in a local var where it is
+ * fb.button() once at setup and keep the result in a local var where it is
  * used often). The value is kept in a GC ref across the reads (the GC
  * moves objects).
  */
-static JSValue fb_key_object(JSContext *ctx, int position)
+static JSValue fb_button_object(JSContext *ctx, int position)
 {
     const int conn = (position - 1) / 2;
     const char *side = ((position - 1) % 2) ? "right" : "left";
     const int type = position >= 1 ? device_hw_get_connector_type(conn) : 0;
     const int isMain = type == 2 && conn == device_hw_get_main_connector();
     if (!isMain && type != 1)
-        return JS_ThrowReferenceError(ctx, "key at position %d is not connected", position);
+        return JS_ThrowReferenceError(ctx, "button at position %d is not connected", position);
 
     JSGCRef ref;
     JSValue *v = JS_PushGCRef(ctx, &ref);
@@ -287,6 +241,109 @@ static JSValue fb_list_set_items(JSContext *ctx, int index, int argc, JSValue *a
 }
 
 /*
+ * fb.style.set(style, property, value): changes one value of a style; every
+ * item that uses the style is restyled (by the LVGL task). property is a
+ * property name ("color"), or "title.", "unit.", "selected." or "icon." and
+ * one ("title.color"). value is a string or a number, as in config.json.
+ * Every property can be set, also one the style does not set in config
+ * (it is added until the script restarts), except font-family, font-size
+ * and line-height. The block has to exist: a style of "styles" has the
+ * blocks config.json gives it, "button", "displayitem" and "list" (the
+ * style of a kind) the parts of the kind. Otherwise TypeError, as for a
+ * value that is not valid; the checks run in this order: the property name,
+ * the three fixed properties, the block, the value. Without room in the
+ * LVGL pool for a property more, or heap for the copy of the config values:
+ * the engine's out-of-memory error, and nothing changes. Nothing is
+ * allocated on the JS heap. The style and property
+ * names are copied to the stack before the value is read. A property or a
+ * string value with a NUL character in it is refused (TypeError): the
+ * firmware reads both as C strings and would see only the part before it.
+ * Each call waits for the LVGL lock (style_binding.cpp): the display task
+ * holds it for a whole render.
+ */
+static JSValue fb_style_set(JSContext *ctx, int argc, JSValue *argv)
+{
+    if (argc < 3 || !JS_IsString(ctx, argv[0]) || !JS_IsString(ctx, argv[1]))
+        return JS_ThrowTypeError(ctx, "fb.style.set() requires a style name, a property name and a value");
+
+    int ref;
+    {
+        JSCStringBuf buf;
+        size_t len;
+        const char *name = JS_ToCStringLen(ctx, &len, argv[0], &buf);
+        if (!name)
+            return JS_EXCEPTION;
+        ref = style_hw_find(name, len);  /* < 0: "button" / "displayitem" / "list" */
+        if (ref == 0) {
+            if (len == 0)
+                return JS_ThrowTypeError(ctx, "fb.style.set() requires a style name, a property name and a value");
+            return JS_ThrowReferenceError(ctx, "unknown style \"%.32s\"", name);
+        }
+    }
+
+    char prop[32];  /* the longest is "selected.background-color", 25 characters */
+    {
+        JSCStringBuf buf;
+        size_t len;
+        const char *name = JS_ToCStringLen(ctx, &len, argv[1], &buf);
+        if (!name)
+            return JS_EXCEPTION;
+        if (strlen(name) != len)
+            return JS_ThrowTypeError(ctx, "fb.style.set(): the property name has a NUL character in it");
+        if (len >= sizeof(prop))
+            return JS_ThrowTypeError(ctx, "fb.style.set(): unknown property \"%.32s\"", name);
+        memcpy(prop, name, len);
+        prop[len] = '\0';
+    }
+
+    int r;
+    if (JS_IsString(ctx, argv[2])) {
+        JSCStringBuf buf;
+        size_t len;
+        const char *value = JS_ToCStringLen(ctx, &len, argv[2], &buf);
+        if (!value)
+            return JS_EXCEPTION;
+        if (strlen(value) != len)
+            return JS_ThrowTypeError(ctx, "fb.style.set(): the value has a NUL character in it");
+        r = style_hw_set_string(ref, prop, value);
+    } else if (JS_IsNumber(ctx, argv[2])) {
+        double d;
+        if (JS_ToNumber(ctx, &d, argv[2]))
+            return JS_EXCEPTION;
+        r = style_hw_set_number(ref, prop, d);
+    } else {
+        return JS_ThrowTypeError(ctx, "fb.style.set(): the value must be a string or a number");
+    }
+
+    switch (r) {
+    case STYLE_HW_SET_OK:
+        return JS_UNDEFINED;
+    case STYLE_HW_SET_UNKNOWN:
+        return JS_ThrowTypeError(ctx, "fb.style.set(): unknown property \"%s\"", prop);
+    case STYLE_HW_SET_NO_PART: {
+        /* The block the property is in: "title" of "title.color"; no dot:
+         * the main block. (The engine's printf has no "%.*s".) */
+        const char *dot = strchr(prop, '.');
+        if (!dot)
+            return JS_ThrowTypeError(ctx, "fb.style.set(): the style has no main block in config.json");
+        char part[sizeof(prop)];
+        const size_t n = (size_t)(dot - prop);
+        memcpy(part, prop, n);
+        part[n] = '\0';
+        if (ref < 0)
+            return JS_ThrowTypeError(ctx, "fb.style.set(): the style of this kind has no \"%s\" part", part);
+        return JS_ThrowTypeError(ctx, "fb.style.set(): the style has no \"%s\" block in config.json", part);
+    }
+    case STYLE_HW_SET_FIXED:
+        return JS_ThrowTypeError(ctx, "fb.style.set(): \"%s\" cannot be changed by a script", prop);
+    case STYLE_HW_SET_NO_MEMORY:
+        return JS_ThrowOutOfMemory(ctx);
+    default:
+        return JS_ThrowTypeError(ctx, "fb.style.set(): not a valid value for \"%s\"", prop);
+    }
+}
+
+/*
  * Proxy dispatcher for fb object tree methods.
  *
  * Each method on the fb hierarchy (e.g. fb.bars[0].left.led.setColor) is a
@@ -374,15 +431,31 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         tmp[1] = argv[0];
         return js_freebutton_button_setIcon(ctx, this_val, 2, tmp);
     }
-    case FB_METHOD_DISP_SET_FONT:
-    case FB_METHOD_DISP_SET_TOP_FONT: {
-        const int top = method == FB_METHOD_DISP_SET_TOP_FONT;
-        int face = 0, size = 0;
-        const int r = fb_font_args(ctx, argc, argv, top ? "setTopFont" : "setFont", &face, &size);
-        if (r < 0)
+    case FB_METHOD_DISP_SET_STYLE: {
+        uint32_t list = 0;
+        int restore = 0;
+        if (argc < 1)
+            return JS_ThrowTypeError(ctx, "setStyle() requires style names (a string)");
+        if (fb_style_list_arg(ctx, argv[0], "setStyle", &list, &restore))
             return JS_EXCEPTION;
-        if ((r == FB_FONT_RESTORE ? button_hw_restore_font(pos, top) : button_hw_set_font(pos, face, size, top)) != 0)
-            return JS_ThrowInternalError(ctx, "failed to set font for button %d", pos);
+        if (button_hw_set_styles(pos, list, restore != 0) != 0)
+            return JS_ThrowInternalError(ctx, "failed to set style for button %d", pos);
+        return JS_UNDEFINED;
+    }
+    case FB_METHOD_DISP_ADD_STYLE:
+    case FB_METHOD_DISP_REMOVE_STYLE: {
+        const int add = method == FB_METHOD_DISP_ADD_STYLE;
+        const char *what = add ? "addStyle" : "removeStyle";
+        int ref = 0;
+        if (argc < 1)
+            return JS_ThrowTypeError(ctx, "%s() requires a style name (a string)", what);
+        if (fb_style_name_arg(ctx, argv[0], what, &ref))
+            return JS_EXCEPTION;
+        const int r = add ? button_hw_add_style(pos, ref) : button_hw_remove_style(pos, ref);
+        if (r == -2)
+            return JS_ThrowRangeError(ctx, "%s(): an item has at most 4 styles", what);
+        if (r != 0)
+            return JS_ThrowInternalError(ctx, "failed to set style for button %d", pos);
         return JS_UNDEFINED;
     }
     case FB_METHOD_DISP_GET_LABEL:
@@ -417,8 +490,14 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
         return js_freebutton_display_setPage(ctx, this_val, argc, argv);
     case FB_METHOD_DITEM_SET_ICON:
         return js_freebutton_display_setIcon(ctx, this_val, argc, argv);
-    case FB_METHOD_DITEM_SET_FONT:
-        return js_freebutton_display_setFont(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_SET_STYLE:
+        return js_freebutton_display_setStyle(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_ADD_STYLE:
+        return js_freebutton_display_addStyle(ctx, this_val, argc, argv);
+    case FB_METHOD_DITEM_REMOVE_STYLE:
+        return js_freebutton_display_removeStyle(ctx, this_val, argc, argv);
+    case FB_METHOD_STYLE_SET:
+        return fb_style_set(ctx, argc, argv);
     case FB_METHOD_IMAGE_SET_ICON:
     case FB_METHOD_IMAGE_SET_SRC:
         return fb_image_set(ctx, method, argc, argv);
@@ -432,7 +511,7 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
     case FB_METHOD_LIST_GET_SELECTED:
     case FB_METHOD_LIST_COUNT:
     case FB_METHOD_LIST_SET_ITEMS:
-    case FB_METHOD_LIST_SET_FONT: {
+    case FB_METHOD_LIST_SET_STYLE: {
         int index = 0;
         if (fb_list_arg(ctx, argc, argv, &index))
             return JS_EXCEPTION;
@@ -451,26 +530,25 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
             return JS_NewInt32(ctx, list_hw_get_selected(index));
         case FB_METHOD_LIST_COUNT:
             return JS_NewInt32(ctx, list_hw_count(index));
-        case FB_METHOD_LIST_SET_FONT: {
-            int face = 0, size = 0;
-            const int r = fb_font_args(ctx, argc - 1, argv + 1, "fb.main.list.setFont", &face, &size);
-            if (r < 0)
+        case FB_METHOD_LIST_SET_STYLE: {
+            uint32_t list = 0;
+            int restore = 0;
+            if (argc < 2)
+                return JS_ThrowTypeError(ctx, "fb.main.list.setStyle() requires style names (a string)");
+            if (fb_style_list_arg(ctx, argv[1], "fb.main.list.setStyle", &list, &restore))
                 return JS_EXCEPTION;
-            if (r == FB_FONT_RESTORE)
-                list_hw_restore_font(index);
-            else
-                list_hw_set_font(index, face, size);
+            list_hw_set_styles(index, list, restore != 0);
             return JS_UNDEFINED;
         }
         default:
             return fb_list_set_items(ctx, index, argc, argv);
         }
     }
-    case FB_METHOD_KEY: {
+    case FB_METHOD_BUTTON: {
         /* The name is looked up in the firmware's name table (config.json
          * "name" on a "buttons" entry); it is not copied into the JS heap. */
         if (argc < 1 || !JS_IsString(ctx, argv[0]))
-            return JS_ThrowTypeError(ctx, "fb.key() requires a key name (string)");
+            return JS_ThrowTypeError(ctx, "fb.button() requires a button name (string)");
         JSCStringBuf buf;
         size_t len;
         const char *name = JS_ToCStringLen(ctx, &len, argv[0], &buf);
@@ -478,8 +556,8 @@ JSValue js_fb_device_proxy(JSContext *ctx, JSValue *this_val,
             return JS_EXCEPTION;
         int position = 0;
         if (!button_hw_find_by_name(name, len, &position))
-            return JS_ThrowReferenceError(ctx, "unknown key \"%.32s\"", name);
-        return fb_key_object(ctx, position);
+            return JS_ThrowReferenceError(ctx, "unknown button \"%.32s\"", name);
+        return fb_button_object(ctx, position);
     }
     default:
         return JS_ThrowInternalError(ctx, "unknown fb method %d", method);

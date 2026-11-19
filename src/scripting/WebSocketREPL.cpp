@@ -42,6 +42,29 @@ static std::string unescapeJson(std::string_view input) {
 // contain, so responses are always valid JSON.
 using FreeButton::escapeJsonString;
 
+// The text for a JSON string, at most about max characters ("..." marks a
+// cut). The text is cut before it is escaped: an escaped copy of a long
+// result is up to six times its size, and a cut after escaping could split
+// an escape sequence. The cut never splits a UTF-8 character. An escape-heavy
+// text is shortened further, so the result always fits the message buffers.
+static std::string escapeCut(std::string_view text, size_t max) {
+    bool cut = false;
+    std::string out;
+    for (;;) {
+        size_t n = text.size() < max ? text.size() : max;
+        if (n < text.size()) {
+            while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80) --n;
+            cut = true;
+        }
+        out = escapeJsonString(text.substr(0, n));
+        if (out.size() <= max + 16 || n < 16) break;
+        text = text.substr(0, n);
+        max = n / 2;
+    }
+    if (cut) out += "...";
+    return out;
+}
+
 namespace Scripting {
 
 WebSocketREPL& WebSocketREPL::getInstance() {
@@ -239,11 +262,7 @@ void WebSocketREPL::processPending() {
 
 void WebSocketREPL::sendResult(AsyncWebSocketClient* client, const uint32_t clientId, std::string_view id,
                                 bool success, std::string_view value) {
-    // Escape value for JSON and truncate if needed
-    std::string escapedValue = escapeJsonString(value);
-    if (escapedValue.size() > 150) {
-        escapedValue = escapedValue.substr(0, 150) + "...";
-    }
+    const std::string escapedValue = escapeCut(value, 150);
 
     // Build JSON response
     // Use different field names for success vs error
@@ -266,6 +285,13 @@ void WebSocketREPL::sendResult(AsyncWebSocketClient* client, const uint32_t clie
         if (client) {
             client->text(buffer, len);
         } else if (ws_) {
+            // From loop(), after the code ran. Its console output may have
+            // filled the client's short queue: a result must not be dropped
+            // with it (the IDE waits for it), so give the queue up to a
+            // second to drain.
+            for (int i = 0; i < 100 && ws_->hasClient(clientId) && !ws_->availableForWrite(clientId); ++i) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
             ws_->text(clientId, buffer, len);  // no-op if the client has gone
         }
     }
@@ -276,11 +302,22 @@ void WebSocketREPL::broadcastConsole(std::string_view message) {
         return;  // No clients connected
     }
 
-    // Escape message for JSON and truncate if needed
-    std::string escapedMsg = escapeJsonString(message);
-    if (escapedMsg.size() > 200) {
-        escapedMsg = escapedMsg.substr(0, 200) + "...";
+    // A client's queue is short (WS_MAX_QUEUED_MESSAGES, platformio.ini): a
+    // burst of lines must not take the heap. Lines that do not fit are
+    // counted, and the count is sent when there is room again.
+    if (!ws_->availableForWriteAll()) {
+        ++consoleDropped_;
+        return;
     }
+    if (consoleDropped_) {
+        char note[112];
+        const int n = snprintf(note, sizeof(note), R"({"type":"console","message":"... %u lines dropped: the console could not keep up"})",
+                               static_cast<unsigned>(consoleDropped_));
+        consoleDropped_ = 0;
+        if (n > 0 && n < static_cast<int>(sizeof(note))) ws_->textAll(note, n);
+    }
+
+    const std::string escapedMsg = escapeCut(message, 200);
 
     // Build JSON message
     char buffer[300];
@@ -293,21 +330,21 @@ void WebSocketREPL::broadcastConsole(std::string_view message) {
     }
 }
 
-bool WebSocketREPL::hasClients() const noexcept {
-    return ws_ && ws_->count() > 0;
-}
-
-size_t WebSocketREPL::clientCount() const noexcept {
-    return ws_ ? ws_->count() : 0;
-}
-
 void WebSocketREPL::cleanupClients() {
-    if (ws_) {
-        ws_->cleanupClients();
+    if (!ws_) return;
+    // New API keys: a console that was opened with the old ones must not
+    // stay (it can run code). Asked from the LVGL task, done here.
+    if (closeAllRequested_.exchange(false)) {
+        ws_->closeAll(1008, "credentials changed");
     }
+    ws_->cleanupClients();
 }
 
-// Free function for easy access from main loop without include issues
+void WebSocketREPL::requestCloseAll() {
+    closeAllRequested_.store(true);
+}
+
+// Free functions for the main loop
 void cleanupWebSocketClients() {
     WebSocketREPL::getInstance().cleanupClients();
 }

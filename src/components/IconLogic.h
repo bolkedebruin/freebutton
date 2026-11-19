@@ -9,7 +9,7 @@
 //
 // Config:
 //   button       "icon": "<name>", "iconsize": 48 (square)
-//   display item "icon": "<name>", "iconsize": 32, "iconcolor": "#rrggbb"
+//   display item "icon": "<name>", "iconsize": 32 (its tint: "icon": {"color"} of a style)
 //   "images"[]   {"name","page","x","y","width","height",
 //                 "icon": "<name>" | "src": "<key>.bin", "color": "#rrggbb"}
 // A colour only tints A8 rasters (single-colour artwork).

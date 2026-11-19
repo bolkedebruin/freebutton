@@ -26,7 +26,7 @@
  * (uploadFont: checked first, ttf-check.ts; the device reloads its fonts on
  * every change of the bucket) and deleted from it (deleteFont; the system
  * fonts medium.ttf / semibold.ttf are refused); addFontToConfig /
- * removeFontFromConfig then offer the matching config.json "style.fonts"
+ * removeFontFromConfig then offer the matching config.json "fonts"
  * entry. The previews draw with the device's fonts (font-loader.ts,
  * told about the device and every fonts listing here).
  *
@@ -47,6 +47,7 @@ import {
 import { checkTtf, MAX_FONT_BYTES } from './ttf-check';
 import { fontWarnings, hasFontTable, isSystemFontSrc, SYSTEM_FONTS, validFontSrc } from './font-config';
 import { fontLoader, wireFontLoader } from './font-loader';
+import { virtualMedia } from './virtual-media';
 import { iconSizeSlots, iconTable } from './icon-raster';
 import { ICON_MANIFEST_KEY, readIconSources, setIconSources, syncIcons, type IconSyncDeps, type IconSyncResult } from './icon-sync';
 import { prepareSvg, rasterizeSvg, SvgError } from './icon-render';
@@ -145,6 +146,12 @@ export class Workspace {
   private storedUsesIcons = false;
   /** The open file could not be read: the editor does not hold its text, so it must not be saved. */
   private unread = false;
+  /**
+   * The open file's text as this page last read or wrote it (null: it did
+   * not exist). Save compares the device's file with it: a difference means
+   * another tab or a deploy wrote the file since.
+   */
+  private storedText: string | null = null;
   private storage: StorageUsage | null = null;
 
   private base = '';
@@ -160,7 +167,20 @@ export class Workspace {
   private preview = new ConfigPreview(() =>
     this.currentKey === CONFIG_KEY && this.deps?.editor.isReady() ? this.deps.editor.getCode() : null);
 
+  /** The stored config.json as last read or written; null: there is none. */
+  private storedConfig: string | null = null;
+
   // ---- public API --------------------------------------------------------
+
+  /**
+   * config.json as the virtual device shows it: the editor's text while it
+   * is the open file (unsaved edits included), else the stored text. Null:
+   * no config.json is loaded. Nothing is asked of the device for this.
+   */
+  configText(): string | null {
+    const draft = this.currentKey === CONFIG_KEY && this.deps?.editor.isReady() ? this.deps.editor.getCode() : null;
+    return draft ?? this.storedConfig;
+  }
 
   snapshot(): WorkspaceSnapshot {
     return {
@@ -175,6 +195,14 @@ export class Workspace {
       iconSyncing: this.iconSync !== null,
       storage: this.storage ?? undefined,
     };
+  }
+
+  /**
+   * Show the open config.json's text on the virtual device now, without the
+   * debounce of typing (after an edit made on the device itself).
+   */
+  flushConfigPreview(): void {
+    if (this.currentKey === CONFIG_KEY) this.preview.flush();
   }
 
   /** The icon sync in flight (or null): tests and callers can await it. */
@@ -267,6 +295,15 @@ export class Workspace {
     }
   }
 
+  /** As readText, but a file that cannot be read is null without a word (the virtual device looks for an icon's SVG). */
+  async readQuietly(rawKey: string): Promise<string | null> {
+    try {
+      return await this.backend().read(normalizeKey(rawKey));
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * List read-only buckets not listed yet (device mode only; one request
    * each, sequentially). Contents are never downloaded.
@@ -337,6 +374,7 @@ export class Workspace {
 
     return this.withBusy(async () => {
       const rev = this.revision;
+      if (this.mode === 'device' && !(await this.confirmOverwrite(key, text))) return false;
       try {
         await this.backend().write(key, text);
       } catch (err) {
@@ -345,6 +383,7 @@ export class Workspace {
       }
       this.dirty = this.revision !== rev;
       this.isNew = false;
+      this.storedText = text;
       const where = this.mode === 'device' ? 'on device' : 'in browser memory (no device)';
       this.note(`Saved ${displayPath(key)} (${utf8Length(text)} bytes) ${where}`, 'result');
       await this.listQuietly();
@@ -414,6 +453,7 @@ export class Workspace {
       await this.listQuietly();
       return true;
     });
+    if (removed && key.endsWith('.svg')) virtualMedia.iconsChanged();
     if (removed && key.endsWith('.svg') && this.mode === 'device' && this.storedUsesIcons) void this.syncIcons();
     if (removed && key === this.currentKey) {
       // The open file is gone: drop its buffer and go back to the boot script.
@@ -465,6 +505,7 @@ export class Workspace {
       }
       this.note(`Uploaded ${displayPath(key)} (${bytes} bytes). Use it in config.json: "icons": {"<name>": "${displayPath(key)}"}`, 'result');
       await this.listQuietly();
+      virtualMedia.iconsChanged();
       // A replaced SVG that config.json already uses: the device needs new rasters.
       if (this.mode === 'device' && this.storedUsesIcons) void this.syncIcons();
       return key;
@@ -530,6 +571,8 @@ export class Workspace {
       }
       this.note(`config.json: icon "${name}" = ${path}`, 'result');
       await this.listQuietly();
+      // This page wrote it: the version a later Save compares with.
+      if (this.currentKey === CONFIG_KEY) this.storedText = next;
       if (this.currentKey === CONFIG_KEY && !this.dirty) this.load(CONFIG_KEY, next, false);
       // The firmware does not use the "icons" table itself (only the
       // rasters), so no reboot is needed for it.
@@ -578,6 +621,7 @@ export class Workspace {
         return null;
       }
       this.note(`Uploaded fonts/${key} (${bytes.length} bytes); the device reloads its fonts`, 'result');
+      virtualMedia.changed(FONTS_BUCKET, key, bytes);
       for (const w of check.warnings) this.note(`fonts/${key}: ${w}`, 'warn');
       await this.listReadOnly(FONTS_BUCKET);
       return key;
@@ -601,39 +645,36 @@ export class Workspace {
         return false;
       }
       this.note(`Deleted fonts/${key}`, 'info');
+      virtualMedia.changed(FONTS_BUCKET, key, null);
       await this.listReadOnly(FONTS_BUCKET);
       return true;
     });
   }
 
   /**
-   * Add a config.json "style.fonts" entry for an uploaded font key (name =
-   * the file stem, fontNameForKey), after asking. An entry with that src
+   * Add a config.json "fonts" entry for an uploaded font key (name = the
+   * file stem, fontNameForKey), after asking. An entry with that src
    * already, or a system font file, = nothing to do. Same rules as
    * addIconToConfig (skipped while config.json has unsaved edits). The
-   * firmware reads "style" at boot, so a reboot is offered.
+   * firmware reads "fonts" at boot, so a reboot is offered.
    */
   async addFontToConfig(key: string): Promise<boolean> {
     if (isSystemFontSrc(key)) return true;
     const name = fontNameForKey(key);
-    const snippet = `"style": {"fonts": [{"name": "${name}", "src": "${key}"}]}`;
+    const snippet = `"fonts": [{"name": "${name}", "src": "${key}"}]`;
     const edited = await this.editConfig(snippet, async (o) => {
-      if ('style' in o && !isRecord(o.style)) return { skip: `config.json "style" is not an object: add ${snippet} yourself` };
-      const style = (o.style ?? {}) as Record<string, unknown>;
-      if ('fonts' in style && !Array.isArray(style.fonts)) {
-        return { skip: `config.json "style.fonts" is not an array: add ${snippet} yourself` };
+      if ('fonts' in o && !Array.isArray(o.fonts)) {
+        return { skip: `config.json "fonts" is not an array: add ${snippet} yourself` };
       }
-      const fonts = (style.fonts ?? []) as unknown[];
+      const fonts = (o.fonts ?? []) as unknown[];
       if (fonts.some(e => isRecord(e) && e.src === key)) return { done: true };
       const same = fonts.find(e => isRecord(e) && e.name === name) as Record<string, unknown> | undefined;
       if (same) {
         if (!(await this.ask(`Change font "${name}" in config.json from ${JSON.stringify(same.src)} to ${key}?`))) return { done: false };
-        o.style = { ...style, fonts: fonts.map(e => (e === same ? { ...same, src: key } : e)) };
+        o.fonts = fonts.map(e => (e === same ? { ...same, src: key } : e));
       } else {
-        if (!(await this.ask(`Add font "${name}" (${key}) to config.json "style.fonts"?`))) return { done: false };
-        const next = [...fonts, { name, src: key }];
-        // A new "fonts" goes first in "style"; an existing one keeps its place.
-        o.style = 'fonts' in style ? { ...style, fonts: next } : { fonts: next, ...style };
+        if (!(await this.ask(`Add font "${name}" (${key}) to config.json "fonts"?`))) return { done: false };
+        o.fonts = [...fonts, { name, src: key }];
       }
       return { changed: `config.json: font "${name}" = ${key}` };
     });
@@ -641,19 +682,18 @@ export class Workspace {
   }
 
   /**
-   * Remove the config.json "style.fonts" entries whose src is `key` (a
-   * deleted font), after asking.
+   * Remove the config.json "fonts" entries whose src is `key` (a deleted
+   * font), after asking.
    */
   async removeFontFromConfig(key: string): Promise<boolean> {
-    return this.editConfig(`the "style.fonts" entry with "src": "${key}"`, async (o) => {
-      const style = isRecord(o.style) ? o.style : null;
-      if (!style || !Array.isArray(style.fonts)) return { done: true };
-      const fonts = style.fonts as unknown[];
+    return this.editConfig(`the "fonts" entry with "src": "${key}"`, async (o) => {
+      if (!Array.isArray(o.fonts)) return { done: true };
+      const fonts = o.fonts as unknown[];
       const keep = fonts.filter(e => !(isRecord(e) && e.src === key));
       if (keep.length === fonts.length) return { done: true };
       const names = fonts.filter(e => !keep.includes(e)).map(e => `"${(e as Record<string, unknown>).name}"`).join(', ');
-      if (!(await this.ask(`Remove font ${names} (${key}) from config.json "style.fonts"?`))) return { done: false };
-      style.fonts = keep;
+      if (!(await this.ask(`Remove font ${names} (${key}) from config.json "fonts"?`))) return { done: false };
+      o.fonts = keep;
       return { changed: `config.json: font ${names} removed` };
     });
   }
@@ -709,9 +749,11 @@ export class Workspace {
       }
       this.note(r.changed, 'result');
       await this.listQuietly();
+      // This page wrote it: the version a later Save compares with.
+      if (this.currentKey === CONFIG_KEY) this.storedText = next;
       if (this.currentKey === CONFIG_KEY && !this.dirty) this.load(CONFIG_KEY, next, false);
       this.configStored(next);
-      // The firmware reads config.json (and its "style") at boot.
+      // The firmware reads config.json (and its "fonts" and "styles") at boot.
       if (this.mode === 'device') emit('reboot-suggested', { key: CONFIG_KEY });
       return true;
     });
@@ -776,7 +818,8 @@ export class Workspace {
   /**
    * Font and style warnings of a stored config (console, font-config
    * fontWarnings): files missing from bucket `fonts` (listed once when the
-   * config has a "style.fonts" table), too many font instances, no "style".
+   * config has a "fonts" table), too many font instances, style properties
+   * without an effect where they are used.
    */
   private async checkFonts(cfg: unknown): Promise<void> {
     if (cfg === null) return;
@@ -784,7 +827,7 @@ export class Workspace {
     if (hasFonts && this.mode === 'device' && !this.readOnly.fonts) await this.listReadOnly(FONTS_BUCKET);
     const listed = this.readOnly.fonts;
     const keys = hasFonts && this.mode === 'device' && listed ? new Set(listed.map(f => f.key)) : null;
-    for (const w of fontWarnings(cfg, keys)) emit('console-line', { text: `config.json: ${w}`, type: 'warn' });
+    for (const w of fontWarnings(cfg, keys)) emit('console-line', { to: 'device', text: `config.json: ${w}`, type: 'warn' });
   }
 
   private async runIconSync(cfgText: string | undefined): Promise<IconSyncResult | null> {
@@ -806,13 +849,20 @@ export class Workspace {
     }
     const base = this.base;
     const log = (t: string, type: 'info' | 'warn' | 'error' | 'result' | 'log' | 'input') => {
-      emit('console-line', { text: t, type });
+      emit('console-line', { to: 'device', text: t, type });
     };
     const result = await syncIcons(cfg, {
       readSvg: async (key) => (await getObject(base, key))?.text ?? null,
       listImages: async () => (await listObjects(base, { bucket: IMAGES_BUCKET })).objects,
-      putImage: async (key, bytes) => { await putObject(base, key, bytes, IMAGES_BUCKET); },
-      deleteImage: (key) => deleteObject(base, key, IMAGES_BUCKET),
+      // The virtual device follows each raster as the real one does.
+      putImage: async (key, bytes) => {
+        await putObject(base, key, bytes, IMAGES_BUCKET);
+        virtualMedia.changed(IMAGES_BUCKET, key, bytes);
+      },
+      deleteImage: async (key) => {
+        await deleteObject(base, key, IMAGES_BUCKET);
+        virtualMedia.changed(IMAGES_BUCKET, key, null);
+      },
       rasterize: this.deps?.rasterize ?? rasterizeSvg,
       log,
       readManifest: async () => (await getObject(base, ICON_MANIFEST_KEY))?.text ?? null,
@@ -834,6 +884,8 @@ export class Workspace {
       // Previews draw with the device's fonts (when the browser can).
       wireFontLoader();
       void fontLoader.setDevice(this.mode === 'device' ? this.base : null);
+      virtualMedia.setDevice(this.mode === 'device' ? this.base : null);
+      this.storedConfig = null;
       if (this.files.some(f => f.key === CONFIG_KEY)) {
         try {
           const text = await this.backend().read(CONFIG_KEY);
@@ -867,7 +919,7 @@ export class Workspace {
     } catch (err) {
       if (err instanceof StorageUnavailableError) {
         if (this.mode !== 'local') {
-          emit('console-line', { text: `No device storage (${err.message}); files are kept in browser memory only.`, type: 'warn' });
+          emit('console-line', { to: 'device', text: `No device storage (${err.message}); files are kept in browser memory only.`, type: 'warn' });
         }
         this.mode = 'local';
         this.message = LOCAL_MESSAGE;
@@ -878,7 +930,7 @@ export class Workspace {
         this.message = err instanceof S3Error && err.code === 'NoSuchBucket'
           ? 'File list failed: this firmware has no "app" storage bucket (update the device firmware)'
           : `File list failed: ${describeError(err)}`;
-        emit('console-line', { text: this.message, type: 'error' });
+        emit('console-line', { to: 'device', text: this.message, type: 'error' });
       }
     }
   }
@@ -952,12 +1004,14 @@ export class Workspace {
     this.currentKey = key;
     this.dirty = false;
     this.isNew = isNew;
+    this.storedText = isNew ? null : text;
     // A (re)opened file: unsaved config.json edits are gone, show the stored config.
     this.preview.reset();
   }
 
   /** Show a config.json text on the virtual device; returns it parsed (null if invalid). */
   private applyConfig(text: string): unknown {
+    this.storedConfig = text;
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -967,6 +1021,25 @@ export class Workspace {
     const model = configToModel(parsed);
     setConfig(model.pages, model.connectors, model.names, model.fonts, model.styles);
     return parsed;
+  }
+
+  /**
+   * Before a save to a device: the file there is still the one this page
+   * read or wrote, or the user agrees to replace the other version. A file
+   * that cannot be read now is not held back: the write reports its own error.
+   */
+  private async confirmOverwrite(key: string, text: string): Promise<boolean> {
+    let now: string | null;
+    try {
+      now = await this.backend().read(key);
+    } catch {
+      return true;
+    }
+    if (now === null || now === this.storedText || now === text) return true;
+    const path = displayPath(key);
+    if (await this.ask(`${path} on the device is not the version this editor opened: another tab or a deploy changed it since.\nSave replaces that version with the text in this editor. Save anyway?`)) return true;
+    this.note(`Not saved: ${path} was changed on the device since it was opened here. Open the file again to get the device's version (the text in this editor is then lost: copy what you need first).`, 'warn');
+    return false;
   }
 
   private async confirmDiscard(): Promise<boolean> {
@@ -985,7 +1058,7 @@ export class Workspace {
    */
   private note(text: string, type: 'info' | 'warn' | 'error' | 'result'): void {
     this.message = type === 'error' || type === 'warn' ? text : (this.mode === 'local' ? LOCAL_MESSAGE : '');
-    emit('console-line', { text, type });
+    emit('console-line', { to: 'device', text, type });
     this.publish();
   }
 

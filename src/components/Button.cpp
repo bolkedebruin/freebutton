@@ -12,6 +12,10 @@
 #include "drivers/DisplayManager.h"
 #include "types.h"
 #include "ui/ui_style.h"
+
+extern "C" {
+#include "ui/fonts/fonts.h"
+}
 #include <esp_log.h>
 
 #include <algorithm>
@@ -141,8 +145,17 @@ bool Button::applyPending() {
     if (!button) {
         return false;  // createButton() requests a render once the button exists
     }
-    if (fontDirty_.exchange(false, std::memory_order_acq_rel)) {
-        applyFonts();
+    // A script changed a value of a style this button uses (fb.style.set):
+    // the texts are drawn again, and the labels attached again (a block may
+    // hold its first LVGL property since, ui_style.h).
+    const bool changed = ui_style_changed(STYLE_KIND_BUTTON, style_.load(std::memory_order_acquire));
+    const bool dirty = styleDirty_.exchange(false, std::memory_order_acq_rel);
+    bool restyled = changed;
+    if (dirty || changed) {
+        restyled = applyStyles() || restyled;
+    }
+    if (restyled) {
+        redrawTexts();
     }
     if (redrawConfigured_ != 0) {
         // restoreConfigState() reset these slots: the configured text again.
@@ -165,6 +178,14 @@ bool Button::applyPending() {
             return true;
         });
     }
+    // Styles the LVGL pool had no room for (a label, or a row of spans
+    // drawn just now): the button shows what it carried, font included, and
+    // applyStyles() runs again in a later walk. Not at once: that would
+    // spin while the pool stays low.
+    if (ui_button_styles_pending(button)) {
+        styleDirty_.store(true, std::memory_order_release);
+        ui::requestPendingRenderLater();
+    }
     return again;
 }
 
@@ -182,51 +203,88 @@ void Button::invalidatePending() {
 
 namespace {
 
-// A label's font (the item layer): nullptr without one (face FONT_FACE_NONE
-// and no size: the shared style), else the face (the style's when none) at
-// the size (the style's when none; a legacy step on the top label: 2 = 18
-// px). LVGL lock held.
-const lv_font_t* labelFont(const uint32_t packed, const style_element_t el) {
-    const int face = fontref::face(packed);
-    const int size = fontref::size(packed);
-    if (face == FONT_FACE_NONE && size == 0) {
-        return nullptr;
-    }
-    const style_props_t* r = ui_style_resolved(el);
-    return fonts_get(face == FONT_FACE_NONE ? r->face : face,
-                     style_logic_item_px(size, el == STYLE_EL_KEY_TOPLABEL, r->px));
+// What a label's text starts from: the lookup (ui/ui_style.h) of its part
+// through the styles the label carries. `local`: the shared styles do not
+// give that font (the face comes from one style and the size from
+// another), so the label needs it as a local style.
+struct LabelLook {
+    int face;
+    int px;
+    int lineHeight;  // x100, 0 = no style sets one
+    bool local;
+};
+
+LabelLook labelLook(const style_list_t carried, const style_part_t part) {
+    style_props_t r;
+    ui_style_lookup(STYLE_KIND_BUTTON, part, carried, &r, nullptr);
+    int sharedFace = 0;
+    int sharedPx = 0;
+    const bool shared = ui_style_shared_font(STYLE_KIND_BUTTON, part, carried, &sharedFace, &sharedPx);
+    return {r.face, r.px, (r.has & STYLE_HAS_LINE_HEIGHT) ? r.line_height : 0,
+            !shared || sharedFace != r.face || sharedPx != r.px};
 }
 
 } // namespace
 
+// LVGL lock held, button exists. The styles first: the fonts follow what
+// the labels carry then (styles that found no room in the LVGL pool are not
+// there, and their font and size must not show without their colour).
+// Returns whether the texts have to be set again: only that puts the fonts
+// on the labels (a text's own markup font stays on a text that is not set
+// again).
+bool Button::applyStyles() {
+    bool restyled = ui_button_set_styles(button, style_.load(std::memory_order_acquire));
+    style_list_t carried = 0;
+    style_list_t titleCarried = 0;
+    ui_button_get_styles(button, &carried, &titleCarried);
+    const LabelLook text = labelLook(carried, STYLE_PART_MAIN);
+    const LabelLook title = labelLook(titleCarried, STYLE_PART_TITLE);
+    restyled = ui_button_set_base(button, text.face, text.px, text.lineHeight, title.face, title.px,
+                                  title.lineHeight) || restyled;
+    restyled = ui_button_set_fonts(button, text.local ? fonts_get(text.face, text.px) : nullptr,
+                                   title.local ? fonts_get(title.face, title.px) : nullptr) || restyled;
+    return restyled;
+}
+
 // LVGL lock held, button exists.
-void Button::applyFonts() {
-    // What a span of a text with markup starts from: the label's face and px.
-    const auto base = [](const uint32_t packed, const style_element_t el, int& face, int& px) {
-        const style_props_t* r = ui_style_resolved(el);
-        const int f = fontref::face(packed);
-        face = f == FONT_FACE_NONE ? r->face : f;
-        px = style_logic_item_px(fontref::size(packed), el == STYLE_EL_KEY_TOPLABEL, r->px);
-    };
-    int textFace = 0, textPx = 0, titleFace = 0, titlePx = 0;
-    base(labelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_LABEL, textFace, textPx);
-    base(topLabelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_TOPLABEL, titleFace, titlePx);
-    ui_button_set_base_fonts(button, textFace, textPx, titleFace, titlePx);
-    ui_button_set_fonts(button,
-                        labelFont(labelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_LABEL),
-                        labelFont(topLabelFont_.load(std::memory_order_acquire), STYLE_EL_KEY_TOPLABEL));
+void Button::redrawTexts() {
+    char text[kLabelTextBytes];
+    currentTopLabel(text);
+    ui_button_set_title(button, text);
+    currentLabel(text);
+    ui_button_set_text(button, text);
+    if (IconState* s = icon_.get()) {
+        s->name.invalidate();
+    }
 }
 
-void Button::setLabelFont(const int face, const int size) {
-    labelFont_.store(fontref::pack(face, size), std::memory_order_release);
-    fontDirty_.store(true, std::memory_order_release);
+void Button::setStyles(const style_list_t list) {
+    if (style_.exchange(list, std::memory_order_acq_rel) == list) {
+        return;  // the list it has: nothing to draw
+    }
+    styleDirty_.store(true, std::memory_order_release);
     ui::requestPendingRender();
 }
 
-void Button::setTopLabelFont(const int face, const int size) {
-    topLabelFont_.store(fontref::pack(face, size), std::memory_order_release);
-    fontDirty_.store(true, std::memory_order_release);
-    ui::requestPendingRender();
+bool Button::addStyle(const uint8_t ref) {
+    bool changed = false;
+    if (!styleref::add(style_, ref, &changed)) {
+        return false;
+    }
+    if (changed) {
+        styleDirty_.store(true, std::memory_order_release);
+        ui::requestPendingRender();
+    }
+    return true;
+}
+
+void Button::removeStyle(const uint8_t ref) {
+    bool changed = false;
+    styleref::remove(style_, ref, &changed);
+    if (changed) {
+        styleDirty_.store(true, std::memory_order_release);
+        ui::requestPendingRender();
+    }
 }
 
 // JS bindings. These run in the JS task, or in an MQTT task when called from a
@@ -251,12 +309,9 @@ void Button::restoreConfigState() {
     if (wrote & kScriptIcon) {
         icon_.restoreConfigName();  // "" (no config icon) shows the label again
     }
-    const uint32_t configuredFont = fontref::pack(fontFace_, fontSize_);
-    const uint32_t configuredTopFont = fontref::pack(topFontFace_, topFontSize_);
-    const bool labelChanged = labelFont_.exchange(configuredFont, std::memory_order_acq_rel) != configuredFont;
-    const bool topChanged = topLabelFont_.exchange(configuredTopFont, std::memory_order_acq_rel) != configuredTopFont;
-    if (labelChanged || topChanged) {
-        fontDirty_.store(true, std::memory_order_release);
+    const style_list_t configured = configStyles();
+    if (style_.exchange(configured, std::memory_order_acq_rel) != configured) {
+        styleDirty_.store(true, std::memory_order_release);
     }
 }
 
@@ -275,7 +330,7 @@ void Button::configureIcon(const JsonObject& data) {
         ESP_LOGW(TAG, "Button at position %u: icon \"%s\" is not a valid icon name, ignored", position_, name);
         name = "";
     }
-    IconState* s = icon_.ensure(configuredIconSize_, icon::kNoColor, name);  // keeps the config name
+    IconState* s = icon_.ensure(configuredIconSize_, name);  // keeps the config name
     if (s == nullptr) {
         ESP_LOGE(TAG, "Button at position %u: no memory for its icon", position_);
         return;
@@ -287,8 +342,7 @@ void Button::configureIcon(const JsonObject& data) {
 
 // Script code (JS task). Like the label setters, only stores the name.
 Button::SetIconResult Button::setIconName(const std::string_view name) {
-    return setIconFromScript(icon_, name, configuredIconSize_, icon::kNoColor, slotOwner(), scriptWrote_,
-                             kScriptIcon);
+    return setIconFromScript(icon_, name, configuredIconSize_, slotOwner(), scriptWrote_, kScriptIcon);
 }
 
 const std::string Button::getComponentType() const {
@@ -440,8 +494,8 @@ void Button::createButton() {
     // If button already exists, just redraw it with new configuration
     if (button != nullptr) {
         ESP_LOGI(TAG, "Redrawing existing button for Button %lu", id);
-        fontDirty_.store(false, std::memory_order_release);
-        applyFonts();
+        styleDirty_.store(false, std::memory_order_release);
+        applyStyles();
         ui_button_set_title(button, topLabel.c_str());
         ui_button_set_text(button, label.c_str());
         invalidatePending();
@@ -465,8 +519,8 @@ void Button::createButton() {
     }
 
     // Apply the initial configuration
-    fontDirty_.store(false, std::memory_order_release);
-    applyFonts();
+    styleDirty_.store(false, std::memory_order_release);
+    applyStyles();
     ui_button_set_title(button, topLabel.c_str());
     ui_button_set_text(button, label.c_str());
     invalidatePending();

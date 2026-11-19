@@ -277,7 +277,11 @@ def main():
     # 4. Upload and apply.
     body, ctype = multipart([("updateType", "filesystem")], "updateFile", "littlefs.bin", payload)
     try:
-        status, text = http("POST", f"{base}/upload", data=body, headers={"Content-Type": ctype}, timeout=300)
+        # The signature covers the URL, not the multipart body: the URL
+        # carries the image's hash, which the device checks.
+        import hashlib
+        status, text = http("POST", f"{base}/upload?sha256={hashlib.sha256(payload).hexdigest()}", data=body,
+                            headers={"Content-Type": ctype}, timeout=300)
     except urllib.error.HTTPError as e:
         sys.exit(f"upload refused ({e.code}): {e.read().decode(errors='replace')}")
     print(f"[ota_fs] upload: {status} {text.decode(errors='replace')}")

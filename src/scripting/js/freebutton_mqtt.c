@@ -157,21 +157,40 @@ static void js_mqtt_message_wrapper(uint8_t brokerId, const char* topic, size_t 
         JSContext *ctx = sub->ctx;
 
         // Stack check FIRST (3 slots: 2 args + function + this)
-        if (JS_StackCheck(ctx, 4))
+        if (JS_StackCheck(ctx, 4)) {
+            mqtt_binding_count_drop();
             continue;
+        }
 
         // Verify callback is still a function
         if (!JS_IsFunction(ctx, sub->callback.val))
             continue;
 
         // Arguments straight from the queue record (no extra copies).
-        // REVERSE ORDER: args (right to left), function, this.
-        // Push each string as soon as it exists: the JS stack is a GC root,
-        // a C local is not, and the second allocation may run the (moving)
-        // GC. Holding both in locals first left `topic` pointing at a moved
-        // string (LoadProhibited in the callback).
-        JS_PushArg(ctx, JS_NewStringLen(ctx, payload, length));  // Arg 2 (payload)
-        JS_PushArg(ctx, JS_NewStringLen(ctx, topic, topic_len)); // Arg 1 (topic)
+        // The second allocation may run the (moving) GC, and a C local is
+        // not a GC root: the payload string is held in a GC reference while
+        // the topic string is made. (Holding both in locals left one
+        // pointing at a moved string: LoadProhibited in the callback.)
+        // A full script heap gives an exception instead of a string: the
+        // callback is then not called (it would get no topic or payload),
+        // and the message counts as dropped.
+        JSGCRef payload_ref;
+        JSValue payload_val = JS_NewStringLen(ctx, payload, length);
+        JSValue topic_val = JS_EXCEPTION;
+        if (!JS_IsException(payload_val)) {
+            *JS_PushGCRef(ctx, &payload_ref) = payload_val;
+            topic_val = JS_NewStringLen(ctx, topic, topic_len);
+            payload_val = JS_PopGCRef(ctx, &payload_ref);
+        }
+        if (JS_IsException(topic_val)) {
+            JS_GetException(ctx);  // clears it
+            mqtt_binding_count_drop();
+            continue;
+        }
+        // REVERSE ORDER: args (right to left), function, this. Nothing is
+        // allocated between here and the call.
+        JS_PushArg(ctx, payload_val);        // Arg 2 (payload)
+        JS_PushArg(ctx, topic_val);          // Arg 1 (topic)
         JS_PushArg(ctx, sub->callback.val);  // Function (GC ref, current value)
         JS_PushArg(ctx, JS_NULL);        // This
 

@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "../media/media_store.h"
+#include "TextLogic.h"
 #include "../ui/fonts/font_logic.h" /* FONT_SYSTEM_SRC, FONT_SYSTEM_BOLD_SRC (macros only) */
 
 namespace s3 {
@@ -51,15 +52,7 @@ enum class KeyCheck : uint8_t {
     OtherBucket,  // 400 InvalidArgument (the key lies in another bucket's directory)
 };
 
-inline bool startsWith(const char* s, size_t len, const char* prefix) {
-    const size_t plen = strlen(prefix);
-    return len >= plen && memcmp(s, prefix, plen) == 0;
-}
-
-inline bool endsWith(const char* s, size_t len, const char* suffix) {
-    const size_t slen = strlen(suffix);
-    return len >= slen && memcmp(s + len - slen, suffix, slen) == 0;
-}
+using fbtext::endsWith;
 
 // ---------------------------------------------------------------------------
 // Buckets
@@ -219,16 +212,25 @@ inline UrlTarget parseUrl(const char* u, size_t len) {
     return {UrlTarget::Object, b, u + end + 1, len - end - 1};
 }
 
+// A control byte (below 0x20, or 0x7F) or ".." anywhere in the key.
+inline bool hasControlOrDotDot(const char* key, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        const auto c = static_cast<unsigned char>(key[i]);
+        if (c < 0x20 || c == 0x7F) return true;
+        if (c == '.' && i + 1 < len && key[i + 1] == '.') return true;
+    }
+    return false;
+}
+
 // Structural checks shared by reads and writes: non-empty, no leading or
 // trailing '/', no empty segment ("//"), no ".." anywhere, no control bytes.
 inline bool keyWellFormed(const char* key, size_t len, size_t maxLen) {
     if (!key || len == 0 || len > maxLen) return false;
     if (key[0] == '/' || key[len - 1] == '/') return false;
+    if (hasControlOrDotDot(key, len)) return false;
     size_t seg = 0;
     for (size_t i = 0; i < len; ++i) {
-        const auto c = static_cast<unsigned char>(key[i]);
-        if (c < 0x20 || c == 0x7F) return false;
-        if (c == '.' && i + 1 < len && key[i + 1] == '.') return false;
+        const char c = key[i];
         if (c == '/') {
             if (seg == 0) return false;
             seg = 0;
@@ -264,9 +266,9 @@ inline bool mediaKeyExtensionOk(const Bucket& b, const char* key, size_t len) {
 // (Not LittleFS: no name_max per component.)
 inline KeyCheck checkMediaKey(const Bucket& b, const char* key, size_t len) {
     if (!key || len == 0 || len > MEDIA_KEY_MAX) return KeyCheck::Invalid;
+    if (hasControlOrDotDot(key, len)) return KeyCheck::Invalid;
     for (size_t i = 0; i < len; ++i) {
         if (!keyCharOk(key[i])) return KeyCheck::Invalid;
-        if (key[i] == '.' && i + 1 < len && key[i + 1] == '.') return KeyCheck::Invalid;
     }
     if (len < 5 || !mediaKeyExtensionOk(b, key, len)) return KeyCheck::Invalid;
     return KeyCheck::Ok;
@@ -317,6 +319,14 @@ struct HttpError {
     const char* msg;
 };
 
+// Answers more than one place gives.
+inline constexpr HttpError kNoSuchKey{404, "NoSuchKey", "The specified key does not exist."};
+inline constexpr HttpError kInvalidKey{400, "InvalidArgument", "invalid key"};
+inline constexpr HttpError kNotMounted{503, "ServiceUnavailable", "filesystem not mounted"};
+inline constexpr HttpError kOutOfMemory{503, "SlowDown", "out of memory"};
+inline constexpr HttpError kFileInUse{503, "SlowDown", "file is in use, retry"};
+inline constexpr HttpError kMalformedChunked{400, "InvalidRequest", "malformed aws-chunked body"};
+
 // The answer to a PutObject / DeleteObject key that checkWriteKey refuses
 // (status 0: allowed).
 inline HttpError writeRefusal(const Bucket& b, const char* key, size_t len, bool forDelete = false) {
@@ -354,14 +364,8 @@ enum class MediaReadKey : uint8_t {
 
 inline MediaReadKey checkMediaReadKey(const char* key, size_t len) {
     if (!key || len == 0 || len > kReadKeyMax) return MediaReadKey::Malformed;
-    bool slash = false;
-    for (size_t i = 0; i < len; ++i) {
-        const auto c = static_cast<unsigned char>(key[i]);
-        if (c < 0x20 || c == 0x7F) return MediaReadKey::Malformed;
-        if (c == '.' && i + 1 < len && key[i + 1] == '.') return MediaReadKey::Malformed;
-        if (c == '/') slash = true;
-    }
-    if (len > MEDIA_KEY_MAX || slash) return MediaReadKey::Missing;
+    if (hasControlOrDotDot(key, len)) return MediaReadKey::Malformed;
+    if (len > MEDIA_KEY_MAX || memchr(key, '/', len)) return MediaReadKey::Missing;
     return MediaReadKey::Ok;
 }
 
@@ -444,11 +448,11 @@ inline HttpError mediaError(media_err_t e, MediaOp op) {
         case MEDIA_ERR_NOT_FOUND:
             if (op == MediaOp::Delete) return {0, nullptr, nullptr};
             if (op == MediaOp::Write) return {500, "InternalError", "upload lost by the media store"};
-            return {404, "NoSuchKey", "The specified key does not exist."};
+            return kNoSuchKey;
         case MEDIA_ERR_NO_SPACE:
             return {507, "InsufficientStorage", "not enough free space in the media store"};
         case MEDIA_ERR_INVALID:
-            if (op == MediaOp::Read) return {404, "NoSuchKey", "The specified key does not exist."};
+            if (op == MediaOp::Read) return kNoSuchKey;
             return {400, "InvalidArgument", "refused by the media store (key, size or state)"};
         case MEDIA_ERR_BUSY:
             return {503, "SlowDown", op == MediaOp::Read ? "too many open files, retry" : "media store busy, retry"};
@@ -512,16 +516,11 @@ inline uint32_t mediaMtime(bool clockValid, int64_t now) {
     return now > 0xFFFFFFFFll ? 0xFFFFFFFFu : static_cast<uint32_t>(now);
 }
 
+// Content-Type of an object. A ".gz" key (bucket web) is served as the gzip
+// it is, not as what it holds.
 inline const char* contentTypeFor(const char* key, size_t len) {
-    if (endsWith(key, len, ".json")) return "application/json";
-    if (endsWith(key, len, ".js")) return "application/javascript";
-    if (endsWith(key, len, ".txt")) return "text/plain";
-    if (endsWith(key, len, ".svg")) return "image/svg+xml";
-    if (endsWith(key, len, ".html")) return "text/html";
     if (endsWith(key, len, ".gz")) return "application/gzip";
-    if (endsWith(key, len, ".ttf")) return "font/ttf";
-    if (endsWith(key, len, ".otf")) return "font/otf";
-    return "application/octet-stream";
+    return fbtext::contentTypeByExtension(key, len);
 }
 
 // ---------------------------------------------------------------------------
@@ -571,29 +570,15 @@ void putXml(S& s, const char* str) {
 // S3 encoding-type=url: percent-encode everything but unreserved and '/'.
 template <class S>
 void putUrlEncoded(S& s, const char* str, size_t len) {
-    static constexpr char hex[] = "0123456789ABCDEF";
-    for (size_t i = 0; i < len; ++i) {
-        const auto c = static_cast<unsigned char>(str[i]);
-        const bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                           (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
-                           c == '~' || c == '/';
-        if (plain) {
-            s.Put(static_cast<char>(c));
-        } else {
-            s.Put('%');
-            s.Put(hex[c >> 4]);
-            s.Put(hex[c & 0xF]);
-        }
-    }
+    fbtext::percentEncode(s, str, len, true);
 }
 
 template <class S>
 void putHex(S& s, const char* str, size_t len) {
-    static constexpr char hex[] = "0123456789abcdef";
     for (size_t i = 0; i < len; ++i) {
         const auto c = static_cast<unsigned char>(str[i]);
-        s.Put(hex[c >> 4]);
-        s.Put(hex[c & 0xF]);
+        s.Put(fbtext::kHexLower[c >> 4]);
+        s.Put(fbtext::kHexLower[c & 0xF]);
     }
 }
 
@@ -601,15 +586,9 @@ void putHex(S& s, const char* str, size_t len) {
 // XML-safe, stateless. Returns the decoded length, or -1 if malformed/too long.
 inline int hexDecode(const char* in, size_t len, char* out, size_t cap) {
     if (len % 2 || len / 2 >= cap) return -1;
-    auto nib = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    };
     for (size_t i = 0; i < len; i += 2) {
-        const int hi = nib(in[i]);
-        const int lo = nib(in[i + 1]);
+        const int hi = fbtext::hexNibble(in[i]);
+        const int lo = fbtext::hexNibble(in[i + 1]);
         if (hi < 0 || lo < 0) return -1;
         const char c = static_cast<char>(hi << 4 | lo);
         if (c == '\0') return -1;
@@ -686,45 +665,16 @@ inline void formatCrc32B64(uint32_t crc, char* out) {
 // Dates and ETags
 // ---------------------------------------------------------------------------
 
-struct Civil {
-    int year;
-    unsigned month, day, hour, minute, second, weekday;  // weekday 0 = Sunday
-};
+// Calendar fields without gmtime/TZ; valid up to 2106 (TextLogic.h).
+using fbtext::Civil;
+using fbtext::toCivil;
 
-// Howard Hinnant's days-from-civil inverse; no gmtime/TZ dependency.
-// 32-bit math (no 64-bit division helpers on the ESP32): valid up to 2106.
-inline Civil toCivil(int64_t t64) {
-    const uint32_t t = t64 < 0 ? 0 : (t64 > 0xFFFFFFFFll ? 0xFFFFFFFFu : static_cast<uint32_t>(t64));
-    const uint32_t days = t / 86400;
-    const uint32_t secs = t % 86400;
-    const uint32_t z = days + 719468;
-    const uint32_t era = z / 146097;
-    const uint32_t doe = z - era * 146097;
-    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const unsigned mp = (5 * doy + 2) / 153;
-    Civil c{};
-    c.day = doy - (153 * mp + 2) / 5 + 1;
-    c.month = mp < 10 ? mp + 3 : mp - 9;
-    c.year = static_cast<int>(yoe + era * 400 + (c.month <= 2));
-    c.hour = static_cast<unsigned>(secs / 3600);
-    c.minute = static_cast<unsigned>(secs / 60 % 60);
-    c.second = static_cast<unsigned>(secs % 60);
-    c.weekday = static_cast<unsigned>((days + 4) % 7);  // 1970-01-01 was a Thursday
-    return c;
-}
-
-inline void put2(char* p, unsigned v) {
-    p[0] = static_cast<char>('0' + v / 10 % 10);
-    p[1] = static_cast<char>('0' + v % 10);
-}
+inline void put2(char* p, unsigned v) { fbtext::putDigits(p, v, 2); }
 
 // "2026-11-08T12:34:56.000Z" (24 chars + NUL).
 inline void formatIso8601(int64_t t, char out[25]) {
     const Civil c = toCivil(t);
-    const unsigned y = static_cast<unsigned>(c.year) % 10000;
-    put2(out, y / 100);
-    put2(out + 2, y % 100);
+    fbtext::putDigits(out, c.year, 4);
     out[4] = '-';
     put2(out + 5, c.month);
     out[7] = '-';
@@ -739,40 +689,18 @@ inline void formatIso8601(int64_t t, char out[25]) {
 }
 
 // RFC 7231 IMF-fixdate "Sun, 08 Nov 2026 12:34:56 GMT" (29 chars + NUL).
-inline void formatHttpDate(int64_t t, char out[30]) {
-    static constexpr char days[] = "SunMonTueWedThuFriSat";
-    static constexpr char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    const Civil c = toCivil(t);
-    memcpy(out, days + 3 * c.weekday, 3);
-    out[3] = ',';
-    out[4] = ' ';
-    put2(out + 5, c.day);
-    out[7] = ' ';
-    memcpy(out + 8, months + 3 * (c.month - 1), 3);
-    out[11] = ' ';
-    const unsigned y = static_cast<unsigned>(c.year) % 10000;
-    put2(out + 12, y / 100);
-    put2(out + 14, y % 100);
-    out[16] = ' ';
-    put2(out + 17, c.hour);
-    out[19] = ':';
-    put2(out + 20, c.minute);
-    out[22] = ':';
-    put2(out + 23, c.second);
-    memcpy(out + 25, " GMT", 5);
-}
+using fbtext::formatHttpDate;
 
 // "\"<size-hex>-<mtime-hex>\"" including the quotes. The '-' marks it as a
 // non-MD5 ETag, so S3 clients do not verify it against content. Needs 20 B.
 inline void formatETag(uint64_t size, uint64_t mtime, char out[40]) {
-    static constexpr char hex[] = "0123456789abcdef";
     size_t n = 0;
     out[n++] = '"';
     auto putHexNum = [&](uint64_t v) {
         char tmp[16];
         size_t k = 0;
         do {
-            tmp[k++] = hex[v & 0xF];
+            tmp[k++] = fbtext::kHexLower[v & 0xF];
             v >>= 4;
         } while (v);
         while (k) out[n++] = tmp[--k];
@@ -787,12 +715,8 @@ inline void formatETag(uint64_t size, uint64_t mtime, char out[40]) {
 // "\"<32 hex digits>\"" including the quotes: the MD5 of the content, the
 // ETag S3 gives a non-multipart object (media buckets store it). 35 B.
 inline void formatMd5ETag(const uint8_t md5[16], char out[35]) {
-    static constexpr char hex[] = "0123456789abcdef";
     out[0] = '"';
-    for (int i = 0; i < 16; ++i) {
-        out[1 + 2 * i] = hex[md5[i] >> 4];
-        out[2 + 2 * i] = hex[md5[i] & 0xF];
-    }
+    fbtext::toHex(md5, 16, out + 1);
     out[33] = '"';
     out[34] = '\0';
 }
@@ -906,7 +830,6 @@ public:
 
     bool done() const { return state_ == State::Done; }
     bool failed() const { return state_ == State::Error; }
-    State state() const { return state_; }
 
     bool hasCrc32() const { return haveCrc_; }
     const char* crc32B64() const { return crc_; }
@@ -933,13 +856,6 @@ private:
     bool haveCrc_ = false;
     uint8_t crcLen_ = 0;
     char crc_[13] = {};
-
-    static int hexVal(char c) {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    }
 
     void startTrailerLine() {
         nameIdx_ = 0;
@@ -974,7 +890,7 @@ private:
     void step(char c) {
         switch (state_) {
             case State::Size: {
-                const int v = hexVal(c);
+                const int v = fbtext::hexNibble(c);
                 if (v >= 0) {
                     if (digits_ == 0) sigLen_ = 0;  // new chunk header
                     if (remaining_ > 0x0FFFFFFF) { state_ = State::Error; return; }

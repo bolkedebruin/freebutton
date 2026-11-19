@@ -135,25 +135,32 @@ describe('JSON validation', () => {
     expect(validateConfigShape({ displayitems: 'x' })).toEqual(['"displayitems" must be an array']);
   });
 
-  it('includes invalid and duplicate key / display item names', () => {
+  it('includes invalid and duplicate button / display item names', () => {
     expect(validateConfigShape({
       buttons: [{ position: 1, name: 'up' }, { position: 2, name: 'up' }],
-      mqttdisplays: [{ displayitemid: '1', name: 'bad-name' }],
+      displayitems: [{ displayitemid: '1', name: 'bad-name' }],
     })).toEqual([
-      'buttons[1].name "up" is already used by buttons[0] (key names must be unique)',
-      'mqttdisplays[0].name "bad-name" is not a valid name (1-24 letters, digits or _, not starting with a digit)',
+      'buttons[1].name "up" is already used by buttons[0] (button names must be unique)',
+      'displayitems[0].name "bad-name" is not a valid name (1-24 letters, digits or _, not starting with a digit)',
+    ]);
+  });
+
+  it('the removed array names are not arrays the IDE checks: they are removed keys', () => {
+    expect(validateConfigShape({ mqttbuttons: {}, mqttdisplays: [{ name: 'bad-name' }], mqttbrokers: [] })).toEqual([
+      '"mqttbuttons" is no longer read: use "buttons"',
+      '"mqttdisplays" is no longer read: use "displayitems"',
+      '"mqttbrokers" is no longer read: use "brokers"',
     ]);
   });
 
   it('accepts well-formed lists', () => {
     expect(validateConfigShape({
       lists: [
-        { name: 'scenes', page: 2, x: 4, y: 18, width: 92, rows: 3, fontsize: 3,
-          items: ['Bed Time', 'Evening'], selected: 0,
-          color: '808080', focuscolor: 'FFD45F', focustextcolor: '000000' },
+        { name: 'scenes', page: 2, x: 4, y: 18, width: 92, rows: 3, items: ['Bed Time', 'Evening'], selected: 0, style: 'rows' },
         { name: 'empty', items: [] },
         { name: 'bare' },
       ],
+      styles: { rows: { 'font-size': 24, color: '#808080', selected: { 'background-color': '#ffd45f', color: '#000000' } } },
     })).toEqual([]);
   });
 
@@ -165,8 +172,8 @@ describe('JSON validation', () => {
         { items: ['a'] },
         { name: 's', items: 'a\nb' },
         { name: 't', items: ['ok', 3, 'two\nlines'] },
-        { name: 'u', rows: 0, fontsize: 73, x: 101, width: '50', page: 1.5, selected: -1 },
-        { name: 'v', color: '#808080', focuscolor: 'fff', focustextcolor: 0 },
+        { name: 'u', rows: 0, x: 101, width: '50', page: 1.5, selected: -1 },
+        { name: 'v', color: '808080', focuscolor: 'fff', focustextcolor: 0, fontsize: 3, font: 'x', focusstyle: 'y' },
       ],
     })).toEqual([
       'lists[0] must be an object',
@@ -178,11 +185,14 @@ describe('JSON validation', () => {
       'lists[4].x must be a number 0..100',
       'lists[4].width must be a number 0..100',
       'lists[4].rows must be an integer 1..7',
-      'lists[4].fontsize must be an integer 1..72',
       'lists[4].selected must be an integer >= 0',
-      'lists[5].color must be 6 hex digits without "#" (e.g. "ffd45f")',
-      'lists[5].focuscolor must be 6 hex digits without "#" (e.g. "ffd45f")',
-      'lists[5].focustextcolor must be 6 hex digits without "#" (e.g. "ffd45f")',
+      // The font and colour fields of a list are gone: each is reported with what replaces it.
+      '"color" is no longer read: use a style with "color" (lists[5])',
+      '"focuscolor" is no longer read: use a style with "selected": {"background-color"} (lists[5])',
+      '"focustextcolor" is no longer read: use a style with "selected": {"color"} (lists[5])',
+      '"fontsize" is no longer read: use a style with "font-size" (lists[5])',
+      '"font" is no longer read: use a style with "font-family" (lists[5])',
+      '"focusstyle" is no longer read: use a style with a "selected" block (lists[5])',
     ]);
   });
 
@@ -206,17 +216,17 @@ describe('validateBody', () => {
   });
 
   it('blocks saving config.json with a duplicate name', () => {
-    const text = JSON.stringify({ mqttdisplays: [{ name: 'v' }, { name: 'v' }] });
+    const text = JSON.stringify({ displayitems: [{ name: 'v' }, { name: 'v' }] });
     expect(validateBody('config.json', text)).toBe(
-      'config.json: mqttdisplays[1].name "v" is already used by mqttdisplays[0] (display item names must be unique)'
+      'config.json: displayitems[1].name "v" is already used by displayitems[0] (display item names must be unique)'
     );
-    expect(validateBody('config.json', JSON.stringify({ mqttdisplays: [{ name: 'v' }], buttons: [{ position: 1, name: 'v' }] }))).toBeNull();
+    expect(validateBody('config.json', JSON.stringify({ displayitems: [{ name: 'v' }], buttons: [{ position: 1, name: 'v' }] }))).toBeNull();
   });
 
   it('blocks saving config.json with a malformed list', () => {
     expect(validateBody('config.json', JSON.stringify({ lists: [{ name: 's', rows: 9 }] })))
       .toBe('config.json: lists[0].rows must be an integer 1..7');
-    expect(validateBody('config.json', JSON.stringify({ lists: [{ name: 'v' }], mqttdisplays: [{ name: 'v' }] }))).toBeNull();
+    expect(validateBody('config.json', JSON.stringify({ lists: [{ name: 'v' }], displayitems: [{ name: 'v' }] }))).toBeNull();
   });
 
   it('does not syntax-check .js (the source is always saved)', () => {
@@ -230,23 +240,42 @@ describe('validateBody', () => {
   });
 });
 
-describe('validateConfigShape: fonts', () => {
-  it('includes the font table and item font checks; save refuses them', () => {
-    const cfg = { style: { fonts: [{ name: 'a', src: 'a.ttf', fallback: 'a' }] }, buttons: [{ position: 1, font: 'zz' }] };
+describe('validateConfigShape: fonts, styles and removed keys', () => {
+  it('includes the font table and the style lists; save refuses them', () => {
+    const cfg = { fonts: [{ name: 'a', src: 'a.ttf', fallback: 'a' }], buttons: [{ position: 1, style: 'zz' }] };
     expect(validateConfigShape(cfg)).toEqual([
-      'style.fonts: fallback cycle a -> a',
-      expect.stringContaining('buttons[0].font "zz" is not a font'),
+      'fonts: fallback cycle a -> a',
+      'buttons[0].style: unknown style "zz", left out',
     ]);
     expect(validateBody('config.json', JSON.stringify(cfg))).toContain('fallback cycle');
-    expect(validateConfigShape({ style: { fonts: [{ name: 'a', src: 'a.ttf' }] }, displayitems: [{ font: 'a', fontsize: 40 }] })).toEqual([]);
+    expect(validateConfigShape({
+      fonts: [{ name: 'a', src: 'a.ttf' }], styles: { big: { 'font-family': 'a', 'font-size': 40 } }, displayitems: [{ style: 'big' }],
+    })).toEqual([]);
   });
 
-  it('includes the style errors; save refuses them', () => {
-    const cfg = { style: { title: { text_color: 'gold' }, key: { lable: {} } } };
+  it('includes the problems in "styles"; save refuses them', () => {
+    const cfg = { styles: { displayitem: { title: { color: 'gold' } }, button: { lable: {} }, bold: { 'font-weight': 700 } } };
     expect(validateConfigShape(cfg)).toEqual([
-      'style.title.text_color must be a colour "#rrggbb"',
-      expect.stringContaining('style.key.lable is not an element of "key"'),
+      'styles.displayitem.title.color: bad value, ignored (it takes a colour "#rrggbb")',
+      'styles.button: unknown property "lable", ignored ("lable" is not a part: title, unit, selected, icon)',
+      'styles.bold: unknown property "font-weight", ignored (there is no font-weight: a bold face is another font, chosen with "font-family")',
     ]);
-    expect(validateBody('config.json', JSON.stringify(cfg))).toContain('text_color');
+    expect(validateBody('config.json', JSON.stringify(cfg))).toContain('styles.displayitem.title.color: bad value');
+  });
+
+  it('a config in the old format: every removed key with its replacement; save refuses it', () => {
+    const cfg = {
+      style: { fonts: [], text: { text_color: '#ffffff' } },
+      buttons: [{ position: 1, fontsize: 3 }],
+      displayitems: [{ fontsize: 2, iconcolor: '#ff0000' }],
+      // "color" stays valid on an image.
+      images: [{ name: 'logo', color: '#ff0000' }],
+    };
+    expect(validateConfigShape(cfg)).toEqual([
+      '"style" is no longer read: use the top-level "fonts" and "styles"',
+      '"fontsize" is no longer read: use a style with "font-size" (buttons[0] and 1 more)',
+      '"iconcolor" is no longer read: use a style with "icon": {"color"} (displayitems[0])',
+    ]);
+    expect(validateBody('config.json', JSON.stringify(cfg))).toContain('"fontsize" is no longer read: use a style with "font-size"');
   });
 });

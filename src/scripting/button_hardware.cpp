@@ -129,27 +129,32 @@ int button_hw_set_icon(int position, const char* name, size_t len) {
     return -3;
 }
 
-int button_hw_set_font(int position, int face, int size, bool top) {
+int button_hw_set_styles(int position, uint32_t list, bool restore) {
     auto* button = configManager.getButtonByPosition(position);
     if (!button) {
         ESP_LOGW(TAG, "Button at position %d not found", position);
         return -1;
     }
-    if (top) {
-        button->setTopLabelFont(face, size);
-    } else {
-        button->setLabelFont(face, size);
-    }
+    button->setStyles(restore ? button->configStyles() : list);
     return 0;
 }
 
-int button_hw_restore_font(int position, bool top) {
+int button_hw_add_style(int position, int ref) {
     auto* button = configManager.getButtonByPosition(position);
     if (!button) {
         ESP_LOGW(TAG, "Button at position %d not found", position);
         return -1;
     }
-    button->restoreFont(top);
+    return button->addStyle(freebutton::styleref::toRef(ref)) ? 0 : -2;
+}
+
+int button_hw_remove_style(int position, int ref) {
+    auto* button = configManager.getButtonByPosition(position);
+    if (!button) {
+        ESP_LOGW(TAG, "Button at position %d not found", position);
+        return -1;
+    }
+    button->removeStyle(freebutton::styleref::toRef(ref));
     return 0;
 }
 

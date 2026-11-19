@@ -13,6 +13,8 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     include: ['src/**/*.test.ts'],
+    // Pins the virtual device's MQTT start mode to offline: no test opens a socket by accident.
+    setupFiles: ['src/test-setup.ts'],
     exclude: [],
   },
 });

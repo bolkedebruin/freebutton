@@ -35,14 +35,14 @@ extern "C" {
 
 unsigned long displayitem_create(
     int x, int y, int width, int boxType,
-    int fontSize, int alignment,
+    uint32_t styles, int alignment,
     const char* label, const char* unit,
     int round, int page)
 {
     // Create DisplayItem with empty topics (topics will be added separately if needed)
     auto item = std::make_unique<freebutton::DisplayItem>(
         x, y, width, boxType,
-        fontSize, alignment,
+        static_cast<style_list_t>(styles), alignment,
         label ? std::string(label) : "",
         unit ? std::string(unit) : "",
         round, page,
@@ -109,7 +109,7 @@ const DisplayItemInfo* displayitem_get_info(unsigned long id)
     cachedInfo.y = item->y;
     cachedInfo.width = item->width;
     cachedInfo.boxType = item->boxType;
-    cachedInfo.fontSize = item->fontSize;
+    cachedInfo.styles = item->styles();
     cachedInfo.alignment = item->alignment;
     cachedInfo.label = item->label.c_str();
     cachedInfo.unit = item->unit.c_str();
@@ -182,26 +182,36 @@ int displayitem_set_icon(unsigned long id, const char* name, size_t len)
     return -2;
 }
 
-bool displayitem_set_font(unsigned long id, int face, int size)
+bool displayitem_set_styles(unsigned long id, uint32_t list, bool restore)
 {
     freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
     if (!item) {
         ESP_LOGW(TAG, "DisplayItem %lu not found", id);
         return false;
     }
-    item->setFont(face, size);
+    item->setStyles(restore ? item->configStyles() : list);
     return true;
 }
 
-bool displayitem_restore_font(unsigned long id)
+int displayitem_add_style(unsigned long id, int ref)
 {
     freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
     if (!item) {
         ESP_LOGW(TAG, "DisplayItem %lu not found", id);
-        return false;
+        return 0;
     }
-    item->restoreFont();
-    return true;
+    return item->addStyle(freebutton::styleref::toRef(ref)) ? 1 : -1;
+}
+
+int displayitem_remove_style(unsigned long id, int ref)
+{
+    freebutton::DisplayItem* item = configManager.findDisplayItemById(id);
+    if (!item) {
+        ESP_LOGW(TAG, "DisplayItem %lu not found", id);
+        return 0;
+    }
+    item->removeStyle(freebutton::styleref::toRef(ref));
+    return 1;
 }
 
 bool displayitem_set_position(unsigned long id, int x, int y)

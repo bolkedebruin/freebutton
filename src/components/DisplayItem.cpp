@@ -22,16 +22,18 @@ namespace {
 constexpr size_t kRoomForIcon = 512;
 } // namespace
 
-DisplayItem::DisplayItem(const int x, const int y, const int width, const int boxtype, const int fontSize, const int alignment,
+DisplayItem::DisplayItem(const int x, const int y, const int width, const int boxtype, const style_list_t styles,
+                        const int alignment,
                         std::string  label, std::string  unit, const int round, const int page,
                         std::vector<Topic> topicConfigs)
     : id(next_id++)
     , x(x), y(y), width(width), boxType(boxtype)
-    , fontSize(fontSize), alignment(alignment)
+    , alignment(alignment)
     , label(std::move(label)), unit(std::move(unit)), round(round), page(page)
 {
     topics = std::move(topicConfigs);
-    font_.store(fontref::pack(FONT_FACE_NONE, fontSize), std::memory_order_relaxed);
+    styleref::store(configStyle_, styles);
+    style_.store(styles, std::memory_order_relaxed);
     // Topics will be registered later via ConfigManager::registerAllSubscriptions()
     // UI box creation is deferred until after configuration (called from fromJson)
 }
@@ -98,14 +100,16 @@ bool DisplayItem::applyPending() {
         deleteBox();
         return false;
     }
-    // A box built now draws with the current font anyway.
-    const bool fontChanged = fontDirty_.exchange(false, std::memory_order_acq_rel);
+    // A box built now draws with the current styles anyway.
+    const bool styleChanged = styleDirty_.exchange(false, std::memory_order_acq_rel);
     if (box == nullptr) {
         if (!buildBox()) {
             return false;  // no LVGL memory now; the next render request retries
         }
-    } else if (fontChanged || redraw_) {
-        drawConfigured();  // the new font; the slots below render over it
+    } else if (styleChanged || redraw_ ||
+               // a script changed a value of a style the item uses (fb.style.set)
+               ui_style_changed(STYLE_KIND_DISPLAYITEM, style_.load(std::memory_order_acquire))) {
+        drawConfigured();  // the new styles; the slots below render over it
     }
     // A text that could not be drawn (the LVGL pool was too low just then,
     // e.g. while a page is built) is not lost: its slot is marked not applied
@@ -143,8 +147,7 @@ bool DisplayItem::showIcon(IconState& s, const lv_image_dsc_t* dsc) {
         }
         return false;  // shown without icon; the next change of icon retries
     }
-    const lv_color_t tint = s.color != icon::kNoColor ? lv_color_hex(s.color) : ui_box_text_color(box);
-    return ui_box_set_icon(box, dsc, tint) && dsc != nullptr;
+    return ui_box_set_icon(box, dsc, ui_box_icon_color(box)) && dsc != nullptr;
 }
 
 // LVGL lock held, box exists. Draws the configured label and unit and an
@@ -152,15 +155,8 @@ bool DisplayItem::showIcon(IconState& s, const lv_image_dsc_t* dsc) {
 // each field over them (a slot never written keeps the configured default).
 void DisplayItem::drawConfigured() {
     const int adjustedWidth = width == 0 ? 45 : width;
-    const uint32_t font = font_.load(std::memory_order_acquire);
-    const auto clampSize = [](const int size) { return static_cast<uint8_t>(size < 0 ? 0 : size > 255 ? 255 : size); };
-    const ui_box_fonts_t fonts = {
-        .face = static_cast<int16_t>(fontref::face(font)),
-        .fontsize = clampSize(fontref::size(font)),
-        .caption_face = static_cast<int16_t>(labelFontFace),
-        .caption_fontsize = clampSize(labelFontSize),
-    };
-    redraw_ = !draw_box(box, label.c_str(), "", unit.c_str(), x, y, &fonts, adjustedWidth, alignment, boxType);
+    redraw_ = !draw_box(box, label.c_str(), "", unit.c_str(), x, y, style_.load(std::memory_order_acquire),
+                        adjustedWidth, alignment, boxType);
     valueSlot_.invalidate();
     captionSlot_.invalidate();
     unitSlot_.invalidate();
@@ -247,8 +243,8 @@ void DisplayItem::restoreConfigState() {
         }
         page = configPage_;  // applyPending() looks at it on every walk
     }
-    const uint32_t configured = fontref::pack(fontFace, fontSize);
-    if (font_.exchange(configured, std::memory_order_acq_rel) != configured) {
+    const style_list_t configured = configStyles();
+    if (style_.exchange(configured, std::memory_order_acq_rel) != configured) {
         redraw = true;
     }
     parked_.store(false, std::memory_order_release);
@@ -300,16 +296,38 @@ void DisplayItem::setDisplayUnit(const std::string_view text) {
     storeFromScript(unitSlot_, text, slotOwner(), "unit", scriptWrote_, kScriptUnit);
 }
 
-void DisplayItem::setFont(const int face, const int size) {
-    font_.store(fontref::pack(face, size), std::memory_order_release);
-    fontDirty_.store(true, std::memory_order_release);
+void DisplayItem::setStyles(const style_list_t list) {
+    if (style_.exchange(list, std::memory_order_acq_rel) == list) {
+        return;  // the list it has: nothing to draw
+    }
+    styleDirty_.store(true, std::memory_order_release);
     ui::requestPendingRender();
+}
+
+bool DisplayItem::addStyle(const uint8_t ref) {
+    bool changed = false;
+    if (!styleref::add(style_, ref, &changed)) {
+        return false;
+    }
+    if (changed) {
+        styleDirty_.store(true, std::memory_order_release);
+        ui::requestPendingRender();
+    }
+    return true;
+}
+
+void DisplayItem::removeStyle(const uint8_t ref) {
+    bool changed = false;
+    styleref::remove(style_, ref, &changed);
+    if (changed) {
+        styleDirty_.store(true, std::memory_order_release);
+        ui::requestPendingRender();
+    }
 }
 
 // Boot (config load), before the item is attached and subscribed.
 void DisplayItem::configureIcon(const JsonObject& data) {
     configuredIconSize_ = icon::clampSize(data["iconsize"] | 0, icon::kDisplayDefaultSize);
-    configuredIconColor_ = icon::parseColor(data["iconcolor"] | "");
     const char* name = data["icon"] | "";
     bool wanted = name[0] != '\0';
     for (const auto& t : topics) {
@@ -322,7 +340,7 @@ void DisplayItem::configureIcon(const JsonObject& data) {
         ESP_LOGW(TAG, "DisplayItem %lu: icon \"%s\" is not a valid icon name, ignored", id, name);
         name = "";
     }
-    IconState* s = icon_.ensure(configuredIconSize_, configuredIconColor_, name);  // keeps the config name
+    IconState* s = icon_.ensure(configuredIconSize_, name);  // keeps the config name
     if (s == nullptr) {
         ESP_LOGE(TAG, "DisplayItem %lu: no memory for its icon", id);
         return;
@@ -333,8 +351,7 @@ void DisplayItem::configureIcon(const JsonObject& data) {
 }
 
 DisplayItem::SetIconResult DisplayItem::setIconName(const std::string_view name) {
-    return setIconFromScript(icon_, name, configuredIconSize_, configuredIconColor_, slotOwner(), scriptWrote_,
-                             kScriptIcon);
+    return setIconFromScript(icon_, name, configuredIconSize_, slotOwner(), scriptWrote_, kScriptIcon);
 }
 
 } // freebutton

@@ -232,9 +232,8 @@ export function parseLvglBinHeader(bytes: Uint8Array): { cf: number; w: number; 
   return { cf, w, h, stride };
 }
 
-// The firmware reads both spellings of each list.
-const KEY_LISTS = ['buttons', 'mqttbuttons'] as const;
-const ITEM_LISTS = ['displayitems', 'mqttdisplays'] as const;
+const KEY_LISTS = ['buttons'] as const;
+const ITEM_LISTS = ['displayitems'] as const;
 
 /** config.json `icons` table: name -> LittleFS path, valid entries only. */
 export function iconTable(cfg: unknown): Map<string, string> {

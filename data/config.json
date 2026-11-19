@@ -5,12 +5,10 @@
         "connectors": [
             {
                 "id": 3,
-                "connector": 4,
                 "type": 1
             },
             {
                 "id": 2,
-                "connector": 3,
                 "type": 2
             }
         ],
@@ -38,37 +36,23 @@
         "ntpserver": "",
         "timezone": ""
     },
-    "style": {
-        "fonts": [
-            {"id": 1, "name": "mdi", "src": "icons.ttf"},
-            {"name": "montserrat", "fallback": "mdi"},
-            {"name": "montserrat_semibold", "fallback": "mdi"}
-        ],
-        "text": {"text_font": "montserrat", "text_color": "#ffffff"},
-        "title": {"text_font": "montserrat_semibold", "text_color": "#ffd700"},
-        "key": {
-            "label": {"text_size": 32},
-            "toplabel": {"text_size": 18}
-        },
-        "display": {
-            "value": {"text_size": 14},
-            "unit": {"text_color": "#999999"},
-            "caption": {"text_size": 14}
-        },
-        "list": {
-            "text_size": 32,
-            "text_color": "#808080",
-            "selected": {"bg_color": "#ffd700", "text_color": "#000000"}
-        }
+    "fonts": [
+        {"id": 1, "name": "mdi", "src": "icons.ttf"},
+        {"name": "montserrat", "fallback": "mdi"},
+        {"name": "montserrat_semibold", "fallback": "mdi"}
+    ],
+    "styles": {
+        "size14": {"font-size": 14},
+        "size24": {"font-size": 24},
+        "size32": {"font-size": 32},
+        "size48": {"font-size": 48}
     },
     "buttons": [
         {
-            "id": 0,
             "position": 7,
-            "buttonuid": "7-1",
             "page": 1,
             "label": "Open",
-            "topLabel": "Raam",
+            "toplabel": "Raam",
             "topics": [
                 {
                     "brokerid": "ha-button-plus",
@@ -97,12 +81,10 @@
             ]
         },
         {
-            "id": 1,
             "position": 8,
-            "buttonuid": "8-1",
             "page": 1,
             "label": "Dicht",
-            "topLabel": "Raam",
+            "toplabel": "Raam",
             "topics": [
                 {
                     "brokerid": "ha-button-plus",
@@ -138,7 +120,7 @@
             "y": 0,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 4,
+            "style": "size48",
             "align": 1,
             "width": 50,
             "label": "Home",
@@ -152,7 +134,7 @@
             "y": 60,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 1,
+            "style": "size14",
             "align": 1,
             "width": 35,
             "label": "",
@@ -173,7 +155,7 @@
             "y": 52,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 1,
+            "style": "size14",
             "align": 1,
             "width": 36,
             "label": "",
@@ -194,7 +176,7 @@
             "y": 80,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 1,
+            "style": "size14",
             "align": 1,
             "width": 100,
             "label": "Sonos",
@@ -227,7 +209,7 @@
             "y": 5,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 3,
+            "style": "size32",
             "align": 1,
             "width": 20,
             "label": "",
@@ -248,7 +230,7 @@
             "y": 30,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 1,
+            "style": "size14",
             "align": 1,
             "width": 35,
             "label": "",
@@ -269,7 +251,7 @@
             "y": 40,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 2,
+            "style": "size24",
             "align": 1,
             "width": 10,
             "label": "",
@@ -290,7 +272,7 @@
             "y": 40,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 2,
+            "style": "size24",
             "align": 1,
             "width": 10,
             "label": "",
@@ -311,7 +293,7 @@
             "y": 40,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 2,
+            "style": "size24",
             "align": 1,
             "width": 10,
             "label": "",
@@ -332,7 +314,7 @@
             "y": 0,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 4,
+            "style": "size48",
             "align": 1,
             "width": 30,
             "label": "",
@@ -353,7 +335,7 @@
             "y": 20,
             "page": 0,
             "boxtype": 1,
-            "fontsize": 3,
+            "style": "size32",
             "align": 1,
             "width": 30,
             "label": "",

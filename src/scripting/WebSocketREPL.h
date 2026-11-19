@@ -26,14 +26,11 @@ public:
     // Called from the JS console callback - zero buffering, streams directly
     void broadcastConsole(std::string_view message);
 
-    // Check if any clients are connected
-    [[nodiscard]] bool hasClients() const noexcept;
-
-    // Get number of connected clients
-    [[nodiscard]] size_t clientCount() const noexcept;
-
     // Clean up stale/disconnected clients - call periodically from main loop
     void cleanupClients();
+
+    // Closes every console connection at the next cleanup (any task).
+    void requestCloseAll();
 
     // Loop task: run a parked eval request and send its result. The
     // WebSocket handler (async_tcp task) never runs script code itself.
@@ -58,6 +55,8 @@ private:
 
     // WebSocket instance (lazy initialized)
     AsyncWebSocket* ws_{nullptr};
+    std::atomic<bool> closeAllRequested_{false};
+    uint32_t consoleDropped_{0};  // console lines not sent for a full queue (broadcastConsole)
 
     // One parked eval request, handed from the async_tcp task to the loop
     // task (which owns the JS engine). Waiting for the engine in async_tcp
@@ -92,7 +91,8 @@ private:
 // Static callback for console output (called from mquickjs)
 void websocketConsoleCallback(const char* buf, size_t len);
 
-// Free function for main.cpp (avoids including ESPAsyncWebServer there)
+// Free functions for the main loop (main.cpp).
+void cleanupWebSocketClients();
 void processWebSocketRepl();
 
 } // namespace Scripting

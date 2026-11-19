@@ -5,7 +5,7 @@
 // A FACE is one TTF file plus an optional fallback face; it has no size.
 // The two system faces always exist: FONT_FACE_SYSTEM "montserrat"
 // (medium.ttf) and FONT_FACE_SYSTEM_BOLD "montserrat_semibold"
-// (semibold.ttf). config.json "style.fonts" adds faces, and may give a
+// (semibold.ttf). config.json "fonts" adds faces, and may give a
 // system face a fallback and a lineheight (not another file)
 // (fonts_configure()). Fallbacks are explicit only: a face without a
 // configured fallback has none. No font name is special in the code.
@@ -36,7 +36,7 @@ extern "C" {
 
 /* FONTS_MAX_FACES, FONTS_MAX_INSTANCES, FONT_NAME_MAX, FONT_SRC_MAX,
  * FONT_PX_MIN/MAX, FONT_CHAIN_MAX, the FONT_FACE_* indexes,
- * font_fallback_kind_t and font_def_t (one config.json "style.fonts" entry) are in
+ * font_fallback_kind_t and font_def_t (one config.json "fonts" entry) are in
  * font_logic.h, which has no LVGL dependency. */
 #include "font_logic.h"
 
@@ -53,7 +53,7 @@ void destroy_fonts(void);
  * 1.5 s after the last request of a batch. */
 void fonts_request_reload(void);
 
-/* config.json "style.fonts" (LVGL lock held, once at boot, before any object
+/* config.json "fonts" (LVGL lock held, once at boot, before any object
  * uses a config face). Adds faces in order (an entry with a system name sets
  * that face's id, fallback and lineheight instead; its src is ignored with a
  * warning), then resolves every fallback: unknown
@@ -71,10 +71,10 @@ int fonts_find_id(int32_t id);
 /* The face's name ("" for an invalid face). */
 const char *fonts_face_name(int face);
 
-/* Config / script "fontsize" -> px: 1..5 = the legacy steps
- * 14/24/32/48/72; FONT_PX_MIN..FONT_PX_MAX = px; 0 or anything else =
- * `fallback_px` (font_logic_px). Items use style_logic_item_px, which also
- * has the title rule (step 2 = 18 px). */
+/* A size step -> px: 1..5 = the steps 14/24/32/48/72; FONT_PX_MIN..
+ * FONT_PX_MAX = px; 0 or anything else = `fallback_px` (font_logic_px).
+ * Text markup (\s1..\s5) uses style_logic_item_px, which also has the
+ * title rule (step 2 = 18 px). */
 int fonts_px(int fontsize, int fallback_px);
 
 /* The instance of `face` at `px` (clamped to FONT_PX_MIN..MAX), made on

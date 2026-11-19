@@ -145,8 +145,9 @@ describe('workspace fonts', () => {
     expect(ws.snapshot().readOnly?.fonts?.map(f => f.key)).toContain('Roboto_Mono.ttf');
 
     expect(await ws.addFontToConfig(key!)).toBe(true);
-    expect(questions[questions.length - 1]).toBe('Add font "Roboto_Mono" (Roboto_Mono.ttf) to config.json "style.fonts"?');
-    expect(JSON.parse(dev.files.get('config.json')!).style).toEqual({ fonts: [{ name: 'Roboto_Mono', src: 'Roboto_Mono.ttf' }] });
+    expect(questions[questions.length - 1]).toBe('Add font "Roboto_Mono" (Roboto_Mono.ttf) to config.json "fonts"?');
+    // "fonts" is a top-level array.
+    expect(JSON.parse(dev.files.get('config.json')!)).toEqual({ buttons: [], fonts: [{ name: 'Roboto_Mono', src: 'Roboto_Mono.ttf' }] });
     expect(dev.files.get('config.json')!.startsWith('{\n  "buttons"')).toBe(true);
     // The preview's font table knows it now.
     expect(getFontTable().faces.map(f => f.name)).toContain('Roboto_Mono');
@@ -156,16 +157,42 @@ describe('workspace fonts', () => {
     expect(questions.length).toBe(asked);
   });
 
-  it('adds to an existing "style" keeping its other sections; a system font file needs no entry', async () => {
-    const dev = fakeDevice({ 'config.json': JSON.stringify({ style: { text: { text_color: '#ffffff' } } }) });
+  it('adds to an existing "fonts" keeping its entries and the other sections; a system font file needs no entry', async () => {
+    const cfg = { fonts: [{ name: 'mono', src: 'mono.ttf' }], styles: { big: { 'font-size': 48 } } };
+    const dev = fakeDevice({ 'config.json': JSON.stringify(cfg) });
     await start();
     expect(await ws.addFontToConfig('roboto.ttf')).toBe(true);
-    expect(JSON.parse(dev.files.get('config.json')!).style).toEqual({
-      fonts: [{ name: 'roboto', src: 'roboto.ttf' }], text: { text_color: '#ffffff' },
+    expect(JSON.parse(dev.files.get('config.json')!)).toEqual({
+      fonts: [{ name: 'mono', src: 'mono.ttf' }, { name: 'roboto', src: 'roboto.ttf' }], styles: { big: { 'font-size': 48 } },
     });
     const asked = questions.length;
     expect(await ws.addFontToConfig('medium.ttf')).toBe(true);
     expect(questions.length).toBe(asked);
+  });
+
+  it('does not add to "fonts" that is not an array, and says what to add', async () => {
+    const text = JSON.stringify({ fonts: { roboto: 'roboto.ttf' } });
+    const dev = fakeDevice({ 'config.json': text });
+    await start();
+    expect(await ws.addFontToConfig('roboto.ttf')).toBe(false);
+    expect(questions).toEqual([]);
+    expect(lines[lines.length - 1]!.text).toBe('config.json "fonts" is not an array: add "fonts": [{"name": "roboto", "src": "roboto.ttf"}] yourself');
+    expect(dev.files.get('config.json')).toBe(text);
+  });
+
+  it('a "style" block is not read, and a config that has one is not changed', async () => {
+    const text = JSON.stringify({ style: { fonts: [{ name: 'mono', src: 'mono.ttf' }] } });
+    const dev = fakeDevice({ 'config.json': text });
+    await start();
+    // The font of the block is not in the table.
+    expect(getFontTable().faces.map(f => f.name)).not.toContain('mono');
+    expect(await ws.addFontToConfig('roboto.ttf')).toBe(false);
+    expect(lines[lines.length - 1]!.text).toBe(
+      'config.json not changed: config.json: "style" is no longer read: use the top-level "fonts" and "styles"');
+    expect(dev.files.get('config.json')).toBe(text);
+    // Nothing in the block is removed either.
+    expect(await ws.removeFontFromConfig('mono.ttf')).toBe(true);
+    expect(dev.files.get('config.json')).toBe(text);
   });
 
   it('refuses a non-TrueType or too large file before any request', async () => {
@@ -181,7 +208,7 @@ describe('workspace fonts', () => {
   });
 
   it('deletes a font after asking and offers to remove its config entry', async () => {
-    const cfg = { style: { fonts: [{ name: 'roboto', src: 'roboto.ttf' }, { name: 'mono', src: 'mono.ttf' }] } };
+    const cfg = { fonts: [{ name: 'roboto', src: 'roboto.ttf' }, { name: 'mono', src: 'mono.ttf' }] };
     const dev = fakeDevice({ 'config.json': JSON.stringify(cfg) });
     dev.fonts.set('roboto.ttf', new Uint8Array(4));
     await start();
@@ -189,8 +216,8 @@ describe('workspace fonts', () => {
     expect(questions[questions.length - 1]).toBe('Delete fonts/roboto.ttf from the device?');
     expect(dev.fonts.has('roboto.ttf')).toBe(false);
     expect(await ws.removeFontFromConfig('roboto.ttf')).toBe(true);
-    expect(questions[questions.length - 1]).toBe('Remove font "roboto" (roboto.ttf) from config.json "style.fonts"?');
-    expect(JSON.parse(dev.files.get('config.json')!).style.fonts).toEqual([{ name: 'mono', src: 'mono.ttf' }]);
+    expect(questions[questions.length - 1]).toBe('Remove font "roboto" (roboto.ttf) from config.json "fonts"?');
+    expect(JSON.parse(dev.files.get('config.json')!)).toEqual({ fonts: [{ name: 'mono', src: 'mono.ttf' }] });
   });
 
   it('refuses to delete a system font (no question, no request); icons.ttf is an ordinary font', async () => {
@@ -208,20 +235,24 @@ describe('workspace fonts', () => {
     expect(dev.fonts.has('icons.ttf')).toBe(false);
   });
 
-  it('does not remove a config entry that items still use', async () => {
-    const cfg = { style: { fonts: [{ name: 'roboto', src: 'roboto.ttf' }] }, buttons: [{ position: 1, font: 'roboto' }] };
+  it('does not remove a config entry that a style still uses', async () => {
+    const cfg = {
+      fonts: [{ name: 'roboto', src: 'roboto.ttf' }],
+      styles: { title: { 'font-family': 'roboto' } },
+      buttons: [{ position: 1, style: 'title' }],
+    };
     const dev = fakeDevice({ 'config.json': JSON.stringify(cfg) });
     await start();
     expect(await ws.removeFontFromConfig('roboto.ttf')).toBe(false);
-    expect(lines[lines.length - 1]!.text).toContain('buttons[0].font "roboto" is not a font');
-    expect(JSON.parse(dev.files.get('config.json')!).style.fonts).toHaveLength(1);
+    expect(lines[lines.length - 1]!.text).toContain('styles.title.font-family: unknown font');
+    expect(JSON.parse(dev.files.get('config.json')!).fonts).toHaveLength(1);
   });
 
   it('saving a config with fonts lists the bucket once and warns about missing files', async () => {
     const dev = fakeDevice({ 'config.json': '{}' });
     const ed = await start();
     await ws.open('config.json');
-    ed.content = JSON.stringify({ style: { fonts: [{ name: 'roboto', src: 'roboto.ttf' }] } });
+    ed.content = JSON.stringify({ fonts: [{ name: 'roboto', src: 'roboto.ttf' }] });
     emit('editor-doc-change');
     expect(await ws.save()).toBe(true);
     await new Promise(r => setTimeout(r, 0));

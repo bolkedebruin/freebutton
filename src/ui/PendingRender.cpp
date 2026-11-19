@@ -23,6 +23,10 @@ std::atomic<bool> g_requested{false};
 constexpr int kRetryAfterCalls = 50;
 int g_retryIn = 0;
 
+// setWalkHooks(). Only accessed with the LVGL lock held.
+void (*g_walkBegin)() = nullptr;
+void (*g_walkEnd)() = nullptr;
+
 } // namespace
 
 // Both walk the list (a few dozen widgets at most, and only when a widget is
@@ -60,12 +64,20 @@ void requestPendingRenderLater() {
     }
 }
 
+void setWalkHooks(void (*begin)(), void (*end)()) {
+    g_walkBegin = begin;
+    g_walkEnd = end;
+}
+
 void applyPendingRenders() {
     const bool retryNow = g_retryIn > 0 && --g_retryIn == 0;
     if (!g_requested.exchange(false, std::memory_order_acq_rel) && !retryNow) {
         return;
     }
     g_retryIn = 0;  // this walk is the retry; a widget asks again if it still fails
+    if (g_walkBegin) {
+        g_walkBegin();
+    }
     bool again = false;
     // Release first, then build (PendingRender::shownNow). Both passes keep
     // the list (config) order.
@@ -78,6 +90,9 @@ void applyPendingRenders() {
         if (r->shownNow()) {
             again |= r->applyPending();
         }
+    }
+    if (g_walkEnd) {
+        g_walkEnd();
     }
     if (again) {
         g_requested.store(true, std::memory_order_release);

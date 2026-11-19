@@ -24,7 +24,7 @@ export async function uploadImages(files: readonly Picked[]): Promise<void> {
 export async function uploadFonts(files: readonly Picked[]): Promise<void> {
   for (const file of files) {
     const key = await workspace.uploadFont(file);
-    // Offer the matching config.json "style.fonts" entry (asks first).
+    // Offer the matching config.json "fonts" entry (asks first).
     if (key) await workspace.addFontToConfig(key);
   }
 }
@@ -40,7 +40,7 @@ export async function uploadDropped(files: readonly Picked[]): Promise<{ images:
   const fonts = files.filter(isFontFile);
   const other = files.filter(f => !isSvgFile(f) && !isFontFile(f));
   if (other.length) {
-    emit('console-line', {
+    emit('console-line', { to: 'device',
       text: `Not uploaded (only .svg images and .ttf / .otf fonts can be dropped here): ${other.map(f => f.name).join(', ')}`,
       type: 'warn',
     });

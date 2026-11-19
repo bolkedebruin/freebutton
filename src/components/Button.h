@@ -11,7 +11,7 @@
 #include "TopicHandler.h"
 #include "ButtonEventPlan.h"
 #include "IconRef.h"
-#include "FontRef.h"
+#include "StyleRef.h"
 #include "ui/PendingRender.h"
 #include "utils/TextSlot.h"
 #include <atomic>
@@ -81,26 +81,27 @@ private:
     IconHolder icon_;
     int configuredIconSize_ = icon::kButtonDefaultSize;
 
-    // Config "font" / "fontsize" (bottom label) and "topfont" /
-    // "topfontsize" (top label): the local layer over the key.label /
-    // key.toplabel styles (ui/ui_style.h). FONT_FACE_NONE and 0 = the
-    // style's (the shared style: no per-button style).
-    int fontFace_ = FONT_FACE_NONE;
-    int fontSize_ = 0;
-    int topFontFace_ = FONT_FACE_NONE;
-    int topFontSize_ = 0;
-    // The fonts now (fontref::pack): the configured ones until a script
-    // calls setFont() / setTopFont() (any task); applied by the LVGL task.
-    std::atomic<uint32_t> labelFont_{fontref::pack(FONT_FACE_NONE, 0)};
-    std::atomic<uint32_t> topLabelFont_{fontref::pack(FONT_FACE_NONE, 0)};
-    std::atomic<bool> fontDirty_{false};
-    // LVGL lock held, button exists.
-    void applyFonts();
+    // The button's styles now (ui/ui_style.h list): the configured ones
+    // until a script calls setStyles() (any task). The bottom label carries
+    // their main blocks and the top label their "title" blocks; the LVGL
+    // task applies them when styleDirty_ is set.
+    std::atomic<uint32_t> style_{0};
+    std::atomic<bool> styleDirty_{false};
+    // LVGL lock held, button exists. The styles, the labels' base fonts and
+    // line heights, and a local font where the shared styles give none.
+    // true when a label's styles changed: the caller draws the texts again.
+    bool applyStyles();
+    // LVGL lock held, button exists: the texts and the icon as they are
+    // now, drawn again (a row of spans keeps the colour and font it was
+    // rendered with; the icon its tint).
+    void redrawTexts();
 
     // Button position and device information
     uint32_t position_{0};
     uint8_t page_{1};
     uint8_t brokerId_{0};
+    // Config "style" (styleref::store). Written at config load only.
+    uint8_t configStyle_[STYLE_ITEM_MAX]{};
 
 public:
 
@@ -142,24 +143,21 @@ public:
     using SetIconResult = freebutton::SetIconResult;
     SetIconResult setIconName(std::string_view name);
 
-    // Font of the bottom / top label (a fonts.h face, FONT_FACE_NONE = the
-    // style's face; size 1..5 = step, else px, 0 = the style's). Any task:
-    // the LVGL task applies it.
-    void setLabelFont(int face, int size);
-    void setTopLabelFont(int face, int size);
-    // Back to the configured font and size of the label (top: the top
-    // label). Any task: the configured values are not written after boot.
-    void restoreFont(bool top) {
-        if (top) {
-            setTopLabelFont(topFontFace_, topFontSize_);
-        } else {
-            setLabelFont(fontFace_, fontSize_);
-        }
-    }
+    // The button's style list: refs the caller resolved (ui/ui_style.h).
+    // Any task: the LVGL task applies it.
+    void setStyles(style_list_t list);
+    // One style (a ref, 0 = none: nothing changes) as the last of the
+    // list, or out of it; any task. addStyle: false, and nothing changed,
+    // when it would be a fifth style.
+    bool addStyle(uint8_t ref);
+    void removeStyle(uint8_t ref);
+    // The list now, and the one config.json gives the button.
+    style_list_t styles() const { return style_.load(std::memory_order_acquire); }
+    style_list_t configStyles() const { return styleref::load(configStyle_); }
 
     // Script engine restart (ConfigManager::restoreConfigState): label, top
-    // label and icon a script set (not those from the key's config topics)
-    // and the fonts go back to the config. LVGL lock held, no script code
+    // label and icon a script set (not those from the key's config topics),
+    // and the style list go back to the config. LVGL lock held, no script code
     // running; the LVGL task draws on its next tick. The caller requests the
     // render.
     void restoreConfigState();
@@ -176,12 +174,10 @@ public:
 
     template<typename OutputStream>
     void toJson(json::JsonWriter<OutputStream>::ScopedObject &obj) {
-        obj.Add("id", id);
         obj.Add("position", position_);
-        obj.Add("buttonuid", std::to_string(position_) + "-" + std::to_string(page_)); // not used
         obj.Add("page", page_);
         obj.Add("label", label);
-        obj.Add("toplabel", topLabel);  // the key configure() reads (Button+ format)
+        obj.Add("toplabel", topLabel);
         if (const IconState* s = icon_.get()) {
             char name[TextSlot<IconState::kSlotBytes>::kBufferSize];
             if (s->name.read(name) && name[0] != '\0') {
@@ -189,18 +185,7 @@ public:
             }
             obj.Add("iconsize", static_cast<int>(s->size));
         }
-        if (fontFace_ != FONT_FACE_NONE) {
-            obj.Add("font", fonts_face_name(fontFace_));
-        }
-        if (fontSize_ != 0) {
-            obj.Add("fontsize", fontSize_);
-        }
-        if (topFontFace_ != FONT_FACE_NONE) {
-            obj.Add("topfont", fonts_face_name(topFontFace_));
-        }
-        if (topFontSize_ != 0) {
-            obj.Add("topfontsize", topFontSize_);
-        }
+        styleref::write(obj, configStyle_);
 
         // topics array
         {
@@ -223,40 +208,19 @@ private:
 
     // Configuration from JSON
     void configure(const JsonObject& data) {
-        // Legacy fields for backwards compatibility
-        if (!data["id"].isNull()) {
-            id = data["id"].as<unsigned long>();
-        }
-
-        // ignoring buttonid not used in freebutton
-        data["position"].isNull() ? position_ = id : position_ = data["position"].as<uint32_t>();
+        // The position says which key this is. An entry without one is
+        // not loaded at all (ConfigManager::loadButtons).
+        position_ = data["position"].as<uint32_t>();
         data["page"].isNull() ? page_ = 1 : page_ = data["page"].as<uint32_t>();
 
         label = data["label"].isNull() ? label : data["label"].as<std::string>();
-        // "toplabel" (Button+ format); "topLabel" is what /config wrote before
-        // and what configs saved from it (data/config.json) still contain.
-        if (!data["toplabel"].isNull()) {
-            topLabel = data["toplabel"].as<std::string>();
-        } else if (!data["topLabel"].isNull()) {
-            topLabel = data["topLabel"].as<std::string>();
-        }
+        topLabel = data["toplabel"].isNull() ? topLabel : data["toplabel"].as<std::string>();
         ledColorFront = data["ledcolorfront"].isNull() ? ledColorFront : data["ledcolorfront"].as<uint32_t>();
         ledColorWall = data["ledcolorwall"].isNull() ? ledColorWall : data["ledcolorwall"].as<uint32_t>();
 
         // Set device ID and broker ID - use external deviceId from main.cpp
         brokerId_ = 0; // Default broker ID
 
-        // Parse LED topics for backwards compatibility (but don't create LEDs here)
-        if (data["leds"].is<JsonArray>()) {
-            for (const auto& ledJson : data["leds"].as<JsonArray>()) {
-                // Add LED topics to main topics list (handled by TopicHandler)
-                if (ledJson["topics"].is<JsonArray>()) {
-                    handleTopics(ledJson["topics"].as<JsonArray>());  // Existing TopicHandler logic
-                }
-            }
-        }
-
-        // Parse button topics (existing logic)
         if (data["topics"].is<JsonArray>()) {
             handleTopics(data["topics"].as<JsonArray>());
         } else {
@@ -266,12 +230,9 @@ private:
 
         configureIcon(data);
 
-        fontFace_ = fontref::parse(data["font"], TAG, "font");
-        fontSize_ = data["fontsize"] | 0;
-        topFontFace_ = fontref::parse(data["topfont"], TAG, "topfont");
-        topFontSize_ = data["topfontsize"] | 0;
-        labelFont_.store(fontref::pack(fontFace_, fontSize_), std::memory_order_release);
-        topLabelFont_.store(fontref::pack(topFontFace_, topFontSize_), std::memory_order_release);
+        const style_list_t list = styleref::parse(data["style"], TAG);
+        styleref::store(configStyle_, list);
+        style_.store(list, std::memory_order_release);
 
         ESP_LOGI(TAG, "Configured Button %d at position %d", id, position_);
     }

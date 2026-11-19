@@ -3,12 +3,56 @@
  * Components use emit() and on() to communicate via typed custom events.
  * No central state object - each component manages its own state.
  */
+import type { StyleProps } from './style-config';
 
 export type LogLevel = 'log' | 'info' | 'warn' | 'error' | 'result' | 'input';
+
+/**
+ * The two consoles. They share nothing: each has its own output, input and
+ * history.
+ *   device   the real device's REPL, and what the IDE reports about the
+ *            device and its files (saved, deployed, storage, images, fonts)
+ *   virtual  the script running in the virtual device (the emulator in the
+ *            page): its print() output, its errors, lines evaluated in it
+ */
+export type ConsoleId = 'device' | 'virtual';
 
 export interface ConsoleLine {
   text: string;
   type: LogLevel;
+  /** The console this line belongs to: stated by whoever emits it, never guessed. */
+  to: ConsoleId;
+}
+
+/** Where a typed line is evaluated: the console it was typed in. */
+export type ConsoleTarget = ConsoleId;
+
+/**
+ * The emulator of the virtual device (emulator-session.ts).
+ * idle: nothing runs; starting: the engine loads; running: a script runs;
+ * error: it stopped (or did not start) with `error`.
+ */
+export interface EmulatorSnapshot {
+  status: 'idle' | 'starting' | 'running' | 'error';
+  /** "virt_btn_" + 6 hex digits: what system.id() gives the script. Never a real device's id. */
+  identity: string;
+  /**
+   * Where the virtual device's MQTT goes: 'live-publish' the real broker,
+   * it publishes (the mode of a Run unless the user chose another);
+   * 'live-readonly' the real broker, nothing is published; 'offline' the
+   * broker in the page. While nothing runs: the mode the next Run starts in.
+   */
+  mqtt: 'offline' | 'live-readonly' | 'live-publish';
+  /** The live connection(s): 'none' offline, and while nothing runs. */
+  mqttLink: 'none' | 'connecting' | 'connected' | 'error';
+  /** Why it stopped, or the last error of a script that still runs. */
+  error: string;
+  /** Errors since Run. */
+  errors: number;
+  /** config.json or the script changed since Run: what runs is the older text. */
+  stale: 'config' | 'script' | null;
+  /** Run was pressed at least once since the page loaded (the virtual console and the MQTT tab exist from then on). */
+  used: boolean;
 }
 
 export interface FileEntry {
@@ -20,13 +64,11 @@ export interface FileEntry {
 /**
  * The font a text starts with (font-config.ts slotFont): a face of the
  * font table (index; 0, 1 = the system fonts montserrat, montserrat_semibold)
- * at px device pixels. configured = the item names a config font (else the
- * style's font of the element).
+ * at px device pixels.
  */
 export interface ItemFont {
   face: number;
   px: number;
-  configured: boolean;
 }
 
 export interface DisplayItem {
@@ -40,7 +82,6 @@ export interface DisplayItem {
   label?: string;
   value?: string;
   unit?: string;
-  fontSize?: number;
   color?: string;
   /** Stable id from config.json "displayitemid". */
   id?: string;
@@ -52,12 +93,23 @@ export interface DisplayItem {
   icon?: string;
   /** Square icon size in px (config.json "iconsize", default 32). */
   iconSize?: number;
-  /** "#rrggbb" tint of a single-colour icon (config.json "iconcolor"). */
+  /** "#rrggbb" tint of the icon: "icon.color" of the item's styles, else of "displayitem"; absent = none sets one (on the device a single-colour icon then has the value's colour). */
   iconColor?: string;
-  /** Value font (config.json "font"/"fontsize"; the unit's too unless the style gives it its own); absent = the style's display.value at fontSize. */
+  /**
+   * What the item's styles ("style": up to four names), the style
+   * "displayitem" and the built-in look give each part (style-config
+   * lookupPart): the font, and every other property. Absent = the built-in
+   * look.
+   */
   valueFont?: ItemFont;
-  /** Caption font (config.json "labelfont"/"labelfontsize"); absent = the style's display.caption. */
   labelFont?: ItemFont;
+  /** The unit's: what its "unit" blocks do not set is the value's. */
+  unitFont?: ItemFont;
+  valueStyle?: Readonly<StyleProps>;
+  captionStyle?: Readonly<StyleProps>;
+  unitStyle?: Readonly<StyleProps>;
+  /** Bottom padding (px) of the caption and of the box that goes with the value's size; absent = none of its own. */
+  pad?: { captionPad: number; boxPad: number };
 }
 
 /** A physical connector slot (config.json info.connectors). Keys: id*2+1, id*2+2. */
@@ -74,17 +126,26 @@ export interface ButtonConfig {
   topLabel: string;
   ledOn: boolean;
   ledColor: string;
+  /** Colour of the LED at the back of the key (towards the wall) when it is on; set by a running script only. */
+  backLedColor?: string;
   page: number;
-  /** Script name from config.json "name" (fb.key("name")). */
+  /** Script name from config.json "name" (fb.button("name")). */
   name?: string;
   /** Icon name (config.json "icon"); shown instead of the bottom label. */
   icon?: string;
   /** Square icon size in px (config.json "iconsize", default 48). */
   iconSize?: number;
-  /** Bottom label font (config.json "font"/"fontsize"); absent = the style's key.label. */
+  /**
+   * What the button's styles ("style"), the style "button" and the built-in
+   * look give the label and the top label ("title"): the font, and every
+   * other property. Absent = the built-in look.
+   */
   labelFont?: ItemFont;
-  /** Top label font (config.json "topfont"/"topfontsize"); absent = the style's key.toplabel. */
   topFont?: ItemFont;
+  labelStyle?: Readonly<StyleProps>;
+  topStyle?: Readonly<StyleProps>;
+  /** "#rrggbb" tint of the icon: "icon.color" of the button's styles, else of "button"; absent = none sets one (on the device a single-colour icon then has the label's colour). */
+  iconColor?: string;
 }
 
 /**
@@ -133,26 +194,49 @@ export interface ListConfig {
   width: number;
   /** Visible rows (1..7); the selected item sits in the middle one. */
   rows: number;
-  /** 1..5 (14, 24, 32, 48, 72 px), 6..72 = px. */
-  fontSize: number;
-  /** config.json "font"/"fontsize"; absent = the style's list font at fontSize. */
-  font?: ItemFont;
+  /** The rows' font, and the selected row's (what its "selected" blocks do not set is the rows'). */
+  font: ItemFont;
+  selectedFont: ItemFont;
   items: string[];
   /** Selected index from config.json (clamped to the items; -1 = no items). */
   selected: number;
-  /** "#rrggbb": other rows' text, selected row background, selected row text. */
-  color: string;
-  focusColor: string;
-  focusTextColor: string;
+  /**
+   * What the list's styles ("style"), the style "list" and the built-in
+   * look give the rows (the main blocks: color, line-height, the roller's
+   * background-color) and the selected row as it is drawn (the "selected"
+   * blocks; the rows' opacity, letter-spacing and text-decoration where
+   * "selected" sets none, and always the rows' text-align:
+   * config-model listSelectedRow).
+   */
+  style: Readonly<StyleProps>;
+  selectedStyle: Readonly<StyleProps>;
+}
+
+/**
+ * The analog clock on the main display (config.json "clocks"). The device
+ * draws the first entry only (Clock.cpp).
+ */
+export interface ClockConfig {
+  /** Source entry in config.json (set by configToModel). */
+  ref?: ConfigRef;
+  /** 1-based; 0 = every page. */
+  page: number;
+  /** Pixels on the 320x240 main display: the top-left corner. Not used with align 9 (centre). */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** lv_align_t; only 9 (centre) changes where the clock is. */
+  align: number;
 }
 
 /** The kinds of config.json entries the virtual device draws. */
-export type ConfigItemKind = 'button' | 'displayitem' | 'list' | 'image';
+export type ConfigItemKind = 'button' | 'displayitem' | 'list' | 'image' | 'clock';
 
 /** Where an item of the virtual device comes from in config.json: `list`[`index`]. */
 export interface ConfigRef {
   kind: ConfigItemKind;
-  /** The array's key as written in the file ("buttons", "mqttdisplays", ...). */
+  /** The array's key in the file ("buttons", "displayitems", "lists", "images", "clocks"). */
   list: string;
   index: number;
 }
@@ -176,6 +260,8 @@ export interface PageConfig {
   lists?: ListConfig[];
   /** Images shown on this page (config.json "images"); missing = none. */
   images?: ImageConfig[];
+  /** The clock shown on this page (config.json "clocks": the first entry); missing = none. */
+  clocks?: ClockConfig[];
 }
 
 /**
@@ -271,8 +357,21 @@ declare global {
 
     // Console events
     'console-line': CustomEvent<ConsoleLine>;
-    'console-clear': CustomEvent<void>;
-    'console-eval': CustomEvent<{ code: string }>;
+    // console: the one to clear; absent = the one that is shown.
+    'console-clear': CustomEvent<{ console?: ConsoleId }>;
+    'console-eval': CustomEvent<{ code: string; target: ConsoleTarget }>;
+
+    // The emulator of the virtual device: its status, the device state a
+    // script changed (redraw), its MQTT log.
+    'emulator-change': CustomEvent<EmulatorSnapshot>;
+    'emulator-state': CustomEvent<void>;
+    'emulator-mqtt': CustomEvent<void>;
+    // What draws the virtual device's face changed (emulatorSession.face(), faceInfo()).
+    'emulator-face': CustomEvent<void>;
+    // What the browser keeps for a broker host of the virtual device changed (virtual-broker.ts).
+    'virtual-broker-change': CustomEvent<{ host: string }>;
+    // Show the back of the virtual device, where its MQTT settings are.
+    'virtual-device-settings': CustomEvent<void>;
 
     // Device events
     // connectors: physical layout (empty = unknown, use the legacy layout).

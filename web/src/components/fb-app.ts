@@ -1,3 +1,5 @@
+import { emulatorSession } from '../js/emulator-session.js';
+import { FACE_W } from '../js/display-geometry.js';
 import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { emit, on } from '../js/app-state.js';
@@ -6,7 +8,7 @@ import { bytecodeUploadUrl, compileForDeviceEx } from '../js/compiler.js';
 import { validateCode, formatValidationErrors } from '../js/validator.js';
 import { workspace } from '../js/workspace.js';
 import { MAIN_BYTECODE_NAME, MAIN_SCRIPT_KEY } from '../js/fs-rules.js';
-import { signedFetch } from '../js/auth.js';
+import { sha256Hex, signedFetch } from '../js/auth.js';
 import { askConfirm } from './fb-dialog.js';
 import { scriptStatusOf, waitForScriptStart, type ScriptStatus } from '../js/script-status.js';
 
@@ -14,7 +16,8 @@ import { scriptStatusOf, waitForScriptStart, type ScriptStatus } from '../js/scr
 export class FbApp extends LitElement {
   createRenderRoot() { return this; }
 
-  @state() private rightPaneWidth = 400;
+  /** The virtual device's face at its own size: its width and what fb-right-pane puts around it (16 px to the window, 1 px border and 12 px padding at each side). */
+  @state() private rightPaneWidth = FACE_W + 42;
   private _deploying = false;
   private _unsubs: Array<() => void> = [];
 
@@ -53,7 +56,7 @@ export class FbApp extends LitElement {
     }
 
     // Ctrl/Cmd+Enter — deploy (the toolbar's primary action)
-    if (mod && e.key === 'Enter') {
+    if (mod && !e.shiftKey && e.key === 'Enter') {
       e.preventDefault();
       emit('deploy-request');
     }
@@ -61,7 +64,18 @@ export class FbApp extends LitElement {
     // Ctrl/Cmd+L — clear console
     if (mod && e.key === 'l') {
       e.preventDefault();
-      emit('console-clear');
+      emit('console-clear', {});
+    }
+
+    // Ctrl/Cmd+Shift+Enter: run in the virtual device (again, when it runs);
+    // Ctrl/Cmd+Shift+. stops it. Nothing goes to the real device.
+    if (mod && e.shiftKey && e.key === 'Enter') {
+      e.preventDefault();
+      void emulatorSession.run();
+    }
+    if (mod && e.shiftKey && (e.key === '.' || e.key === '>' || e.code === 'Period')) {
+      e.preventDefault();
+      emulatorSession.stop();
     }
   };
 
@@ -88,7 +102,7 @@ export class FbApp extends LitElement {
       }
       if (currentKey !== MAIN_SCRIPT_KEY) {
         const msg = `Saved /${currentKey}. Only /${MAIN_SCRIPT_KEY} is compiled and run at boot; open it to deploy.`;
-        emit('console-line', { text: msg, type: 'info' });
+        emit('console-line', { to: 'device', text: msg, type: 'info' });
         emit('deploy-result', { success: true, message: msg });
         return;
       }
@@ -97,7 +111,7 @@ export class FbApp extends LitElement {
       const code = getCode();
       const validation = validateCode(code);
       if (!validation.valid) {
-        emit('console-line', {
+        emit('console-line', { to: 'device',
           text: 'Deploy aborted (source saved) — validation failed:\n' + formatValidationErrors(validation.errors),
           type: 'error'
         });
@@ -105,15 +119,15 @@ export class FbApp extends LitElement {
         return;
       }
       if (mode === 'local') {
-        emit('console-line', { text: 'No device storage reachable — trying the bytecode upload anyway...', type: 'warn' });
+        emit('console-line', { to: 'device', text: 'No device storage reachable — trying the bytecode upload anyway...', type: 'warn' });
       }
 
       // 3. Compile relocated for the device and upload as main.jsc.
       const base = workspace.deviceBase;
-      emit('console-line', { text: 'Compiling for device...', type: 'info' });
+      emit('console-line', { to: 'device', text: 'Compiling for device...', type: 'info' });
       const { bytecode, atomsId } = await compileForDeviceEx(code, base);
 
-      emit('console-line', {
+      emit('console-line', { to: 'device',
         text: 'Compiled ' + bytecode.length + ' bytes — uploading ' + MAIN_BYTECODE_NAME + '...',
         type: 'info'
       });
@@ -130,7 +144,7 @@ export class FbApp extends LitElement {
       formData.append('file', blob, MAIN_BYTECODE_NAME);
 
       // Multipart body: signed with x-amz-content-sha256 UNSIGNED-PAYLOAD.
-      const uploadUrl = bytecodeUploadUrl(base, bytecode.length, atomsId);
+      const uploadUrl = bytecodeUploadUrl(base, bytecode.length, atomsId, await sha256Hex(bytecode));
       const response = await signedFetch(uploadUrl, {
         method: 'POST',
         body: formData
@@ -150,13 +164,13 @@ export class FbApp extends LitElement {
       }
 
       const okMsg = '✓ Uploaded ' + bytecode.length + ' bytes to device as ' + MAIN_BYTECODE_NAME;
-      emit('console-line', { text: okMsg, type: 'result' });
+      emit('console-line', { to: 'device', text: okMsg, type: 'result' });
 
       // 4. The device restarts its script engine by itself (no reboot). Older
       //    firmware does not say "restart": the script runs after a reboot.
       if (result.restart !== true) {
         const note = 'reboot the device to run it';
-        emit('console-line', { text: 'The new script runs after a reboot of the device.', type: 'info' });
+        emit('console-line', { to: 'device', text: 'The new script runs after a reboot of the device.', type: 'info' });
         emit('deploy-result', { success: true, message: okMsg, size: bytecode.length, note });
         return;
       }
@@ -165,15 +179,15 @@ export class FbApp extends LitElement {
         throw new Error('The script was uploaded but failed when it started: ' + outcome.error);
       }
       if (outcome.kind === 'running') {
-        emit('console-line', { text: '✓ The new script is running', type: 'result' });
+        emit('console-line', { to: 'device', text: '✓ The new script is running', type: 'result' });
         emit('deploy-result', { success: true, message: okMsg, size: bytecode.length, note: 'running' });
       } else {
-        emit('console-line', { text: 'The device did not confirm that the new script started.', type: 'info' });
+        emit('console-line', { to: 'device', text: 'The device did not confirm that the new script started.', type: 'info' });
         emit('deploy-result', { success: true, message: okMsg, size: bytecode.length, note: 'start not confirmed' });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      emit('console-line', { text: 'Deploy failed: ' + message, type: 'error' });
+      emit('console-line', { to: 'device', text: 'Deploy failed: ' + message, type: 'error' });
       emit('deploy-result', { success: false, message });
     } finally {
       this._deploying = false;
