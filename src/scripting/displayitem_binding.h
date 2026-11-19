@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,7 +21,7 @@ typedef struct {
     int y;
     int width;
     int boxType;
-    int fontSize;
+    uint32_t styles; /* the item's style list now (style_binding.h: style_hw_list_text gives the names) */
     int alignment;
     const char* label;
     const char* unit;
@@ -29,12 +30,13 @@ typedef struct {
 } DisplayItemInfo;
 
 /*
- * Create a new display item with the specified properties
+ * Create a new display item with the specified properties. styles: its
+ * style list (style_binding.h: refs the caller resolved, 0 = none).
  * Returns the ID of the created item, or 0 on failure
  */
 unsigned long displayitem_create(
     int x, int y, int width, int boxType,
-    int fontSize, int alignment,
+    uint32_t styles, int alignment,
     const char* label, const char* unit,
     int round, int page
 );
@@ -87,20 +89,21 @@ bool displayitem_set_unit(unsigned long id, const char* unit);
 int displayitem_set_icon(unsigned long id, const char* name, size_t len);
 
 /*
- * Font of the item's value and unit: a fonts.h face (resolved by the
- * caller) and a fontsize (1..5 = step, else px). Returns false if the item
- * was not found.
+ * The item's style list (style_binding.h: refs the caller resolved), or,
+ * with `restore`, the configured one (config.json's; for an item a script
+ * made, the list it was created with). Returns false if the item was not
+ * found.
  */
-bool displayitem_set_font(unsigned long id, int face, int size);
-/* Back to the font and size of config.json (JS setFont(id, "")). */
-bool displayitem_restore_font(unsigned long id);
+bool displayitem_set_styles(unsigned long id, uint32_t list, bool restore);
 
 /*
- * Named style of the item's value and unit (caption = false) or of its
- * caption: a style_binding.h ref the caller resolved and checked, 0 = none.
- * Returns false if the item was not found.
+ * addStyle / removeStyle: one style (a ref the caller resolved) as the last
+ * of the item's list, or out of it. The list changes as a whole. Returns 1
+ * on success (also when nothing had to change), 0 if the item was not
+ * found, -1 when adding would make a fifth style (nothing changes).
  */
-bool displayitem_set_style(unsigned long id, int ref, bool caption);
+int displayitem_add_style(unsigned long id, int ref);
+int displayitem_remove_style(unsigned long id, int ref);
 
 /*
  * Update display item position

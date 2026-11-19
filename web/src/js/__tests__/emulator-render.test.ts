@@ -17,17 +17,17 @@ const AT = Date.UTC(2026, 0, 15, 9, 10, 30);   // 10:10:30 on the device (Centra
 const MODULES = { connectors: [{ id: 0, type: 2 }, { id: 1, type: 1 }] };
 const BROKER = [{ brokerid: 'local', url: 'mqtt://broker.test/', port: 1883, hassdiscovery: false }];
 /** The fonts table of the real devices: the icon font as fallback of both system fonts. */
-const STYLE = {
-  fonts: [
-    { id: 1, name: 'mdi', src: 'icons.ttf' },
-    { name: 'montserrat', fallback: 'mdi' },
-    { name: 'montserrat_semibold', fallback: 'mdi' },
-  ],
-};
+const FONTS = [
+  { id: 1, name: 'mdi', src: 'icons.ttf' },
+  { name: 'montserrat', fallback: 'mdi' },
+  { name: 'montserrat_semibold', fallback: 'mdi' },
+];
+/** A style per value size the tests use: an item names one where it had a size of its own. */
+const SIZES = Object.fromEntries([14, 18, 24, 32, 48, 72].map(px => [`size${px}`, { 'font-size': px }]));
 
 async function device(config: Record<string, unknown>, options: { media?: MediaSource; script?: string } = {}) {
   const made = await makeEmulator({
-    config: { info: MODULES, brokers: BROKER, ...config },
+    config: { info: MODULES, brokers: BROKER, styles: SIZES, ...config },
     clock: new ManualClock(AT),
     media: options.media ?? repoMedia({}, { icons: true }),
   });
@@ -90,7 +90,7 @@ describe('displays', () => {
     const frames: Array<{ display: string; x: number; y: number; width: number; height: number }> = [];
     emu.on('frame', frame => frames.push(frame));
     const before = emu.readPixels('key3');
-    emu.eval('fb.key("light").display.setLabel("Off")');
+    emu.eval('fb.button("light").display.setLabel("Off")');
     // The LVGL task runs after the script's turn and then when its refresh timer is due (33 ms).
     clock.advance(50);
     expect(frames.length).toBeGreaterThan(0);
@@ -107,7 +107,7 @@ describe('displays', () => {
 
   it('render() draws what is pending at once; screenshot() does that first', async () => {
     const { emu } = await makeEmulator({ media: repoMedia() });
-    emu.run('fb.key("light").display.setLabel("Dim")');
+    emu.run('fb.button("light").display.setLabel("Dim")');
     const before = emu.readPixels('key3');
     const shot = emu.screenshot('key3');
     expect(Array.from(shot.data)).not.toEqual(Array.from(before));
@@ -176,7 +176,7 @@ describe('media: the fonts and images the firmware reads', () => {
       },
     };
     const emu = await Emulator.create({
-      config: { ...BASIC_CONFIG, style: STYLE }, wasm: emulatorModule(), identity: 'virt_btn_0a1b2c', clock: new ManualClock(AT),
+      config: { ...BASIC_CONFIG, fonts: FONTS }, wasm: emulatorModule(), identity: 'virt_btn_0a1b2c', clock: new ManualClock(AT),
       sampleSensors: false, media,
     });
     // The firmware named them: the system fonts, the style's font, the image's raster. Each asked once.
@@ -184,7 +184,7 @@ describe('media: the fonts and images the firmware reads', () => {
     expect(emu.state.fonts.map(f => `${f.name}:${f.loaded}`)).toEqual(['montserrat:true', 'montserrat_semibold:true', 'mdi:true']);
     expect(emu.state.item('temp')!.box!.caption.font).toMatchObject({ font: 'montserrat_semibold', px: 14, real: true });
     // The same frame as with files that are there at once.
-    const direct = await makeEmulator({ config: { ...BASIC_CONFIG, style: STYLE }, clock: new ManualClock(AT), media: files });
+    const direct = await makeEmulator({ config: { ...BASIC_CONFIG, fonts: FONTS }, clock: new ManualClock(AT), media: files });
     expect(Array.from(emu.readPixels('main'))).toEqual(Array.from(direct.emu.readPixels('main')));
     expect(emu.stats().mediaBytes).toBe(direct.emu.stats().mediaBytes);
   });
@@ -205,9 +205,10 @@ describe('media: the fonts and images the firmware reads', () => {
 
   it('a font file that is not there: the firmware draws the text in its built-in font', async () => {
     const { emu } = await device({
-      style: { fonts: [{ name: 'fancy', src: 'nosuch.ttf' }] },
+      fonts: [{ name: 'fancy', src: 'nosuch.ttf' }],
+      styles: { ...SIZES, fancy: { 'font-family': 'fancy' } },
       buttons: [{ position: 3, label: 'Light', toplabel: 'Room' }],
-      displayitems: [{ name: 'a', x: 5, y: 10, width: 90, font: 'fancy', fontsize: 48, label: 'Fancy', unit: 'kWh' }],
+      displayitems: [{ name: 'a', x: 5, y: 10, width: 90, style: 'size48 fancy', label: 'Fancy', unit: 'kWh' }],
     }, { script: 'fb.main.display.setValue("a", "12.5")' });
     expect(emu.state.fonts.find(f => f.name === 'fancy')).toMatchObject({ src: 'nosuch.ttf', loaded: false });
     // The item still names its font and size; what draws is LVGL's 12 px font.
@@ -218,7 +219,7 @@ describe('media: the fonts and images the firmware reads', () => {
   it('no font files at all (an empty fonts bucket): everything in the built-in font', async () => {
     const { emu } = await device({
       buttons: [{ position: 3, label: 'Light', toplabel: 'Room' }],
-      displayitems: [{ name: 'a', x: 5, y: 10, width: 90, fontsize: 48, label: 'Power', unit: 'W' }],
+      displayitems: [{ name: 'a', x: 5, y: 10, width: 90, style: 'size48', label: 'Power', unit: 'W' }],
     }, { media: { read: () => null }, script: 'fb.main.display.setValue("a", "230")' });
     expect(emu.state.fonts.every(f => f.loaded === false)).toBe(true);
     expectGolden(emu, 'main', 'font-none-main');
@@ -296,7 +297,7 @@ describe('attachCanvas', () => {
     expect(Array.from(pixels)).toEqual(Array.from(emu.readPixels('key3')));
 
     calls.length = 0;
-    emu.eval('fb.key("light").display.setLabel("Off")');
+    emu.eval('fb.button("light").display.setLabel("Off")');
     clock.advance(50);
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every(c => c.width * c.height < 160 * 80)).toBe(true);
@@ -305,11 +306,11 @@ describe('attachCanvas', () => {
 
     // Another display's frames are not drawn here; after detach nothing is.
     calls.length = 0;
-    emu.eval('fb.key("blind").display.setLabel("Up")');
+    emu.eval('fb.button("blind").display.setLabel("Up")');
     clock.advance(50);
     expect(calls).toEqual([]);
     detach();
-    emu.eval('fb.key("light").display.setLabel("On")');
+    emu.eval('fb.button("light").display.setLabel("On")');
     clock.advance(50);
     expect(calls).toEqual([]);
   });
@@ -324,13 +325,13 @@ describe('attachCanvas', () => {
 describe('golden images: what the device shows', () => {
   it('display items: each box type, with caption, value and unit', async () => {
     const { emu } = await device({
-      style: STYLE,
+      fonts: FONTS,
       displayitems: [
-        { name: 'line', x: 2, y: 2, width: 45, boxtype: 0, fontsize: 32, label: 'Underlined', unit: '°C' },
-        { name: 'plain', x: 52, y: 2, width: 45, boxtype: 1, fontsize: 32, label: 'Plain', unit: 'W' },
-        { name: 'small', x: 2, y: 40, width: 45, boxtype: 2, fontsize: 14, label: 'Type 2', unit: 'kWh' },
-        { name: 'bare', x: 52, y: 40, width: 45, boxtype: 1, fontsize: 24 },
-        { name: 'big', x: 2, y: 62, width: 96, boxtype: 0, fontsize: 72, unit: '%' },
+        { name: 'line', x: 2, y: 2, width: 45, boxtype: 0, style: 'size32', label: 'Underlined', unit: '°C' },
+        { name: 'plain', x: 52, y: 2, width: 45, boxtype: 1, style: 'size32', label: 'Plain', unit: 'W' },
+        { name: 'small', x: 2, y: 40, width: 45, boxtype: 2, style: 'size14', label: 'Type 2', unit: 'kWh' },
+        { name: 'bare', x: 52, y: 40, width: 45, boxtype: 1, style: 'size24' },
+        { name: 'big', x: 2, y: 62, width: 96, boxtype: 0, style: 'size72', unit: '%' },
       ],
     }, {
       script: `var d = fb.main.display;
@@ -343,9 +344,9 @@ describe('golden images: what the device shows', () => {
   it('display items: every alignment of the box on the display', async () => {
     // lv_align_t: 1 top left, 2 top middle, 3 top right, 4 bottom left, 5 bottom middle, 6 bottom right, 7 left middle, 8 right middle, 9 centre.
     const { emu } = await device({
-      style: STYLE,
+      fonts: FONTS,
       displayitems: [1, 2, 3, 4, 5, 6, 7, 8, 9].map(align => ({
-        name: `a${align}`, x: 0, y: 0, width: 28, boxtype: 0, fontsize: 18, align, label: `align ${align}`,
+        name: `a${align}`, x: 0, y: 0, width: 28, boxtype: 0, style: 'size18', align, label: `align ${align}`,
       })),
     }, { script: 'for (var i = 1; i <= 9; i++) fb.main.display.setValue("a" + i, "v" + i);' });
     expectGolden(emu, 'main', 'align-main');
@@ -356,14 +357,14 @@ describe('golden images: what the device shows', () => {
 
   it('text markup: colours, sizes, fonts, alignment and icons of the icon font', async () => {
     const { emu } = await device({
-      style: STYLE,
+      fonts: FONTS,
       buttons: [{ position: 3, label: '\\cff0000Red \\c00ff00Green', toplabel: '\\c00ffffCyan' }, { position: 4, label: '\u{F0335}', toplabel: 'Lamp' }],
       displayitems: [
-        { name: 'colours', x: 2, y: 2, width: 96, fontsize: 24 },
-        { name: 'sizes', x: 2, y: 20, width: 96, fontsize: 14 },
-        { name: 'icons', x: 2, y: 42, width: 96, fontsize: 32 },
-        { name: 'right', x: 2, y: 62, width: 96, fontsize: 18 },
-        { name: 'centre', x: 2, y: 76, width: 96, fontsize: 18, label: '\\acCentred caption' },
+        { name: 'colours', x: 2, y: 2, width: 96, style: 'size24' },
+        { name: 'sizes', x: 2, y: 20, width: 96, style: 'size14' },
+        { name: 'icons', x: 2, y: 42, width: 96, style: 'size32' },
+        { name: 'right', x: 2, y: 62, width: 96, style: 'size18' },
+        { name: 'centre', x: 2, y: 76, width: 96, style: 'size18', label: '\\acCentred caption' },
       ],
     }, {
       script: `var d = fb.main.display;
@@ -378,13 +379,50 @@ describe('golden images: what the device shows', () => {
     expectGolden(emu, 'key4', 'markup-key-icon-glyph');
   });
 
+  it('text-align in a style places a text exactly as \\al, \\ac and \\ar at its start do', async () => {
+    const items = (styled: boolean) => [
+      { name: 'c', x: 2, y: 2, width: 96, boxtype: 0, style: styled ? 'size24 centre' : 'size24', label: styled ? 'Caption' : '\\arCaption', unit: 'W' },
+      { name: 'r', x: 2, y: 40, width: 96, style: styled ? 'size18 right' : 'size18' },
+      { name: 'l', x: 2, y: 60, width: 96, style: styled ? 'size18 left' : 'size18' },
+      // The text's own \\a wins over the style's.
+      { name: 'o', x: 2, y: 80, width: 96, style: styled ? 'size18 centre' : 'size18' },
+    ];
+    const styles = {
+      ...SIZES,
+      centre: { 'text-align': 'center', title: { 'text-align': 'right' } },
+      right: { 'text-align': 'right' },
+      left: { 'text-align': 'left' },
+    };
+    const markup = await device({ fonts: FONTS, styles, displayitems: items(false) }, {
+      script: `var d = fb.main.display;
+        d.setValue("c", "\\\\acin the middle"); d.setValue("r", "\\\\arto the right"); d.setValue("l", "\\\\alto the left");
+        d.setValue("o", "\\\\arover the style");`,
+    });
+    const styled = await device({ fonts: FONTS, styles, displayitems: items(true) }, {
+      script: `var d = fb.main.display;
+        d.setValue("c", "in the middle"); d.setValue("r", "to the right"); d.setValue("l", "to the left");
+        d.setValue("o", "\\\\arover the style");`,
+    });
+    const a = markup.emu.screenshot('main');
+    const b = styled.emu.screenshot('main');
+    expect(litPixels(a)).toBeGreaterThan(1000);
+    expect(Array.from(b.data)).toEqual(Array.from(a.data));
+    // And it is not where the same texts are without either.
+    const plain = await device({ fonts: FONTS, styles, displayitems: items(false).map(i => ({ ...i, label: i.label?.replace('\\ar', '') })) }, {
+      script: `var d = fb.main.display;
+        d.setValue("c", "in the middle"); d.setValue("r", "to the right"); d.setValue("l", "to the left");
+        d.setValue("o", "over the style");`,
+    });
+    expect(Array.from(plain.emu.screenshot('main').data)).not.toEqual(Array.from(a.data));
+  });
+
   it('long text: a value wider than its box is clipped, a key label wraps', async () => {
     const { emu } = await device({
-      style: STYLE,
+      fonts: FONTS,
       buttons: [{ position: 3, label: 'A label of many words', toplabel: 'A top label that is too long' }],
       displayitems: [
-        { name: 'long', x: 2, y: 5, width: 60, boxtype: 0, fontsize: 24, label: 'A caption that is longer than its box is wide', unit: 'unit' },
-        { name: 'next', x: 2, y: 55, width: 96, fontsize: 14, label: 'Below' },
+        { name: 'long', x: 2, y: 5, width: 60, boxtype: 0, style: 'size24', label: 'A caption that is longer than its box is wide', unit: 'unit' },
+        { name: 'next', x: 2, y: 55, width: 96, style: 'size14', label: 'Below' },
       ],
     }, {
       script: `fb.main.display.setValue("long", "The quick brown fox jumps over the lazy dog");
@@ -398,7 +436,8 @@ describe('golden images: what the device shows', () => {
 
   it('a list: the roller with its selection, after its animation', async () => {
     const { emu, clock } = await device({
-      style: { ...STYLE, list: { text_size: 24, text_color: '#808080', selected: { bg_color: '#ffd700', text_color: '#000000' } } },
+      fonts: FONTS,
+      styles: { list: { 'font-size': 24, color: '#808080', selected: { 'background-color': '#ffd700', color: '#000000' } } },
       lists: [{ name: 'scenes', x: 4, y: 10, width: 92, rows: 3, items: ['Morning', 'Evening', 'Night', 'Away'], selected: 1 }],
     }, { script: '' });
     const rest = expectGolden(emu, 'main', 'list-main');
@@ -425,7 +464,7 @@ describe('golden images: what the device shows', () => {
 
   it('images and icons: a raster of one colour takes the text colour, a colour raster is drawn as it is', async () => {
     const { emu } = await device({
-      style: STYLE,
+      fonts: FONTS,
       icons: { sun: '/icons/sun.svg', colorwheel: '/icons/colorwheel.svg' },
       buttons: [{ position: 3, label: 'Hidden', toplabel: 'Sun', icon: 'sun' }, { position: 4, label: 'Hidden', toplabel: 'Wheel', icon: 'colorwheel' }],
       images: [
@@ -433,7 +472,7 @@ describe('golden images: what the device shows', () => {
         { name: 'colour', x: 40, y: 5, width: 64, height: 64, icon: 'colorwheel' },
         { name: 'file', x: 70, y: 5, src: 'radar.bin' },
       ],
-      displayitems: [{ name: 'withIcon', x: 5, y: 60, width: 90, fontsize: 32, label: 'Icon before the value', unit: '°C', icon: 'colorwheel' }],
+      displayitems: [{ name: 'withIcon', x: 5, y: 60, width: 90, style: 'size32', label: 'Icon before the value', unit: '°C', icon: 'colorwheel' }],
     }, {
       media: repoMedia({ 'images/radar.bin': testRaster(80, 60, 'rgb565a8') }, { icons: true }),
       script: 'fb.main.display.setValue("withIcon", "21.5")',
@@ -446,9 +485,9 @@ describe('golden images: what the device shows', () => {
 
   it('the analog clock at 10:10:30, and a script\'s digital clock beside it', async () => {
     const { emu, clock } = await device({
-      style: STYLE,
+      fonts: FONTS,
       clocks: [{ x: 0, y: 0, width: 180, height: 180, align: 9, page: 1 }],
-      displayitems: [{ name: 'time', x: 2, y: 2, width: 30, fontsize: 24 }, { name: 'date', x: 70, y: 2, width: 30, fontsize: 14 }],
+      displayitems: [{ name: 'time', x: 2, y: 2, width: 30, style: 'size24' }, { name: 'date', x: 70, y: 2, width: 30, style: 'size14' }],
     }, {
       script: `function two(n) { return n < 10 ? "0" + n : "" + n; }
         var now = new Date();
@@ -464,7 +503,7 @@ describe('golden images: what the device shows', () => {
 
   it('key displays: label, top label, an icon instead of the label, a key without top label', async () => {
     const { emu } = await device({
-      style: STYLE,
+      fonts: FONTS,
       info: { connectors: [{ id: 0, type: 2 }, { id: 1, type: 1 }, { id: 2, type: 1 }] },
       icons: { sun: '/icons/sun.svg' },
       buttons: [
@@ -482,12 +521,12 @@ describe('golden images: what the device shows', () => {
 
   it('a page switch: the items of the other page, and the key labels of that page', async () => {
     const { emu } = await device({
-      style: STYLE,
+      fonts: FONTS,
       buttons: [{ position: 3, label: 'One', toplabel: 'Page 1', page: 1 }, { position: 3, label: 'Two', toplabel: 'Page 2', page: 2 }],
       displayitems: [
-        { name: 'first', x: 5, y: 10, width: 90, fontsize: 32, page: 1, label: 'Page one' },
-        { name: 'second', x: 5, y: 50, width: 90, fontsize: 32, page: 2, label: 'Page two' },
-        { name: 'both', x: 5, y: 80, width: 90, fontsize: 14, page: 0, label: 'On every page' },
+        { name: 'first', x: 5, y: 10, width: 90, style: 'size32', page: 1, label: 'Page one' },
+        { name: 'second', x: 5, y: 50, width: 90, style: 'size32', page: 2, label: 'Page two' },
+        { name: 'both', x: 5, y: 80, width: 90, style: 'size14', page: 0, label: 'On every page' },
       ],
     }, { script: 'fb.main.display.setValue("first", "1"); fb.main.display.setValue("second", "2"); fb.main.display.setValue("both", "0");' });
     expectGolden(emu, 'main', 'page-1-main');
@@ -497,18 +536,19 @@ describe('golden images: what the device shows', () => {
     expectGolden(emu, 'key3', 'page-key');
   });
 
-  it('a script changes things: values, labels, fonts, position, an item it creates, a key\'s label', async () => {
+  it('a script changes things: values, labels, styles, position, an item it creates, a key\'s label', async () => {
     const { emu, clock } = await device({
-      style: STYLE,
+      fonts: FONTS,
+      styles: { ...SIZES, semibold: { 'font-family': 'montserrat_semibold' } },
       buttons: [{ name: 'light', position: 3, label: 'Light', toplabel: 'Room' }],
-      displayitems: [{ name: 'temp', x: 5, y: 5, width: 60, fontsize: 24, label: 'Temperature', unit: '°C' }],
+      displayitems: [{ name: 'temp', x: 5, y: 5, width: 60, style: 'size24', label: 'Temperature', unit: '°C' }],
     }, { script: '' });
     expectGolden(emu, 'main', 'script-before-main');
     emu.eval(`var d = fb.main.display;
-      d.setValue("temp", "21.5"); d.setLabel("temp", "Inside"); d.setUnit("temp", "C"); d.setFont("temp", "montserrat_semibold", 48);
+      d.setValue("temp", "21.5"); d.setLabel("temp", "Inside"); d.setUnit("temp", "C"); d.setStyle("temp", "size48 semibold");
       d.setPosition("temp", 30, 40);
-      d.create(2, 2, 60, 1, 18, 1, "Made by the script", "", 0, 1);
-      fb.key("light").display.setLabel("\\\\cffd700On"); fb.key("light").display.setTopLabel("Kitchen");
+      d.create(2, 2, 60, 1, "size18", 1, "Made by the script", "", 0, 1);
+      fb.button("light").display.setLabel("\\\\cffd700On"); fb.button("light").display.setTopLabel("Kitchen");
       setTimeout(function () { d.setValue("temp", "22.0"); }, 500);`);
     expectGolden(emu, 'main', 'script-after-main');
     expectGolden(emu, 'key3', 'script-after-key');
@@ -518,8 +558,8 @@ describe('golden images: what the device shows', () => {
 
   it('LVGL pool low: a value in several formats is drawn in one, then not at all (the firmware\'s rule)', async () => {
     const { emu, rec } = await device({
-      style: STYLE,
-      displayitems: [{ name: 'v', x: 5, y: 10, width: 90, fontsize: 32, label: 'Formats' }],
+      fonts: FONTS,
+      displayitems: [{ name: 'v', x: 5, y: 10, width: 90, style: 'size32', label: 'Formats' }],
     }, { script: 'fb.main.display.setValue("v", "\\\\cff0000A\\\\c00ff00B\\\\c0000ffC")' });
     expectGolden(emu, 'main', 'pool-ok-main');
     expect(emu.state.item('v')!.box!.value.runs).toHaveLength(3);

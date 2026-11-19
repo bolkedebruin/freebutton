@@ -219,13 +219,34 @@ that is open in the editor.
   frames to its storage for a moment (a frame does not fit its RAM); the IDE
   downloads them and deletes them from the device at once
   (`src/js/screenshot.ts`).
-- **Virtual device**: the key labels and top labels (`toplabel`, or `topLabel`
-  in older files) come from the device's `config.json`. The connector layout
-  comes from `info.connectors`. With `config.json` open, the entry under the
-  cursor (key, display item, list or image) has an outline on the virtual
-  device, and a click on an item of the virtual device selects its entry in
-  `config.json` (`src/js/config-locate.ts`). The "i" button shows read-only
-  device info on the back.
+- **Virtual device**: while nothing runs it shows where the elements of
+  `config.json` are: a dashed outline per display item, list, image, clock
+  and key display, with the element's name in it (`name`; else
+  `#<displayitemid>` or `displayitems[i]`, `Key <position>`, `clock`). No
+  labels, values or icons are shown and the LEDs are off. Run (toolbar)
+  shows the device as the firmware draws it, with the labels (`label`,
+  `toplabel`) and the look the styles of `config.json` give them (`styles`,
+  and the `style` field of an entry; see `docs/STYLE.md`). The connector
+  layout comes from `info.connectors`. A key's display is drawn at 0.75 of
+  the main display's scale, as the panels are; while a script runs, hover
+  or focus shows it larger. The page stepper picks a page of `config.json`
+  while nothing runs; while a script runs it only shows the page the script
+  shows. With `config.json` open, the entry under the cursor (key, display
+  item, list, image or clock) has a purple outline on the virtual device,
+  and a click on an element of the virtual device selects its entry in
+  `config.json` (`src/js/config-locate.ts`). The virtual device does not
+  say that `config.json` is unsaved or not valid JSON: the editor marks a
+  JSON error. The "i" button shows the virtual device's own information on
+  the back, and below it its MQTT settings. Run connects the virtual device
+  to the broker of `config.json` (live publish; Home Assistant discovery,
+  retained messages and its own state reports are not sent unless switched
+  on there, and a topic of a real device asks first). The mode (Live
+  publish, Live read-only, Offline) is remembered by the browser; a config
+  without brokers is offline. Per broker the WebSocket address
+  (`ws://<host>:<wsport>` from `config.json`, else port 9001; a `ws://` or
+  `wss://` url as it is), the user name and the password can be set for this
+  browser (`src/js/virtual-broker.ts`). The MQTT tab of the console shows
+  the messages and injects one. See `docs/EMULATOR.md`.
 - **No device** (dev without hardware, or firmware without the S3 API): files
   are kept in browser memory only, and the App panel says so. Firmware with
   the older single bucket `fs` answers NoSuchBucket for `app`; the App panel

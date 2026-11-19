@@ -30,7 +30,6 @@
 
 #include "ArduinoJson.h"
 #include "ListLogic.h"
-#include "FontRef.h"
 #include "StyleRef.h"
 #include "json/JsonWriter.h"
 #include "ui/PendingRender.h"
@@ -59,23 +58,19 @@ public:
     bool select(int index);
     // Replaces the items (options string and count from list::appendItem).
     void setItems(std::string options, int count);
-    // Font of the items (a fonts.h face, FONT_FACE_NONE = the list style's;
-    // size 1..5 = step, else px, 0 = the style's).
-    void setFont(int face, int size);
-    // Back to the configured "font" / "fontsize".
-    void restoreFont() { setFont(fontFace_, fontSize_); }
-    // Named style of the rows (focus: of the selected row): a ui_style.h
-    // ref the caller resolved, 0 = none. Any task: the LVGL task applies it.
-    void setStyle(uint8_t ref, bool focus);
+    // The list's style list: refs the caller resolved (ui/ui_style.h). The
+    // rows carry their main blocks, the selected row their "selected"
+    // blocks. Any task: the LVGL task applies it.
+    void setStyles(style_list_t list);
+    // The list now, and the one config.json gives the list.
+    style_list_t styles() const { return style_.load(std::memory_order_acquire); }
+    style_list_t configStyles() const { return styleref::load(configStyle_); }
     // Script engine restart (ConfigManager::restoreConfigState): the config
-    // items, selection, font and named styles again. Any task, no script code running;
+    // items, selection and style list again. Any task, no script code running;
     // the LVGL task renders on its next tick.
     void restoreConfigState();
 
     int getPage() const { return page_; }
-
-    // A config colour that is not set (the list style's applies).
-    static constexpr unsigned long kNoColor = 0xFFFFFFFFul;
 
     // Copy of the options string ("a\nb"), for the config writer (/config,
     // rare): taken under the items mutex so the writer never holds it while
@@ -95,7 +90,7 @@ private:
     void configure(const ArduinoJson::JsonObject& data);
     void createRoller();   // LVGL lock held
     void deleteRoller();   // LVGL lock held
-    void applyStyles();    // LVGL lock held, roller exists: named styles, font, row height
+    void applyStyles();    // LVGL lock held, roller exists: styles, fonts, row height, background
     void requestRender();
 
     // Configuration (written before attach(), read-only afterwards).
@@ -103,15 +98,7 @@ private:
     int y_ = 0;
     int width_ = 50;
     int rows_ = list::kDefaultRows;
-    // Config "font" / "fontsize" and the colours: the local layer over the
-    // list / list.selected styles (ui/ui_style.h); FONT_FACE_NONE, 0 and
-    // kNoColor = the style's.
-    int fontSize_ = 0;
-    int fontFace_ = FONT_FACE_NONE;
     int page_ = 1;
-    unsigned long color_ = kNoColor;
-    unsigned long focusColor_ = kNoColor;
-    unsigned long focusTextColor_ = kNoColor;
 
     // Items: options_ under the items mutex; count_ and selected_ atomic.
     std::string options_;
@@ -127,26 +114,20 @@ private:
     bool itemsReplaced_ = false;
     // Config "selected" (clamped). Written at config load only.
     int16_t configSelected_ = -1;
-    // Config "style" (the rows, LV_PART_MAIN) and "focusstyle" (the selected
-    // row, LV_PART_SELECTED): named styles (ui/ui_style.h ref, 0 = none).
-    // Written at config load only.
-    uint8_t configStyle_ = 0;
-    uint8_t configFocusStyle_ = 0;
-    // The font now (fontref::pack): the configured one until setFont().
-    std::atomic<uint32_t> font_{fontref::pack(FONT_FACE_NONE, 0)};
-    std::atomic<bool> fontDirty_{false};
-    // The named styles now: the configured ones until setStyle(). A change
-    // sets fontDirty_ (the font and the row height depend on them).
-    std::atomic<uint8_t> style_{0};
-    std::atomic<uint8_t> focusStyle_{0};
+    // Config "style" (styleref::store). Written at config load only.
+    uint8_t configStyle_[STYLE_ITEM_MAX]{};
+    // The styles now: the configured ones until setStyles(). A change sets
+    // styleDirty_ (the fonts and the row height depend on them).
+    std::atomic<uint32_t> style_{0};
+    std::atomic<bool> styleDirty_{false};
 
     lv_obj_t* roller_ = nullptr;  // LVGL lock held
     bool linked_ = false;         // LVGL lock held
     bool buildFailed_ = false;    // LVGL lock held; logged once
-    // The named styles the roller carries now (0 for a new roller). LVGL
-    // lock held.
-    uint8_t styleCarried_ = 0;
-    uint8_t focusStyleCarried_ = 0;
+    // The style lists the roller carries now, for its rows (LV_PART_MAIN)
+    // and its selected row (0 for a new roller). LVGL lock held.
+    style_list_t styleCarried_ = 0;
+    style_list_t selectedCarried_ = 0;
 };
 
 template<typename OutputStream>
@@ -156,25 +137,8 @@ void List::toJson(json::JsonWriter<OutputStream>::ScopedObject& obj) const {
     obj.Add("y", y_);
     obj.Add("width", width_);
     obj.Add("rows", rows_);
-    if (fontSize_ != 0) {
-        obj.Add("fontsize", fontSize_);
-    }
-    if (fontFace_ != FONT_FACE_NONE) {
-        obj.Add("font", fonts_face_name(fontFace_));
-    }
-    styleref::write(obj, "style", configStyle_);
-    styleref::write(obj, "focusstyle", configFocusStyle_);
+    styleref::write(obj, configStyle_);
     obj.Add("selected", selected());
-    char hex[7];
-    const auto addColor = [&](const char* key, const unsigned long c) {
-        if (c != kNoColor) {
-            snprintf(hex, sizeof(hex), "%06lx", c);
-            obj.Add(key, static_cast<const char*>(hex));
-        }
-    };
-    addColor("color", color_);
-    addColor("focuscolor", focusColor_);
-    addColor("focustextcolor", focusTextColor_);
     auto items = obj.Array("items");
     const std::string options = optionsCopy();
     if (count() > 0) {

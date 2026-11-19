@@ -31,6 +31,7 @@ export const BASIC_CONFIG = {
   info: { connectors: [{ id: 0, type: 2 }, { id: 1, type: 1 }] },
   // No Home Assistant discovery: the tests that are about it turn it on.
   brokers: [{ brokerid: 'local', url: 'mqtt://broker.test/', port: 1883, hassdiscovery: false }],
+  styles: { size32: { 'font-size': 32 } },
   buttons: [
     { position: 1, label: 'M-L', toplabel: 'Main' },
     { position: 2, label: 'M-R' },
@@ -38,7 +39,7 @@ export const BASIC_CONFIG = {
     { name: 'blind', position: 4, label: 'Blind' },
   ],
   displayitems: [
-    { name: 'temp', displayitemid: 7, x: 10, y: 20, width: 40, page: 1, fontsize: 3, align: 1, label: 'Temperature', unit: '°C' },
+    { name: 'temp', displayitemid: 7, x: 10, y: 20, width: 40, page: 1, style: 'size32', align: 1, label: 'Temperature', unit: '°C' },
     { name: 'power', x: 50, y: 20, width: 40, page: 2, label: 'Power', unit: 'W', round: 1, boxtype: 2 },
   ],
   lists: [{ name: 'scenes', items: ['Morning', 'Evening', 'Night'], selected: 1 }],

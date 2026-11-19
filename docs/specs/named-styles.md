@@ -1,6 +1,6 @@
 # Spec: styles (version 2)
 
-Status: approved for building (2026-11-18). The section "Decisions and corrections after review" at the end is binding and overrides the text above where they differ. Replaces version 1 of this spec, whose
+Status: implemented (2026-11-19; acceptance 4 was measured on the bench device, acceptance 5 and 7 were not measured on a device: see "Notes from the fix round"). The section "Decisions and corrections after review" at the end is binding and overrides the text above where they differ. Replaces version 1 of this spec, whose
 implementation is in the working tree (uncommitted) and is the starting point:
 named styles in `style.styles`, four item fields, LVGL property names. Version
 2 keeps its machinery (one shared `lv_style_t` per style, the table, the
@@ -465,3 +465,293 @@ Build order: step 1 firmware model, rendering and the three configs (goldens
 unchanged); step 2 script API and the device scripts (memory measured here);
 step 3 web IDE and documents.
 
+
+## Notes from building step 1 (2026-11-18)
+
+Where the firmware differs from the text above, or settles what it leaves
+open. Step 3 (documents) takes these over.
+
+- **A main block's `background-color` is set by the list, not by the shared
+  style.** The shared `lv_style_t` of a main block never holds a background
+  (`style_logic_lvgl_has`); `List.cpp` (`applyLook`) sets it as a local
+  style on the roller from the lookup. A label of a button or a display item
+  has no local `bg_opa`, so a background in the shared style would have been
+  drawn behind it; this way "no effect on a button or a display item" needs
+  nothing per label. `list` itself (the reserved style) and every `selected`
+  block hold their background in their shared style.
+- **`color` and `background-color` need the `#`.** Version 1 also read
+  `"rrggbb"`.
+- **Numbers.** The caller gives `opacity` and `line-height` to
+  `style_logic.c` in hundredths (`style_logic_prop_scale`); `opacity` is
+  stored 0..255 (rounded), `line-height` as hundredths.
+- **Which parts a style has.** A main entry exists when the style has a key
+  that is not a sub-block name; `title` / `unit` / `selected` when they are
+  objects with at least one key. `icon` is a colour word in the style's
+  head.
+- **`line-height` on a button** applies to a label in one format (the
+  wrapping label). A label in several formats is one row and has no line
+  space.
+- **Removed keys** are reported by the pass that reads `fonts` and `styles`
+  (a key observer on the reader), not by a pass of its own. `info` is not
+  looked at: `info.connectors[].connector` was only written, and is no
+  longer written.
+- **A button without `position`** is not shown and logs a warning (it used
+  the button's `id`). GET /config no longer writes a button's `id` and
+  `buttonuid`.
+- **Done in step 1 from the script API:** `setStyle` takes a list and `""`
+  gives the configured list back (for an item a script made: the list it was
+  created with); `fb.style.set` takes the dotted prefixes `title.`, `unit.`,
+  `selected.` and `icon.` for the styles of the table. On `button`,
+  `displayitem` and `list` it throws `TypeError` until step 2.
+- **The emulator's records:** an item, a key and a list have `style` and
+  `configStyle` (names joined by a space); an item no longer has `fontSize`.
+  The device record's `styles` has the keys `button`, `button.title`,
+  `displayitem`, `displayitem.unit`, `displayitem.title`, `list`,
+  `list.selected` (with `lineHeight` in hundredths and `lineThrough`, no
+  `lineSpace` / `strikethrough`), and `styleNames` lists the other styles. A
+  list's roller has `bg`.
+
+
+## Notes from building step 2 (2026-11-18)
+
+Where the script API as built differs from the text above, or settles what
+it leaves open. Step 3 (web IDE, documents) takes these over.
+
+- **`addStyle` / `removeStyle` take one style name**, not a list. `""` or a
+  value that is no string: `TypeError`. A name that is no style of the
+  config, also for `removeStyle`: `ReferenceError` (only a style that exists
+  and that the item does not have "does nothing"). A reserved name:
+  `TypeError`. A string of two names is an unknown style.
+- **Return values.** On a button side (`<side>.display`) the three calls
+  return `undefined`, as `setStyle` did; a button without an entry in
+  `buttons` throws `InternalError: failed to set style for button N`. On
+  `fb.main.display` they return `true`, or `false` for an id that does not
+  exist. `fb.main.list.setStyle` returns `undefined`.
+- **`fb.style.set` on `button` / `displayitem` / `list`.** A property can be
+  changed when the kind's resolved part holds it: the built-in ones (every
+  part: `color`; `list.selected`: also `background-color`) and what config
+  sets for the kind. A property the part does not hold, a part the kind
+  does not have (`button` + `unit.`, `list` + `title.` ...) and an
+  `icon.color` the config does not set: `TypeError: fb.style.set(): the
+  style of this kind has no "<property>"`. Nothing can be added at run time
+  (the shared `lv_style_t` keeps its size in the LVGL pool).
+- **Which items draw again.** One word holds a bit per style of the table
+  and, in its three top bits, one per kind (`STYLE_CHANGED_KIND`,
+  `style_logic_changed`); `ui_style_changed(kind, list)` takes the item's
+  kind. The walk hooks of the LVGL task are always installed (the kinds
+  exist without a table).
+- **The backup** is one block for the table's parts, the seven elements and
+  the icon colours (152 bytes with no style beyond the reserved ones),
+  allocated at the first `fb.style.set` after a script start and freed at
+  restart.
+- **Method ids:** `src/scripting/js/fb_method_ids.h`.
+  `tools/js/emulator/sources.txt` is written by the emulator build
+  (`list_sources.py`) and lists it.
+- **A list under a low LVGL pool** keeps the selected row's styles until its
+  rows have theirs (`List::applyStyles`): a `selected` block that holds only
+  a font needs no room, and its font showed on the rows of the old look.
+- **`data/scripts/examples/displays.js`** names no style (it has to run on
+  any config) and sizes its value with `\s{40}` markup. The item therefore
+  has no padding of its own, where the 40 px item of before had the padding
+  of the 48 px step.
+- **The emulator's host (`web/src/js/emulator`)** reads the changed records
+  only: an item, a key and a list have `style` / `configStyle`, an item has
+  no `fontSize` (`preview-overlay.ts` no longer passes one for an item a
+  script made), a roller has `bg`, `DeviceState.styleNames` is new and
+  `StyleState` has `lineHeight` / `lineThrough` with `font` null where a
+  part has no font. Warnings the firmware logs while it loads the config
+  cannot be observed through the emulator (listeners attach after boot).
+
+
+## Notes from building step 3 (2026-11-19)
+
+The web IDE and the documents. Where they differ from the text above, or
+settle what it leaves open.
+
+- **A firmware bug found by the comparison with the IDE.** `"line-height":
+  1.2`, `0.8` and `"opacity": 0.29` (every value of two decimals that is no
+  exact binary fraction) were logged as a bad value at config load: the JSON
+  reader keeps a short decimal as a float, and `styleref::scaled()` allowed a
+  difference of 1e-6. It allows 1e-4 now (`src/components/StyleRef.h`); a
+  third decimal is still refused. The emulator was built again.
+  `web/src/js/__tests__/mirror-firmware.test.ts` loads every value.
+- **The comparison "the IDE computes the same as the firmware"** is
+  `mirror-firmware.test.ts`: per config, the style lists, the font and colour
+  of every part, the icon tint, the padding, a list's line space and
+  backgrounds and the looks of the kinds against the emulator's records; the
+  alignment through the pixels (the same config without `text-align` and with
+  the `\a` markup the IDE computes); `fb.style.set` and `setStyle` call by
+  call against the firmware's error.
+- **Config problems stop a save**, as they did: also a key that is no longer
+  read. Each removed key is reported once per key name with the first entry
+  that has it (`"fontsize" is no longer read: use a style with "font-size"
+  (buttons[0] and 3 more)`). Notes do not stop a save: `background-color` in
+  a style that a button or a display item uses, and `line-height` in one a
+  display item uses (no effect).
+- **An unknown sub-block** is, as in the firmware, an unknown property of the
+  main block; the IDE adds that it is no part when its value is an object.
+- **The item popover** has one field "Styles": the text of the list (the
+  order counts) and a toggle per style of the config. A press adds the style
+  as the last one or takes it out.
+- **The fallback preview** (no WebAssembly) draws a display item's padding
+  and a list's `line-height` and backgrounds from the lookup. It shows an
+  icon in its own colours unless an `icon` colour is set (it cannot tell a
+  single-colour raster from a colour one).
+- **`ConfigNames.styles`** (script checks, completion) lists every style, the
+  three reserved ones included, with the dotted properties it holds. Script
+  checks use the firmware's error texts; `fb.style.set` with a value that is
+  not valid adds what the property takes.
+- **Font instances.** The estimate counts the fonts of the kinds' parts
+  (their shared styles hold them from boot), which version 1's did not.
+- **Not done:** the measurements on a device; "add a style to every item of
+  this page" (deferred above).
+
+
+## Notes from the fix round (2026-11-19)
+
+What two independent reviews found and what changed. Where this differs
+from the text above, this is what was built. `docs/STYLE.md` and
+`docs/LISTS.md` have the same for a user.
+
+### `fb.style.set` adds a property (owner's decision)
+
+This replaces "a property the style does not set cannot be added" of
+"Script API" and of the notes of step 2.
+
+- Every property can be set except `font-family`, `font-size` and
+  `line-height` (they are calculated per item and per font, and a new size
+  makes a font instance that is never freed). A property that the block
+  does not set is added: its has bit and value are set under the LVGL lock,
+  the style is marked dirty and the LVGL task fills the `lv_style_t` again.
+- A property is set in a block that the style has. `button`, `displayitem`
+  and `list` have all their parts always. A style of the table has the
+  blocks config.json gives it (the table is sized at load); a block it does
+  not have cannot be made, and that includes the main block of a style
+  that has only sub-blocks or is `{}`. Every style of the table has an
+  icon word, and so have `button` and `displayitem`: `icon.color` can be
+  set there. `list` has no icon.
+- The order of the checks: the property name, the three fixed properties,
+  the block, the value, the memory. A number that is no number for a style
+  (14.5 for an integer, a third decimal) goes into `style_logic.c` as
+  `STYLE_NUMBER_INVALID`, so that "fixed" and "no such block" are reported
+  before "not a valid value" (review finding: `"font-size", 14.5` said "not
+  a valid value").
+- Statuses: `STYLE_PROP_NOT_IN_STYLE` is gone; `STYLE_PROP_NO_PART` is "the
+  style has no such block (a kind: no such part)". Messages: `the style
+  has no "<part>" block in config.json`, `the style has no main block in
+  config.json`, `the style of this kind has no "<part>" part`.
+- Memory: nothing new per style at rest. An added property is 5 bytes in
+  the style's property block in the LVGL pool. A call that adds a property
+  is refused (`InternalError: out of memory`, nothing changed) when the
+  pool has no room for one more block above its reserve.
+- A block that held nothing for LVGL is not on the objects of its users.
+  When it gets its first LVGL property (or loses its last at a restart),
+  `ui_style_refresh` marks the style (`reattach_now`) and, for a block that
+  holds properties from now on, the block (`ENTRY_FILLED_NOW` until the end
+  of that walk). `ui_style_attach_all` is then called by every user in that
+  walk, also when its list did not change: it takes the blocks that hold
+  nothing any more off the object (no room needed, so a restart under a low
+  pool works) and adds the new ones. Buttons call `applyStyles()` in the
+  walk in which `ui_style_changed()` is true for them (display items and
+  lists already attached there). Without room to add a new block, the item
+  carries no style of its list (the look of its kind, whole) until the
+  retry, so that what its objects carry is always what is recorded.
+- Restart: the backup holds the has bits, so the restore takes an added
+  property away; the refill removes each LVGL property that is no longer
+  set (`fill_style` with `remove` for the table too), and the users take a
+  block off that holds nothing again. The restore allocates no heap. The
+  refill builds each changed property block again at its smaller size
+  (LVGL allocates the new block before it frees the old one).
+- The emulator tests compare the number of LVGL blocks in use before the
+  calls and after the restart (equal), not the free bytes: the free figure
+  moves by some tens of bytes with fragmentation, also across a restart of
+  a script that sets no style.
+
+### Firmware
+
+- **A button's markup font was lost** when `setStyle` gave the list the
+  button already had. `setStyles` of a button, a display item and a list
+  does nothing when the list is the one the item has. `ui_button_set_fonts`
+  and `ui_button_set_base` only keep their values and say whether they
+  changed; a label gets its font where its text is set (`set_markup`), and
+  `Button::applyStyles` has the texts set again whenever a style, a base
+  or a font changed.
+- **Broker `hassdiscovery`**: absent = on, otherwise the value as a boolean
+  (`0` is off). `value | true` read every value that is no JSON boolean as
+  true. The rule is `configlogic::hassDiscovery` (`src/components/ConfigLogic.h`).
+- **Removed key `autoDiscovery`**: a config with `"autoDiscovery": false`
+  has discovery on now. Its warning says so; the warning for `leds` says
+  that its topics are no longer subscribed.
+- **The selected row of a list** has the rows' `opacity`, `letter-spacing`
+  and `text-decoration` where no `selected` block sets them: LVGL takes an
+  inheritable property that a part does not hold from the object's main
+  part. The firmware is unchanged; the rule is written down
+  (`style_logic_selected_row`), the emulator's roller record has the three
+  values as LVGL resolves them and as the rule gives them, and the IDE's
+  model and fallback preview follow.
+- **Never half a look, per item.** `ui_style_attach_all` checks the LVGL
+  pool once for all the parts of an item (caption, value and unit; label
+  and top label; rows and selected row) before it touches the first
+  object. This replaces "a list keeps the selected row's styles until its
+  rows have theirs" of the notes of step 2.
+- **A style list that does not grow** was changed without a check of the
+  pool. With LVGL's own allocator that cannot fail (the list is built
+  again in the block it had), so the review's finding has no known way to
+  happen. The firmware now checks that the largest free block holds the
+  list, and no reserve: a low pool must not stop an item from giving
+  styles up.
+- **A `buttons` entry without `position`** is skipped whole in the loader:
+  no button, no topics, no name (two such entries shared the name slot of
+  position 0).
+- **A NUL character** in the argument of `setStyle`, `addStyle`,
+  `removeStyle` and in the style string of `display.create` is a
+  `TypeError` (`setStyle("big\0junk")` set `big`).
+- **`display.get`, `display.getAll` and `sensor.getInfo`** held the object
+  they build in a plain `JSValue` across calls that allocate. The engine's
+  collector moves objects (lib/mquickjs README, "Memory handling"), so the
+  value could point at the old place. They hold it in a `JSGCRef` now, as
+  `fb_button_object` does, and make each value before they read the
+  object for the call.
+
+### Web IDE
+
+- `scriptSetStatus` follows the new rule and order; `styleHoldings` is
+  `styleSettable` (per style, the dotted properties `fb.style.set` can
+  set). Completion of the property of `fb.style.set` offers all of them.
+- The removed-key scan follows the firmware's depth rule: also the keys of
+  an object's member objects (`{"buttons": {"a": {"font": 1}}}`).
+- The validator treats `<expr>.display.<call>` as a button's display only
+  where the receiver provably is a button: `fb.button(...)`, `fb.main.left`
+  / `.right`, `fb.bars[...].left` / `.right`, or a variable that only ever
+  holds one of these. A `display` member of the script's own objects is
+  not judged.
+- Completion: `addStyle` / `removeStyle` are offered one name; `setStyle`
+  and `display.create` are not offered a name the list has; a member of an
+  object named like an `Object.prototype` member no longer throws.
+- The item popover counts styles as the firmware does (a name given twice
+  is one style), and shows a `style` that is no string as empty, with the
+  problem.
+- `styleSharedFont`, `styleLvglHas` and `styleSpanHas` are removed from
+  `style-config.ts`: nothing but their own tests used them.
+
+### Measurements
+
+Bench device btn_a00002, 2026-11-19, this firmware against the committed
+909014a, its own config converted to four size styles: JS heap free 10,248
+against 10,432 bytes (184 more used; budget 350); LVGL pool free 16,878
+against 16,708 bytes (170 more free); internal heap 56.9 against 58.7 KB
+free, inside the spread of about 1.5 KB between boots of this device, so
+not attributable. `sizeof`: `Button` 356 (372), `DisplayItem` 300 (316),
+`List` 124 (132). One font instance of 48 px: 380 bytes of LVGL pool.
+These figures were taken before the fix round's changes to the firmware.
+
+Not measured on a device: acceptance 5 (three extra styles on six items)
+and acceptance 7 (btn_a00001: its script needs six buttons, the bench
+device has two). The emulator's figures for btn_a00001: JS heap 172 bytes
+more used, the LVGL low-water mark of its forecast page 140 bytes lower,
+its six size styles 308 bytes of heap and no pool.
+
+### Not done
+
+- `CLAUDE.md`, the "Backwards Compatibility" paragraph: left for the owner
+  (an agent does not change `CLAUDE.md` on another agent's request).

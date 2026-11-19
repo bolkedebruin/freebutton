@@ -1,4 +1,5 @@
 import { emulatorSession } from '../js/emulator-session.js';
+import { FACE_W } from '../js/display-geometry.js';
 import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { emit, on } from '../js/app-state.js';
@@ -15,7 +16,8 @@ import { scriptStatusOf, waitForScriptStart, type ScriptStatus } from '../js/scr
 export class FbApp extends LitElement {
   createRenderRoot() { return this; }
 
-  @state() private rightPaneWidth = 400;
+  /** The virtual device's face at its own size: its width and what fb-right-pane puts around it (16 px to the window, 1 px border and 12 px padding at each side). */
+  @state() private rightPaneWidth = FACE_W + 42;
   private _deploying = false;
   private _unsubs: Array<() => void> = [];
 

@@ -35,6 +35,8 @@ export class MediaCache {
   private async = false;
   /** Configs whose files are all here (Emulator.create asks ahead once per config). */
   private readonly settledFor = new Set<string>();
+  /** Counts clear(): an answer to a question from before it is not kept. */
+  private cleared = 0;
 
   constructor(private readonly source: MediaSource | null = null) {}
 
@@ -58,17 +60,23 @@ export class MediaCache {
       return answer ?? null;
     }
     this.async = true;
+    const asked = this.cleared;
     const arrived = answer.then(
-      data => { this.arrive(bucket, key, data ?? null); },
-      () => { this.arrive(bucket, key, null); },
+      data => { this.arrive(bucket, key, data ?? null, asked); },
+      () => { this.arrive(bucket, key, null, asked); },
     );
     this.waiting.set(name, arrived);
     return undefined;
   }
 
-  private arrive(bucket: MediaBucket, key: string, data: Uint8Array | null): void {
+  private arrive(bucket: MediaBucket, key: string, data: Uint8Array | null, asked: number): void {
     const name = id(bucket, key);
     this.waiting.delete(name);
+    // Asked before a clear() (another device): not an answer for now, the next use asks again.
+    if (asked !== this.cleared) {
+      this.settledFor.clear();
+      return;
+    }
     this.files.set(name, data);
     // A file that turned out missing changes nothing: it was missing before.
     if (data) this.tell(bucket, key);
@@ -104,6 +112,13 @@ export class MediaCache {
     for (const name of [...this.files.keys()]) {
       if (!bucket || name.startsWith(`${bucket}/`)) this.files.delete(name);
     }
+    this.settledFor.clear();
+    this.cleared++;
+  }
+
+  /** Forgets what the source answered for one file (it was missing, the source may have it now): the next use asks again. */
+  forget(bucket: MediaBucket, key: string): void {
+    this.files.delete(id(bucket, key));
     this.settledFor.clear();
   }
 

@@ -1,9 +1,11 @@
 # Emulator: the script engine in the web IDE
 
-The IDE's virtual device is the firmware in the page: its displays are drawn
-by the firmware's own LVGL, with or without a script; a script runs on the
-firmware's engine; keys can be clicked, the displays and LEDs follow, MQTT
-works against an in-page broker (or, when asked, the real one).
+The IDE's virtual device is the firmware in the page. While a script runs
+its displays are the pixels the firmware's own LVGL drew; while nothing runs
+it shows where the firmware puts each element of `config.json`, as an outline
+with the element's name. A script runs on the firmware's engine; keys can be clicked, the displays and LEDs follow, MQTT
+goes to the broker of `config.json` under the rules of "MQTT safety model"
+(or, when chosen, to a broker in the page).
 
 ## Using the virtual device
 
@@ -33,40 +35,91 @@ works against an in-page broker (or, when asked, the real one).
   what Run will use (the editor's text or the stored file). It is measured
   once a second while that side is shown; nothing is asked of the real
   device, whose information is in the Device view.
-- **The face is the firmware's displays.** The main display (320 x 240) and
-  the display of every bar key (160 x 80) are canvases that show the pixels
-  the firmware's LVGL drew in the page (`attachCanvas`, "The displays"
-  below), a CSS pixel per device pixel: exact on a 1x screen, exactly doubled
-  on a 2x one (`image-rendering: pixelated`). The face is 358 px wide and
-  fits the pane at its default width; in a narrower pane the whole face is
-  scaled down (CSS `zoom`), and whenever a device pixel is not a whole number
-  of screen pixels (a scaled face, a 1.25x or 1.5x screen) the browser
-  smooths instead: text with uneven pixel widths reads worse than slightly
-  soft text. The LEDs (front, and the one at the key's back as a glow at its
-  outer edge) are drawn by the page from the device state. Without a known
-  module layout (no device, no `info.connectors`) the modules are the ones
-  the firmware made of the config.
-- **Also while nothing runs.** As soon as the virtual device is on screen
-  and a config.json is loaded, the page makes the device from it without a
-  script (`Emulator.create`, no `run()`): what the device shows at boot. A
-  new one is made after every change of config.json (the editor's text, 250
+- **MQTT settings** are on that side too, below the values, and can be set
+  while nothing runs (they hold for the next Run). The mode: Live publish
+  (what a Run uses unless another was chosen), Live read-only or Offline;
+  the browser remembers the choice. Per broker of `config.json`, under its
+  `brokerid`: the WebSocket address, the user name and the password, each
+  empty with `config.json`'s value as placeholder. Save keeps what was
+  typed in this browser for that broker's host (two entries with one host
+  share it) and, while a script runs, connects again with it; "Reset to
+  default" forgets it. An empty field means `config.json`'s value. Next to
+  each broker: the state of its connection and, when it does not connect,
+  why, with what to do about it; the connection is tried again until it is
+  there, and "Use offline" switches to the broker in the page (nothing
+  falls back to it by itself). In Live publish: the switches "Send Home
+  Assistant discovery", "Send retained" and "Publish the virtual device's
+  own states" (all off after a reload), and "Remove announcement" once
+  something was announced. The side scrolls inside the face; the page
+  stepper is hidden while it is shown.
+- **A script runs: the face is the firmware's displays.** The main display
+  (320 x 240) and the display of every bar key (160 x 80) are canvases that
+  show the pixels the firmware's LVGL drew in the page (`attachCanvas`, "The
+  displays" below). The LEDs (front, and the one at the key's back as a glow
+  at its outer edge) are drawn by the page from the device state. Without a
+  known module layout (no device, no `info.connectors`) the modules are the
+  ones the firmware made of the config.
+- **Proportions.** The sizes follow the panels (`display-geometry.ts`, one
+  place). The main display is a 2.8" panel (its diagonal is about 70 mm,
+  measured by the owner): 320 pixels on 57.6 mm, a pitch of 0.180 mm. A
+  key's display is a 0.96" panel with a pitch of 0.135 mm. The main display
+  is drawn a CSS pixel per device pixel, a key's display at 0.135 / 0.180 =
+  0.75 of that: 120 x 60 CSS px, in the middle of its half of the bar, with
+  the LED and the dots at the key's outer edge. The whole half of the bar
+  takes the press. The face is 416 px wide: the main display is 0.77 of
+  the face's width, a proportion read from a photo of the device (the sizes
+  in mm would give about 478 px, too wide for the pane). The pane's default
+  width fits the face; in a narrower pane the whole face is scaled down (CSS
+  `zoom`).
+- **Square pixels or smoothing, per display.** A display keeps square pixels
+  (`image-rendering: pixelated`) only when one of its device pixels is a
+  whole number of screen pixels: the main display on a 1x or 2x screen at
+  the face's own size. Otherwise the browser smooths (a scaled face, a 1.25x
+  or 1.5x screen, and a key's display on most screens: 0.75 or 1.5 screen
+  pixels per device pixel), as text with uneven pixel widths reads worse
+  than slightly soft text.
+- **Nothing runs: outlines with names.** As soon as the virtual device is on
+  screen and a config.json is loaded, the page makes the device from it
+  without a script (`Emulator.create`, no `run()`): the idle device. Its
+  pixels are not shown. The face shows, on plain dark displays, a dashed
+  outline for every element at the rectangle the firmware laid it out in
+  (`emu.layout('main')`), with the element's name in it: the `name` of a
+  display item, list or image; a display item without one shows
+  `#<displayitemid>`, and without that its place in the file
+  (`displayitems[2]`); the clock shows `clock`. A key's display is an outline
+  with the key's `name`, or `Key <position>`; a position without a configured
+  key stays empty. Labels, values, list items, icons and the clock's hands
+  are not shown, and the LEDs are off: what the elements show is seen with
+  Run. An element the firmware draws nothing of yet (no caption, no value)
+  has an outline of the least height (14 px) where it will be. A new idle
+  device is made after every change of config.json (the editor's text, 250
   ms after the last key; at once after an edit made on the device) and the
-  old one is disposed; while the text is not valid JSON the last frame
-  stays. The stepper shows another page on that idle device (the firmware
-  changes page only when a script asks: the idle device gets the one-line
-  script `fb.main.display.showPage(n)`). While a script runs the stepper
-  does the same on the running device, as the script's own `showPage`.
-  A page whose items get their values from the script or MQTT is empty at
-  boot, as on the device.
+  old one is disposed; while the text is not valid JSON the last layout
+  stays. The virtual device says nothing about that text, and nothing about
+  unsaved changes: the editor marks a JSON error.
+- **The page stepper.** While nothing runs it picks the page of config.json
+  whose outlines are shown (the firmware changes page only when a script
+  asks: the idle device gets the one-line script
+  `fb.main.display.showPage(n)`). While a script runs the page is the
+  script's, as on the device, which has no stepper: the stepper shows the
+  page the script shows and its buttons are off ("The script decides the
+  page while it runs"). The IDE never calls `showPage` on a running device:
+  a script that keeps the page in a variable of its own would draw nothing
+  on a page it did not choose. After Stop the page looked at before Run is
+  shown again.
 - **Loading.** The engine (`fb-emulator.wasm`, 322 KB compressed, and 20 KB
   of script) and the media are fetched when the virtual device is first
-  drawn, not with the IDE's own code. Until the first frame, and whenever
-  the firmware cannot draw (no WebAssembly, no 2D canvas, the engine did not
-  load, no valid config.json yet), the page draws its own preview from the
-  config model: the same layout and sizes, approximate text (the browser's
-  fonts and wrapping). While it loads a small "Loading the display engine…"
+  drawn, not with the IDE's own code. Until the idle device is there, and
+  whenever the firmware cannot start (no WebAssembly, no 2D canvas, the
+  engine did not load, no valid config.json yet), the page lays out the same
+  outlines itself from the config model (`idle-outline.ts`): the positions
+  and widths are config.json's; the height of a display item is not in the
+  config (the firmware sizes it by its content) and is estimated from the
+  fonts of its styles. While it loads a small "Loading the display engine…"
   shows on the face; when it failed, one line under the face says why.
-  Without a config.json the sample is drawn and nothing is loaded. The
+  Without a config.json the sample's outlines are shown and nothing is
+  loaded. A script that runs in a browser without a 2D canvas is drawn by
+  the page from the device state (labels and values, approximate text). The
   device serves the wasm under a fixed name with an ETag: a later page load
   asks once and gets "304 Not Modified".
 - **Media.** One `MediaCache` for the page (`virtual-media.ts`): fonts and
@@ -85,21 +138,17 @@ works against an in-page broker (or, when asked, the real one).
 - **Keys.** Press a key with the pointer, or Space / Enter on a focused key;
   how long it is held gives click, long press (0.8 s) and repeats, as on the
   device. The left and right half of the main display are its two keys.
-- **Editing on the canvas.** Over the main display lies one transparent box
-  per entry the firmware laid out (`emu.layout('main')`, device pixels): it
-  takes the pointer and the focus, in config order, with the same label as
-  before ("Display item temp, x 10, y 10"). Hover outlines it; the editor
-  cursor's entry has the purple outline; a click shows it in config.json; a
-  drag or the arrow keys move it; right-click, the menu key, Shift+F10 or a
-  long touch opens its properties; right-click on empty space offers "Add
-  text item here". During a drag the box moves with the pointer, carrying a
-  copy of the entry's pixels, with its position next to it; config.json is
-  written on drop (one undo step) and the firmware then draws it there (a
-  new idle device, some milliseconds). An entry the firmware draws nothing
-  of yet (no caption, no value: it is filled by the script or MQTT) has a
-  dashed place holder with its name where it will be; a box is at least 12
-  px high so that an underline alone can be pointed at. A key's box is the
-  key itself.
+- **Editing on the outlines.** While nothing runs, each outline on the main
+  display takes the pointer and the focus, with a label such as "Display
+  item temp, x 10, y 10". Hover brightens it; the editor cursor's entry has
+  the purple outline; a click shows it in config.json; a drag or the arrow
+  keys move it; right-click, the menu key, Shift+F10 or a long touch opens
+  its properties; right-click on empty space offers "Add text item here".
+  During a drag the outline moves with the pointer, with its position next
+  to it; config.json is written on drop (one undo step) and the firmware
+  then lays it out there (a new idle device, some milliseconds). The clock
+  can be shown in config.json and has properties (size and position), but
+  is not moved by a drag. A key's box is the key itself.
 - **Does it fit the device.** The info side shows LVGL's memory pool as the
   shown device has it (the device's size): free of total with a bar, and the
   least that was free; and the texts the firmware left out or drew without
@@ -126,21 +175,19 @@ works against an in-page broker (or, when asked, the real one).
   while another tab was shown (red: an error among them). Run shows the
   Virtual tab, Deploy the Device tab. An error with a position is also
   marked in the editor when `scripts/main.js` is open.
-- **MQTT tab** (after the first Run; the form needs a running script). Mode:
-  Offline (the broker in the page, the mode at every start), Live read-only
-  or Live publish (the real broker of `config.json`, over its WebSocket
-  address: see "MQTT safety model"). Per broker: its WebSocket address, the
-  state of the connection and the script's subscriptions. Inject a message
-  (topic, payload, retain) as if the broker sent it: local in every mode.
-  The log lists, newest first, what was injected, what the script received
-  and from where, and for every publish where it went: to the in-page
-  broker, sent, would publish (read-only), or held with the reason.
-  Loopback (offline) returns a publish to the script's own subscriptions.
-  Export saves the session as a JSON file; Import replays its incoming
-  messages at their recorded times. "Sensors" sets the readings of the three
-  default sensors. While live, the toolbar and the MQTT tab show "read" or,
-  in the warning colour, "live", and in Live publish the glow of the face
-  is orange.
+- **MQTT tab** (after the first Run; the form needs a running script): the
+  messages. A line says where MQTT goes (the mode and the connection);
+  "Settings" in it shows the back of the virtual device, where the mode,
+  the brokers and the switches are (see "MQTT settings" above). Per broker
+  the script's subscriptions. Inject a message (topic, payload, retain) as
+  if the broker sent it: local in every mode. The log lists, newest first,
+  what was injected, what the script received and from where, and for every
+  publish where it went: sent, would publish (read-only), held with the
+  reason, or to the in-page broker (offline). A publish to a real device's
+  topic asks first (Once / For this session / No). Loopback (offline only)
+  returns a publish to the script's own subscriptions. Export saves the
+  session as a JSON file; Import replays its incoming messages at their
+  recorded times. "Sensors" sets the readings of the three default sensors.
 - **Without a script too:** the virtual device is the firmware reading
   config.json: config `topics` fill items and key labels, a key press
   publishes its configured topics and the Home Assistant event, sensors
@@ -161,7 +208,7 @@ firmware's own sources, unchanged, and LVGL 9.6.0 with the firmware's
 | `src/components/` (`ConfigManager`, `DisplayItem`, `Button`, `List`, `ImageItem`, `Clock`, `TopicHandler`, `ButtonEventPlan`, the `*Logic.h`) | reading config.json; config `topics`; text slots and their sizes; what a script restart restores; a key's press topics |
 | `src/mqtt/` (`Broker`, `Registry`, `Component`, `HomeAssistantDiscovery`, `HaEntities`, `HaSlug`) | subscriptions and their batches, the birth message and last will, discovery and its pacing |
 | `src/drivers/` (`PushButton`, `ButtonManager`, `ButtonLed`, `NeoPixel`, `Sensors`, `HardwareScanner`), `src/core/HardwareInitializer.cpp` | the module scan, click / long press / repeat, the default action of a press, LED state, the sensors and their 1 s sample |
-| `src/ui/` (`ui_box.c`, `ui_text.c`, `ui_button.c`, `ui_style.c`, `ui_clock.c`, `MediaImage.cpp`, `fonts/fonts.c`, `fonts/ttf_check.c`, `text_spans.c`, `style_logic.c`, `fonts/font_logic.c`, `box_logic.h`, `media_image_check.c`, `PendingRender.cpp`, `MainPage.cpp`) | every widget: the display item box, a key's display, text in spans, the shared styles, the analog clock, image rasters, the TrueType fonts (tiny_ttf, with the firmware's glyph guard and fallbacks), text markup, the style cascade, pages |
+| `src/ui/` (`ui_box.c`, `ui_text.c`, `ui_button.c`, `ui_style.c`, `ui_clock.c`, `MediaImage.cpp`, `fonts/fonts.c`, `fonts/ttf_check.c`, `text_spans.c`, `style_logic.c`, `fonts/font_logic.c`, `box_logic.h`, `media_image_check.c`, `PendingRender.cpp`, `MainPage.cpp`) | every widget: the display item box, a key's display, text in spans, the shared styles, the analog clock, image rasters, the TrueType fonts (tiny_ttf, with the firmware's glyph guard and fallbacks), text markup, the style lookup, pages |
 | LVGL 9.6.0 (`.pio/libdeps/esp32/lvgl`, all of `src/`, with `src/lv_conf.h`) | layout, wrapping, clipping, the roller, drawing, the 61440-byte memory pool, timers and animations |
 
 `tools/js/emulator/` is what stands in for the rest: `runner.c` (the script
@@ -200,7 +247,9 @@ the live transport).
 ## The displays
 
 Each display of the virtual device is drawn by the firmware's LVGL in the
-wasm: the main display (320x240) and one per bar key (160x80), created as
+wasm, also for the idle device (the page then uses its layout only and shows
+none of its pixels): the main display (320x240) and one per bar key
+(160x80), created as
 `LvglDisplay::initialize` does (`LV_COLOR_FORMAT_RGB565_SWAPPED`, partial
 render mode, a 60-row draw buffer for the main display and one 30-row buffer
 shared by the key displays, the default dark theme). The flush converts each
@@ -258,7 +307,8 @@ emu.stats();                           // lvglFree, lvglLowest, textSkipped, tex
   three repo fonts (1.7 MB) loaded.
 - **Layout.** `emu.layout(display)` is `lv_obj_get_coords` of each widget
   after layout, with the `ref` of its config.json entry: outlines, hit tests
-  and drag handles over the canvas need no rule of their own.
+  and drag handles need no rule of their own (the outlines of the idle
+  device are these rectangles).
 - **Input.** Keys only, as before (`press` / `release` / `click`). The
   firmware has no touch or encoder input (no LVGL input device is created).
 
@@ -413,16 +463,26 @@ refuses anything else, so `system.id()` and every topic built from it are
 virtual. It is also the MQTT client id of a live connection: a client id in
 `config.json` is not used.
 
-The mode is chosen in the MQTT tab while a script runs. It is never stored:
-every start is `offline`. Run again with the same brokers keeps the mode and
-the connection; Stop, a script that does not start, a reload, or a config
-with other brokers ends the connection and is `offline` again.
+**Run connects to the broker of `config.json`.** The mode of a Run is
+`live publish`, with every switch below off, unless the user chose another
+mode: the choice (made on the back of the virtual device, running or not) is
+kept by the browser (`localStorage` `fb-mqtt-mode`) and holds over Stop, Run
+again and a reload. A config without brokers is `offline`. Run again with
+the same brokers keeps the connection; Stop or a script that does not start
+ends it (a script that does not compile makes none); a config with other
+brokers ends it and connects to the new ones. The firmware never hears
+"connected" from the in-page broker before the real one: its link is made in
+the session's mode, and the connection starts when the script runs.
+
+A connection that fails is tried again, as a device does. Nothing falls
+back to the in-page broker by itself: the error is shown with the broker,
+and "Use offline" is the user's choice (it is remembered like any other).
 
 | Mode | Connection | A publish of the script or the firmware |
 |---|---|---|
+| `live publish` | the real broker, as the virtual identity | is sent, with the four exceptions below |
+| `live read-only` | the same | is not sent; logged as "would publish" |
 | `offline` | the broker in the page | goes to the in-page broker; nothing leaves the page |
-| `live read-only` | the real broker, as the virtual identity | is not sent; logged as "would publish" |
-| `live publish` | the same | is sent, with the four exceptions below |
 
 In `live publish`, by default:
 
@@ -431,7 +491,10 @@ In `live publish`, by default:
 2. **Announcements are not sent**: a publish of kind `discovery` or
    `availability` (the firmware's birth message `status` = `online` at every
    connect, and its discovery configs, about fifty for btn_a00001), or a
-   script's publish to `homeassistant/...` or `buttonplus/<id>/status`. "Announce to Home Assistant" lets them
+   script's publish to `homeassistant/...` or `buttonplus/<id>/status`.
+   Never by itself: `"hassdiscovery": true` in `config.json` makes the
+   firmware try, and it is held like the rest. "Send Home Assistant
+   discovery" lets them
    through (unretained unless "Send retained" is on too). Every announcement
    topic sent is remembered for the session; "Remove announcement" publishes
    an empty retained message to each, which removes the entities from Home
@@ -456,17 +519,20 @@ the virtual identity reaches nothing real; one that names a real device asks
 first, like a script's. A command on the virtual device's own
 `button_N/set` presses the key, as on the device.
 
-**The last will.** The connection has one only while "Announce" is on: the
+**The last will.** The connection has one only while "Send Home Assistant
+discovery" is on: the
 firmware's (`buttonplus/<id>/status` = `offline`), retained only with "Send
-retained". Without "Announce" there is no will, so a virtual device that
-vanishes leaves no `offline` behind. Switching "Announce" makes the
+retained". Without it there is no will, so a virtual device that
+vanishes leaves no `offline` behind. Switching it makes the
 connection again (the old one is ended first: the same client id twice
 would be a take-over and the broker would publish the will), and the
 firmware then sends its birth message and discovery under the new rule.
-"Remove announcement" switches "Announce" off, clears every announcement
+"Remove announcement" switches discovery off, clears every announcement
 topic sent (the birth message included) and reconnects without the will.
 
-Leaving `live publish` clears the switches and what was allowed.
+The three switches and what was allowed for real devices are kept in memory
+only: they can be set before Run and hold over Stop and Run again, and a
+reload has them all off. Leaving `live publish` clears them.
 Injected messages are local in every mode (the real broker does not get
 them). The firmware's limits (8 subscriptions per broker, the size of a
 message) hold in the live modes: the wasm applies them before a subscribe
@@ -483,39 +549,61 @@ the payloads before. Filters: All / Script / Firmware, and In / Out.
 holds the in-page broker and, live, the connection; `MqttSession`
 (`live-session.ts`) holds the mode, what is allowed, and the log. The
 Emulator itself is created permissive (`live-publish`, all allowed) so that
-the mode can change while a script runs; the link decides.
+the mode can change while a script runs; the link decides. What
+`config.json` says of a broker, what the browser keeps over it and the
+remembered mode are `web/src/js/virtual-broker.ts`: it has no imports, so
+the back of the virtual device uses it without loading the emulator.
 
 ### The live connection
 
 MQTT over WebSocket with MQTT.js (npm `mqtt`; `mqtt-live.ts` is the part
 that is the emulator's): MQTT 3.1.1, client id = the virtual identity, a
 clean session, keepalive 30 s, the user name and password of the broker
-entry in `config.json`, a will only as above. MQTT.js makes no subscription
+entry in `config.json` (or the ones the browser keeps for its host), a will
+only as above. MQTT.js makes no subscription
 again after a reconnect (`resubscribe: false`): the firmware does when it
 hears "connected", as on the device, so each is made once. Its own
 reconnect timer is off; the pause between attempts doubles from 1 s to
-30 s. The library (104 KB compressed) is fetched when a live mode is first
-chosen, not with the emulator.
+30 s. The library (104 KB compressed) is fetched at the first live
+connection (the first Run of a config with brokers, unless Offline was
+chosen), not with the emulator.
 
 The broker needs a websockets listener. Mosquitto (`mosquitto.conf`):
 
-    listener 1884
+    listener 9001
     protocol websockets
 
-The address is a setting per broker in the MQTT tab, by default
-`ws://<host of the broker url>:1884` (the port Home Assistant's Mosquitto
-add-on uses); the browser keeps it per broker host.
+The address, per broker, in this order:
+
+1. what was saved for the broker's host on the back of the virtual device
+   (`localStorage` `freebutton.virtualBroker:<host>` = `{url, username,
+   password}`; an address set with an earlier version of the IDE,
+   `fb-mqtt-ws:<host>`, is still read);
+2. the `url` of the broker entry when it is `ws://` or `wss://` already;
+3. `ws://<host of the url>:<wsport>` when the entry has a `wsport` above 0;
+4. `ws://<host of the url>:9001` (the port of Mosquitto's examples; Home
+   Assistant's Mosquitto add-on listens on 1884: set `"wsport": 1884`).
+
+The user name and the password are the entry's, unless that record has
+others; an empty field of the record means the entry's. They are kept as
+the device's access key is: in this browser's local storage, readable by
+anything that runs in this page's origin. Saving another address, user name
+or password while a script runs makes the connection again.
 A broker in Docker needs a fixed port mapping for the listener (for example
-`-p 1884:1884`): with a dynamic mapping the host port changes at every
+`-p 9001:9001`): with a dynamic mapping the host port changes at every
 restart of the container and the address has to be set again. The IDE
 served over http can use `ws://`; from an https page the browser blocks
-`ws://` (the tab says so; use `wss://`).
+`ws://` (the back of the virtual device says so; use `wss://`).
 
-What is shown when it does not connect: no WebSocket at the address
-(refused, unreachable: most likely no websockets listener, with the two
-lines above), a WebSocket that is not MQTT, the user name or password
-refused, the client id refused, the https case, and "another client uses
-this client id" (the virtual device running in another tab).
+What is shown, with the broker on the back of the virtual device, when it
+does not connect: no WebSocket at the address (refused, unreachable: most
+likely no websockets listener, with the two lines above for the port of the
+address), a WebSocket that is not MQTT, the user name or password refused,
+the client id refused, the https case, and "another client uses this client
+id" (the virtual device running in another tab). An unreachable broker and a
+connection that ended are tried again; a refusal (user name or password,
+client id, the https case, an address that is none) is not, until the
+settings change.
 
 ## Stages
 
@@ -524,9 +612,12 @@ this client id" (the virtual device running in another tab).
    discovery and availability (`origin: 'firmware'`, with a kind), text
    behaviour, clocks, the time zone, sensors: done.**
 3. **A WebSocket transport and the modes `live read-only` / `live publish`:
-   done** (see "MQTT safety model").
+   done** (see "MQTT safety model"). **Run connects by default (`live
+   publish`), the mode is remembered, the connection settings per broker
+   are on the back of the virtual device: done.**
 4. **The firmware's LVGL in the wasm: every display as the device draws it,
    frames, layout rectangles, media, golden images: done.**
-5. **The face in the page is those displays (canvases), also while nothing
-   runs; editing on top of them; the media from the device: done** (see
+5. **The face in the page is those displays (canvases) while a script runs,
+   and the firmware's layout as outlines with names while nothing runs;
+   editing on the outlines; the media from the device: done** (see
    "Using the virtual device").

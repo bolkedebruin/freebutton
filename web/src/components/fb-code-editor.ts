@@ -8,7 +8,7 @@ import { familyName, fontLoader } from '../js/font-loader.js';
 
 /**
  * font-family list of the device fonts that are loaded in the browser (the
- * faces of config.json "style.fonts"), or '' when there are none. The editor
+ * faces of config.json "fonts"), or '' when there are none. The editor
  * draws icon glyphs with them (class cm-fb-glyph).
  */
 export function deviceFontFamilies(): string {

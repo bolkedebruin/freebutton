@@ -16,29 +16,21 @@
  * it can; this model is what the page draws itself when it cannot (no
  * WebAssembly, no canvas), and where the keys' LEDs come from in both cases
  * (a key's back LED is carried next to its front LED). The values are the
- * firmware's results: texts as it cut them to its slots, the font a script
- * set.
+ * firmware's results: texts as it cut them to its slots, the fonts its
+ * style lookup chose (a script may have given the entry other styles).
  */
 import { sameConfigRef, type ButtonConfig, type ConfigRef, type DisplayItem, type ImageConfig, type ItemFont, type ListConfig, type PageConfig } from '../app-state';
-import { fontsizePx } from '../font-config';
 import type { DeviceState, ItemState } from './device-state';
 import type { FontChoice } from './host';
 
-/** Size of a text whose entry gives none (the style's default caption / value size). */
-const DEFAULT_PX = 14;
-
 /**
- * The font a script set, as the preview draws fonts: the face of the font
- * table at the size in px (a fontsize 1..5 is a step, else px; 0 or anything
- * else keeps the size the entry had). Undefined: the script set none.
+ * The font the firmware chose, as the preview draws fonts: the face of the
+ * font table at the size in px. Undefined: the firmware reported none (the
+ * part is not drawn), so the entry's own stays.
  */
-function scriptFont(font: FontChoice | null, configured: ItemFont | undefined): ItemFont | undefined {
+function chosenFont(font: FontChoice | null, configured: ItemFont | undefined): ItemFont | undefined {
   if (!font) return undefined;
-  return {
-    face: font.face >= 0 ? font.face : configured?.face ?? 0,
-    px: fontsizePx(font.size, configured?.px ?? DEFAULT_PX),
-    configured: true,
-  };
+  return { face: font.face >= 0 ? font.face : configured?.face ?? 0, px: font.size > 0 ? font.size : configured?.px ?? 14 };
 }
 
 function byRef<T extends { ref?: ConfigRef }>(pages: readonly PageConfig[], pick: (page: PageConfig) => readonly T[], ref: ConfigRef | undefined): T | undefined {
@@ -52,13 +44,13 @@ function byRef<T extends { ref?: ConfigRef }>(pages: readonly PageConfig[], pick
 
 function drawnItem(pages: readonly PageConfig[], item: ItemState): DisplayItem {
   const base: DisplayItem = byRef(pages, p => p.displayItems, item.ref) ?? {
-    // Made by a script: the fields a config entry would have given.
+    // Made by a script: the fields a config entry would have given. (Its look is in its
+    // styles, which the device resolved: the fonts below.)
     x: item.x, y: item.y, width: item.width, height: 0, type: 'text',
-    fontSize: item.fontSize, align: item.align, id: String(item.id),
+    align: item.align, id: String(item.id),
   };
-  // The unit's font is the one the device chose (below): its cascade has the item's own font
-  // and size, the named style a script may have given the item, and the style. Not the
-  // configured one; while the box is not drawn the component derives it from the value's.
+  // The unit's font is the one the device chose (below), from the styles the item has now. Not
+  // the configured one; while the box is not drawn the component derives it from the value's.
   const { icon: _configuredIcon, unitFont: _configuredUnitFont, ...rest } = base;
   return {
     ...rest,
@@ -68,11 +60,11 @@ function drawnItem(pages: readonly PageConfig[], item: ItemState): DisplayItem {
     value: item.value,
     unit: item.unit || undefined,
     ...(item.icon ? { icon: item.icon } : {}),
-    ...(item.font ? { valueFont: scriptFont(item.font, base.valueFont) } : {}),
+    ...(item.font ? { valueFont: chosenFont(item.font, base.valueFont) } : {}),
     ...(item.box?.caption.font
-      ? { labelFont: scriptFont({ face: item.box.caption.font.face, size: item.box.caption.font.px }, base.labelFont) } : {}),
+      ? { labelFont: chosenFont({ face: item.box.caption.font.face, size: item.box.caption.font.px }, base.labelFont) } : {}),
     ...(item.box?.unit.font
-      ? { unitFont: scriptFont({ face: item.box.unit.font.face, size: item.box.unit.font.px }, base.unitFont) } : {}),
+      ? { unitFont: chosenFont({ face: item.box.unit.font.face, size: item.box.unit.font.px }, base.unitFont) } : {}),
   };
 }
 
@@ -97,8 +89,8 @@ function drawnButton(state: DeviceState, button: ButtonConfig): ButtonConfig {
     ...((key ? key.icon : button.icon) ? { icon: key ? key.icon : button.icon } : {}),
     ...(led ? { ledOn: led.r + led.g + led.b > 0, ledColor: `rgb(${led.r},${led.g},${led.b})` } : {}),
     ...(back && back.r + back.g + back.b > 0 ? { backLedColor: `rgb(${back.r},${back.g},${back.b})` } : {}),
-    ...(key?.font ? { labelFont: scriptFont(key.font, button.labelFont) } : {}),
-    ...(key?.topFont ? { topFont: scriptFont(key.topFont, button.topFont) } : {}),
+    ...(key?.font ? { labelFont: chosenFont(key.font, button.labelFont) } : {}),
+    ...(key?.topFont ? { topFont: chosenFont(key.topFont, button.topFont) } : {}),
   };
 }
 
@@ -107,7 +99,7 @@ function drawnList(state: DeviceState, list: ListConfig): ListConfig {
   if (!running) return list;
   return {
     ...list, items: [...running.items], selected: running.selected,
-    ...(running.font ? { font: scriptFont(running.font, list.font) } : {}),
+    ...(running.font ? { font: chosenFont(running.font, list.font) } : {}),
   };
 }
 

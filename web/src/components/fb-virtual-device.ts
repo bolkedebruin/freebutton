@@ -7,44 +7,49 @@ import { emulatorSession, type FaceInfo } from '../js/emulator-session.js';
 import type { Emulator } from '../js/emulator/index.js';
 import { drawScreenshot, saveCanvasPng } from '../js/screenshot.js';
 import './fb-virtual-info.js';
-import { getConfig, getConnectors, getFontTable, getNamedStyles, getPreviewState, loadDefaultConfig } from '../js/device-config.js';
+import { getConfig, getConnectors, getPreviewState, getStyles, loadDefaultConfig } from '../js/device-config.js';
 import { positionsForConnector } from '../js/config-model.js';
+import { BAR_H, FACE_W, MAIN_SCALE, MODULE_GAP, SCREEN_H, squarePixels } from '../js/display-geometry.js';
 import { addItem, listKeyFor, removeItem, setItemProps, type PropValue } from '../js/config-edit.js';
 import { applyConfigEdit, ensureConfigOpen, readConfigItem } from '../js/config-session.js';
-import { fieldText, fieldValue, itemFields, KIND_LABEL, type Field } from '../js/item-props.js';
+import { fieldProblem, fieldText, fieldValue, itemFields, KIND_LABEL, styleFieldNames, toggleStyle, type Field } from '../js/item-props.js';
 import { openPopover, type PopoverHandle } from '../js/popover.js';
 import { CameraIcon, InfoIcon, PlusIcon, TrashIcon, XIcon } from '../icons/index.js';
 import { askConfirm } from './fb-dialog.js';
 import type { FbTftDisplay } from './fb-tft-display.js';
 
 /**
- * Front-face geometry (CSS px). Every display is drawn a CSS px per device
- * pixel: the main display 320 x 240 between two 19 px columns, a key's
- * display 160 x 80. A pane narrower than the face scales the whole face down.
+ * Front-face geometry (CSS px), from display-geometry.ts: the main display
+ * 320 x 240 between its two bezels, a bar with its two key displays at the
+ * key panel's finer scale. A pane narrower than the face scales the whole
+ * face down.
  */
-const FACE_W = 358;
-const TFT_H = 240 + 6.72;
-const KEY_ROW_H = 86 + 6.72;
+const TFT_H = SCREEN_H * MAIN_SCALE + MODULE_GAP;
+const KEY_ROW_H = BAR_H + MODULE_GAP;
 /**
- * The least the face is high: what the info side needs without scrolling
- * (its title, the rows of fb-virtual-info with all gauges, the display memory
- * and the line about dropped texts).
+ * The least the face is high: what the info side's values need without
+ * scrolling (its title, the rows of fb-virtual-info with all gauges, the
+ * display memory and the line about dropped texts). The MQTT settings come
+ * below them: the info side scrolls inside the face for those.
  * The front is usually higher; the flip container takes the higher of the two.
  */
 const MIN_FACE_H = 392;
+const FACE_STYLE = `width: ${FACE_W}px;`;
 
 // Kept for callers that import it from here.
 export { formatFirmware } from './fb-device-info.js';
 
 const INVALID_HINT = 'config.json is not valid JSON: correct it to move or change items here';
 const RUNNING_HINT = 'The script is running: Stop (in the toolbar) to move or change items';
+const STEPPER_RUNNING_HINT = 'The script decides the page while it runs';
+
 const NOTICE_MS = 6000;
-/** How long a new entry may take to be drawn by the firmware before its properties are not opened. */
+/** How long a new entry may take to be laid out by the firmware before its properties are not opened. */
 const DRAWN_WAIT_MS = 1500;
 /** A new text item (a caption line, about 28 px) starts no lower than this (%): it stays on the screen. */
 const NEW_ITEM_MAX_Y = 88;
 
-const FIELD_CLASS = 'w-full min-w-0 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-text-default outline-none focus:border-purple-80';
+const FIELD_CLASS = 'invalid:border-status-red w-full min-w-0 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-text-default outline-none focus:border-purple-80';
 const STEP_CLASS = 'w-7 h-7 shrink-0 rounded-lg flex items-center justify-center text-lg leading-none pb-0.5 text-gray-100 '
   + 'hover:text-text-default hover:bg-white/10 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-purple-80 '
   + 'disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-100 disabled:cursor-default cursor-pointer';
@@ -66,11 +71,9 @@ export class FbVirtualDevice extends LitElement {
   @state() private _pages: PageConfig[] = [];
   // Physical layout from config.json info.connectors; empty = legacy layout.
   @state() private _connectors: ConnectorConfig[] = [];
-  // Showing unsaved config.json edits ('stale': the text does not parse right now).
+  // The editor's config.json is what is drawn ('stale': its text does not parse right now, the last valid one stays; nothing is said of it here: the editor marks the error).
   @state() private _preview: PreviewState | null = null;
   @state() private _flipped = false;
-  // The device's own name, once it reported it ('' until then).
-  @state() private _deviceName = '';
   // The config.json entry under the editor cursor (outlined on the device).
   @state() private _selected: ConfigRef | null = null;
   /** Why something asked for here was not done (shown for a moment). */
@@ -81,9 +84,9 @@ export class FbVirtualDevice extends LitElement {
   @state() private _emu: EmulatorSnapshot = emulatorSession.snapshot();
   /** The pages as the running script shows them; null: config.json's. */
   @state() private _runPages: PageConfig[] | null = null;
-  /** The page the script showed last (the stepper may look at another one). */
-  private _shownPage: number | null = null;
-  /** The emulator whose displays are shown (the firmware's pixels); null: the config model is drawn here. */
+  /** The config page looked at before Run: shown again after Stop. */
+  private _pageBeforeRun: number | null = null;
+  /** The firmware in the page the face is made from: the running device (its pixels are shown) or the idle one (its layout, as outlines); null: none yet, the outlines are laid out from the config model. */
   @state() private _engine: Emulator | null = emulatorSession.face();
   @state() private _face: FaceInfo = emulatorSession.faceInfo();
   /** The face's scale: 1, or less in a pane narrower than the face. */
@@ -106,7 +109,6 @@ export class FbVirtualDevice extends LitElement {
           this.currentPage = this._pages[0]?.number ?? 1;
         }
       }),
-      on('device-info', (e) => { this._deviceName = e.detail.data?.deviceName ?? ''; }),
       on('config-selection', (e) => this._select(e.detail.ref)),
       on('emulator-change', (e) => {
         const was = this._emu.status;
@@ -121,8 +123,13 @@ export class FbVirtualDevice extends LitElement {
       }),
       on('emulator-state', () => this._followEmulator()),
       on('emulator-face', () => this._followFace()),
+      // "Settings" of the MQTT tab: they are on the back.
+      on('virtual-device-settings', () => {
+        if (!this._flipped) this._toggleFlip();
+        void this.updateComplete.then(() => this.querySelector('[data-testid="mqtt-settings-section"]')?.scrollIntoView?.({ block: 'nearest' }));
+      }),
     );
-    // On screen: config.json is drawn by the firmware from here on (the engine and the media load now, not with the IDE).
+    // On screen: config.json is laid out by the firmware from here on (the engine and the media load now, not with the IDE).
     emulatorSession.showPage(this.currentPage);
     emulatorSession.showPreview();
     if (typeof ResizeObserver === 'function') {
@@ -177,22 +184,26 @@ export class FbVirtualDevice extends LitElement {
     this._zoom = width > 0 && width < FACE_W ? Math.max(0.5, Math.floor(width / FACE_W * 1000) / 1000) : 1;
   }
 
-  /**
-   * Square pixels only when a device pixel is a whole number of screen
-   * pixels (the face at its own size on a 1x or 2x screen); at any other
-   * scale the browser smooths, as text with uneven pixel widths reads worse.
-   */
-  private get _smooth(): boolean {
-    const perPixel = this._zoom * (window.devicePixelRatio || 1);
-    return Math.abs(perPixel - Math.round(perPixel)) > 0.01;
+  /** Screen pixels per CSS px of the face: each display decides with it whether its pixels stay square (squarePixels). */
+  private get _screenPerCss(): number {
+    return this._zoom * (window.devicePixelRatio || 1);
   }
 
-  /** Draw what the running script made of the device; go to the page it shows. */
+  /**
+   * Draw what the running script made of the device. While it runs the page
+   * is the one the script shows: the stepper only says which. After Stop the
+   * config page looked at before is shown again.
+   */
   private _followEmulator() {
     this._runPages = emulatorSession.pages();
     const shown = emulatorSession.shownPage();
-    if (shown !== null && shown !== this._shownPage) this.currentPage = shown;
-    this._shownPage = shown;
+    if (shown !== null) {
+      this._pageBeforeRun ??= this.currentPage;
+      this.currentPage = shown;
+    } else if (this._pageBeforeRun !== null) {
+      this.currentPage = this._pageBeforeRun;
+      this._pageBeforeRun = null;
+    }
     if (!this._runPages && !this._pages.some(p => p.number === this.currentPage)) {
       this.currentPage = this._pages[0]?.number ?? 1;
     }
@@ -208,8 +219,8 @@ export class FbVirtualDevice extends LitElement {
   }
 
   protected willUpdate(changed: Map<PropertyKey, unknown>) {
-    // The device that is shown goes to the page looked at (a page the running device went to itself is the same one).
-    if (changed.has('currentPage')) emulatorSession.showPage(this.currentPage);
+    // The idle device goes to the page looked at. Never the running one: its page is the script's.
+    if (changed.has('currentPage') && !this._running) emulatorSession.showPage(this.currentPage);
     if (changed.has('_emu')) this._followFace();
   }
 
@@ -222,10 +233,12 @@ export class FbVirtualDevice extends LitElement {
   private _select(ref: ConfigRef | null) {
     this._selected = ref;
     if (!ref) return;
-    const has = (p: PageConfig) => [...p.buttons, ...p.displayItems, ...(p.lists ?? []), ...(p.images ?? [])]
+    const has = (p: PageConfig) => [...p.buttons, ...p.displayItems, ...(p.lists ?? []), ...(p.images ?? []), ...(p.clocks ?? [])]
       .some(item => sameConfigRef(item.ref, ref));
     const pages = this._drawnPages();
     if (pages.find(p => p.number === this.currentPage && has(p))) return;
+    // While a script runs the page is the script's: the entry is outlined when the script shows its page.
+    if (this._running) return;
     const page = pages.find(has);
     if (page) this.currentPage = page.number;
     // The front shows it: an outline on the back side would be invisible.
@@ -265,7 +278,9 @@ export class FbVirtualDevice extends LitElement {
     if (down) emulatorSession.press(keys[e.detail.side]); else emulatorSession.release(keys[e.detail.side]);
   }
 
+  /** Look at another page of config.json. Not while a script runs: the page is the script's then. */
   private _selectPage(page: number) {
+    if (this._running) return;
     this.currentPage = page;
   }
 
@@ -403,33 +418,10 @@ export class FbVirtualDevice extends LitElement {
     if (!result.ok) this._say(result.error);
   }
 
-  /** Font names for a select: the style's fonts and the system fonts. */
-  private _fontOptions(current: unknown): Array<{ value: string; label: string }> {
-    const faces = getFontTable().faces;
-    const options = faces.map(f => ({ value: f.name, label: f.system ? `${f.name} (system)` : f.name }));
-    const byId = typeof current === 'number' ? faces.find(f => f.id === current) : undefined;
-    const name = byId?.name ?? (typeof current === 'string' ? current : current === undefined ? '' : String(current));
-    if (name && !options.some(o => o.value === name)) options.push({ value: name, label: `${name} (not in style.fonts)` });
-    return options;
-  }
-
-  private _fontValue(current: unknown): string {
-    const byId = typeof current === 'number' ? getFontTable().faces.find(f => f.id === current) : undefined;
-    return byId?.name ?? (typeof current === 'string' ? current : current === undefined ? '' : String(current));
-  }
-
-  /** The colour drawn for an entry that sets none (the style's), for the swatch. */
-  private _styleColor(ref: ConfigRef, key: string): string {
-    for (const page of this._pages.length > 0 ? this._pages : getConfig()) {
-      const list = page.lists?.find(l => sameConfigRef(l.ref, ref));
-      if (list) return { color: list.color, focuscolor: list.focusColor, focustextcolor: list.focusTextColor }[key] ?? '#ffffff';
-    }
-    return '#ffffff';
-  }
-
   private _renderField(ref: ConfigRef, field: Field, raw: Record<string, unknown>) {
-    const value = raw[field.key] ?? (field.key === 'toplabel' ? raw.topLabel : undefined);
+    const value = raw[field.key];
     const text = fieldText(field, value);
+    const problem = fieldProblem(field, value);
     const id = `fb-prop-${field.key}`;
     const onInput = (e: Event) => this._onField(ref, field, (e.target as HTMLInputElement).value, false);
     const onChange = (e: Event) => this._onField(ref, field, (e.target as HTMLInputElement).value, true);
@@ -437,7 +429,7 @@ export class FbVirtualDevice extends LitElement {
     switch (field.type) {
       case 'text':
         control = html`<input id=${id} type="text" class=${FIELD_CLASS} spellcheck="false" autocomplete="off"
-          data-field=${field.key} .value=${text} @input=${onInput} />`;
+          pattern=${field.pattern?.source ?? nothing} data-field=${field.key} .value=${text} @input=${onInput} @change=${onChange} />`;
         break;
       case 'lines':
         control = html`<textarea id=${id} class="${FIELD_CLASS} resize-y min-h-[64px] leading-snug" rows="4" spellcheck="false"
@@ -448,22 +440,25 @@ export class FbVirtualDevice extends LitElement {
           min=${field.min ?? nothing} max=${field.max ?? nothing} placeholder=${field.unset ?? ''}
           data-field=${field.key} .value=${text} @input=${onInput} @change=${onChange} />`;
         break;
-      case 'font': {
-        const current = this._fontValue(value);
-        control = html`<select id=${id} class=${FIELD_CLASS} data-field=${field.key} @change=${onChange}>
-          <option value="" ?selected=${current === ''}>Style's font</option>
-          ${this._fontOptions(value).map(o => html`<option value=${o.value} ?selected=${o.value === current}>${o.label}</option>`)}
-        </select>`;
-        break;
-      }
-      case 'style': {
-        // A named style of "style.styles"; one the entry names that is not there (or not usable here) stays listed.
+      case 'styles': {
+        // The entry's style list as text (the order counts: the last wins), and a toggle per style of the config.
         const options = field.styles ?? [];
-        control = html`<select id=${id} class=${FIELD_CLASS} data-field=${field.key} @change=${onChange}>
-          <option value="" ?selected=${text === ''}>None</option>
-          ${options.map(name => html`<option value=${name} ?selected=${name === text}>${name}</option>`)}
-          ${text !== '' && !options.includes(text) ? html`<option value=${text} selected>${text} (not usable here)</option>` : ''}
-        </select>`;
+        // Counted as the device counts them: a name given twice is one style.
+        const listed = styleFieldNames(text);
+        control = html`
+          <input id=${id} type="text" class="${FIELD_CLASS} font-mono" spellcheck="false" autocomplete="off"
+            placeholder=${field.unset ?? ''} data-field=${field.key} .value=${text} @change=${onChange} />
+          ${options.length ? html`<div class="flex flex-wrap gap-1" role="group" aria-label="Styles of config.json">
+            ${options.map((name) => {
+              const on = listed.includes(name);
+              const next = toggleStyle(text, name);
+              return html`<button type="button" data-style=${name} aria-pressed=${on ? 'true' : 'false'} ?disabled=${next === null}
+                title=${next === null ? 'An entry has at most 4 styles' : on ? `Take "${name}" out` : `Add "${name}" as the last style`}
+                class="px-1.5 py-0.5 rounded text-[11px] font-mono outline-none focus-visible:ring-2 focus-visible:ring-purple-80 disabled:opacity-40
+                  ${on ? 'bg-purple-80 text-white' : 'bg-white/10 text-gray-100 hover:text-text-default'}"
+                @click=${() => { if (next !== null) this._onField(ref, field, next, true); }}>${name}</button>`;
+            })}
+          </div>` : ''}`;
         break;
       }
       case 'select':
@@ -476,10 +471,10 @@ export class FbVirtualDevice extends LitElement {
       case 'color':
         control = html`<div class="flex items-center gap-2">
           <input id=${id} type="color" class="w-8 h-6 shrink-0 p-0 bg-transparent border border-white/10 rounded cursor-pointer"
-            data-field=${field.key} .value=${text || this._styleColor(ref, field.key)} @input=${onInput} />
-          <span class="flex-1 text-[11px] font-mono text-gray-100">${text || 'style\'s colour'}</span>
+            data-field=${field.key} .value=${text || '#ffffff'} @input=${onInput} />
+          <span class="flex-1 text-[11px] font-mono text-gray-100">${text || 'the image\'s own colours'}</span>
           ${text ? html`<button class="px-1.5 py-0.5 rounded text-[11px] text-gray-100 hover:bg-white/10 hover:text-text-default outline-none focus-visible:ring-2 focus-visible:ring-purple-80"
-            data-clear=${field.key} title="Remove the key: the style's colour applies" aria-label="Use the style's colour for ${field.label}"
+            data-clear=${field.key} title="Remove the key" aria-label="Remove ${field.label}"
             @click=${() => this._setProps(ref, { [field.key]: undefined }, field.key)}>Reset</button>` : ''}
         </div>`;
         break;
@@ -488,6 +483,7 @@ export class FbVirtualDevice extends LitElement {
       <div class="flex flex-col gap-1 min-w-0 ${field.half ? '' : 'col-span-2'}">
         <label for=${id} class="text-[10px] uppercase tracking-wider text-gray-100">${field.label}</label>
         ${control}
+        ${problem ? html`<p class="text-[11px] text-status-orange" data-field-problem=${field.key} role="alert">${problem}</p>` : ''}
       </div>
     `;
   }
@@ -499,7 +495,7 @@ export class FbVirtualDevice extends LitElement {
         ${this._editable ? 'This entry is no longer in config.json.' : this._blockedHint}</p>`;
     }
     const name = typeof raw.name === 'string' ? raw.name : '';
-    const fields = itemFields(ref.kind, raw, getNamedStyles());
+    const fields = itemFields(ref.kind, [...getStyles().named.keys()]);
     const hints = [...new Set(fields.map(f => f.hint).filter((h): h is string => !!h))];
     return html`
       <div class="flex items-center gap-2">
@@ -513,7 +509,7 @@ export class FbVirtualDevice extends LitElement {
       <div class="grid grid-cols-2 gap-x-2 gap-y-2">
         ${fields.map(f => this._renderField(ref, f, raw))}
       </div>
-      ${hints.map(h => html`<p class="text-[10px] leading-snug text-gray-100">Size: ${h}. Empty: the style's.</p>`)}
+      ${hints.map(h => html`<p class="text-[10px] leading-snug text-gray-100" data-testid="item-popover-hint">${h}.</p>`)}
       <div class="flex items-center justify-between gap-2 pt-2 border-t border-white/10">
         <span class="min-w-0 truncate text-[10px] font-mono text-gray-100" title="This entry in config.json">${ref.list}[${ref.index}]</span>
         <button class="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2 py-1 rounded-md text-xs bg-status-red/20 text-status-red hover:bg-status-red/30 outline-none focus-visible:ring-2 focus-visible:ring-status-red"
@@ -555,14 +551,14 @@ export class FbVirtualDevice extends LitElement {
     let n = 1;
     while (taken.has(`text${n}`)) n++;
     const width = Math.max(10, Math.min(40, 100 - x));
-    const result = applyConfigEdit(s => addItem(s, listKeyFor(s, 'displayitem'), {
+    const result = applyConfigEdit(s => addItem(s, listKeyFor('displayitem'), {
       name: `text${n}`, page: this.currentPage, x: Math.min(x, 100 - width), y: Math.min(y, NEW_ITEM_MAX_Y), width, align: 1, boxtype: 1, label: 'Text',
     }), { userEvent: 'input.device.add' });
     if (!result.ok) { this._say(result.error); return; }
     if (result.ref && await this._whenDrawn(result.ref)) void this._openProperties(result.ref);
   }
 
-  /** Resolves when the entry is on the front (the firmware draws a new config a moment after the edit); false: it did not come. */
+  /** Resolves when the entry is on the front (the firmware lays out a new config a moment after the edit); false: it did not come. */
   private async _whenDrawn(ref: ConfigRef): Promise<boolean> {
     const until = Date.now() + DRAWN_WAIT_MS;
     for (;;) {
@@ -573,7 +569,7 @@ export class FbVirtualDevice extends LitElement {
     }
   }
 
-  /** The main display as a PNG file, at the device's resolution (nothing is written on a device for it). */
+  /** The main display as the firmware draws it, as a PNG file, at the device's resolution (nothing is written on a device for it). */
   private _saveScreenshot() {
     const shot = emulatorSession.screenshot();
     if (!shot) return;
@@ -608,13 +604,17 @@ export class FbVirtualDevice extends LitElement {
   }
 
   /**
-   * ‹ Page 2 of 5 ›: the same width for any number of pages. The label opens
-   * the list of pages when there are more than two. Belongs to the front
-   * face: hidden (space kept) while the back is showing.
+   * ‹ Page 2 of 5 ›: the same width for any number of pages. While nothing
+   * runs it picks the page of config.json whose outlines are shown, and the
+   * label opens the list of pages when there are more than two. While a
+   * script runs the page is the script's (the device has no stepper): this
+   * only says which page it shows, and its buttons are off. Belongs to the
+   * front face: hidden (space kept) while the back is showing.
    */
   private _renderStepper(pages: PageConfig[]) {
     const index = pages.findIndex(p => p.number === this.currentPage);
     const off = this._flipped;
+    const running = this._running;
     const label = pageLabel(pages, this.currentPage);
     // From the page shown at the click (two quick clicks are two steps).
     const go = (step: number) => {
@@ -624,31 +624,35 @@ export class FbVirtualDevice extends LitElement {
     const labelClass = 'w-[98px] h-7 shrink-0 rounded-lg text-xs font-medium tabular-nums text-text-default text-center whitespace-nowrap';
     return html`
       <div class="flex items-center shrink-0 rounded-xl p-0.5 bg-white/5 border border-white/10 ${off ? 'invisible' : ''}"
-        role="group" aria-label="Pages" data-testid="page-stepper" aria-hidden=${off ? 'true' : 'false'}>
-        <button class=${STEP_CLASS} aria-label="Previous page" title="Previous page" data-testid="page-prev"
-          ?disabled=${off || index <= 0} @click=${() => go(-1)}>‹</button>
-        ${pages.length > 2 ? html`
+        role="group" aria-label="Pages" data-testid="page-stepper" data-mode=${running ? 'shown' : 'select'} aria-hidden=${off ? 'true' : 'false'}
+        title=${running ? STEPPER_RUNNING_HINT : nothing}>
+        <button class=${STEP_CLASS} aria-label="Previous page" title=${running ? STEPPER_RUNNING_HINT : 'Previous page'} data-testid="page-prev"
+          ?disabled=${off || running || index <= 0} @click=${() => go(-1)}>‹</button>
+        ${pages.length > 2 && !running ? html`
           <button class="${labelClass} cursor-pointer hover:bg-white/10 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-purple-80"
             data-testid="page-label" title="Go to page…" aria-haspopup="menu" aria-expanded=${this._pageMenuOpen ? 'true' : 'false'}
             ?disabled=${off} @click=${(e: Event) => this._togglePageMenu(e.currentTarget as HTMLElement, pages)}>${label}</button>
         ` : html`
-          <span class="${labelClass} leading-7" data-testid="page-label" aria-live="polite">${label}</span>
+          <span class="${labelClass} leading-7" data-testid="page-label" aria-live="polite"
+            title=${running ? STEPPER_RUNNING_HINT : nothing}>${label}</span>
         `}
-        <button class=${STEP_CLASS} aria-label="Next page" title="Next page" data-testid="page-next"
-          ?disabled=${off || index < 0 || index >= pages.length - 1} @click=${() => go(1)}>›</button>
+        <button class=${STEP_CLASS} aria-label="Next page" title=${running ? STEPPER_RUNNING_HINT : 'Next page'} data-testid="page-next"
+          ?disabled=${off || running || index < 0 || index >= pages.length - 1} @click=${() => go(1)}>›</button>
       </div>
     `;
   }
 
   /**
    * Back face: the virtual device itself (the emulator's identity, state,
-   * heap, limits), measured while this side is shown. The real device's
-   * information is in the Device view; nothing is asked of it for this.
+   * heap, limits), measured while this side is shown, and its MQTT settings.
+   * The real device's information is in the Device view; nothing is asked of
+   * it for this. The title stays; what is under it scrolls inside the face,
+   * so that a long list never reaches over what is below the device.
    */
   private _renderInfoCard() {
     return html`
-      <div class="w-full h-full bg-[rgb(20,20,20)] rounded-2xl p-3.5 flex flex-col gap-2 overflow-y-auto custom-scrollbar" data-testid="info-card">
-        <div class="flex items-center justify-between">
+      <div class="w-full h-full bg-[rgb(20,20,20)] rounded-2xl p-3.5 flex flex-col gap-2 overflow-hidden" data-testid="info-card">
+        <div class="flex items-center justify-between shrink-0">
           <span class="text-[13px] font-medium text-gray-100">Virtual device</span>
           <button
             class="ml-auto mr-1 flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-gray-100 hover:bg-white/10 hover:text-white cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-purple-80 disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent"
@@ -668,7 +672,9 @@ export class FbVirtualDevice extends LitElement {
             </svg>
           </button>
         </div>
-        <fb-virtual-info .active=${this._flipped}></fb-virtual-info>
+        <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1" data-testid="info-scroll">
+          <fb-virtual-info .active=${this._flipped}></fb-virtual-info>
+        </div>
       </div>
     `;
   }
@@ -685,24 +691,26 @@ export class FbVirtualDevice extends LitElement {
     const items = page?.displayItems ?? [];
     const lists = page?.lists ?? [];
     const images = page?.images ?? [];
+    const clocks = page?.clocks ?? [];
     const slots = this._slots();
-    const smooth = this._smooth;
+    const perCss = this._screenPerCss;
+    const smoothMain = !squarePixels(MAIN_SCALE, perCss);
     if (slots.length === 0) {
       return html`
-        <fb-tft-display .currentPage=${this.currentPage} .displayItems=${items} .deviceName=${this._deviceName}
-          .lists=${lists} .images=${images} .selected=${this._selected} .editable=${this._editable} .running=${this._running}
-          .engine=${this._engine} .smooth=${smooth}></fb-tft-display>
+        <fb-tft-display .currentPage=${this.currentPage} .displayItems=${items}
+          .lists=${lists} .images=${images} .clocks=${clocks} .selected=${this._selected} .editable=${this._editable} .running=${this._running}
+          .engine=${this._engine} .smooth=${smoothMain}></fb-tft-display>
         <fb-button-grid .currentPage=${this.currentPage} .buttons=${buttons} .selected=${this._selected} .pressable=${this._running}
-          .engine=${this._engine} .smooth=${smooth}></fb-button-grid>
+          .engine=${this._engine} .screenPerCss=${perCss}></fb-button-grid>
       `;
     }
     return slots.map(c => c.type === 'display'
       ? html`<fb-tft-display data-connector=${c.id} .currentPage=${this.currentPage} .displayItems=${items}
-          .deviceName=${this._deviceName} .lists=${lists} .images=${images} .selected=${this._selected}
-          .editable=${this._editable} .running=${this._running} .engine=${this._engine} .smooth=${smooth}></fb-tft-display>`
+          .lists=${lists} .images=${images} .clocks=${clocks} .selected=${this._selected}
+          .editable=${this._editable} .running=${this._running} .engine=${this._engine} .smooth=${smoothMain}></fb-tft-display>`
       : html`<fb-button-grid data-connector=${c.id} .currentPage=${this.currentPage} .buttons=${buttons}
           .positions=${positionsForConnector(c.id)} .selected=${this._selected} .pressable=${this._running}
-          .engine=${this._engine} .smooth=${smooth}></fb-button-grid>`);
+          .engine=${this._engine} .screenPerCss=${perCss}></fb-button-grid>`);
   }
 
   /**
@@ -717,16 +725,6 @@ export class FbVirtualDevice extends LitElement {
     return this._engine.state.connectors
       .map((kind, id): ConnectorConfig => ({ id, type: kind === 2 ? 'display' : kind === 1 ? 'bar' : 'empty' }))
       .filter(c => c.type !== 'empty');
-  }
-
-  /** Subtle note while the preview shows unsaved config.json edits. */
-  private _renderPreviewHint() {
-    if (!this._preview) return '';
-    const stale = this._preview === 'stale';
-    return html`<span class="ml-auto mr-1 min-w-0 truncate text-[10px] font-mono ${stale ? 'text-status-orange' : 'text-gray-200'}"
-      data-testid="preview-hint" data-state=${this._preview}
-      title=${stale ? 'config.json is not valid JSON: showing the last valid preview; items cannot be moved or changed here until it is' : 'Preview of unsaved config.json edits'}
-      >${stale ? 'unsaved · invalid JSON' : 'unsaved'}</span>`;
   }
 
   /**
@@ -752,10 +750,9 @@ export class FbVirtualDevice extends LitElement {
 
     return html`
       <div class="flex flex-col items-center" style=${this._zoom === 1 ? '' : `zoom: ${this._zoom};`} data-zoom=${this._zoom}>
-        <!-- Page stepper, preview note and the info toggle. -->
-        <div class="relative flex items-center justify-between gap-1 w-[358px] mb-4">
+        <!-- Page stepper and the info toggle. -->
+        <div class="relative flex items-center justify-between gap-1 mb-4" style=${FACE_STYLE}>
           ${this._renderStepper(pages)}
-          ${this._flipped ? '' : this._renderPreviewHint()}
           <button
             class="shrink-0 p-2 rounded-lg hover:bg-white/10 cursor-pointer transition-colors ${this._flipped ? 'text-white bg-white/10' : 'text-gray-200 hover:text-white'}"
             title=${this._flipped ? 'Back to the device' : 'About this virtual device'}
@@ -771,7 +768,7 @@ export class FbVirtualDevice extends LitElement {
         </div>
 
         <!-- Flip container -->
-        <div class="device-flip-container w-[358px] ${this._running ? 'fb-device-running' : ''} ${this._running && this._emu.mqtt === 'live-publish' ? 'fb-device-live' : ''}" data-running=${this._running ? 'true' : 'false'} style="height: ${this._faceHeight()}px;">
+        <div class="device-flip-container ${this._running ? 'fb-device-running' : ''}" data-running=${this._running ? 'true' : 'false'} style="${FACE_STYLE} height: ${this._faceHeight()}px;">
           <div class="device-flip-inner ${this._flipped ? 'flipped' : ''} relative h-full">
             ${this._emu.status === 'starting' && !this._flipped ? html`
               <div class="absolute inset-0 z-10 flex items-center justify-center bg-black/40 pointer-events-none" role="status" data-testid="emu-loading">
@@ -779,7 +776,7 @@ export class FbVirtualDevice extends LitElement {
               </div>` : ''}
             ${this._face.state === 'loading' && this._emu.status !== 'starting' && !this._flipped ? html`
               <div class="absolute right-1 top-1 z-10 px-2 py-1 rounded-md bg-bg-primary/90 border border-white/10 text-[10px] text-gray-100 pointer-events-none"
-                role="status" data-testid="face-loading" title="Until then the display is drawn by the page: the same layout, approximate">Loading the display engine…</div>` : ''}
+                role="status" data-testid="face-loading" title="Until then the outlines are laid out by the page: nearly the same places">Loading the display engine…</div>` : ''}
             <!-- Front face -->
             <div class="device-flip-front w-full font-fira text-[11.2px]" @click=${this._onFrontClick}
               @contextmenu=${this._onContextMenu} @item-menu=${this._onContextMenu} @keydown=${this._onFrontKeyDown}
@@ -802,14 +799,17 @@ export class FbVirtualDevice extends LitElement {
 
   /**
    * Under the face, only when there is something to know about how it is
-   * drawn: the firmware could not draw it (the page's approximation shows),
-   * or it draws without font files.
+   * made: the firmware in the page could not do it (the page's own layout
+   * shows; while a script runs, its own drawing of the running device), or
+   * it draws without font files.
    */
   private _renderFaceNote() {
     const failed = this._face.state === 'failed';
-    const text = failed ? `Approximate preview, drawn by the page: ${this._face.note}` : this._face.hint;
+    const text = failed
+      ? `${this._running ? 'Approximate preview, drawn by the page' : 'Approximate layout, made by the page'}: ${this._face.note}`
+      : this._face.hint;
     if (!text || this._flipped) return '';
-    return html`<p class="w-[358px] mt-2 text-[10px] leading-snug truncate ${failed ? 'text-status-orange' : 'text-gray-200'}"
-      data-testid="face-note" data-state=${failed ? 'failed' : 'hint'} title=${text}>${text}</p>`;
+    return html`<p class="mt-2 text-[10px] leading-snug truncate ${failed ? 'text-status-orange' : 'text-gray-200'}"
+      data-testid="face-note" data-state=${failed ? 'failed' : 'hint'} title=${text} style=${FACE_STYLE}>${text}</p>`;
   }
 }

@@ -1,7 +1,7 @@
 // The pure rules of the font registry (src/ui/fonts/fonts.c): config entry
 // validation, the face table merge (the two system faces + config.json
-// "style.fonts"), fallback resolution with the cycle / depth cut, the
-// "fontsize" -> px mapping, the instance budget and the line box.
+// "fonts"), fallback resolution with the cycle / depth cut, the
+// size step -> px mapping, the instance budget and the line box.
 //
 // Plain C, no LVGL: the native tests build it (test/test_font_logic). The
 // constants and config types here are part of the fonts.h API (fonts.h
@@ -44,7 +44,7 @@ typedef enum {
     FONT_FALLBACK_ID,          /* "fallback": <id> */
 } font_fallback_kind_t;
 
-/* One entry of config.json "style.fonts". */
+/* One entry of config.json "fonts". */
 typedef struct {
     char name[FONT_NAME_MAX + 1];
     int32_t id;                   /* 0 = none; else >= 1 */
@@ -138,10 +138,9 @@ void font_logic_resolve(font_face_spec_t *faces, size_t count, font_warn_fn warn
 
 /* ---- sizes ----------------------------------------------------------------- */
 
-/* "fontsize" -> px: 1..5 = the legacy steps 14/24/32/48/72;
- * FONT_PX_MIN..FONT_PX_MAX = px; anything else = fallback_px. (The item
- * layer's rule, with step 2 = 18 on title elements, is
- * style_logic_item_px.) */
+/* A size step -> px: 1..5 = the steps 14/24/32/48/72 (text markup
+ * \s1..\s5); FONT_PX_MIN..FONT_PX_MAX = px; anything else = fallback_px.
+ * (With step 2 = 18 on a title: style_logic_item_px.) */
 int font_logic_px(int fontsize, int fallback_px);
 
 /* ---- instance budget ------------------------------------------------------- */

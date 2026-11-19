@@ -12,7 +12,7 @@
  *   removeItem(doc, ref)           take the entry out of its array
  *   addItem(doc, list, props)      append an entry, written like the last one
  *   readItem(doc, ref)             the entry's own values (to show them)
- *   listKeyFor(doc, kind)          the array the model reads for a kind
+ *   listKeyFor(kind)               the array the model reads for a kind
  *
  * `doc` is the editor state or the file's text. Every edit returns the
  * changes (positions in the given text, not overlapping, sorted) or a
@@ -20,12 +20,6 @@
  * not valid JSON, an entry that is not there or not an object, an array or
  * a key that the file has twice (which of the two the device reads is not
  * the IDE's to guess).
- *
- * Legacy files: the entry is addressed by the array's key as written
- * ("mqttdisplays", "mqttbuttons"), so those are edited in place like the
- * current names. A key that an older file spells differently and the
- * firmware still reads ("topLabel") is updated under the spelling the file
- * has.
  */
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { jsonLanguage } from '@codemirror/lang-json';
@@ -47,12 +41,13 @@ export type ItemRef = Pick<ConfigRef, 'list' | 'index'>;
 const PARSE_TIMEOUT_MS = 200;
 const VALUE_NODES = new Set(['Object', 'Array', 'String', 'Number', 'True', 'False', 'Null']);
 
-/** The arrays the model reads per kind, in the order it looks for them (config-model.ts). */
-const LIST_KEYS: Record<ConfigItemKind, string[]> = {
-  button: ['buttons', 'mqttbuttons'],
-  displayitem: ['displayitems', 'mqttdisplays'],
-  list: ['lists'],
-  image: ['images'],
+/** The array the model reads per kind (config-model.ts). */
+const LIST_KEYS: Record<ConfigItemKind, string> = {
+  button: 'buttons',
+  displayitem: 'displayitems',
+  list: 'lists',
+  image: 'images',
+  clock: 'clocks',
 };
 
 /**
@@ -62,13 +57,8 @@ const LIST_KEYS: Record<ConfigItemKind, string[]> = {
  */
 const KEY_ORDER = [
   'displayitemid', 'name', 'position', 'page', 'x', 'y', 'width', 'height', 'rows', 'align', 'boxtype',
-  'fontsize', 'font', 'style', 'labelfontsize', 'labelfont', 'labelstyle', 'label', 'toplabel', 'topfontsize', 'topfont',
-  'topstyle', 'unit', 'icon', 'src', 'iconsize', 'iconcolor', 'color', 'focuscolor', 'focustextcolor', 'focusstyle',
-  'items', 'selected',
+  'style', 'label', 'toplabel', 'unit', 'icon', 'src', 'iconsize', 'color', 'items', 'selected',
 ];
-
-/** Older spellings the firmware still reads: the key the file has is the one updated. */
-const KEY_ALIASES: Record<string, string[]> = { toplabel: ['topLabel'] };
 
 const INVALID = 'config.json is not valid JSON';
 
@@ -251,10 +241,7 @@ export function setItemProps(input: EditorState | string, ref: ItemRef, props: R
   const added: Array<[string, string]> = [];
 
   for (const [key, value] of Object.entries(props)) {
-    let matches = existing.filter(p => p.name === key);
-    if (matches.length === 0) {
-      matches = existing.filter(p => (KEY_ALIASES[key] ?? []).includes(p.name));
-    }
+    const matches = existing.filter(p => p.name === key);
     if (matches.length > 1) {
       return { ok: false, error: `${ref.list}[${ref.index}] has "${matches[0].name}" twice: remove one of them first` };
     }
@@ -348,7 +335,7 @@ export function addItem(input: EditorState | string, list: string, props: Record
     if (text === null) return { ok: false, error: `"${key}" cannot be set to that value` };
     if (text !== undefined) encoded.push([key, text]);
   }
-  const kind = (Object.keys(LIST_KEYS) as ConfigItemKind[]).find(k => LIST_KEYS[k].includes(list)) ?? 'displayitem';
+  const kind = (Object.keys(LIST_KEYS) as ConfigItemKind[]).find(k => LIST_KEYS[k] === list) ?? 'displayitem';
   const unit = indentUnit(doc);
   const entries = found.value ? children(found.value.array, VALUE_NODES) : [];
   const ref: ConfigRef = { kind, list, index: entries.length };
@@ -406,16 +393,9 @@ export function itemRange(input: EditorState | string, ref: ItemRef): { from: nu
   return found?.ok ? { from: found.value.entry.from, to: found.value.entry.to } : null;
 }
 
-/**
- * The root array entries of `kind` go to: the one the model reads (the
- * current name, else the legacy one when the file has only that), or the
- * current name for a file that has neither.
- */
-export function listKeyFor(input: EditorState | string, kind: ConfigItemKind): string {
-  const doc = docOf(input);
-  const root = doc ? rootObject(doc) : null;
-  const names = root && doc ? propsOf(doc, root).filter(p => p.value.name === 'Array').map(p => p.name) : [];
-  return LIST_KEYS[kind].find(k => names.includes(k)) ?? LIST_KEYS[kind][0];
+/** The root array entries of `kind` go to. */
+export function listKeyFor(kind: ConfigItemKind): string {
+  return LIST_KEYS[kind];
 }
 
 /** `text` with `changes` (as an edit returns them) applied. */

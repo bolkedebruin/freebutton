@@ -64,6 +64,8 @@ void writeCoords(Json& json, lv_obj_t* obj);
 // The font table and the resolved styles (FBH_STATE_DEVICE).
 void writeFonts(Json& json);
 void writeStyles(Json& json);
+// The names of the config's styles besides "button", "displayitem" and "list".
+void writeStyleNames(Json& json);
 
 } // namespace emu
 

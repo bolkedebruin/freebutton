@@ -91,19 +91,21 @@ describe('config topics, without a script', () => {
     expect(key.display!.label.hidden).toBe(true);
   });
 
-  it('the legacy list names (mqttdisplays, mqttbuttons) work the same', async () => {
+  it('the old names of the lists (mqttbrokers, mqttbuttons, mqttdisplays) are not loaded', async () => {
     const config = {
       info: CONFIG.info,
       mqttbrokers: [{ brokerid: 'ha', url: 'mqtt://10.0.0.1/', hassdiscovery: false }],
       mqttbuttons: [{ position: 7, label: 'old', topics: [{ brokerid: 'ha', topic: 'old/key', eventtype: 11 }] }],
       mqttdisplays: [{ label: 'old item', topics: [{ brokerid: 'ha', topic: 'old/item', eventtype: 15 }] }],
     };
-    const { emu, clock } = await makeEmulator({ config });
-    emu.broker(0).inject('old/key', 'new');
-    emu.broker(0).inject('old/item', '7');
-    clock.advance(0);
-    expect(emu.state.key(7)).toMatchObject({ label: 'new', ref: { kind: 'button', list: 'mqttbuttons', index: 0 } });
-    expect(emu.state.items[0]).toMatchObject({ value: '7', ref: { kind: 'displayitem', list: 'mqttdisplays', index: 0 } });
+    const { emu, rec } = await makeEmulator({ config });
+    // The device boots with what is left: its modules, no broker, no item, no configured key.
+    expect(emu.state.brokers).toEqual([]);
+    expect(emu.state.items).toEqual([]);
+    expect(emu.state.keys.every(k => k.ref === undefined && k.label === '')).toBe(true);
+    expect(rec.subscribes).toEqual([]);
+    expect(emu.run('print(typeof fb.bars[0].left.display.setLabel)')).toEqual({ ok: true });
+    expect(rec.console).toEqual(['function']);
   });
 
   it('an invalid topic entry is skipped by the firmware, with its warning', async () => {
@@ -179,8 +181,8 @@ describe('a key press: the firmware\'s default action', () => {
     const t = await makeEmulator({ config: CONFIG });
     t.emu.run(`
       var seen = [];
-      fb.key("k7").button.onClick(function () { seen.push("click"); return false; });
-      fb.key("k7").button.onRelease(function () { seen.push("release"); });
+      fb.button("k7").button.onClick(function () { seen.push("click"); return false; });
+      fb.button("k7").button.onRelease(function () { seen.push("release"); });
     `);
     press(t, 'k7');
     expect(t.rec.keys).toEqual(['7:click:prevented', '7:release']);
@@ -190,7 +192,7 @@ describe('a key press: the firmware\'s default action', () => {
 
   it('a script publishing from its handler is the script\'s publish, next to the firmware\'s', async () => {
     const t = await makeEmulator({ config: CONFIG });
-    t.emu.run('fb.key("k7").button.onClick(function () { mqtt.publish(0, "mine", "1"); });');
+    t.emu.run('fb.button("k7").button.onClick(function () { mqtt.publish(0, "mine", "1"); });');
     t.emu.click('k7');
     expect(t.rec.publishes.map(p => `${p.origin}/${p.kind} ${p.topic}`)).toEqual([
       'script/script mine', 'firmware/press cfg/k7/click', 'firmware/press cfg/k7/release',
@@ -200,7 +202,7 @@ describe('a key press: the firmware\'s default action', () => {
   it('a press sent from Home Assistant (button_N/set) is a click and a release', async () => {
     const config = { ...CONFIG, brokers: [{ ...CONFIG.brokers[0], hassdiscovery: true }] };
     const t = await makeEmulator({ config });
-    t.emu.run('fb.key("k8").button.onClick(function () { print("clicked by HA"); });');
+    t.emu.run('fb.button("k8").button.onClick(function () { print("clicked by HA"); });');
     t.rec.publishes.length = 0;
     expect(t.emu.broker(0).inject('buttonplus/virt_btn_0a1b2c/button_8/set', 'PRESS')).toBe(true);
     t.clock.advance(0);
@@ -327,40 +329,45 @@ describe('Home Assistant discovery and availability', () => {
 describe('text as the firmware draws it', () => {
   const STYLE_CONFIG = {
     info: CONFIG.info,
-    style: {
-      fonts: [{ id: 1, name: 'mdi', src: 'icons.ttf' }, { name: 'montserrat', fallback: 'mdi' }],
-      text: { text_color: '#eeeeee' },
-      title: { text_font: 'montserrat_semibold', text_color: '#ffd700' },
-      key: { label: { text_size: 32 }, toplabel: { text_size: 18 } },
-      display: { value: { text_size: 24 }, unit: { text_color: '#999999', text_size: 14 }, caption: { text_size: 14 } },
+    fonts: [{ id: 1, name: 'mdi', src: 'icons.ttf' }, { name: 'montserrat', fallback: 'mdi' }],
+    styles: {
+      // The kinds: what config.json sets, over the built-in look.
+      button: { color: '#eeeeee' },
+      displayitem: { 'font-size': 24, color: '#eeeeee', unit: { 'font-size': 14 } },
+      icons32: { 'font-family': 'mdi', 'font-size': 32, title: { 'font-size': 18 } },
+      icons48: { 'font-family': 'mdi', 'font-size': 48 },
+      icons72: { 'font-family': 'mdi', 'font-size': 72 },
+      semi20: { 'font-family': 'montserrat_semibold', 'font-size': 20 },
     },
-    buttons: [{ name: 'k', position: 7, label: 'Key', toplabel: 'Top' }, { name: 'big', position: 8, label: 'B', fontsize: 5, font: 'mdi' }],
+    buttons: [{ name: 'k', position: 7, label: 'Key', toplabel: 'Top' }, { name: 'big', position: 8, label: 'B', style: 'icons72' }],
     displayitems: [
       { name: 'plain', label: 'Caption', unit: 'W' },
-      { name: 'sized', label: 'Caption', unit: 'W', fontsize: 3, labelfontsize: 2, font: 'mdi' },
+      { name: 'sized', label: 'Caption', unit: 'W', style: 'icons32' },
     ],
   };
 
-  it('resolves the style cascade: role, element, then the item\'s own font fields', async () => {
+  it('resolves the lookup: the built-in look, the kind\'s style, then the item\'s styles', async () => {
     const { emu } = await makeEmulator({ config: STYLE_CONFIG });
     expect(emu.state.fonts.map(f => [f.face, f.name, f.fallback])).toEqual([
       [0, 'montserrat', 2], [1, 'montserrat_semibold', -1], [2, 'mdi', -1],
     ]);
-    expect(emu.state.styles['display.value']).toMatchObject({ font: 'montserrat', px: 24, color: '#eeeeee' });
-    expect(emu.state.styles['display.caption']).toMatchObject({ font: 'montserrat_semibold', px: 14, color: '#ffd700' });
+    expect(emu.state.styles.displayitem).toMatchObject({ font: 'montserrat', px: 24, color: '#eeeeee' });
+    expect(emu.state.styles['displayitem.title']).toMatchObject({ font: 'montserrat_semibold', px: 14, color: '#ffd700' });
+    expect(emu.state.styleNames).toEqual(['icons32', 'icons48', 'icons72', 'semi20']);
 
     emu.run('fb.main.display.setValue("plain", "12"); fb.main.display.setValue("sized", "34");');
     const plain = emu.state.item('plain')!.box!;
     expect(plain.caption.runs).toEqual([{ text: 'Caption', font: 'montserrat_semibold', face: 1, px: 14, color: '#ffd700' }]);
     expect(plain.value.runs).toEqual([{ text: '12', font: 'montserrat', face: 0, px: 24, color: '#eeeeee' }]);
-    // The unit has its own size and colour from the style.
+    // The unit has its size from "displayitem" and the built-in colour; its face is the value's.
     expect(plain.unit.runs).toEqual([{ text: 'W', font: 'montserrat', face: 0, px: 14, color: '#999999' }]);
     expect(emu.state.item('plain')!.font).toEqual({ face: 0, size: 24 });
 
     const sized = emu.state.item('sized')!.box!;
-    // "fontsize": 3 = 32 px for value and unit; "labelfontsize": 2 = 18 px on a caption; "font" for value and unit.
+    // The style's main block for the value; the unit has the value's face, and the size
+    // "displayitem" gives units; the style's "title" block sizes the caption.
     expect(sized.value.runs[0]).toMatchObject({ font: 'mdi', px: 32 });
-    expect(sized.unit.runs[0]).toMatchObject({ font: 'mdi', px: 32, color: '#999999' });
+    expect(sized.unit.runs[0]).toMatchObject({ font: 'mdi', px: 14, color: '#999999' });
     expect(sized.caption.runs[0]).toMatchObject({ font: 'montserrat_semibold', px: 18 });
     // The paddings that go with the value's size (src/ui/box_logic.h).
     expect([sized.captionPad, sized.boxPad]).toEqual([4, 8]);
@@ -378,8 +385,8 @@ describe('text as the firmware draws it', () => {
     emu.run(String.raw`
       fb.main.display.setValue("plain", "\\ar\\cff000012\\c00ff00.5\\s{40} big\\f{mdi}\\u{F0599}");
       fb.main.display.setUnit("plain", "\\s1small\\f{nofont}x");
-      fb.key("k").display.setLabel("\\c0000ffBlue");
-      fb.key("k").display.setTopLabel("a\\cff0000b");
+      fb.button("k").display.setLabel("\\c0000ffBlue");
+      fb.button("k").display.setTopLabel("a\\cff0000b");
     `);
     const box = emu.state.item('plain')!.box!;
     expect(box.value).toMatchObject({ plain: '12.5 big\u{F0599}', align: 'right', spansCut: false });
@@ -401,13 +408,13 @@ describe('text as the firmware draws it', () => {
     expect(display.topLabel.runs.map(r => [r.text, r.color])).toEqual([['a', '#ffd700'], ['b', '#ff0000']]);
   });
 
-  it('a script\'s setFont is what the firmware then draws with', async () => {
+  it('a script\'s setStyle is what the firmware then draws with', async () => {
     const { emu } = await makeEmulator({ config: STYLE_CONFIG });
-    emu.run('fb.main.display.setValue("plain", "1"); fb.main.display.setFont("plain", "mdi", 48); fb.key("k").display.setFont("montserrat_semibold", 20);');
+    emu.run('fb.main.display.setValue("plain", "1"); fb.main.display.setStyle("plain", "icons48"); fb.button("k").display.setStyle("semi20");');
     expect(emu.state.item('plain')!.box!.value.runs[0]).toMatchObject({ font: 'mdi', px: 48 });
     expect(emu.state.item('plain')!.font).toEqual({ face: 2, size: 48 });
     expect(emu.state.key('k')!.display!.label.runs[0]).toMatchObject({ font: 'montserrat_semibold', px: 20 });
-    emu.eval('fb.main.display.setFont("plain", "")');
+    emu.eval('fb.main.display.setStyle("plain", "")');
     expect(emu.state.item('plain')!.box!.value.runs[0]).toMatchObject({ font: 'montserrat', px: 24 });
   });
 
@@ -417,7 +424,7 @@ describe('text as the firmware draws it', () => {
     emu.run(`
       var d = fb.main.display;
       d.setValue("plain", "${long}"); d.setLabel("plain", "${long}"); d.setUnit("plain", "${long}");
-      fb.key("k").display.setLabel("${long}"); fb.key("k").display.setTopLabel("${long}");
+      fb.button("k").display.setLabel("${long}"); fb.button("k").display.setTopLabel("${long}");
     `);
     const item = emu.state.item('plain')!;
     const key = emu.state.key('k')!;
@@ -445,7 +452,7 @@ describe('text as the firmware draws it', () => {
     const { emu } = await makeEmulator({ config: CONFIG });
     expect(emu.state.key('mainLeft')).toMatchObject({ position: 1, label: 'MainL', display: null });
     expect(emu.state.keyDisplays).toEqual([7, 8]);
-    expect(emu.eval('fb.key("mainLeft").display.setLabel("x")')).toMatchObject({
+    expect(emu.eval('fb.button("mainLeft").display.setLabel("x")')).toMatchObject({
       ok: false, error: { message: 'InternalError: failed to set label for button 1' },
     });
   });
@@ -465,7 +472,8 @@ describe('pages and clocks', () => {
     info: CONFIG.info,
     displayitems: [{ name: 'one', label: '1', page: 1 }, { name: 'two', label: '2', page: 2 }, { name: 'all', label: '*', page: 0 }],
     clocks: [{ x: 10, y: 20, width: 120, height: 120, page: 2 }, { x: 0, y: 0, page: 1 }],
-    lists: [{ name: 'l', page: 2, x: 50, y: 10, width: 40, rows: 3, items: ['a', 'b', 'c'], selected: 1, focuscolor: 'ff8800' }],
+    styles: { orange: { selected: { 'background-color': '#ff8800' } } },
+    lists: [{ name: 'l', page: 2, x: 50, y: 10, width: 40, rows: 3, items: ['a', 'b', 'c'], selected: 1, style: 'orange' }],
     images: [{ name: 'img', page: 1, x: 5, y: 6, width: 48, height: 48, icon: 'sun' }],
   };
 

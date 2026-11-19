@@ -232,9 +232,9 @@ public:
      * script runs. Takes the locks it needs (items, LVGL) itself.
      *
      * Restored: display items a script made (removed) or removed (shown
-     * again), their texts, icon, font, position and page; key label, top
-     * label, icon and fonts; list items, selection and font; the named
-     * style of every part and the values of the named styles (fb.style.set);
+     * again), their texts, icon, position and page; key label, top
+     * label and icon; list items and selection; the style list of every
+     * item and the values of the styles (fb.style.set);
      * images; the shown page; LED pixels a script set. A text or icon that came from an
      * item's own config topic stays. See docs/SCRIPT-RESTART.md.
      *
@@ -350,16 +350,18 @@ private:
     void loadClocks(const JsonArray& clocksArray);
 
     /**
-     * Config "style" (docs/STYLE.md): a pass over the file of its own,
-     * before the items are built (they resolve their font names at load and
-     * build on the element styles), whatever the key order. Configures the
-     * font registry with style.fonts (fonts_configure), then resolves the
-     * roles and elements into the shared element styles (ui_style_apply),
-     * then loads the named styles of style.styles (ui_style_named_*);
-     * LVGL lock taken here. Without "style": the system fonts and the
-     * firmware defaults, and no named styles.
+     * Config "fonts" and "styles" (docs/specs/named-styles.md): a pass over
+     * the file of its own, before the items are built (they resolve their
+     * style names at load and build on the kinds' element styles), whatever
+     * the key order. Configures the font registry with "fonts"
+     * (fonts_configure), then resolves the reserved styles "button",
+     * "displayitem" and "list" into the shared element styles
+     * (ui_style_apply) and loads the other styles into the style table
+     * (ui_style_table_*); LVGL lock taken here. Without them: the system
+     * fonts and the built-in look. The same pass logs the keys the config
+     * no longer has (style_logic_removed_key), once per key name.
      */
-    void loadStyle(const std::string& filename);
+    void loadStyles(const std::string& filename);
 
     /**
      * Load main-display lists from JSON array
@@ -401,8 +403,8 @@ private:
 
 // Template method implementation must be in header
 // The regenerated config (GET /config) omits the IDE-level tables ("icons",
-// "style" with its fonts and named styles; items still name their fonts
-// and their named styles): it is not a round-trip of config.json.
+// "fonts", "styles"; items still name their styles): it is not a round-trip
+// of config.json.
 template<typename OutputStream>
 void ConfigManager::write(OutputStream &stream) {
     rapidjson::Writer<OutputStream> writer(stream);
@@ -426,7 +428,6 @@ void ConfigManager::write(OutputStream &stream) {
 
                     auto conn = connectors.Object();
                     conn.Add("id", connectorNum);
-                    conn.Add("connector", connectorNum + 1); // backwards compatibility
                     conn.Add("type", static_cast<uint8_t>(connectorType));
                 }
             }

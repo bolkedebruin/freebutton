@@ -1,22 +1,27 @@
 /**
  * MQTT of the virtual device for one IDE session: the brokers of
- * config.json as BrokerLinks, the mode (offline / live read-only / live
- * publish), what the user allowed, and the log.
+ * config.json as BrokerLinks, the mode (live publish / live read-only /
+ * offline), what the user allowed, and the log.
+ *
+ * A Run connects to the brokers of config.json: the mode is the one the
+ * user chose last (kept by the browser), else live publish. A config
+ * without brokers is offline. A connection that fails is tried again, as a
+ * device does; nothing falls back to the in-page broker by itself.
  *
  * Safety, as implemented here and in publish-policy.ts:
  *
- *   offline         (the mode at every start) nothing leaves the page.
- *   live read-only  connected to the real broker as the virtual identity;
- *                   the script's subscriptions are made there; no publish
- *                   is sent, each is logged as "would publish".
- *   live publish    publishes are sent, except:
+ *   live publish    (the mode of a Run when none was chosen) connected to
+ *                   the real broker as the virtual identity. Publishes are
+ *                   sent, except:
  *                   - retain is cleared, unless "send retained" is on;
  *                   - announcements (Home Assistant discovery and
- *                     availability) are not sent, unless "announce to Home
- *                     Assistant" is on. Announcement topics that were sent
- *                     are remembered: removeAnnouncement() publishes an
- *                     empty retained message to each, which removes the
- *                     entities from Home Assistant and from the broker;
+ *                     availability) are not sent, unless "send Home
+ *                     Assistant discovery" is on: also not when config.json
+ *                     says "hassdiscovery": true. Announcement topics that
+ *                     were sent are remembered: removeAnnouncement()
+ *                     publishes an empty retained message to each, which
+ *                     removes the entities from Home Assistant and from the
+ *                     broker;
  *                   - a topic that names a real device ("btn_" + 6 hex,
  *                     not the virtual identity) is held: the user is asked
  *                     once per topic (Once / For this session / No);
@@ -26,24 +31,40 @@
  *                   A key's default action (kind 'press') and what a script
  *                   publishes are what is being tested: they are sent,
  *                   under the rules above.
+ *   live read-only  connected the same way; the script's subscriptions are
+ *                   made there; no publish is sent, each is logged as
+ *                   "would publish".
+ *   offline         nothing leaves the page: the in-page broker.
  *
- * The last will: the connection has one only while "announce" is on (the
+ * The last will: the connection has one only while discovery is on (the
  * firmware's, retained only with "send retained"). Without it a virtual
  * device that vanishes leaves no "offline" behind for a device nobody
- * announced. Switching "announce" makes the connection again, so that the
+ * announced. Switching discovery makes the connection again, so that the
  * firmware sends its birth message and discovery under the new rule.
  *
+ * The firmware never hears "connected" from the in-page broker before the
+ * real one: a link is made in the session's mode (transport()), and the
+ * connection starts when the script runs (begin()).
+ *
  * The client id is always the virtual identity; a client id in config.json
- * is not used. The mode and everything allowed live in memory only: a
- * reload, a Stop, or a config with other brokers is offline again. Run
- * again with the same brokers keeps the connection and the mode. Only the
- * broker's WebSocket address is kept (localStorage, per broker host).
+ * is not used. The mode and the three switches can be set while nothing
+ * runs: they hold for the next Run. The switches and what was allowed for
+ * real devices live in memory only (a reload: all off); leaving live
+ * publish clears them. Run again with the same brokers keeps the
+ * connection. The address, user name and password of a broker are
+ * config.json's unless the browser keeps others for its host
+ * (../virtual-broker.ts).
  */
 import { BrokerLink, type LinkRecord, type LiveOptions } from './broker-link';
 import type { MockSession, MqttTransport } from './mqtt';
 import type { LinkError, LinkState, SocketFactory } from './mqtt-live';
 import { decidePublish, type PublishMode, type TopicMatcher } from './publish-policy';
 import type { Clock } from './clock';
+import {
+  brokerAccess, brokerConfigs, brokerSummary, type BrokerAccess, type BrokerConfig, type BrokerStorage, type BrokerSummary,
+} from '../virtual-broker';
+
+export { brokerConfigs, brokerHost, DEFAULT_WS_PORT } from '../virtual-broker';
 
 export interface MqttLogEntry {
   /**
@@ -86,26 +107,16 @@ export interface BrokerView {
   subscriptions: Array<{ topic: string; qos: number }>;
 }
 
-export interface BrokerStatus {
-  index: number;
-  name: string;
-  /** Host of config.json's broker url. */
-  host: string;
-  /** The WebSocket address used for the live modes (editable; kept per browser and host). */
-  wsUrl: string;
+export interface BrokerStatus extends BrokerSummary {
   state: LinkState;
   error: LinkError | null;
-  /** config.json gives this broker a client id: it is not used here. */
-  configClientId: string;
-  /** config.json has a user name for it (sent with the password in the live modes). */
-  hasCredentials: boolean;
 }
 
 export interface MqttStatus {
   mode: PublishMode;
   /** live publish: keep the retain flag. */
   sendRetained: boolean;
-  /** live publish: let discovery and availability through. */
+  /** live publish: let Home Assistant discovery and availability through ("Send Home Assistant discovery"). */
   announce: boolean;
   /** live publish: let the firmware's own sensor and state reports through. */
   ownStates: boolean;
@@ -140,8 +151,10 @@ export interface MqttSessionDeps {
   say: (text: string, type: 'info' | 'error') => void;
   /** The IDE's question dialog: the chosen id, or null. */
   ask: (request: AskRequest) => Promise<string | null>;
-  /** The broker's WebSocket address per host: a convenience kept by the browser. */
-  storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** Where the browser keeps a broker's address, user name and password per host (../virtual-broker.ts). */
+  storage?: BrokerStorage | null;
+  /** The mode and the switches to start with (what was chosen before this was made). Absent: offline, all off. */
+  start?: { mode: PublishMode; sendRetained?: boolean; announce?: boolean; ownStates?: boolean };
   /** Tests: the socket to use, and whether the page counts as https. */
   socket?: SocketFactory;
   securePage?: boolean;
@@ -151,48 +164,7 @@ export interface MqttSessionDeps {
   will?: (index: number) => { topic: string; payload: string; qos: number; retain: boolean } | undefined;
 }
 
-interface BrokerConfig {
-  name: string;
-  url: string;
-  host: string;
-  username: string;
-  password: string;
-  clientId: string;
-}
-
 export const MQTT_LOG_MAX = 200;
-/** The websockets listener of a broker is usually here (Mosquitto's examples use it). */
-/** 1884: the port Home Assistant's Mosquitto add-on uses for websockets. */
-export const DEFAULT_WS_PORT = 1884;
-const URL_KEY = 'fb-mqtt-ws:';
-
-type Obj = Record<string, unknown>;
-
-function text(v: unknown): string {
-  return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
-}
-
-/** The host of a broker url of config.json ("mqtt://10.0.0.5/", "10.0.0.5", "mqtts://broker.lan:8883"). */
-export function brokerHost(url: string): string {
-  const match = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]*@)?(\[[^\]]+\]|[^:/?#]+)/i.exec(url.trim());
-  return match ? match[1]! : '';
-}
-
-/** config.json "brokers" as the live connection needs them. */
-export function brokerConfigs(config: string): BrokerConfig[] {
-  let parsed: unknown;
-  try { parsed = JSON.parse(config); } catch { return []; }
-  const list = (parsed as Obj | null)?.brokers;
-  if (!Array.isArray(list)) return [];
-  return list.filter((b): b is Obj => typeof b === 'object' && b !== null).map((b, index) => ({
-    name: text(b.brokerid) || `broker${index}`,
-    url: text(b.url),
-    host: brokerHost(text(b.url)),
-    username: text(b.username),
-    password: text(b.password),
-    clientId: text(b.clientid ?? b.clientId ?? b.client_id),
-  }));
-}
 
 function retainNote(record: LinkRecord): string {
   return record.decision?.retainCleared ? ' · retain cleared' : record.retain ? ' · retained' : '';
@@ -201,10 +173,11 @@ function retainNote(record: LinkRecord): string {
 export class MqttSession {
   private configs: BrokerConfig[] = [];
   private links: BrokerLink[] = [];
-  private mode: PublishMode = 'offline';
-  private sendRetained = false;
-  private announce = false;
-  private ownStates = false;
+  /** The mode chosen: what a Run with brokers uses. */
+  private wanted: PublishMode;
+  private sendRetained: boolean;
+  private announce: boolean;
+  private ownStates: boolean;
   private readonly realAllowed = new Set<string>();
   private readonly realDenied = new Set<string>();
   private readonly asking = new Set<string>();
@@ -214,14 +187,26 @@ export class MqttSession {
   private cancelReplay: Array<() => void> = [];
   private attached = false;
 
-  constructor(private readonly deps: MqttSessionDeps) {}
+  constructor(private readonly deps: MqttSessionDeps) {
+    this.wanted = deps.start?.mode ?? 'offline';
+    const publishing = this.wanted === 'live-publish';
+    this.sendRetained = publishing && !!deps.start?.sendRetained;
+    this.announce = publishing && !!deps.start?.announce;
+    this.ownStates = publishing && !!deps.start?.ownStates;
+  }
+
+  /** The mode in use: the one chosen, or offline for a config without brokers. */
+  private get mode(): PublishMode {
+    return this.configs.length === 0 ? 'offline' : this.wanted;
+  }
 
   // ---- the emulator's side -----------------------------------------------------
 
   /**
    * The config a Run starts with. Other brokers than before (names or
-   * addresses): the connections end and the mode is offline again. The
-   * same: the links, the connection and the mode stay.
+   * addresses): the connections end, and new ones are made for the new
+   * brokers. The same: the links and the connections stay. The mode and the
+   * switches stay either way.
    */
   configure(config: string): void {
     const next = brokerConfigs(config);
@@ -236,7 +221,11 @@ export class MqttSession {
     this.attached = true;
   }
 
-  /** The transport of broker `index` for a new Emulator. */
+  /**
+   * The transport of broker `index` for a new Emulator. A new link is made
+   * in the session's mode: in a live mode the firmware finds no broker until
+   * begin() connects, and never the in-page one.
+   */
   transport(context: { index: number; matches: TopicMatcher; clock: Clock }): MqttTransport {
     this.matcher = context.matches;
     let link = this.links[context.index];
@@ -250,10 +239,21 @@ export class MqttSession {
         }, this.matcher),
         record: record => this.record(record),
         link: (i, state, error) => this.onLink(i, state, error),
-      });
+      }, this.mode);
       this.links[context.index] = link;
     }
     return link;
+  }
+
+  /**
+   * The script runs: in a live mode the connections are made (the ones that
+   * are there stay). The firmware's last will is known by now.
+   */
+  begin(): void {
+    if (!this.attached) return;
+    this.relink();
+    this.deps.changed();
+    this.deps.statusChanged();
   }
 
   /** The emulator says what its next publish is (who made it, what kind) just before it publishes. */
@@ -261,7 +261,7 @@ export class MqttSession {
     this.links[broker]?.expect(about);
   }
 
-  /** The script stopped for good (Stop, or it failed): the connections end, offline again. */
+  /** The script stopped for good (Stop, or it failed): the connections end. The mode and the switches stay for the next Run. */
   stop(): void {
     this.cancelReplay.forEach(cancel => cancel());
     this.cancelReplay = [];
@@ -272,10 +272,6 @@ export class MqttSession {
   private end(): void {
     for (const link of this.links) link?.close();
     this.links = [];
-    this.mode = 'offline';
-    this.sendRetained = false;
-    this.announce = false;
-    this.ownStates = false;
     this.realAllowed.clear();
     this.realDenied.clear();
     this.asking.clear();
@@ -290,14 +286,13 @@ export class MqttSession {
       mode: this.mode, sendRetained: this.sendRetained, announce: this.announce, ownStates: this.ownStates, announced: this.announced.size,
       securePage: this.securePage(),
       brokers: this.configs.map((b, index) => ({
-        index, name: b.name, host: b.host, wsUrl: this.wsUrl(index),
+        ...brokerSummary(b, index, this.deps.storage ?? null),
         state: this.links[index]?.linkState ?? 'disconnected', error: this.links[index]?.linkError ?? null,
-        configClientId: b.clientId, hasCredentials: b.username !== '',
       })),
     };
   }
 
-  /** The aggregate of the live connections: 'none' offline. */
+  /** The aggregate of the live connections: 'none' offline, and while nothing runs. */
   linkState(): 'none' | 'connecting' | 'connected' | 'error' {
     if (this.mode === 'offline' || this.links.length === 0) return 'none';
     const states = this.links.map(l => l.linkState);
@@ -305,17 +300,28 @@ export class MqttSession {
     return this.links.some(l => l.linkState === 'disconnected' && l.linkError) ? 'error' : 'connecting';
   }
 
+  /** The mode in use (offline for a config without brokers). */
   get currentMode(): PublishMode {
     return this.mode;
   }
 
-  /** '' when done, else why not. */
+  /** The mode chosen (what a config with brokers gets). */
+  get chosenMode(): PublishMode {
+    return this.wanted;
+  }
+
+  get optIns(): { sendRetained: boolean; announce: boolean; ownStates: boolean } {
+    return { sendRetained: this.sendRetained, announce: this.announce, ownStates: this.ownStates };
+  }
+
+  /**
+   * Choose the mode, running or not: while nothing runs it holds for the
+   * next Run. '' when done, else why it is not in use now.
+   */
   setMode(mode: PublishMode): string {
-    if (!this.attached) return 'Run the virtual device first';
-    if (mode !== 'offline' && this.configs.length === 0) return 'config.json has no "brokers" to connect to';
-    if (mode === this.mode) return '';
     const was = this.mode;
-    this.mode = mode;
+    const chosen = this.wanted;
+    this.wanted = mode;
     if (mode !== 'live-publish') {
       // What was allowed for publishing does not outlive the mode.
       this.sendRetained = false;
@@ -324,43 +330,51 @@ export class MqttSession {
       this.realAllowed.clear();
       this.realDenied.clear();
     }
-    this.links.forEach((link, index) => {
-      if (mode === 'offline') link.setMode('offline', this.deps.identity());
-      else link.setMode(mode, this.deps.identity(), this.liveOptions(index));
-    });
-    if (mode === 'offline') this.announced.clear();
-    const words: Record<PublishMode, string> = {
-      offline: 'MQTT offline: the in-page broker, nothing leaves this page',
-      'live-readonly': `MQTT live, read-only: connected as ${this.deps.identity()}; nothing is published`,
-      'live-publish': `MQTT live: connected as ${this.deps.identity()}; the virtual device PUBLISHES to the real broker`,
-    };
-    if (was !== mode) this.deps.say(words[mode], 'info');
-    this.deps.changed();
-    this.deps.statusChanged();
-    return '';
+    const now = this.mode;
+    if (this.attached && now !== was) {
+      this.links.forEach((link, index) => {
+        if (now === 'offline') link.setMode('offline', this.deps.identity());
+        else link.setMode(now, this.deps.identity(), this.liveOptions(index));
+      });
+      if (now === 'offline') this.announced.clear();
+      const words: Record<PublishMode, string> = {
+        offline: 'MQTT offline: the in-page broker, nothing leaves this page',
+        'live-readonly': `MQTT live, read-only: connected as ${this.deps.identity()}; nothing is published`,
+        'live-publish': `MQTT live: connected as ${this.deps.identity()}; the virtual device PUBLISHES to the real broker`,
+      };
+      this.deps.say(words[now], 'info');
+    }
+    if (mode !== chosen || now !== was) {
+      this.deps.changed();
+      this.deps.statusChanged();
+    }
+    return this.attached && mode !== 'offline' && this.configs.length === 0 ? 'config.json has no "brokers" to connect to' : '';
   }
 
-  /** The WebSocket address of broker `index`: what the user set for its host, else ws://host:1884. */
+  /** What broker `index` is connected with: the browser's values for its host, else config.json's. */
+  private access(index: number): BrokerAccess {
+    const b = this.configs[index];
+    return b ? brokerAccess(b, this.deps.storage ?? null) : { url: '', username: '', password: '' };
+  }
+
+  /** The WebSocket address of broker `index`. */
   wsUrl(index: number): string {
-    const b = this.configs[index];
-    if (!b) return '';
-    let stored: string | null = null;
-    try { stored = this.deps.storage?.getItem(URL_KEY + b.host) ?? null; } catch { /* no storage */ }
-    return stored || (b.host ? `ws://${b.host}:${DEFAULT_WS_PORT}` : '');
+    return this.access(index).url;
   }
 
-  setWsUrl(index: number, url: string): void {
-    const b = this.configs[index];
-    if (!b) return;
-    const value = url.trim();
-    try { if (value) this.deps.storage?.setItem(URL_KEY + b.host, value); } catch { /* no storage */ }
-    if (this.mode !== 'offline') this.links[index]?.setMode(this.mode, this.deps.identity(), this.liveOptions(index, value));
+  /**
+   * The address, user name or password of a broker changed (what the
+   * browser keeps for its host): a connection that used other values is
+   * made again.
+   */
+  settingsChanged(): void {
+    this.relink();
     this.deps.changed();
     this.deps.statusChanged();
   }
 
   setSendRetained(on: boolean): void {
-    this.sendRetained = on && this.mode === 'live-publish';
+    this.sendRetained = on && this.wanted === 'live-publish';
     // The will's retain flag follows: the connection is made again when it has one.
     if (this.announce) this.relink();
     this.deps.changed();
@@ -368,12 +382,12 @@ export class MqttSession {
   }
 
   /**
-   * Announcing on or off. The connection is made again either way: with the
+   * Home Assistant discovery (and the availability messages) on or off. The connection is made again either way: with the
    * firmware's last will or without one, and the firmware then sends its
    * birth message and discovery under the new rule.
    */
   setAnnounce(on: boolean): void {
-    const next = on && this.mode === 'live-publish';
+    const next = on && this.wanted === 'live-publish';
     if (next === this.announce) return;
     this.announce = next;
     this.relink();
@@ -383,13 +397,13 @@ export class MqttSession {
 
   /** live publish: the firmware's own sensor and state reports. */
   setOwnStates(on: boolean): void {
-    this.ownStates = on && this.mode === 'live-publish';
+    this.ownStates = on && this.wanted === 'live-publish';
     this.deps.changed();
     this.deps.statusChanged();
   }
 
   private relink(): void {
-    if (this.mode === 'offline') return;
+    if (this.mode === 'offline' || !this.attached) return;
     this.links.forEach((link, index) => link.setMode(this.mode, this.deps.identity(), this.liveOptions(index)));
   }
 
@@ -502,14 +516,14 @@ export class MqttSession {
     return this.deps.securePage ?? (typeof location !== 'undefined' && location.protocol === 'https:');
   }
 
-  private liveOptions(index: number, url = this.wsUrl(index)): LiveOptions {
-    const b = this.configs[index]!;
+  private liveOptions(index: number): LiveOptions {
+    const access = this.access(index);
     // A last will only for a device that is announced; retained only when retained messages are sent.
     const will = this.announce && this.mode === 'live-publish' ? this.deps.will?.(index) : undefined;
     return {
-      url, securePage: this.securePage(), session: `announce:${this.announce}`,
+      url: access.url, securePage: this.securePage(), session: `announce:${this.announce}`,
       ...(will ? { will: { ...will, retain: will.retain && this.sendRetained } } : {}),
-      ...(b.username ? { username: b.username, password: b.password } : {}),
+      ...(access.username ? { username: access.username, password: access.password } : {}),
       ...(this.deps.socket ? { socket: this.deps.socket } : {}),
       ...(this.deps.backoffMs ? { backoffMs: this.deps.backoffMs } : {}),
       ...(this.deps.keepAliveSec ? { keepAliveSec: this.deps.keepAliveSec } : {}),
@@ -577,7 +591,7 @@ export class MqttSession {
         break;
       case 'blocked':
         if (r.decision?.reason === 'real-device') this.askRealDevice(r);
-        else if (r.decision?.reason === 'discovery') this.add({ ...base, kind: 'blocked', note: 'not sent: announcing to Home Assistant is off' });
+        else if (r.decision?.reason === 'discovery') this.add({ ...base, kind: 'blocked', note: 'not sent: Home Assistant discovery is off' });
         else if (r.decision?.reason === 'own-state') this.add({ ...base, kind: 'blocked', note: 'not sent: the virtual device\'s own states are off' });
         else this.add({ ...base, kind: 'blocked', note: `not sent: ${r.decision?.reason ?? 'blocked'}` });
         break;

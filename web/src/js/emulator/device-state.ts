@@ -28,7 +28,7 @@ import type { DisplayHost, FontChoice, HardwareHost, StateKind } from './host';
 /** One run of text in one format, as the firmware resolved it. */
 export interface TextRun {
   text: string;
-  /** Font name of config.json "style.fonts" (or a system font); '' = LVGL's built-in font. */
+  /** Font name of config.json "fonts" (or a system font); '' = LVGL's built-in font. */
   font: string;
   /** Face index of the firmware's font table; -1 = the built-in font. */
   face: number;
@@ -90,6 +90,8 @@ export interface BoxState {
   align: number;
   underline: boolean;
   /** Bottom padding of the caption and of the box; null = none of its own. */
+  /** The style list each part carries now (names joined by a space): the item's, or under a low LVGL pool the one before it. */
+  carried: { caption: string; value: string; unit: string };
   captionPad: number | null;
   boxPad: number | null;
   caption: TextState;
@@ -108,7 +110,9 @@ export interface ItemState {
   y: number;
   width: number;
   boxType: number;
-  fontSize: number;
+  /** The item's styles now, and the ones config.json gives it: style names joined by a space ('' = none). */
+  style: string;
+  configStyle: string;
   align: number;
   round: number;
   /** 1-based; 0 = every page. */
@@ -140,6 +144,9 @@ export interface KeyState {
   topLabel: string;
   /** Icon shown instead of the label; '' = none. */
   icon: string;
+  /** The button's styles now, and the ones config.json gives it: style names joined by a space ('' = none). */
+  style: string;
+  configStyle: string;
   /** The fonts the firmware chose; null for a key without a display. */
   font: FontChoice | null;
   topFont: FontChoice | null;
@@ -147,7 +154,11 @@ export interface KeyState {
    * The key's own display; null for a key without one (a key of the main
    * display has none: scripts cannot set its label either).
    */
-  display: { index: number; label: TextState; topLabel: TextState; icon: RasterState | null } | null;
+  display: {
+    index: number; label: TextState; topLabel: TextState; icon: RasterState | null;
+    /** The style list each label carries now (see BoxState.carried). */
+    carried: { label: string; topLabel: string };
+  } | null;
 }
 
 export interface LedState {
@@ -157,6 +168,8 @@ export interface LedState {
   b: number;
 }
 
+export interface RollerTextState { opa: number; letterSpace: number; decor: number }
+
 export interface ListState {
   index: number;
   ref?: ConfigRef;
@@ -165,6 +178,9 @@ export interface ListState {
   items: string[];
   /** -1 when the list is empty. */
   selected: number;
+  /** The list's styles now, and the ones config.json gives it: style names joined by a space ('' = none). */
+  style: string;
+  configStyle: string;
   /** The font the firmware chose; null while not drawn. */
   font: FontChoice | null;
   /** The roller, in pixels; null while the list's page is not shown. */
@@ -173,10 +189,21 @@ export interface ListState {
     /** As laid out: the rows' line height and line space times the visible rows. */
     height: number;
     rows: number; selected: number; font: FontState;
-    /** The selected row's font as the device resolves it (its named style, list.selected, else the rows'). */
+    /** The selected row's font as the device resolves it (a "selected" block of its styles, of "list", else the rows'). */
     selectedFont: FontState;
     lineSpace: number;
     color: string; selectedBg: string; selectedColor: string;
+    /**
+     * Opacity (0..255), letter spacing (px) and decoration (1 = underline, 2 = line-through) of
+     * the rows and of the selected row, as LVGL resolves them: the selected row has the rows'
+     * unless a "selected" block sets the property. `selectedRule`: the same from the firmware's
+     * own rule (style_logic_selected_row).
+     */
+    text: RollerTextState; selectedText: RollerTextState; selectedRule: RollerTextState;
+    /** The style list the rows and the selected row carry now (see BoxState.carried). */
+    carried: { rows: string; selected: string };
+    /** The roller's own background; null = none (transparent). */
+    bg: string | null;
   } | null;
 }
 
@@ -265,18 +292,24 @@ export interface LayoutRect {
   visible: boolean;
 }
 
-/** A style element as the firmware resolved config.json "style" ("key.label", "display.value", ...). */
+/**
+ * A part of a kind as the firmware resolved the built-in look and config.json "styles"
+ * "button" / "displayitem" / "list": DeviceState.styles has "button", "button.title",
+ * "displayitem", "displayitem.unit", "displayitem.title", "list" and "list.selected".
+ */
 export interface StyleState {
-  font: string;
+  /** null / -1 / 0: the part has no font of its own (the unit: the value's; the selected row: the rows'). */
+  font: string | null;
   face: number;
   px: number;
   color: string;
   opa: number;
   align: 'left' | 'center' | 'right' | null;
   letterSpace: number;
-  lineSpace: number;
+  /** In hundredths (125 = 1.25 lines); 0 = none. */
+  lineHeight: number;
   underline: boolean;
-  strikethrough: boolean;
+  lineThrough: boolean;
   bgColor?: string;
   bgOpa?: number;
 }
@@ -377,16 +410,18 @@ const SENSOR_INPUT: Readonly<Record<number, { input: number; scale: number; addr
 // The records the firmware sends (tools/js/emulator/device.cpp).
 interface ItemRecord {
   id: number; order: number; name: string | null; x: number; y: number; width: number; boxType: number;
-  fontSize: number; align: number; round: number; page: number; label: string; unit: string;
+  style: string; configStyle: string; align: number; round: number; page: number; label: string; unit: string;
   now: { label: string; value: string; unit: string; icon: string };
   box: BoxState | null;
 }
 interface KeyRecord {
   order: number; position: number; name: string | null; page: number; label: string; topLabel: string;
+  style: string; configStyle: string;
   display: KeyState['display'];
 }
 interface ListRecord {
-  index: number; name: string | null; page: number; selected: number; items: string[]; roller: ListState['roller'];
+  index: number; name: string | null; page: number; selected: number; items: string[];
+  style: string; configStyle: string; roller: ListState['roller'];
 }
 interface ImageRecord {
   index: number; name: string | null; page: number; x: number; y: number; width: number; height: number;
@@ -405,7 +440,7 @@ interface DeviceRecord {
   keyDisplays: number[]; leds: number;
   brokers: Array<{ index: number; name: string; url: string; configured: boolean; discovery: boolean }>;
   sensors: Array<{ id: number; name: string; type: string; unit: string; online: boolean; input: number }>;
-  fonts: FontFaceState[]; styles: Record<string, StyleState>;
+  fonts: FontFaceState[]; styles: Record<string, StyleState>; styleNames: string[];
 }
 
 export class DeviceState {
@@ -428,6 +463,8 @@ export class DeviceState {
   /** The firmware's font table and resolved styles. */
   fonts: FontFaceState[] = [];
   styles: Record<string, StyleState> = {};
+  /** The styles of config.json "styles" an item can name (not "button", "displayitem", "list"), in file order. */
+  styleNames: string[] = [];
   /** Positions of the keys that have a display of their own (the keys of a bar). */
   keyDisplays: number[] = [];
 
@@ -448,8 +485,8 @@ export class DeviceState {
 
   constructor(config: unknown, options: DeviceStateOptions = {}) {
     this.config = isObj(config) ? config : {};
-    this.itemRefs = entryRefs(this.config, ['mqttdisplays', 'displayitems'], 'displayitem');
-    this.keyRefs = entryRefs(this.config, ['mqttbuttons', 'buttons'], 'button');
+    this.itemRefs = entryRefs(this.config, ['displayitems'], 'displayitem');
+    this.keyRefs = entryRefs(this.config, ['buttons'], 'button');
     this.connectors = options.connectors
       ? [0, 1, 2, 3].map(i => options.connectors![i] ?? 0)
       : this.inferConnectors(this.config);
@@ -625,6 +662,7 @@ export class DeviceState {
     }));
     this.fonts = r.fonts;
     this.styles = r.styles;
+    this.styleNames = r.styleNames ?? [];
     this.emit({ kind: 'device' });
   }
 
@@ -635,7 +673,7 @@ export class DeviceState {
       id: r.id,
       ...(r.order >= 0 && this.itemRefs[r.order] ? { ref: this.itemRefs[r.order] } : {}),
       ...(r.name ? { name: r.name } : {}),
-      x: r.x, y: r.y, width: r.width, boxType: r.boxType, fontSize: r.fontSize, align: r.align, round: r.round,
+      x: r.x, y: r.y, width: r.width, boxType: r.boxType, style: r.style, configStyle: r.configStyle, align: r.align, round: r.round,
       page: r.page,
       // Drawn: what is on the display. Not drawn: what the item holds for when its page comes.
       label: box ? box.caption.text : r.now.label,
@@ -686,6 +724,7 @@ export class DeviceState {
       label: d ? d.label.text : r.label,
       topLabel: d ? d.topLabel.text : r.topLabel,
       icon: d ? d.icon?.name ?? d.icon?.key ?? '' : '',
+      style: r.style, configStyle: r.configStyle,
       font: d ? fontChoice(d.label.font) : null,
       topFont: d ? fontChoice(d.topLabel.font) : null,
       display: d,
@@ -712,6 +751,7 @@ export class DeviceState {
     const ref = refByName(this.config, 'lists', 'list', r.name);
     const list: ListState = {
       index: r.index, ...(ref ? { ref } : {}), name, page: r.page, items: r.items, selected: r.selected,
+      style: r.style, configStyle: r.configStyle,
       font: fontChoice(r.roller?.font), roller: r.roller,
     };
     if (!old) {
@@ -799,13 +839,10 @@ export class DeviceState {
       }
       return out;
     }
-    for (const key of ['mqttbuttons', 'buttons']) {
-      const arr = cfg[key];
-      for (const raw of Array.isArray(arr) ? arr : []) {
-        const button = mapButton(raw);
-        const connector = button ? Math.floor((button.position - 1) / 2) : -1;
-        if (connector >= 0 && connector < out.length) out[connector] = 1;
-      }
+    for (const raw of Array.isArray(cfg.buttons) ? cfg.buttons : []) {
+      const button = mapButton(raw);
+      const connector = button ? Math.floor((button.position - 1) / 2) : -1;
+      if (connector >= 0 && connector < out.length) out[connector] = 1;
     }
     const free = out.indexOf(0);
     if (free >= 0) out[free] = 2;

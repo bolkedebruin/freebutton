@@ -344,7 +344,7 @@ export function initEditor(parent: HTMLElement): EditorView {
 let relintListening = false;
 
 /**
- * The script linter checks fb.key("x") etc. against the loaded config.json:
+ * The script linter checks fb.button("x") etc. against the loaded config.json:
  * lint the open script again when its key / display item names change.
  */
 function relintOnConfigNames(): void {

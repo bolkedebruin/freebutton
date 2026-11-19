@@ -7,7 +7,9 @@
  * does not exist. Every publish, from the script or from the firmware's own
  * side (Home Assistant discovery, availability), goes through decidePublish().
  *
- * Modes:
+ * Modes (the IDE's virtual device starts a Run in live-publish unless the
+ * user chose another: live-session.ts; an Emulator made without a mode is
+ * offline):
  *   offline         nothing leaves the page; the in-page MockBroker gets the
  *                   publish as it is
  *   live-readonly   connected to a real broker, subscriptions only; every
@@ -18,7 +20,8 @@
  *                   2. announcements: Home Assistant discovery and
  *                      availability (a publish of kind 'discovery' or
  *                      'availability', or to such a topic) are blocked
- *                      unless allowDiscovery
+ *                      unless allowDiscovery. config.json "hassdiscovery"
+ *                      does not allow it: only the user's switch does
  *                   3. a real device's topic (with `askRealDevice`): a topic
  *                      that names a device id (btn_ + 6 hex) is that
  *                      device's. Published there, a virtual key press acts
@@ -213,7 +216,7 @@ export function decidePublish(
   if (announce && !policy.allowDiscovery) {
     return {
       action: 'block', ...base, retain: request.retain, retainCleared: false, reason: 'discovery',
-      log: wouldPublish(request, topic, 'announcing the virtual device to Home Assistant is off'),
+      log: wouldPublish(request, topic, 'sending Home Assistant discovery for the virtual device is off'),
     };
   }
 

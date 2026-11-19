@@ -195,16 +195,30 @@ JSValue js_freebutton_sensor_getInfo(JSContext *ctx, JSValue *this_val, int argc
     }
 
     // Create a JavaScript object with sensor information
-    JSValue obj = JS_NewObject(ctx);
+    // In a GC ref: the engine's collector moves objects, and every call
+    // below allocates (see display.get in freebutton_displayitem.c).
+    JSGCRef obj_ref;
+    JSValue *obj = JS_PushGCRef(ctx, &obj_ref);
+    JSValue v;
+    *obj = JS_NewObject(ctx);
+    if (JS_IsException(*obj)) {
+        JS_PopGCRef(ctx, &obj_ref);
+        return JS_EXCEPTION;
+    }
 
-    // Set properties
-    JS_SetPropertyStr(ctx, obj, "id", JS_NewInt32(ctx, info->id));
-    JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, info->name));
-    JS_SetPropertyStr(ctx, obj, "type", JS_NewString(ctx, info->type));
-    JS_SetPropertyStr(ctx, obj, "unit", JS_NewString(ctx, info->unit));
-    JS_SetPropertyStr(ctx, obj, "online", JS_NewBool(info->online));
+    // Set properties: each value first, then *obj is read for the call
+    v = JS_NewInt32(ctx, info->id);
+    JS_SetPropertyStr(ctx, *obj, "id", v);
+    v = JS_NewString(ctx, info->name);
+    JS_SetPropertyStr(ctx, *obj, "name", v);
+    v = JS_NewString(ctx, info->type);
+    JS_SetPropertyStr(ctx, *obj, "type", v);
+    v = JS_NewString(ctx, info->unit);
+    JS_SetPropertyStr(ctx, *obj, "unit", v);
+    v = JS_NewBool(info->online);
+    JS_SetPropertyStr(ctx, *obj, "online", v);
 
-    return obj;
+    return JS_PopGCRef(ctx, &obj_ref);
 }
 
 /**

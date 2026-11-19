@@ -214,7 +214,7 @@ export class FbToolbar extends LitElement {
     const icon = 'w-5 h-5 shrink-0 flex items-center justify-center [&>svg]:w-5 [&>svg]:h-5';
     const active = status === 'running' || status === 'starting';
     return html`
-      <div class="flex items-center gap-2 pl-3 border-l ${active && this._emu.mqtt === 'live-publish' ? 'border-status-orange' : 'border-white/15'}" role="group" aria-label="Virtual device" data-testid="toolbar-virtual">
+      <div class="flex items-center gap-2 pl-3 border-l border-white/15" role="group" aria-label="Virtual device" data-testid="toolbar-virtual">
         ${active ? html`
           <button class="${button} ${accent} min-w-10 px-2.5 @[860px]:pl-3 @[860px]:pr-4" data-testid="toolbar-run-again"
             title=${this._emu.stale
@@ -233,14 +233,6 @@ export class FbToolbar extends LitElement {
             <span class="${icon}"><span class="w-3 h-3 rounded-[2px] bg-current"></span></span>
             <span class="hidden @[640px]:inline">Stop</span>
           </button>
-          ${status === 'running' && this._emu.mqtt !== 'offline' ? html`
-            <span class="hidden @[640px]:inline shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${this._emu.mqtt === 'live-publish'
-              ? 'bg-status-orange text-black' : 'border border-purple-80/60 text-purple-80'}"
-              data-testid="toolbar-live" data-mode=${this._emu.mqtt} role="status"
-              title=${this._emu.mqtt === 'live-publish'
-                ? 'The virtual device is connected to the real broker and PUBLISHES to it (MQTT tab)'
-                : 'The virtual device is connected to the real broker, read-only: it publishes nothing (MQTT tab)'}
-              >${this._emu.mqtt === 'live-publish' ? 'live' : 'read'}</span>` : ''}
         ` : html`
           <button class="${button} ${accent} pl-3 pr-4" data-testid="toolbar-run" ?disabled=${!this._hasMain}
             title=${!this._hasMain

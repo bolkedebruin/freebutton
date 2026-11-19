@@ -14,11 +14,11 @@
 
 extern freebutton::ConfigManager configManager;
 #include "drivers/ButtonLed.h"
-#include "style_binding.h"
 #include <esp_log.h>
 
 extern "C" {
     #include <mquickjs.h>
+    #include "js/fb_method_ids.h"
 }
 
 static const char* TAG = "DeviceHardware";
@@ -44,43 +44,13 @@ int device_hw_get_main_connector(void) {
 //
 // Memory layout:
 //   3 prototype objects (~320 bytes, shared)
-//   8 closure objects for methods (~128 bytes, shared on prototypes)
+//   one closure object per method (~16 bytes each, shared on prototypes;
+//   js/fb_method_ids.h lists them)
 //   Per-instance: ~32 bytes each (Object.create + _p integer)
 //   Main + 1 bar ≈ 1.0 KB total heap
 //
 void device_hw_init_fb(void* ctx) {
     JSContext* c = static_cast<JSContext*>(ctx);
-
-    // Method IDs matching the enum in freebutton_device.c
-    enum {
-        LED_SET_COLOR = 0, LED_ON = 1, LED_OFF = 2,
-        BTN_ON_CLICK = 3, BTN_ON_LONG_PRESS = 4, BTN_ON_RELEASE = 5,
-        DISP_SET_LABEL = 6, DISP_SET_TOP_LABEL = 7,
-        DITEM_CREATE = 8, DITEM_REMOVE = 9, DITEM_COUNT = 10,
-        DITEM_GET = 11, DITEM_GET_ALL = 12, DITEM_SET_LABEL = 13,
-        DITEM_SET_VALUE = 14, DITEM_SET_UNIT = 15, DITEM_SET_POSITION = 16,
-        DITEM_SET_PAGE = 17,
-        DISP_GET_LABEL = 18, DISP_GET_TOP_LABEL = 19,
-        DITEM_SHOW_PAGE = 20, DITEM_GET_SHOWN_PAGE = 21,
-        FB_KEY = 22,
-        LIST_NEXT = 23, LIST_PREV = 24, LIST_SELECT = 25,
-        LIST_GET_SELECTED = 26, LIST_COUNT = 27, LIST_SET_ITEMS = 28,
-        DISP_SET_ICON = 29, DITEM_SET_ICON = 30,
-        IMAGE_SET_ICON = 31, IMAGE_SET_SRC = 32,
-        DISP_SET_FONT = 33, DISP_SET_TOP_FONT = 34,
-        DITEM_SET_FONT = 35, LIST_SET_FONT = 36,
-        DISP_SET_STYLE = 37, DISP_SET_TOP_STYLE = 38,
-        DITEM_SET_STYLE = 39, DITEM_SET_LABEL_STYLE = 40,
-        LIST_SET_STYLE = 41, LIST_SET_FOCUS_STYLE = 42,
-        STYLE_SET = 43,
-    };
-
-    // The named-style methods (setStyle, ..., fb.style) exist only when
-    // config.json has named styles ("style.styles"): seven closures, one
-    // object and their property names of JS heap, nothing otherwise. A
-    // script that calls one on a device without named styles gets the
-    // engine's "not a function" error.
-    const bool namedStyles = style_hw_count() > 0;
 
     const int P = FB_PROXY_FUNC_IDX;
 
@@ -104,50 +74,47 @@ void device_hw_init_fb(void* ctx) {
     JSGCRef led_proto_ref, btn_proto_ref, disp_proto_ref, disp_items_proto_ref;
     JSValue* led_proto = JS_PushGCRef(c, &led_proto_ref);
     *led_proto = JS_NewObject(c);
-    setMethod(led_proto, "setColor", LED_SET_COLOR);
-    setMethod(led_proto, "on",       LED_ON);
-    setMethod(led_proto, "off",      LED_OFF);
+    setMethod(led_proto, "setColor", FB_METHOD_LED_SET_COLOR);
+    setMethod(led_proto, "on",       FB_METHOD_LED_ON);
+    setMethod(led_proto, "off",      FB_METHOD_LED_OFF);
 
     JSValue* btn_proto = JS_PushGCRef(c, &btn_proto_ref);
     *btn_proto = JS_NewObject(c);
-    setMethod(btn_proto, "onClick",     BTN_ON_CLICK);
-    setMethod(btn_proto, "onLongPress", BTN_ON_LONG_PRESS);
-    setMethod(btn_proto, "onRelease",   BTN_ON_RELEASE);
+    setMethod(btn_proto, "onClick",     FB_METHOD_BTN_ON_CLICK);
+    setMethod(btn_proto, "onLongPress", FB_METHOD_BTN_ON_LONG_PRESS);
+    setMethod(btn_proto, "onRelease",   FB_METHOD_BTN_ON_RELEASE);
 
     JSValue* disp_proto = JS_PushGCRef(c, &disp_proto_ref);
     *disp_proto = JS_NewObject(c);
-    setMethod(disp_proto, "setLabel",    DISP_SET_LABEL);
-    setMethod(disp_proto, "setTopLabel", DISP_SET_TOP_LABEL);
-    setMethod(disp_proto, "getLabel",    DISP_GET_LABEL);
-    setMethod(disp_proto, "getTopLabel", DISP_GET_TOP_LABEL);
-    setMethod(disp_proto, "setIcon",     DISP_SET_ICON);
-    setMethod(disp_proto, "setFont",     DISP_SET_FONT);
-    setMethod(disp_proto, "setTopFont",  DISP_SET_TOP_FONT);
-    if (namedStyles) {
-        setMethod(disp_proto, "setStyle",    DISP_SET_STYLE);
-        setMethod(disp_proto, "setTopStyle", DISP_SET_TOP_STYLE);
-    }
+    setMethod(disp_proto, "setLabel",    FB_METHOD_DISP_SET_LABEL);
+    setMethod(disp_proto, "setTopLabel", FB_METHOD_DISP_SET_TOP_LABEL);
+    setMethod(disp_proto, "getLabel",    FB_METHOD_DISP_GET_LABEL);
+    setMethod(disp_proto, "getTopLabel", FB_METHOD_DISP_GET_TOP_LABEL);
+    setMethod(disp_proto, "setIcon",     FB_METHOD_DISP_SET_ICON);
+    // The style methods are always there: the styles of the kinds always
+    // exist, and a config may add styles.
+    setMethod(disp_proto, "setStyle",    FB_METHOD_DISP_SET_STYLE);
+    setMethod(disp_proto, "addStyle",    FB_METHOD_DISP_ADD_STYLE);
+    setMethod(disp_proto, "removeStyle", FB_METHOD_DISP_REMOVE_STYLE);
 
     JSValue* disp_items_proto = JS_PushGCRef(c, &disp_items_proto_ref);
     *disp_items_proto = JS_NewObject(c);
-    setMethod(disp_items_proto, "create",      DITEM_CREATE);
-    setMethod(disp_items_proto, "remove",      DITEM_REMOVE);
-    setMethod(disp_items_proto, "count",       DITEM_COUNT);
-    setMethod(disp_items_proto, "get",         DITEM_GET);
-    setMethod(disp_items_proto, "getAll",      DITEM_GET_ALL);
-    setMethod(disp_items_proto, "setLabel",    DITEM_SET_LABEL);
-    setMethod(disp_items_proto, "setValue",    DITEM_SET_VALUE);
-    setMethod(disp_items_proto, "setUnit",     DITEM_SET_UNIT);
-    setMethod(disp_items_proto, "setIcon",     DITEM_SET_ICON);
-    setMethod(disp_items_proto, "setFont",     DITEM_SET_FONT);
-    if (namedStyles) {
-        setMethod(disp_items_proto, "setStyle",      DITEM_SET_STYLE);
-        setMethod(disp_items_proto, "setLabelStyle", DITEM_SET_LABEL_STYLE);
-    }
-    setMethod(disp_items_proto, "setPosition", DITEM_SET_POSITION);
-    setMethod(disp_items_proto, "setPage",     DITEM_SET_PAGE);
-    setMethod(disp_items_proto, "showPage",    DITEM_SHOW_PAGE);
-    setMethod(disp_items_proto, "getShownPage", DITEM_GET_SHOWN_PAGE);
+    setMethod(disp_items_proto, "create",      FB_METHOD_DITEM_CREATE);
+    setMethod(disp_items_proto, "remove",      FB_METHOD_DITEM_REMOVE);
+    setMethod(disp_items_proto, "count",       FB_METHOD_DITEM_COUNT);
+    setMethod(disp_items_proto, "get",         FB_METHOD_DITEM_GET);
+    setMethod(disp_items_proto, "getAll",      FB_METHOD_DITEM_GET_ALL);
+    setMethod(disp_items_proto, "setLabel",    FB_METHOD_DITEM_SET_LABEL);
+    setMethod(disp_items_proto, "setValue",    FB_METHOD_DITEM_SET_VALUE);
+    setMethod(disp_items_proto, "setUnit",     FB_METHOD_DITEM_SET_UNIT);
+    setMethod(disp_items_proto, "setIcon",     FB_METHOD_DITEM_SET_ICON);
+    setMethod(disp_items_proto, "setStyle",    FB_METHOD_DITEM_SET_STYLE);
+    setMethod(disp_items_proto, "addStyle",    FB_METHOD_DITEM_ADD_STYLE);
+    setMethod(disp_items_proto, "removeStyle", FB_METHOD_DITEM_REMOVE_STYLE);
+    setMethod(disp_items_proto, "setPosition", FB_METHOD_DITEM_SET_POSITION);
+    setMethod(disp_items_proto, "setPage",     FB_METHOD_DITEM_SET_PAGE);
+    setMethod(disp_items_proto, "showPage",    FB_METHOD_DITEM_SHOW_PAGE);
+    setMethod(disp_items_proto, "getShownPage", FB_METHOD_DITEM_GET_SHOWN_PAGE);
 
     // --- Get Object.create for prototype inheritance ---
 
@@ -227,22 +194,18 @@ void device_hw_init_fb(void* ctx) {
             JS_SetPropertyStr(c, *main_obj, "right", right);
             // fb.main.list: only with lists in config.json (one object, seven
             // closures and their property names: ~400 B of JS heap measured
-            // with six, before setFont).
+            // with six).
             if (configManager.findList(0) != nullptr) {
                 JSGCRef list_ref;
                 JSValue* list_obj = JS_PushGCRef(c, &list_ref);
                 *list_obj = JS_NewObject(c);
-                setMethod(list_obj, "next",        LIST_NEXT);
-                setMethod(list_obj, "prev",        LIST_PREV);
-                setMethod(list_obj, "select",      LIST_SELECT);
-                setMethod(list_obj, "getSelected", LIST_GET_SELECTED);
-                setMethod(list_obj, "count",       LIST_COUNT);
-                setMethod(list_obj, "setItems",    LIST_SET_ITEMS);
-                setMethod(list_obj, "setFont",     LIST_SET_FONT);
-                if (namedStyles) {
-                    setMethod(list_obj, "setStyle",      LIST_SET_STYLE);
-                    setMethod(list_obj, "setFocusStyle", LIST_SET_FOCUS_STYLE);
-                }
+                setMethod(list_obj, "next",        FB_METHOD_LIST_NEXT);
+                setMethod(list_obj, "prev",        FB_METHOD_LIST_PREV);
+                setMethod(list_obj, "select",      FB_METHOD_LIST_SELECT);
+                setMethod(list_obj, "getSelected", FB_METHOD_LIST_GET_SELECTED);
+                setMethod(list_obj, "count",       FB_METHOD_LIST_COUNT);
+                setMethod(list_obj, "setItems",    FB_METHOD_LIST_SET_ITEMS);
+                setMethod(list_obj, "setStyle",    FB_METHOD_LIST_SET_STYLE);
                 JS_SetPropertyStr(c, *main_obj, "list", *list_obj);
                 JS_PopGCRef(c, &list_ref);
             }
@@ -252,8 +215,8 @@ void device_hw_init_fb(void* ctx) {
                 JSGCRef image_ref;
                 JSValue* image_obj = JS_PushGCRef(c, &image_ref);
                 *image_obj = JS_NewObject(c);
-                setMethod(image_obj, "setIcon", IMAGE_SET_ICON);
-                setMethod(image_obj, "setSrc",  IMAGE_SET_SRC);
+                setMethod(image_obj, "setIcon", FB_METHOD_IMAGE_SET_ICON);
+                setMethod(image_obj, "setSrc",  FB_METHOD_IMAGE_SET_SRC);
                 JS_SetPropertyStr(c, *main_obj, "image", *image_obj);
                 JS_PopGCRef(c, &image_ref);
             }
@@ -280,15 +243,15 @@ void device_hw_init_fb(void* ctx) {
     }
 
     JS_SetPropertyStr(c, *fb, "bars", *bars);
-    // fb.key(name): a key by its config.json name (one closure, ~16 B; the
-    // names stay in the firmware's name table, see NameTable.h).
-    setMethod(fb, "key", FB_KEY);
-    // fb.style.set(style, property, value): only with named styles.
-    if (namedStyles) {
+    // fb.button(name): a button by its config.json name (one closure, ~16 B;
+    // the names stay in the firmware's name table, see NameTable.h).
+    setMethod(fb, "button", FB_METHOD_BUTTON);
+    // fb.style.set(style, property, value)
+    {
         JSGCRef style_ref;
         JSValue* style_obj = JS_PushGCRef(c, &style_ref);
         *style_obj = JS_NewObject(c);
-        setMethod(style_obj, "set", STYLE_SET);
+        setMethod(style_obj, "set", FB_METHOD_STYLE_SET);
         JS_SetPropertyStr(c, *fb, "style", *style_obj);
         JS_PopGCRef(c, &style_ref);
     }

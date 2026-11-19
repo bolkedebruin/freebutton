@@ -82,28 +82,40 @@ void ui_text_stats(uint32_t *collapsed, uint32_t *skipped) {
     *skipped = g_skipped;
 }
 
-uint8_t ui_text_named(lv_obj_t *obj) { return (uint8_t)(uintptr_t)lv_obj_get_user_data(obj); }
+style_list_t ui_text_styles(lv_obj_t *obj) { return (style_list_t)(uintptr_t)lv_obj_get_user_data(obj); }
 
-/* The part's named style on the element itself. obj already carries the
- * element style, and a style added later wins among added styles, so the
- * named style goes over it. The ref obj carries now is its user data (see
- * ui_text.h): only a change touches the object. */
-bool ui_text_set_named(lv_obj_t *obj, const uint8_t named) {
-    uint8_t carried = ui_text_named(obj);
-    if (carried == named) {
-        return true;
+/* The item's styles on the element itself. obj already carries the element
+ * style, and a style added later wins among added styles, so they go over
+ * it. The list obj carries now is its user data (see ui_text.h): only a
+ * change touches the object. */
+bool ui_text_set_styles(lv_obj_t *obj, const style_list_t list, const style_part_t part) {
+    return ui_text_set_styles_all(&obj, &part, 1, list);
+}
+
+bool ui_text_set_styles_all(lv_obj_t *const *objs, const style_part_t *parts, size_t count,
+                            const style_list_t list) {
+    style_list_t carried[UI_STYLE_TARGETS_MAX];
+    ui_style_target_t targets[UI_STYLE_TARGETS_MAX];
+    if (count > UI_STYLE_TARGETS_MAX) count = UI_STYLE_TARGETS_MAX;
+    for (size_t i = 0; i < count; i++) {
+        carried[i] = ui_text_styles(objs[i]);
+        targets[i].obj = objs[i];
+        targets[i].have = &carried[i];
+        targets[i].part = parts[i];
+        targets[i].selector = 0;
     }
-    const bool attached = ui_style_named_attach(obj, &carried, named, 0);
-    lv_obj_set_user_data(obj, (void *)(uintptr_t)carried);
+    /* Also when every object carries `list` already: a block of one of its
+     * styles may hold its first LVGL property since (ui_style.h). */
+    const bool attached = ui_style_attach_all(targets, count, list);
+    for (size_t i = 0; i < count; i++) lv_obj_set_user_data(objs[i], (void *)(uintptr_t)carried[i]);
     return attached;
 }
 
-bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_style, const uint8_t named,
-                    const int base_face, const int base_px, const bool title) {
-    /* The span labels get the style obj carries: when the pool had no room
-     * to add `named` to obj, the whole text is drawn without it. */
-    ui_text_set_named(obj, named);
-    const lv_style_t *named_style = ui_style_named_get(ui_text_named(obj));
+bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_style, const style_part_t part,
+                    const int base_face, const int base_px, const bool title, const uint8_t align) {
+    /* The span labels get the styles obj carries: when the pool had no room
+     * to add a new list to obj, the whole text is drawn with the old one. */
+    const style_list_t carried = ui_text_styles(obj);
 
     /* clear out any existing references */
     lv_obj_clean(obj);
@@ -161,16 +173,15 @@ bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
     lv_obj_set_style_pad_gap(container, 2, 0); /* Small gap between elements */
 
     const lv_color_t base_color = lv_obj_get_style_text_color(obj, LV_PART_MAIN);
-    lv_text_align_t text_align = LV_TEXT_ALIGN_LEFT;
+    /* The last \\al, \\ac or \\ar of the text, else the part's text-align
+     * (box_logic.h); none: left, and the part is as wide as its text. */
+    const uint8_t placed = box_logic_text_align(spans, parsed.span_count, align);
+    const lv_text_align_t text_align = to_lv_align(placed);
+    const bool aligned = placed != TEXT_ALIGN_KEEP;
     lv_align_t vertical_align = LV_ALIGN_CENTER;
-    bool aligned = false; /* the text has \\al, \\ac or \\ar */
 
     for (size_t i = 0; i < parsed.span_count; i++) {
         const text_span_t *s = &spans[i];
-        if (s->align != TEXT_ALIGN_KEEP) {
-            text_align = to_lv_align(s->align);
-            aligned = true;
-        }
         if (s->valign != TEXT_VALIGN_KEEP) {
             vertical_align = to_lv_valign(s->valign);
         }
@@ -180,11 +191,9 @@ bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
             break;
         }
         lv_obj_add_style(label, default_style, 0);
-        if (named_style != NULL) {
-            /* after the element style (it wins); 8 bytes of the label's
-             * pool share checked above */
-            lv_obj_add_style(label, named_style, 0);
-        }
+        /* after the element style (they win); 8 bytes each, of the label's
+         * pool share checked above */
+        ui_style_add_to_span(label, carried, part);
         lv_obj_set_style_text_font(label, ui_text_span_font(s, base_face, base_px, title), 0);
         lv_obj_set_style_text_color(label, s->has_color ? lv_color_hex(s->color) : base_color, 0);
 
@@ -198,12 +207,21 @@ bool ui_render_text(lv_obj_t *obj, const char *text, const lv_style_t *default_s
 
     /* Apply alignment to container */
     lv_obj_set_style_text_align(container, text_align, 0);
+    if (align != 0 && placed != align) {
+        /* The text's own alignment over a style's: the labels carry the
+         * style, whose text-align would win over the container's there. */
+        const uint32_t labels = lv_obj_get_child_count(container);
+        for (uint32_t i = 0; i < labels; i++) {
+            lv_obj_set_style_text_align(lv_obj_get_child(container, (int32_t)i), text_align, 0);
+        }
+    }
     lv_obj_align(container, vertical_align, 0, 0);
 
-    /* \\al \\ac \\ar in a display item: its caption, value and unit are flex
-     * rows as wide as their content, so the row of spans has nowhere to move.
-     * With an alignment the element takes the item's width and places the row
-     * on its main axis; without one it is as before. (A key display's row is
+    /* An alignment (a style's text-align, or \\al \\ac \\ar) in a display
+     * item: its caption, value and unit are flex rows as wide as their
+     * content, so the row of spans has nowhere to move. With an alignment the
+     * element takes the item's width and places the row on its main axis;
+     * without one it is as wide as its text. (A key display's row is
      * not in a flex parent: lv_obj_align above centres it.) */
     if (lv_obj_get_style_layout(obj, LV_PART_MAIN) == LV_LAYOUT_FLEX) {
         if (aligned) {

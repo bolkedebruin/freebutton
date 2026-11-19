@@ -4,6 +4,7 @@
 
 #include "style_binding.h"
 
+#include "components/StyleRef.h"
 #include "drivers/LvglDisplay.h"
 #include "ui/PendingRender.h"
 
@@ -11,17 +12,20 @@ extern "C" {
 #include "ui/ui_style.h"
 }
 
+static_assert(STYLE_HW_LIST_TEXT_MAX >= UI_STYLE_LIST_TEXT_MAX, "a list's names fit the script side's buffer");
+
 namespace {
 
-uint8_t toRef(const int ref) {
-    return ref >= 1 && ref <= STYLE_NAMED_MAX ? static_cast<uint8_t>(ref) : 0;
+// A negative ref of style_hw_find: the kind.
+style_kind_t toKind(const int ref) {
+    return static_cast<style_kind_t>(-ref - 1);
 }
 
 int toResult(const style_prop_status_t status) {
     switch (status) {
         case STYLE_PROP_OK: return STYLE_HW_SET_OK;
         case STYLE_PROP_UNKNOWN: return STYLE_HW_SET_UNKNOWN;
-        case STYLE_PROP_NOT_IN_STYLE: return STYLE_HW_SET_NOT_IN_STYLE;
+        case STYLE_PROP_NO_PART: return STYLE_HW_SET_NO_PART;
         case STYLE_PROP_FIXED: return STYLE_HW_SET_FIXED;
         case STYLE_PROP_NO_MEMORY: return STYLE_HW_SET_NO_MEMORY;
         default: return STYLE_HW_SET_BAD_VALUE;
@@ -57,26 +61,70 @@ int setValue(Set&& set) {
 
 extern "C" {
 
-int style_hw_count(void) {
-    return static_cast<int>(ui_style_named_count());
+int style_hw_parse_list(const char* text, uint32_t* list, const char** bad, size_t* bad_len) {
+    const char* cursor = text;
+    const char* name = nullptr;
+    size_t len = 0;
+    style_list_t next = 0;
+    while (style_logic_list_next(&cursor, &name, &len)) {
+        int result = STYLE_HW_LIST_OK;
+        const uint8_t ref = ui_style_find(name, len);
+        if (style_logic_kind(name, len) >= 0) {
+            result = STYLE_HW_LIST_RESERVED;
+        } else if (ref == 0) {
+            result = STYLE_HW_LIST_UNKNOWN;
+        } else if (!style_logic_list_add(&next, ref)) {
+            result = STYLE_HW_LIST_TOO_MANY;
+        }
+        if (result != STYLE_HW_LIST_OK) {
+            *bad = name;
+            *bad_len = len;
+            return result;
+        }
+    }
+    *list = next;
+    return STYLE_HW_LIST_OK;
+}
+
+size_t style_hw_list_text(const uint32_t list, char* out, const size_t capacity) {
+    return ui_style_list_text(list, out, capacity);
 }
 
 int style_hw_find(const char* name, const size_t len) {
-    return name != nullptr ? ui_style_named_find(name, len) : 0;
-}
-
-bool style_hw_has_bg(const int ref) {
-    // Which properties a style has does not change after config load.
-    const style_props_t* props = ui_style_named_props(toRef(ref));
-    return props != nullptr && (props->has & (STYLE_HAS_BG_COLOR | STYLE_HAS_BG_OPA)) != 0;
+    if (name == nullptr) {
+        return 0;
+    }
+    const int kind = style_logic_kind(name, len);
+    return kind >= 0 ? -(kind + 1) : ui_style_find(name, len);
 }
 
 int style_hw_set_string(const int ref, const char* prop, const char* value) {
-    return setValue([&] { return ui_style_named_set_string(toRef(ref), prop, value); });
+    style_part_t part = STYLE_PART_MAIN;
+    const char* name = style_logic_split_prop(prop, &part);
+    return setValue([&] {
+        return ref < 0 ? ui_style_kind_set_string(toKind(ref), part, name, value)
+                       : ui_style_set_string(freebutton::styleref::toRef(ref), part, name, value);
+    });
 }
 
-int style_hw_set_number(const int ref, const char* prop, const int32_t value) {
-    return setValue([&] { return ui_style_named_set_number(toRef(ref), prop, value); });
+int style_hw_set_number(const int ref, const char* prop, const double value) {
+    style_part_t part = STYLE_PART_MAIN;
+    const char* name = style_logic_split_prop(prop, &part);
+    // An integer, or hundredths, as the property takes it; a property that
+    // takes no number gets 0, and style_logic says what is wrong with it.
+    // A number that is none for a style (14.5 for an integer, a third
+    // decimal, NaN) goes on as STYLE_NUMBER_INVALID: the property and the
+    // block are checked before the value, so "font-size", 14.5 is "cannot
+    // be changed by a script" and not "not a valid value".
+    const int scale = style_logic_prop_scale(name);
+    int32_t number = 0;
+    if (scale != 0 && !freebutton::styleref::scaled(value, scale, number)) {
+        number = STYLE_NUMBER_INVALID;
+    }
+    return setValue([&] {
+        return ref < 0 ? ui_style_kind_set_number(toKind(ref), part, name, number)
+                       : ui_style_set_number(freebutton::styleref::toRef(ref), part, name, number);
+    });
 }
 
 } // extern "C"

@@ -11,11 +11,11 @@ src/components/ButtonEventPlan.cpp
 src/components/ButtonEventPlan.h
 src/components/Clock.cpp
 src/components/Clock.h
+src/components/ConfigLogic.h
 src/components/ConfigManager.cpp
 src/components/ConfigManager.h
 src/components/DisplayItem.cpp
 src/components/DisplayItem.h
-src/components/FontRef.h
 src/components/IconLogic.h
 src/components/IconRef.h
 src/components/ImageItem.cpp
@@ -75,7 +75,7 @@ src/scripting/file_hardware.cpp
 src/scripting/file_hardware.h
 src/scripting/image_binding.cpp
 src/scripting/image_binding.h
-src/scripting/js/font_arg.h
+src/scripting/js/fb_method_ids.h
 src/scripting/js/freebutton_button.c
 src/scripting/js/freebutton_device.c
 src/scripting/js/freebutton_displayitem.c

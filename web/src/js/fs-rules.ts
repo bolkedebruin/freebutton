@@ -16,15 +16,15 @@
  *     buckets; the device answers 400 for such `app` keys)
  *   - key <= 63 chars, body <= 64 KiB
  *   - config.json must be valid JSON (and cannot be deleted), with valid,
- *     unique key / display item / list / image names, well-formed "lists",
- *     and consistent icons ("icons" table, "icon"/"iconsize"/"iconcolor",
- *     "images"; validateIcons) and fonts and styles ("style": its "fonts"
- *     table and text styles, item "font"/"fontsize" fields; font-config
- *     validateFonts, style-config parseStyle)
+ *     unique button / display item / list / image names, well-formed
+ *     "lists", consistent icons ("icons" table, "icon"/"iconsize",
+ *     "images"; validateIcons), fonts and styles ("fonts", "styles", the
+ *     items' "style" lists; font-config validateFonts, style-config
+ *     parseStyles) and none of the keys the firmware no longer reads
  */
 
-import { HEX_COLOR, HEX_COLOR_ANY, LIST_MAX_ROWS, validateConfigNames } from './config-model';
-import { validateFonts, FONTSIZE_MAX, FONT_NAME_PATTERN, FONT_SRC_MAX } from './font-config';
+import { HEX_COLOR_ANY, LIST_MAX_ROWS, validateConfigNames } from './config-model';
+import { validateFonts, FONT_NAME_PATTERN, FONT_SRC_MAX } from './font-config';
 import {
   ICON_NAME_PATTERN, ICON_SIZE_MAX, ICON_SIZE_MIN, ITEM_ICON_SIZE_MAX, isIconSize, itemIconSize,
 } from './icon-raster';
@@ -296,10 +296,8 @@ const LIST_NUMBERS: NumberRule[] = [
   ['y', 0, 100, false],
   ['width', 0, 100, false],
   ['rows', 1, LIST_MAX_ROWS, true],
-  ['fontsize', 1, FONTSIZE_MAX, true],
   ['selected', 0, Infinity, true],
 ];
-const LIST_COLORS = ['color', 'focuscolor', 'focustextcolor'];
 /** Media store key rules (S3Logic.h: flat [A-Za-z0-9._-], MEDIA_KEY_MAX 96). */
 const IMAGE_SRC_KEY = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,91}\.bin$/;
 /** "images" x / y: pixels on the 320x240 main display (top-left of the raster). */
@@ -341,11 +339,6 @@ function validateLists(lists: unknown[]): string[] {
         problems.push(`${at}.${field} must be ${integer ? 'an integer' : 'a number'} ${rangeText(min, max)}`);
       }
     }
-    for (const field of LIST_COLORS) {
-      if (field in o && (typeof o[field] !== 'string' || !HEX_COLOR.test(o[field] as string))) {
-        problems.push(`${at}.${field} must be 6 hex digits without "#" (e.g. "ffd45f")`);
-      }
-    }
   });
   return problems;
 }
@@ -370,9 +363,8 @@ function checkIconRef(at: string, v: unknown, icons: ReadonlySet<string> | null,
 }
 
 /**
- * Icons: the `icons` table ({"name": "/path.svg"}), "icon" / "iconsize"
- * (+ "iconcolor" on display items) on keys and display items, and the
- * "images" entries. Exported for tests.
+ * Icons: the `icons` table ({"name": "/path.svg"}), "icon" / "iconsize" on
+ * buttons and display items, and the "images" entries. Exported for tests.
  */
 export function validateIcons(o: Obj): string[] {
   const problems: string[] = [];
@@ -400,8 +392,7 @@ export function validateIcons(o: Obj): string[] {
   // Without an "icons" table every reference is unknown.
   const known = icons ?? new Set<string>();
 
-  const items: [string, boolean][] = [['buttons', false], ['mqttbuttons', false], ['displayitems', true], ['mqttdisplays', true]];
-  for (const [list, isDisplay] of items) {
+  for (const list of ['buttons', 'displayitems']) {
     const arr = o[list];
     if (!Array.isArray(arr)) continue;
     arr.forEach((e, i) => {
@@ -410,9 +401,6 @@ export function validateIcons(o: Obj): string[] {
       if ('icon' in e) checkIconRef(at, e.icon, known, problems);
       if ('iconsize' in e && itemIconSize(e.iconsize, 1) === null) {
         problems.push(`${at}.iconsize must be an integer <= ${ITEM_ICON_SIZE_MAX} (<= 0: the default)`);
-      }
-      if (isDisplay && 'iconcolor' in e && (typeof e.iconcolor !== 'string' || !HEX_COLOR_ANY.test(e.iconcolor))) {
-        problems.push(`${at}.iconcolor must be a colour "#rrggbb"`);
       }
     });
   }
@@ -456,7 +444,8 @@ export function validateIcons(o: Obj): string[] {
 /**
  * Light structural check of a parsed config.json: things that would make
  * the firmware ignore whole sections, malformed "lists" entries, and invalid
- * or duplicate key / display item / list names (validateConfigNames).
+ * or duplicate button / display item / list names (validateConfigNames),
+ * and the fonts, the styles and the removed keys (font-config validateFonts).
  * Returns a list of problems (empty = OK).
  */
 export function validateConfigShape(cfg: unknown): string[] {
@@ -465,20 +454,18 @@ export function validateConfigShape(cfg: unknown): string[] {
     return ['config.json must be a JSON object ({ ... })'];
   }
   const o = cfg as Record<string, unknown>;
-  for (const key of ['buttons', 'mqttbuttons', 'displayitems', 'mqttdisplays', 'brokers', 'lists', 'images']) {
+  for (const key of ['buttons', 'displayitems', 'brokers', 'lists', 'images']) {
     if (key in o && !Array.isArray(o[key])) problems.push(`"${key}" must be an array`);
   }
-  for (const key of ['buttons', 'mqttbuttons']) {
-    const arr = o[key];
-    if (!Array.isArray(arr)) continue;
-    arr.forEach((b, i) => {
+  if (Array.isArray(o.buttons)) {
+    o.buttons.forEach((b, i) => {
       if (typeof b !== 'object' || b === null) {
-        problems.push(`${key}[${i}] must be an object`);
+        problems.push(`buttons[${i}] must be an object`);
         return;
       }
       const pos = (b as Record<string, unknown>).position;
       if (!Number.isInteger(pos) || (pos as number) < 1) {
-        problems.push(`${key}[${i}].position must be a positive integer`);
+        problems.push(`buttons[${i}].position must be a positive integer`);
       }
     });
   }

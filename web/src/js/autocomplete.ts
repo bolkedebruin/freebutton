@@ -9,7 +9,7 @@ import type { FreebuttonAPIDefinition } from './types';
 import { freebuttonAPI, globalCompletions } from './autocomplete-data';
 import { DISPLAY_NAME_METHODS, IMAGE_NAME_METHODS, LIST_NAME_METHODS, type ConfigNames } from './config-model';
 import { getConfigNames } from './device-config';
-import { SYSTEM_FONTS } from './font-config';
+import { styleKind, styleListNames } from './style-config';
 
 /**
  * FreeButton API definitions and global functions
@@ -57,8 +57,10 @@ export function freebuttonCompletions(context: CompletionContext): CompletionRes
 
     // Return completions for the specific API if we found an object name
     if (objectName) {
-        // If we found an object name but it's not a known API, return empty
-        if (!(objectName in freebuttonAPI)) {
+        // If we found an object name but it's not a known API, return empty.
+        // An own property only: "constructor" and "toString" are members of
+        // every object, and no API.
+        if (!Object.prototype.hasOwnProperty.call(freebuttonAPI, objectName)) {
             return { from: word.from, options: [], validFor: /^\w*$/ };
         }
         const apiKey = objectName as keyof FreebuttonAPIDefinition;
@@ -126,10 +128,10 @@ export function freebuttonCompletions(context: CompletionContext): CompletionRes
     };
 }
 
-// Cursor inside the string literal first argument of fb.key("..., of
+// Cursor inside the string literal first argument of fb.button("..., of
 // fb.main.display.setValue("... etc. or of fb.main.list.next("... etc.;
 // group 1 = the name typed so far.
-const KEY_NAME_ARG = /\bfb\s*\.\s*key\s*\(\s*["']([A-Za-z0-9_]*)$/;
+const BUTTON_NAME_ARG = /\bfb\s*\.\s*button\s*\(\s*["']([A-Za-z0-9_]*)$/;
 const DISPLAY_NAME_ARG = new RegExp(
     `\\bfb\\s*\\.\\s*main\\s*\\.\\s*display\\s*\\.\\s*(?:${DISPLAY_NAME_METHODS.join('|')})\\s*\\(\\s*["']([A-Za-z0-9_]*)$`
 );
@@ -144,67 +146,67 @@ const IMAGE_NAME_ARG = new RegExp(
 
 // Icon name: second argument of fb.main.display.setIcon / fb.main.image.setIcon
 // (first argument a simple literal or identifier), or the only argument of a
-// key display's setIcon (fb.main.left.display.setIcon("...).
+// button display's setIcon (fb.main.left.display.setIcon("...).
 const ICON_NAME_ARG = new RegExp(
     `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*(?:display|image)\\s*\\.\\s*setIcon\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
     + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*setIcon\\s*\\()\\s*["']([A-Za-z0-9_-]*)$`
 );
 
-// Font name: second argument of fb.main.display.setFont / fb.main.list.setFont,
-// or the first of a key display's setFont / setTopFont.
-const FONT_NAME_ARG = new RegExp(
-    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*(?:display|list)\\s*\\.\\s*setFont\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
-    + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*set(?:Top)?Font\\s*\\()\\s*["']([A-Za-z0-9_]*)$`
+// The styles of an item, a list of names separated by spaces: the second
+// argument of fb.main.display.setStyle and fb.main.list.setStyle, the first
+// of a button display's setStyle. Group 1 = the names before the one being
+// typed, group 2 = the name typed so far.
+const ITEM_STYLES_ARG = new RegExp(
+    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*(?:display|list)\\s*\\.\\s*setStyle\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
+    + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*setStyle\\s*\\()\\s*["']((?:[A-Za-z0-9_]+ +)*)([A-Za-z0-9_]*)$`
 );
 
-// Named style, any: second argument of fb.main.list.setStyle / setFocusStyle
-// and the first of fb.style.set.
-const STYLE_NAME_ARG = new RegExp(
-    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*list\\s*\\.\\s*set(?:Focus)?Style\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
-    + `|\\bfb\\s*\\.\\s*style\\s*\\.\\s*set\\s*\\()\\s*["']([A-Za-z0-9_]*)$`
+// The same in the fifth argument of fb.main.display.create (after x, y, width, boxType).
+const CREATE_STYLES_ARG = /\bfb\s*\.\s*main\s*\.\s*display\s*\.\s*create\s*\(\s*(?:[^,()"']+,\s*){4}["']((?:[A-Za-z0-9_]+ +)*)([A-Za-z0-9_]*)$/;
+
+// One style: the second argument of fb.main.display.addStyle / removeStyle,
+// the first of a button display's addStyle / removeStyle. These take one
+// name, so nothing is offered after a first name and a space. Group 1 = the
+// name typed so far.
+const ITEM_STYLE_ARG = new RegExp(
+    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*display\\s*\\.\\s*(?:add|remove)Style\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
+    + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*(?:add|remove)Style\\s*\\()\\s*["']([A-Za-z0-9_]*)$`
 );
 
-// Named style for a part without a background: second argument of
-// fb.main.display.setStyle / setLabelStyle, the first of a key display's
-// setStyle / setTopStyle. A style that sets bg_color / bg_opa is for a list
-// only (the device throws TypeError), so it is not offered here.
-const TEXT_STYLE_NAME_ARG = new RegExp(
-    `(?:\\bfb\\s*\\.\\s*main\\s*\\.\\s*display\\s*\\.\\s*set(?:Label)?Style\\s*\\(\\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_$.]+)\\s*,`
-    + `|(?<!\\bmain\\s*)\\.\\s*display\\s*\\.\\s*set(?:Top)?Style\\s*\\()\\s*["']([A-Za-z0-9_]*)$`
-);
+// Any style, "button", "displayitem" and "list" included: the first argument of fb.style.set.
+const STYLE_NAME_ARG = /\bfb\s*\.\s*style\s*\.\s*set\s*\(\s*["']([A-Za-z0-9_]*)$/;
 
-const BG_PROPERTIES = ['bg_color', 'bg_opa'];
-
-/** The properties of a named style, [] for a name that is none (own properties only: "constructor" is no style). */
+/** The dotted properties fb.style.set can set for a style, [] for a name that is none (own properties only: "constructor" is no style). */
 function styleProperties(names: ConfigNames | null, style: string): string[] {
     const styles = names?.styles;
     return styles && Object.prototype.hasOwnProperty.call(styles, style) ? styles[style] ?? [] : [];
 }
 
-// Property of a named style: the second argument of fb.style.set("style", "...
+// Property of a style: the second argument of fb.style.set("style", "...
 // (group 1 = the style, group 2 = the property typed so far).
-const STYLE_PROPERTY_ARG = /\bfb\s*\.\s*style\s*\.\s*set\s*\(\s*["']([A-Za-z0-9_]*)["']\s*,\s*["']([a-z_]*)$/;
+const STYLE_PROPERTY_ARG = /\bfb\s*\.\s*style\s*\.\s*set\s*\(\s*["']([A-Za-z0-9_]*)["']\s*,\s*["']([a-z.-]*)$/;
 
-type NameKind = Exclude<keyof ConfigNames, 'fontIds' | 'styles'>;
+type NameKind = Exclude<keyof ConfigNames, 'fontIds' | 'styles' | 'fonts'>;
 
-const NAME_ARGS: [RegExp, NameKind | 'styles' | 'textStyles', string][] = [
-    [STYLE_NAME_ARG, 'styles', 'named style (config.json)'],
-    [TEXT_STYLE_NAME_ARG, 'textStyles', 'named style (config.json)'],
-    [FONT_NAME_ARG, 'fonts', 'font (config.json)'],
+const NAME_ARGS: [RegExp, NameKind | 'styles' | 'itemStyles', string][] = [
+    [STYLE_NAME_ARG, 'styles', 'style (config.json)'],
+    [ITEM_STYLE_ARG, 'itemStyles', 'style (config.json)'],
     [ICON_NAME_ARG, 'icons', 'icon (config.json)'],
-    [KEY_NAME_ARG, 'keys', 'key (config.json)'],
+    [BUTTON_NAME_ARG, 'keys', 'button (config.json)'],
     [DISPLAY_NAME_ARG, 'displayItems', 'display item (config.json)'],
     [LIST_NAME_ARG, 'lists', 'list (config.json)'],
     [IMAGE_NAME_ARG, 'images', 'image (config.json)'],
 ];
 
 /**
- * Key / display item / list names from config.json inside the name argument
- * of fb.key("..."), fb.main.display.setValue("...", ...) etc. and
- * fb.main.list.next("...") etc.; font, icon and named style names in the
- * arguments that take one; the properties a named style sets in the second
- * argument of fb.style.set. Returns null when the cursor is not in such an
- * argument; no options without a config. Exported for testing.
+ * Button / display item / list names from config.json inside the name
+ * argument of fb.button("..."), fb.main.display.setValue("...", ...) etc.
+ * and fb.main.list.next("...") etc.; icon and style names in the arguments
+ * that take one (an item cannot name "button", "displayitem" or "list";
+ * fb.style.set can; setStyle and display.create take a list and are not
+ * offered a name the list has; addStyle and removeStyle take one name); the
+ * properties fb.style.set can set in its second argument. Returns null when the cursor is not in such an argument; no
+ * options without a config. Exported for testing.
  */
 export function configNameCompletions(
     context: CompletionContext,
@@ -213,22 +215,33 @@ export function configNameCompletions(
     const before = context.state.doc.sliceString(Math.max(0, context.pos - 200), context.pos);
     const property = before.match(STYLE_PROPERTY_ARG);
     if (property) {
-        // What fb.style.set may change: the style's own properties, but its font and size.
-        const settable = styleProperties(names, property[1]!).filter(p => p !== 'text_font' && p !== 'text_size');
+        // What fb.style.set may set: every property but the font, the size and the line
+        // height, in each block the style has (config-model ConfigNames.styles).
+        const settable = styleProperties(names, property[1]!);
         return {
             from: context.pos - property[2]!.length,
             options: settable.map(name => ({ label: name, type: 'property', detail: `property of style "${property[1]}"` })),
-            validFor: /^[a-z_]*$/
+            validFor: /^[a-z.-]*$/
+        };
+    }
+    // A list of styles: the styles an item can name, without those the list has already
+    // (a name given twice counts once).
+    const list = before.match(ITEM_STYLES_ARG) ?? before.match(CREATE_STYLES_ARG);
+    if (list) {
+        const has = styleListNames(list[1]!);
+        const known = Object.keys(names?.styles ?? {}).filter(s => !styleKind(s) && !has.includes(s));
+        return {
+            from: context.pos - list[2]!.length,
+            options: known.map(name => ({ label: name, type: 'constant', detail: 'style (config.json)' })),
+            validFor: /^[A-Za-z0-9_-]*$/
         };
     }
     for (const [pattern, kind, detail] of NAME_ARGS) {
         const match = before.match(pattern);
         if (!match) continue;
         const known = kind === 'styles' ? Object.keys(names?.styles ?? {})
-            : kind === 'textStyles'
-                ? Object.keys(names?.styles ?? {}).filter(s => !styleProperties(names, s).some(p => BG_PROPERTIES.includes(p)))
-            // Fonts: the system fonts exist without a "style.fonts" table.
-            : names?.[kind] ?? (kind === 'fonts' && names ? SYSTEM_FONTS.map(f => f.name) : []);
+            : kind === 'itemStyles' ? Object.keys(names?.styles ?? {}).filter(s => !styleKind(s))
+            : names?.[kind] ?? [];
         return {
             from: context.pos - match[1]!.length,
             options: known.map(name => ({ label: name, type: 'constant', detail })),

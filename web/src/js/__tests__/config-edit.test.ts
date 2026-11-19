@@ -31,7 +31,7 @@ const MODERN = `{
       "width": 17,
       "align": 1,
       "boxtype": 1,
-      "fontsize": 32
+      "style": "big"
     },
     {
       "name": "title",
@@ -55,11 +55,12 @@ const MODERN = `{
 }
 `;
 
-const LEGACY = `{
-\t"mqttbuttons": [
-\t\t{ "position": 1, "label": "Light", "topLabel": "Hall" }
+/** Indented with tabs, an entry per line. */
+const TABBED = `{
+\t"buttons": [
+\t\t{ "position": 1, "label": "Light", "toplabel": "Hall" }
 \t],
-\t"mqttdisplays": [
+\t"displayitems": [
 \t\t{ "x": 0, "y": 0, "label": "Temp" },
 \t\t{ "x": 50, "y": 0, "label": "Temp", "page": 2 }
 \t]
@@ -125,8 +126,8 @@ describe('config-edit setItemProps: position', () => {
   });
 
   it('edits an entry on one line in that style (lists, images)', () => {
-    const list = edited(MODERN, d => setItemProps(d, { list: 'lists', index: 0 }, { x: 10, fontsize: 24 }));
-    expect(list).toContain('{ "name": "scenes", "page": 4, "x": 10, "y": 18, "width": 92, "rows": 3, "fontsize": 24, "items": ["Bed Time", "Evening"] }');
+    const list = edited(MODERN, d => setItemProps(d, { list: 'lists', index: 0 }, { x: 10, style: 'rows' }));
+    expect(list).toContain('{ "name": "scenes", "page": 4, "x": 10, "y": 18, "width": 92, "rows": 3, "style": "rows", "items": ["Bed Time", "Evening"] }');
     const image = edited(MODERN, d => setItemProps(d, { list: 'images', index: 0 }, { y: 30, color: '#ffd700' }));
     expect(image).toContain('{"name":"logo","x":10,"y":30,"width":48,"height":48,"icon":"rain","color":"#ffd700"}');
   });
@@ -137,7 +138,7 @@ describe('config-edit setItemProps: properties', () => {
 
   it('adds an absent key in the entry\'s style: own line, same indent, comma on the line before', () => {
     const out = edited(MODERN, d => setItemProps(d, ref, { label: 'Outside' }));
-    expect(out).toContain('      "fontsize": 32,\n      "label": "Outside"\n    },');
+    expect(out).toContain('      "style": "big",\n      "label": "Outside"\n    },');
     expect(changedLines(MODERN + '\n', out).length).toBeGreaterThan(0);
   });
 
@@ -146,22 +147,24 @@ describe('config-edit setItemProps: properties', () => {
     expect(out).toContain('      "y": 0,\n      "width": 50,\n      "align": 1,');
   });
 
-  it('puts the named style fields next to the fonts they go with', () => {
-    const out = edited(MODERN, d => setItemProps(d, ref, { style: 'alarm', labelstyle: 'muted' }));
+  it('puts "style" after the geometry and before the texts', () => {
+    const plain = MODERN.replace('      "boxtype": 1,\n      "style": "big"\n', '      "boxtype": 1\n');
+    const out = edited(plain, d => setItemProps(d, ref, { style: 'alarm muted', label: 'L' }));
     expect(Object.keys(JSON.parse(out).displayitems[0])).toEqual([
-      'name', 'page', 'x', 'y', 'width', 'align', 'boxtype', 'fontsize', 'style', 'labelstyle',
+      'name', 'page', 'x', 'y', 'width', 'align', 'boxtype', 'style', 'label',
     ]);
+    expect(JSON.parse(out).displayitems[0].style).toBe('alarm muted');
     // Removing them again gives the file back.
-    expect(edited(out, d => setItemProps(d, ref, { style: undefined, labelstyle: undefined }))).toBe(MODERN);
+    expect(edited(out, d => setItemProps(d, ref, { style: undefined, label: undefined }))).toBe(plain);
   });
 
-  it('sets text, font, size, alignment, width and colour', () => {
+  it('sets text, styles, alignment and width', () => {
     const out = edited(MODERN, d => setItemProps(d, ref, {
-      label: 'Buiten', unit: '°C', font: 'pacifico', fontsize: 48, align: 3, width: 30, iconcolor: '#ff0000',
+      label: 'Buiten', unit: '°C', style: 'big alarm', align: 3, width: 30,
     }));
     expect(JSON.parse(out).displayitems[0]).toEqual({
-      name: 'outsideTemp', page: 1, x: 83, y: 5, width: 30, align: 3, boxtype: 1, fontsize: 48,
-      font: 'pacifico', label: 'Buiten', unit: '°C', iconcolor: '#ff0000',
+      name: 'outsideTemp', page: 1, x: 83, y: 5, width: 30, align: 3, boxtype: 1, style: 'big alarm',
+      label: 'Buiten', unit: '°C',
     });
     // The other entries and the rest of the file are as they were.
     expect(out.slice(out.indexOf('"name": "title"'))).toBe(MODERN.slice(MODERN.indexOf('"name": "title"')));
@@ -175,20 +178,20 @@ describe('config-edit setItemProps: properties', () => {
   });
 
   it('removes a key with its comma (undefined), also the first and the last one', () => {
-    const last = edited(MODERN, d => setItemProps(d, ref, { fontsize: undefined }));
+    const last = edited(MODERN, d => setItemProps(d, ref, { style: undefined }));
     expect(last).toContain('      "boxtype": 1\n    },');
     const first = edited(MODERN, d => setItemProps(d, ref, { name: undefined }));
     expect(first).toContain('    {\n      "page": 1,\n      "x": 83,');
-    const two = edited(MODERN, d => setItemProps(d, ref, { name: undefined, page: undefined, fontsize: undefined }));
+    const two = edited(MODERN, d => setItemProps(d, ref, { name: undefined, page: undefined, style: undefined }));
     expect(Object.keys(JSON.parse(two).displayitems[0])).toEqual(['x', 'y', 'width', 'align', 'boxtype']);
     // A key that is not there: nothing to remove.
     expect(changes(setItemProps(MODERN, ref, { unit: undefined }))).toEqual([]);
   });
 
   it('removes one key and adds another in one edit', () => {
-    const out = edited(MODERN, d => setItemProps(d, ref, { fontsize: undefined, font: 'mdi', label: 'x' }));
+    const out = edited(MODERN, d => setItemProps(d, ref, { style: undefined, unit: 'mm', label: 'x' }));
     expect(JSON.parse(out).displayitems[0]).toEqual({
-      name: 'outsideTemp', page: 1, x: 83, y: 5, width: 17, align: 1, boxtype: 1, font: 'mdi', label: 'x',
+      name: 'outsideTemp', page: 1, x: 83, y: 5, width: 17, align: 1, boxtype: 1, label: 'x', unit: 'mm',
     });
   });
 
@@ -210,7 +213,7 @@ describe('config-edit setItemProps: properties', () => {
 
 describe('config-edit: which entry', () => {
   it('goes by the index, also when two entries have the same text', () => {
-    const out = edited(LEGACY, d => setItemProps(d, { list: 'mqttdisplays', index: 1 }, { x: 60 }));
+    const out = edited(TABBED, d => setItemProps(d, { list: 'displayitems', index: 1 }, { x: 60 }));
     expect(out).toContain('{ "x": 0, "y": 0, "label": "Temp" },');
     expect(out).toContain('{ "x": 60, "y": 0, "label": "Temp", "page": 2 }');
   });
@@ -258,34 +261,31 @@ describe('config-edit: which entry', () => {
   });
 });
 
-describe('config-edit: legacy names', () => {
-  it('edits mqttdisplays and mqttbuttons in place, tabs kept', () => {
-    const out = edited(LEGACY, d => setItemProps(d, { list: 'mqttdisplays', index: 0 }, { x: 10, y: 20, width: 40 }));
+describe('config-edit: a file indented with tabs', () => {
+  it('edits its entries in place, tabs kept', () => {
+    const out = edited(TABBED, d => setItemProps(d, { list: 'displayitems', index: 0 }, { x: 10, y: 20, width: 40 }));
     expect(out).toContain('\t\t{ "x": 10, "y": 20, "width": 40, "label": "Temp" },');
-    expect(out).toContain('\t"mqttdisplays": [');
-    expect(out).not.toContain('displayitems');
+    expect(out).toContain('\t"displayitems": [');
   });
 
-  it('updates the spelling the file has ("topLabel"), no second key', () => {
-    const out = edited(LEGACY, d => setItemProps(d, { list: 'mqttbuttons', index: 0 }, { toplabel: 'Room' }));
-    expect(out).toContain('{ "position": 1, "label": "Light", "topLabel": "Room" }');
-    const removed = edited(LEGACY, d => setItemProps(d, { list: 'mqttbuttons', index: 0 }, { toplabel: undefined }));
+  it('sets and removes a key of a one-line entry', () => {
+    const out = edited(TABBED, d => setItemProps(d, { list: 'buttons', index: 0 }, { toplabel: 'Room' }));
+    expect(out).toContain('{ "position": 1, "label": "Light", "toplabel": "Room" }');
+    const removed = edited(TABBED, d => setItemProps(d, { list: 'buttons', index: 0 }, { toplabel: undefined }));
     expect(removed).toContain('{ "position": 1, "label": "Light" }');
   });
 
-  it('a file with both names: each array is edited under its own name', () => {
-    const both = '{ "mqttdisplays": [ { "x": 1 } ], "displayitems": [ { "x": 2 } ] }';
-    expect(edited(both, d => setItemProps(d, { list: 'mqttdisplays', index: 0 }, { x: 5 })))
-      .toBe('{ "mqttdisplays": [ { "x": 5 } ], "displayitems": [ { "x": 2 } ] }');
-    expect(listKeyFor(both, 'displayitem')).toBe('displayitems');
+  it('a key in another spelling is another key: "topLabel" is not read, "toplabel" is added', () => {
+    const old = '{ "buttons": [ { "position": 1, "topLabel": "Hall" } ] }';
+    expect(edited(old, d => setItemProps(d, { list: 'buttons', index: 0 }, { toplabel: 'Room' })))
+      .toBe('{ "buttons": [ { "position": 1, "toplabel": "Room", "topLabel": "Hall" } ] }');
   });
 
-  it('listKeyFor: the array the model reads, the current name for a file without one', () => {
-    expect(listKeyFor(LEGACY, 'displayitem')).toBe('mqttdisplays');
-    expect(listKeyFor(LEGACY, 'button')).toBe('mqttbuttons');
-    expect(listKeyFor(MODERN, 'displayitem')).toBe('displayitems');
-    expect(listKeyFor('{}', 'displayitem')).toBe('displayitems');
-    expect(listKeyFor('{}', 'list')).toBe('lists');
+  it('listKeyFor: the array the model reads for a kind', () => {
+    expect(listKeyFor('displayitem')).toBe('displayitems');
+    expect(listKeyFor('button')).toBe('buttons');
+    expect(listKeyFor('list')).toBe('lists');
+    expect(listKeyFor('image')).toBe('images');
   });
 });
 
@@ -294,7 +294,7 @@ describe('config-edit: line ends and indentation', () => {
     const crlf = MODERN.replace(/\n/g, '\r\n');
     const out = edited(crlf, d => setItemProps(d, { list: 'displayitems', index: 0 }, { x: 1, label: 'L', unit: 'u' }));
     expect(out.replace(/\r\n/g, '')).not.toMatch(/[\r\n]/);
-    expect(out).toContain('      "fontsize": 32,\r\n      "label": "L",\r\n      "unit": "u"\r\n    },');
+    expect(out).toContain('      "style": "big",\r\n      "label": "L",\r\n      "unit": "u"\r\n    },');
     const added = edited(crlf, d => addItem(d, 'displayitems', { name: 'n', x: 1 }));
     expect(added.replace(/\r\n/g, '')).not.toMatch(/[\r\n]/);
     expect(JSON.parse(added).displayitems[2]).toEqual({ name: 'n', x: 1 });
@@ -330,7 +330,7 @@ describe('config-edit removeItem', () => {
     expect(out).toBe(MODERN.replace(/    \{\n      "name": "outsideTemp",[^}]*\},\n/, ''));
     const last = edited(MODERN, d => removeItem(d, { list: 'displayitems', index: 1 }));
     expect(JSON.parse(last).displayitems.map((d: { name: string }) => d.name)).toEqual(['outsideTemp']);
-    expect(last).toContain('      "fontsize": 32\n    }\n  ],');
+    expect(last).toContain('      "style": "big"\n    }\n  ],');
   });
 
   it('refuses an entry that is not there', () => {
@@ -368,8 +368,8 @@ describe('config-edit addItem', () => {
     expect(JSON.parse(edited('{}', d => addItem(d, 'displayitems', { x: 1 })))).toEqual({ displayitems: [{ x: 1 }] });
   });
 
-  it('appends to the legacy array under its name', () => {
-    const out = edited(LEGACY, d => addItem(d, listKeyFor(d, 'displayitem'), { x: 5, y: 6, label: 'New' }));
+  it('appends an entry on one line to an array of one-line entries', () => {
+    const out = edited(TABBED, d => addItem(d, listKeyFor('displayitem'), { x: 5, y: 6, label: 'New' }));
     expect(out).toContain('\t\t{ "x": 50, "y": 0, "label": "Temp", "page": 2 },\n\t\t{ "x": 5, "y": 6, "label": "New" }\n\t]');
   });
 });

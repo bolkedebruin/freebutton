@@ -15,7 +15,7 @@ describe('what crosses the seam', () => {
     emu.run('print(JSON.stringify(fb.main.display.get("power")));');
     // displayitem_get_info is the firmware's (src/scripting/displayitem_binding.cpp) since stage 2.
     expect(JSON.parse(rec.console[0]!)).toEqual({
-      id: 9, x: 50, y: 20, width: 40, boxType: 2, fontSize: 0, alignment: 0, label: 'Power', unit: 'W', round: 1, page: 2,
+      id: 9, x: 50, y: 20, width: 40, boxType: 2, style: '', alignment: 0, label: 'Power', unit: 'W', round: 1, page: 2,
     });
   });
 

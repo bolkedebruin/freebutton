@@ -255,37 +255,55 @@ void writeFonts(Json& json) {
     json.endArray();
 }
 
+// The seven elements (the look of each kind's parts after "button",
+// "displayitem" and "list" were resolved with the built-in look), under the
+// names "<kind>" and "<kind>.<part>", then "icons" (the kinds' icon colours)
+// and "names" (the other styles of the config, in file order).
 void writeStyles(Json& json) {
     static const char* const names[STYLE_EL_COUNT] = {
-        "key.label", "key.toplabel", "display.value", "display.unit", "display.caption", "list", "list.selected",
+        "button", "button.title", "displayitem", "displayitem.unit", "displayitem.title", "list", "list.selected",
     };
     json.beginObject();
     for (int el = 0; el < STYLE_EL_COUNT; el++) {
         const style_props_t* r = ui_style_resolved(static_cast<style_element_t>(el));
         json.key(names[el]).beginObject();
-        json.key("font").value(fonts_face_name(r->face));
-        json.key("face").value(static_cast<int>(r->face));
-        json.key("px").value(static_cast<int>(r->px));
+        json.key("font");
+        if (r->has & STYLE_HAS_FONT) json.value(fonts_face_name(r->face)); else json.null();
+        json.key("face").value((r->has & STYLE_HAS_FONT) ? static_cast<int>(r->face) : -1);
+        json.key("px").value((r->has & STYLE_HAS_SIZE) ? static_cast<int>(r->px) : 0);
         json.key("color").value(hexColor(static_cast<uint32_t>(r->color)));
-        json.key("opa").value(static_cast<int>(r->opa));
+        json.key("opa").value((r->has & STYLE_HAS_OPA) ? static_cast<int>(r->opa) : 255);
         json.key("align");
-        switch (r->has & STYLE_HAS_ALIGN ? r->align : 0) {
+        switch (style_logic_text_align(r)) {
             case STYLE_ALIGN_LEFT: json.value("left"); break;
             case STYLE_ALIGN_CENTER: json.value("center"); break;
             case STYLE_ALIGN_RIGHT: json.value("right"); break;
             default: json.null(); break;
         }
         json.key("letterSpace").value(static_cast<int>(r->letter_space));
-        json.key("lineSpace").value(static_cast<int>(r->line_space));
+        // x100; 0: no line-height (LVGL's own line space)
+        json.key("lineHeight").value((r->has & STYLE_HAS_LINE_HEIGHT) ? static_cast<int>(r->line_height) : 0);
         json.key("underline").value((r->decor & STYLE_DECOR_UNDERLINE) != 0);
-        json.key("strikethrough").value((r->decor & STYLE_DECOR_STRIKETHROUGH) != 0);
-        if (r->has & STYLE_HAS_BG_COLOR) {
-            json.key("bgColor").value(hexColor(static_cast<uint32_t>(r->bg_color)));
-            json.key("bgOpa").value(static_cast<int>(r->bg_opa));
+        json.key("lineThrough").value((r->decor & STYLE_DECOR_LINE_THROUGH) != 0);
+        if (r->has & STYLE_HAS_BG) {
+            json.key("bgColor").value(hexColor(static_cast<uint32_t>(r->bg & 0xFFFFFFu)));
+            json.key("bgOpa").value(static_cast<int>(r->bg >> 24));
         }
         json.endObject();
     }
     json.endObject();
+}
+
+void writeStyleNames(Json& json) {
+    json.beginArray();
+    for (int ref = 1; ref <= STYLE_NAMED_MAX; ref++) {
+        size_t len = 0;
+        const char* name = ui_style_name(static_cast<uint8_t>(ref), &len);
+        if (name == nullptr) break;
+        // a style the LVGL pool had no room for is not there for items and scripts
+        if (ui_style_find(name, len) != 0) json.value(std::string(name, len));
+    }
+    json.endArray();
 }
 
 } // namespace emu

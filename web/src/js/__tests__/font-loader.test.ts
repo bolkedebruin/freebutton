@@ -38,8 +38,8 @@ const BUCKET_OBJECTS: FsObject[] = [
   { key: 'semibold.ttf', size: 1, etag: '"s1"' },
   { key: 'icons.ttf', size: 1, etag: '"i1"' },
 ];
-/** The system fonts plus an icon font from style.fonts. */
-const MDI = { style: { fonts: [{ name: 'mdi', src: 'icons.ttf' }] } };
+/** The system fonts plus an icon font from "fonts". */
+const MDI = { fonts: [{ name: 'mdi', src: 'icons.ttf' }] };
 
 describe('FontLoader', () => {
   it('lists the bucket once, downloads each face once and registers fb-<name>', async () => {
@@ -58,7 +58,7 @@ describe('FontLoader', () => {
     expect(deps.get).toHaveBeenCalledTimes(3);
   });
 
-  it('loads the system fonts always; icons.ttf only when style.fonts names it', async () => {
+  it('loads the system fonts always; icons.ttf only when "fonts" names it', async () => {
     const { loader, deps, registered } = setup(BUCKET_OBJECTS);
     await loader.setDevice('');
     await loader.refresh(fontTable({}));
@@ -89,12 +89,12 @@ describe('FontLoader', () => {
   it('loads config faces; skips files not in the bucket; a system font keeps its file', async () => {
     const { loader, registered } = setup([...BUCKET_OBJECTS, { key: 'roboto.ttf', size: 1, etag: '"r"' }]);
     await loader.setDevice('');
-    await loader.refresh(fontTable({ style: { fonts: [{ name: 'roboto', src: 'roboto.ttf' }, { name: 'mono', src: 'missing.ttf' }] } }));
+    await loader.refresh(fontTable({ fonts: [{ name: 'roboto', src: 'roboto.ttf' }, { name: 'mono', src: 'missing.ttf' }] }));
     expect(registered).toEqual(['fb-montserrat', 'fb-montserrat_semibold', 'fb-roboto']);
     expect(loader.isLoaded('mono')).toBe(false);
 
     // A src on a system font entry is ignored.
-    await loader.refresh(fontTable({ style: { fonts: [{ name: 'montserrat', src: 'roboto.ttf' }] } }));
+    await loader.refresh(fontTable({ fonts: [{ name: 'montserrat', src: 'roboto.ttf' }] }));
     expect(loader.isLoaded('montserrat', 'medium.ttf')).toBe(true);
     expect(registered.filter(r => r === 'fb-montserrat')).toHaveLength(1);
   });
@@ -114,7 +114,7 @@ describe('FontLoader', () => {
   it('a failed listing (old firmware) leaves the CSS fallback, logged once', async () => {
     const { loader, deps } = setup([], { list: vi.fn(async () => { throw new Error('NoSuchBucket'); }) });
     await loader.setDevice('');
-    await loader.refresh(fontTable({ style: { fonts: [{ name: 'x', src: 'x.ttf' }] } }));
+    await loader.refresh(fontTable({ fonts: [{ name: 'x', src: 'x.ttf' }] }));
     expect(deps.log).toHaveBeenCalledTimes(1);
     expect(loader.bucketKeys()).toBeNull();
   });
@@ -126,16 +126,16 @@ describe('FontLoader', () => {
     await loader.refresh(fontTable(MDI));
     expect(loader.isLoaded('mdi')).toBe(false);
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('bad font'));
-    await loader.refresh(fontTable({ style: { fonts: [...MDI.style.fonts, { name: 'montserrat', fallback: 'mdi' }] } }));
+    await loader.refresh(fontTable({ fonts: [...MDI.fonts, { name: 'montserrat', fallback: 'mdi' }] }));
     expect(deps.get.mock.calls.filter((c: unknown[]) => c[1] === 'icons.ttf')).toHaveLength(1);
   });
 });
 
 describe('fontCss', () => {
-  const table = fontTable({ style: { fonts: [
+  const table = fontTable({ fonts: [
     { name: 'roboto', src: 'roboto.ttf', fallback: 'mono', lineheight: 1.1 }, { name: 'mono', src: 'm.ttf', fallback: 'mdi' },
     { name: 'mdi', src: 'icons.ttf' }, { name: 'montserrat_semibold', fallback: 'mdi' },
-  ] } });
+  ] });
   const loaded = (names: string[]) => ({ isLoaded: (n: string) => names.includes(n) });
 
   it('lists the loaded faces of the chain, then the CSS fallback', () => {

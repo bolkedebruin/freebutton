@@ -1,7 +1,7 @@
-// The font and padding rules of a display item box and of a text span,
-// without LVGL: which face and px the caption, the value, the unit and a
-// span of marked-up text get, and the bottom padding that goes with the
-// value's size. ui_box.c and ui_text.c apply them to LVGL objects; the web
+// The font of a text span and the padding of a display item box, without
+// LVGL: which face and px a span of marked-up text gets, and the bottom
+// padding that goes with the value's size. (Which face and px the caption,
+// the value and the unit start from is the lookup of style_logic.h.) ui_box.c and ui_text.c apply them to LVGL objects; the web
 // IDE's emulator (tools/js/emulator) applies the same functions to its
 // virtual display. Plain C, header only: the native tests build it
 // (test/test_box_logic).
@@ -48,46 +48,35 @@ static inline void box_logic_span_font(const text_span_t *s, const int base_face
     }
 }
 
-/* The base font (face, px) of an element: the item's (local layer) where it
- * sets one, else the resolved style's. fontsize 0 = none. */
-static inline int box_logic_base_face(const int item_face, const style_props_t *r)
+/* Where a text is placed in the width of its part: by the last \al, \ac or
+ * \ar among its spans, else by the part's text-align (style_align: a
+ * style_align_t, 0 = no style sets one). TEXT_ALIGN_KEEP (0): not aligned,
+ * the part is as wide as its text. So a text that starts with \ac and the
+ * same text in a part whose style says "center" are placed the same. (The
+ * two enums have the same values: left 1, centre 2, right 3.) */
+static inline uint8_t box_logic_text_align(const text_span_t *spans, const size_t count, const uint8_t style_align)
 {
-    return item_face != FONT_FACE_NONE ? item_face : r->face;
+    uint8_t align = style_align;
+    for (size_t i = 0; i < count; i++) {
+        if (spans[i].align != TEXT_ALIGN_KEEP) {
+            align = spans[i].align;
+        }
+    }
+    return align;
 }
 
-static inline int box_logic_base_px(const int item_fontsize, const bool title, const style_props_t *r)
-{
-    return style_logic_item_px(item_fontsize, title, r->px);
-}
-
-/* The unit: the item's "font" / "fontsize" are the value's and the unit's;
- * without them the unit has display.unit's font / size where "style" sets
- * them, else the value's. v = display.value, u = display.unit (resolved). */
-static inline int box_logic_unit_face(const int item_face, const style_props_t *v, const style_props_t *u)
-{
-    return item_face != FONT_FACE_NONE ? item_face : (u->has & STYLE_HAS_FONT) ? u->face : v->face;
-}
-
-static inline int box_logic_unit_px(const int item_fontsize, const style_props_t *v, const style_props_t *u)
-{
-    return style_logic_item_px(item_fontsize, false, (u->has & STYLE_HAS_SIZE) ? u->px : v->px);
-}
-
-/* The step whose padding the value gets: the item's legacy step as it is;
- * else the value's px (the item's, or the style's without one) as the
- * nearest step's px (14/24/32/48/72). Two cases get none (0): less than 14
- * px (as the old invalid steps 6..9 always had), and 14 px that comes from
- * the style because the item has no size (as the old default fontsize 14
- * always had). An item's own "fontsize": 14 is step 1, so a pixel size can
- * replace every legacy step. value_style_px = display.value's resolved px. */
-static inline int box_logic_padding_step(const int fontsize, const int value_style_px)
+/* The step whose padding a display item gets: the value's resulting size
+ * (px: the lookup through the item's styles, "displayitem" and the
+ * built-in 14) as the nearest of the steps 14 / 24 / 32 / 48 / 72, a tie to
+ * the smaller. Two cases get none (0): less than 14 px, and exactly 14 px
+ * that none of the item's own styles set (own_size false: the size comes
+ * from "displayitem" or is the built-in one), so that an item without a
+ * style looks as it always did. An item whose own style says 14 px is step
+ * 1. */
+static inline int box_logic_padding_step(const int px, const bool own_size)
 {
     static const uint8_t step_px[5] = {14, 24, 32, 48, 72};
-    if (fontsize >= 1 && fontsize <= 5) {
-        return fontsize;
-    }
-    const int px = style_logic_item_px(fontsize, false, value_style_px);
-    if (px < 14 || (px == 14 && fontsize == 0) || px > FONT_PX_MAX) {
+    if (px < 14 || (px == 14 && !own_size) || px > FONT_PX_MAX) {
         return 0;
     }
     int best = 0;
@@ -101,7 +90,7 @@ static inline int box_logic_padding_step(const int fontsize, const int value_sty
 
 /* The bottom padding (px) of the caption and of the box for a padding step
  * (box_logic_padding_step) and the item's boxtype. false for step 0: no
- * padding of its own (the caller removes one a font set at runtime left). */
+ * padding of its own (the caller removes one an earlier style left). */
 static inline bool box_logic_padding(const int step, const int boxtype, int *caption_pad, int *box_pad)
 {
     switch (step) {

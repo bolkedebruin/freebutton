@@ -91,6 +91,9 @@ bool FilteredReaderHandler::StartObject() {
 }
 
 bool FilteredReaderHandler::Key(const char* str, rapidjson::SizeType length, bool copy) {
+    if (keyObserver != nullptr) {
+        keyObserver(keyObserverContext, str, length, nestingLevel);
+    }
     if (nestingLevel > currentPath.size()) {
         currentPath.push_back(std::string(str, length));
     } else {

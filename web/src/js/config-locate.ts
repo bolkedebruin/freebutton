@@ -6,7 +6,7 @@
  *   itemAt(state, pos)   the top-level array entry the position lies in
  *   rangeOf(state, ref)  the text range of an entry
  * An entry is addressed as a ConfigRef: the array's key as written
- * ("buttons", "mqttdisplays", "lists", "images") and its index, which is
+ * ("buttons", "displayitems", "lists", "images") and its index, which is
  * what configToModel puts on every mapped item (`ref`).
  */
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';

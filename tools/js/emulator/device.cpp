@@ -69,6 +69,7 @@ extern "C" {
 #include "../../lib/vendored/stscommon/sensirion_i2c.h"
 #include "ui/fonts/fonts.h"
 #include "ui/ui_style.h"
+#include "ui/ui_text.h"
 }
 
 static const char* TAG = "Emulator";
@@ -137,6 +138,13 @@ BusAwareFile BusAwareFileSystem::open(const char* path, const char* mode) {
 } // namespace FreeButton
 
 namespace {
+
+// "key": the names of a style list, joined by a space ("" = none).
+void writeCarried(emu::Json& json, const char* key, const style_list_t list) {
+    char names[UI_STYLE_LIST_TEXT_MAX];
+    ui_style_list_text(list, names, sizeof(names));
+    json.key(key).value(names);
+}
 CRGB* g_leds = nullptr;
 int g_ledCount = 0;
 CRGB g_ledsShown[32];
@@ -222,7 +230,14 @@ void sendItem(freebutton::DisplayItem& item) {
     json.key("y").value(item.y);
     json.key("width").value(item.width);
     json.key("boxType").value(item.boxType);
-    json.key("fontSize").value(item.fontSize);
+    // The item's styles: the names config.json gives it, and the ones it has now.
+    {
+        char names[UI_STYLE_LIST_TEXT_MAX];
+        ui_style_list_text(item.configStyles(), names, sizeof(names));
+        json.key("configStyle").value(names);
+        ui_style_list_text(item.styles(), names, sizeof(names));
+        json.key("style").value(names);
+    }
     json.key("align").value(item.alignment);
     json.key("round").value(item.round);
     json.key("page").value(item.page);
@@ -250,6 +265,13 @@ void sendItem(freebutton::DisplayItem& item) {
         json.key("width").value(static_cast<int>(lv_obj_get_style_width(box, LV_PART_MAIN)));
         json.key("align").value(static_cast<int>(lv_obj_get_style_align(box, LV_PART_MAIN)));
         json.key("underline").value(lv_obj_get_style_border_width(box, LV_PART_MAIN) > 0);
+        // The style list each part carries (ui_text_styles): the item's own list, or under a
+        // low LVGL pool the one before it. Never one list on one part and another on the next.
+        json.key("carried").beginObject();
+        writeCarried(json, "caption", caption ? ui_text_styles(caption) : 0);
+        writeCarried(json, "value", value ? ui_text_styles(value) : 0);
+        writeCarried(json, "unit", unit ? ui_text_styles(unit) : 0);
+        json.endObject();
         lv_style_value_t pad;
         json.key("captionPad");
         if (caption && lv_obj_get_local_style_prop(caption, LV_STYLE_PAD_BOTTOM, &pad, 0) == LV_STYLE_RES_FOUND) {
@@ -293,6 +315,13 @@ void sendKey(freebutton::Button& button, const int order) {
     json.key("page").value(static_cast<int>(button.page_));
     json.key("label").value(button.label);
     json.key("topLabel").value(button.topLabel);
+    {
+        char names[UI_STYLE_LIST_TEXT_MAX];
+        ui_style_list_text(button.configStyles(), names, sizeof(names));
+        json.key("configStyle").value(names);
+        ui_style_list_text(button.styles(), names, sizeof(names));
+        json.key("style").value(names);
+    }
     json.key("display");
     const auto* b = button.button ? static_cast<const button_dsc_t*>(lv_obj_get_user_data(button.button)) : nullptr;
     if (b) {
@@ -302,9 +331,9 @@ void sendKey(freebutton::Button& button, const int order) {
         // A text in one format is its label; one in several formats a row of
         // labels beside it (ui_button.c set_markup).
         json.key("label");
-        // The text's own font: the label's local one (ui_button_set_fonts: an item font, or a
-        // named style with one of font / size), else its base (ui_button_set_base_fonts: the
-        // item's, else the named style's, else the element style's, Button::applyFonts).
+        // The text's own font: the label's local one (ui_button_set_fonts: a face from one
+        // style and a size from another), else its base (ui_button_set_base: the lookup
+        // through the button's styles, Button::applyStyles).
         emu::writeText(json, b->rich_text ? b->rich_text : b->text, slotText(button.labelSlot_, button.label),
                        b->rich_text != nullptr, b->text_font ? b->text_font : fonts_get(b->text_face, b->text_px));
         json.key("topLabel");
@@ -313,6 +342,10 @@ void sendKey(freebutton::Button& button, const int order) {
                        b->title_font ? b->title_font : fonts_get(b->title_face, b->title_px));
         json.key("icon");
         emu::writeIcon(json, b->icon);
+        json.key("carried").beginObject();
+        writeCarried(json, "label", ui_text_styles(b->text));
+        writeCarried(json, "topLabel", ui_text_styles(b->title));
+        json.endObject();
         json.endObject();
     } else {
         json.null();
@@ -328,6 +361,13 @@ void sendList(freebutton::List& list, const int index) {
     writeName(json, nameOf(freebutton::NameTable::Kind::List, static_cast<uint32_t>(index)));
     json.key("page").value(list.page_);
     json.key("selected").value(list.selected());
+    {
+        char names[UI_STYLE_LIST_TEXT_MAX];
+        ui_style_list_text(list.configStyles(), names, sizeof(names));
+        json.key("configStyle").value(names);
+        ui_style_list_text(list.styles(), names, sizeof(names));
+        json.key("style").value(names);
+    }
     json.key("items").beginArray();
     if (list.count() > 0) {
         const std::string options = list.optionsCopy();
@@ -353,14 +393,51 @@ void sendList(freebutton::List& list, const int index) {
         json.key("selected").value(static_cast<int>(lv_roller_get_selected(r)));
         json.key("font");
         emu::writeFont(json, font);
-        // The selected row's own font, as LVGL resolves it (LV_PART_SELECTED: a local font, its
-        // named style, list.selected, else the rows').
+        // The selected row's own font, as LVGL resolves it (LV_PART_SELECTED: a local font, a
+        // "selected" block of its styles, "list", else the rows').
         json.key("selectedFont");
         emu::writeFont(json, lv_obj_get_style_text_font(r, LV_PART_SELECTED));
         json.key("lineSpace").value(static_cast<int>(lv_obj_get_style_text_line_space(r, LV_PART_MAIN)));
         json.key("color").value(emu::hexColor(lv_obj_get_style_text_color(r, LV_PART_MAIN)));
         json.key("selectedBg").value(emu::hexColor(lv_obj_get_style_bg_color(r, LV_PART_SELECTED)));
         json.key("selectedColor").value(emu::hexColor(lv_obj_get_style_text_color(r, LV_PART_SELECTED)));
+        // Opacity, letter spacing and decoration of the rows and of the selected row, as LVGL
+        // resolves them: a property the selected part does not hold comes from the roller
+        // itself, so the selected row has the rows' unless a "selected" block sets it.
+        const auto writeText = [&](const char* key, const lv_part_t part) {
+            json.key(key).beginObject();
+            json.key("opa").value(static_cast<int>(lv_obj_get_style_text_opa(r, part)));
+            json.key("letterSpace").value(static_cast<int>(lv_obj_get_style_text_letter_space(r, part)));
+            json.key("decor").value(static_cast<int>(lv_obj_get_style_text_decor(r, part)));
+            json.endObject();
+        };
+        writeText("text", LV_PART_MAIN);
+        writeText("selectedText", LV_PART_SELECTED);
+        json.key("carried").beginObject();
+        writeCarried(json, "rows", list.styleCarried_);
+        writeCarried(json, "selected", list.selectedCarried_);
+        json.endObject();
+        {
+            // The same from the firmware's rule (style_logic_selected_row), for the tests that
+            // hold it against what LVGL draws. A property nothing sets: LVGL's default.
+            style_props_t rows;
+            style_props_t selected;
+            style_props_t row;
+            ui_style_lookup(STYLE_KIND_LIST, STYLE_PART_MAIN, list.styleCarried_, &rows, nullptr);
+            ui_style_lookup(STYLE_KIND_LIST, STYLE_PART_SELECTED, list.selectedCarried_, &selected, nullptr);
+            style_logic_selected_row(&selected, &rows, &row);
+            json.key("selectedRule").beginObject();
+            json.key("opa").value((row.has & STYLE_HAS_OPA) ? static_cast<int>(row.opa) : 255);
+            json.key("letterSpace").value((row.has & STYLE_HAS_LETTER_SPACE) ? static_cast<int>(row.letter_space) : 0);
+            json.key("decor").value((row.has & STYLE_HAS_DECOR) ? static_cast<int>(row.decor) : 0);
+            json.endObject();
+        }
+        json.key("bg");
+        if (lv_obj_get_style_bg_opa(r, LV_PART_MAIN) != LV_OPA_TRANSP) {
+            json.value(emu::hexColor(lv_obj_get_style_bg_color(r, LV_PART_MAIN)));
+        } else {
+            json.null();
+        }
         json.endObject();
     } else {
         json.null();
@@ -423,7 +500,8 @@ int sensorInput(const int id) {
     }
 }
 
-// The device: name, time zone, brokers, modules, sensors, fonts, styles.
+// The device: name, time zone, brokers, modules, sensors, fonts, styles
+// (the kinds' resolved looks, and the names of the config's other styles).
 // "input" of a sensor: which reading of the host it samples (fbh_sensor_read),
 // -1 for one the firmware computes (memory).
 void sendDevice() {
@@ -481,6 +559,8 @@ void sendDevice() {
     emu::writeFonts(json);
     json.key("styles");
     emu::writeStyles(json);
+    json.key("styleNames");
+    emu::writeStyleNames(json);
     json.endObject();
     send(FBH_STATE_DEVICE, "device", json.str());
 }

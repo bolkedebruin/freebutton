@@ -1832,9 +1832,9 @@
                 "type": "number"
               },
               {
-                "description": "Font size",
-                "name": "fontSize",
-                "type": "number"
+                "description": "Style names of config.json \"styles\", separated by spaces (up to four; \"\" for none)",
+                "name": "styles",
+                "type": "string"
               },
               {
                 "description": "0=left, 1=center, 2=right",
@@ -1883,7 +1883,7 @@
             "returns": "number"
           },
           {
-            "description": "Get display item by ID",
+            "description": "Get display item by ID: id, x, y, width, boxType, style (its styles now, names joined by a space), alignment, label, unit, round, page; null when there is none",
             "name": "get",
             "params": [
               {

@@ -2,7 +2,7 @@
  * The device's fonts in the browser, for the previews of the virtual device.
  *
  * For every face of the font table the preview shows (device-config
- * getFontTable: the system fonts + config.json "style.fonts"), the TTF is read from the
+ * getFontTable: the system fonts + config.json "fonts"), the TTF is read from the
  * device's `fonts` bucket with an S3 GetObject (device-storage
  * getObjectBytes; a plain fetch of /fonts/x.ttf would hit the IDE's own
  * static files) and registered as `new FontFace("fb-<name>", bytes)` in

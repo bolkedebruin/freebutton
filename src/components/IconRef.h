@@ -90,14 +90,13 @@ struct IconState {
     TextSlot<kSlotBytes> name;  // "" = no icon
     RasterRef raster;           // LVGL task
     uint16_t size;              // square, px
-    uint32_t color;             // A8 tint, icon::kNoColor = the item's text colour
     bool roomWarned = false;    // LVGL task: no LVGL memory for the image, logged once
     // Length of the config "icon" name kept behind this struct (0: the config
     // has no icon). Written once by IconHolder::ensure(), before the state is
     // published.
     uint8_t configNameLen = 0;
 
-    IconState(const int sizePx, const uint32_t tint) : size(static_cast<uint16_t>(sizePx)), color(tint) {}
+    explicit IconState(const int sizePx) : size(static_cast<uint16_t>(sizePx)) {}
 
     // The config "icon" name ("" without one). The name slot is run-time
     // state (MQTT, scripts write over it), so the configured name is kept
@@ -147,7 +146,7 @@ public:
     // the heap is out of memory (malloc, never a throwing / aborting new).
     // configName: the config "icon" name (a valid icon name, or empty), kept
     // for IconState::configName(); used only when the state is created here.
-    IconState* ensure(const int sizePx, const uint32_t tint, const std::string_view configName = {}) {
+    IconState* ensure(const int sizePx, const std::string_view configName = {}) {
         if (IconState* s = get()) {
             return s;
         }
@@ -156,7 +155,7 @@ public:
         if (mem == nullptr) {
             return nullptr;
         }
-        auto* fresh = new (mem) IconState(sizePx, tint);
+        auto* fresh = new (mem) IconState(sizePx);
         if (nameLen != 0) {
             char* tail = reinterpret_cast<char*>(fresh + 1);
             std::memcpy(tail, configName.data(), nameLen);
@@ -191,11 +190,10 @@ enum class SetIconResult : uint8_t { Ok, Invalid, NoMemory };
 
 // Script code: the icon name of a button or display item ("" hides the
 // icon). Like the text setters it only stores the name, and notes in
-// scriptWrote (bit) that a script wrote it last. sizePx / tint: for the icon
-// state when this is the item's first icon.
+// scriptWrote (bit) that a script wrote it last. sizePx: for the icon state
+// when this is the item's first icon.
 inline SetIconResult setIconFromScript(IconHolder& holder, const std::string_view name, const int sizePx,
-                                       const uint32_t tint, const SlotOwner owner,
-                                       std::atomic<uint8_t>& scriptWrote, const uint8_t bit) {
+                                       const SlotOwner owner, std::atomic<uint8_t>& scriptWrote, const uint8_t bit) {
     if (!name.empty() && !icon::validName(name)) {
         return SetIconResult::Invalid;
     }
@@ -204,7 +202,7 @@ inline SetIconResult setIconFromScript(IconHolder& holder, const std::string_vie
         if (name.empty()) {
             return SetIconResult::Ok;  // no icon to hide
         }
-        s = holder.ensure(sizePx, tint);
+        s = holder.ensure(sizePx);
         if (s == nullptr) {
             return SetIconResult::NoMemory;
         }

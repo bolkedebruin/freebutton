@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { ConnectorConfig } from '../app-state';
 import {
-  getConfig, getConfigNames, getConnectors, setConfig, setHardwareConnectors, loadDefaultConfig, updateDisplayItem, updateButton,
+  clearPreviewConfig, getConfig, getConfigNames, getConnectors, getFontTable, getStyles, setConfig, setHardwareConnectors, setPreviewConfig,
+  loadDefaultConfig, updateDisplayItem, updateButton,
 } from '../device-config';
+import { configToModel } from '../config-model';
+import { DEFAULT_CONFIG_STYLES, StyleElement } from '../style-config';
 
 beforeEach(() => {
   loadDefaultConfig();
@@ -156,5 +159,28 @@ describe('device-config', () => {
     setHardwareConnectors(undefined);
     loadDefaultConfig();
     expect(getConfigNames()).toBeNull();
+  });
+
+  it('styles and fonts: the built-in look for sample data, set with config.json, the draft\'s while a preview shows', () => {
+    expect(getStyles()).toBe(DEFAULT_CONFIG_STYLES);
+    const stored = configToModel({
+      fonts: [{ name: 'roboto', src: 'roboto.ttf' }],
+      styles: { button: { 'font-size': 40 }, big: { 'font-size': 48 } },
+    });
+    setConfig(stored.pages, stored.connectors, stored.names, stored.fonts, stored.styles);
+    expect(getStyles().elements[StyleElement.KeyLabel]).toMatchObject({ px: 40 });
+    expect([...getStyles().named.keys()]).toEqual(['big']);
+    expect(getFontTable().faces.map(f => f.name)).toEqual(['montserrat', 'montserrat_semibold', 'roboto']);
+    expect(Object.keys(getConfigNames()!.styles!)).toEqual(['button', 'displayitem', 'list', 'big']);
+
+    setPreviewConfig(configToModel({ styles: { alarm: { color: '#ff0000' } } }));
+    expect([...getStyles().named.keys()]).toEqual(['alarm']);
+    expect(getStyles().elements[StyleElement.KeyLabel]).toMatchObject({ px: 32 });
+    clearPreviewConfig();
+    expect([...getStyles().named.keys()]).toEqual(['big']);
+
+    loadDefaultConfig();
+    expect(getStyles()).toBe(DEFAULT_CONFIG_STYLES);
+    expect(getFontTable().faces.map(f => f.name)).toEqual(['montserrat', 'montserrat_semibold']);
   });
 });

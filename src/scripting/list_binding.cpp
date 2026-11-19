@@ -57,30 +57,12 @@ bool list_hw_select(const int index, const int item) {
     return l != nullptr && l->select(item);
 }
 
-bool list_hw_set_font(const int index, const int face, const int size) {
+bool list_hw_set_styles(const int index, const uint32_t list, const bool restore) {
     auto* l = listAt(index);
     if (l == nullptr) {
         return false;
     }
-    l->setFont(face, size);
-    return true;
-}
-
-bool list_hw_restore_font(const int index) {
-    auto* l = listAt(index);
-    if (l == nullptr) {
-        return false;
-    }
-    l->restoreFont();
-    return true;
-}
-
-bool list_hw_set_style(const int index, const int ref, const bool focus) {
-    auto* l = listAt(index);
-    if (l == nullptr) {
-        return false;
-    }
-    l->setStyle(static_cast<uint8_t>(ref), focus);
+    l->setStyles(restore ? l->configStyles() : list);
     return true;
 }
 

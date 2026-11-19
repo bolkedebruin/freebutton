@@ -1,8 +1,8 @@
 # OpenWolf
 
-@.wolf/OPENWOLF.md
+This project uses OpenWolf for context management. The always-on rules live in `.claude/rules/openwolf.md`; the hooks handle bookkeeping (anatomy index, memory log, read tracking) automatically.
 
-This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
+For the full operating protocol (session handoff, memory discipline, bug logging), load the `openwolf` skill, or read `.wolf/OPENWOLF.md`. Regenerate the session handoff with `/handoff`.
 
 
 # CLAUDE.md
@@ -147,8 +147,7 @@ handler.parse(jsonData, length);
 ```
 
 **Backwards Compatibility:**
-- Supports path-based JSON parsing compatible with legacy ../button architecture
-- Handles both old (`mqttbuttons`, `mqttdisplays`) and new naming conventions
+- None: the vendor's original config format is not read. A key of that format is reported once at load and ignored (see docs/STYLE.md, "Changed from the old format")
 - Memory-efficient for ESP32 constraints using SAX parsing and filtering
 
 **ESP32 Firmware Constraints:**

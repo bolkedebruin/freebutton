@@ -14,18 +14,26 @@
  *
  * The identity is "virt_btn_" + 6 hex digits, made once per browser and
  * kept in localStorage: it is never taken from the real device, so topics a
- * script builds from system.id() are the virtual device's own. MQTT is the
- * in-page broker at every start ("offline"); the live modes and what they
- * may publish are emulator/live-session.ts (loaded with the engine).
+ * script builds from system.id() are the virtual device's own. MQTT: a Run
+ * connects to the brokers of config.json (live publish, under the rules of
+ * emulator/live-session.ts, loaded with the engine) unless the user chose
+ * live read-only or offline, which the browser remembers; a config without
+ * brokers is offline (the broker in the page). The mode, the three
+ * switches and each broker's address, user name and password can be set
+ * while nothing runs (the back of the virtual device): mqttStatus() lists
+ * the brokers of config.json as the workspace has it then.
  *
- * The face. The virtual device's displays are drawn by the firmware in the
- * page (emulator/: LVGL in the wasm), also while nothing runs: showPreview()
- * (the virtual device is on screen) makes an emulator from config.json
- * without a script, what the device shows at boot, and makes a new one when
- * config.json changes. face() is the emulator whose displays are shown: the
- * running one, else that idle one; null while there is none (the page then
- * draws its own approximation from the config model). The engine and the
- * media are fetched then, not when the IDE loads.
+ *   virtual-broker-change   what the browser keeps for a broker host changed
+ *
+ * The face. The idle device: showPreview() (the virtual device is on screen)
+ * makes an emulator from config.json without a script, what the device is at
+ * boot, and makes a new one when config.json changes. face() is the emulator
+ * the virtual device takes its layout from: the running one, else that idle
+ * one; null while there is none. While a script runs its displays are shown
+ * (the firmware's pixels); of the idle device only the layout is used: the
+ * virtual device draws an outline with the name per element, no pixels. The
+ * engine and the media are fetched when the virtual device is on screen, not
+ * when the IDE loads.
  *
  *   emulator-face     face() or faceInfo() changed
  *
@@ -44,6 +52,11 @@ import { virtualMedia } from './virtual-media';
 import type { Emulator, MediaCache, MediaSource, ScriptError, SensorState } from './emulator';
 import type { AskRequest, BrokerView, MqttLogEntry, MqttSession, MqttStatus, SessionFile } from './emulator/live-session';
 import type { SocketFactory } from './emulator/mqtt-live';
+import { FirmwareNotes, isProblem, logMessage, type FirmwareLogEntry } from './emulator/firmware-log';
+import {
+  brokerConfigs, brokerSummary, browserStorage, clearBrokerSettings, defaultStartMode, readBrokerSettings, readStoredMode,
+  writeBrokerSettings, writeStoredMode, type BrokerSettings,
+} from './virtual-broker';
 
 type EmulatorModule = typeof import('./emulator/session-runtime');
 type PublishMode = EmulatorSnapshot['mqtt'];
@@ -57,11 +70,14 @@ export interface RunSource {
 }
 
 export type { BrokerStatus, BrokerView, MqttLogEntry, MqttStatus, SessionFile } from './emulator/live-session';
+export type { BrokerSettings } from './virtual-broker';
 
 const ID_KEY = 'fb-virtual-device-id';
 const ID_PATTERN = /^virt_btn_[0-9a-f]{6}$/;
 /** The MQTT log holds this many entries (emulator/live-session.ts). */
 export const MQTT_LOG_MAX = 200;
+/** A Run writes at most this many warnings and errors of the firmware to the Virtual console. */
+export const FIRMWARE_LINES_MAX = 40;
 
 /**
  * The virtual device as its info side shows it. Everything is the
@@ -85,7 +101,7 @@ export interface VirtualInfo {
   subscriptions: { used: number; limit: number } | null;
   /** MQTT events lost because the script did not keep up. */
   mqttDropped: number | null;
-  /** Where MQTT goes, and the state of the live connection ('none' offline). */
+  /** Where MQTT goes (while nothing runs: where the next Run's will), and the state of the live connection ('none' offline, and while nothing runs). */
   mqtt: PublishMode;
   mqttLink: EmulatorSnapshot['mqttLink'];
   /** config.json "brokers", by name. */
@@ -109,17 +125,17 @@ export interface VirtualInfo {
   textSkipped: number;
 }
 
-/** What draws the face of the virtual device. */
+/** What the face of the virtual device is made from. */
 export interface FaceInfo {
   /**
-   * none     no config.json to draw (the page shows its sample)
+   * none     no config.json to lay out (the page shows its sample)
    * loading  the engine or the media are on their way
-   * engine   the firmware's own pixels
+   * engine   the firmware in the page: its layout, and its pixels while a script runs
    * failed   the engine could not start: `note` says why
    */
   state: 'none' | 'loading' | 'engine' | 'failed';
   note: string;
-  /** Something to know that is not an error (no font files). */
+  /** Something to know that is not an error (no font files, a part of config.json or a font file the firmware does not use). */
   hint: string;
 }
 /** The shortest press given to the firmware's key scan (three scans of 20 ms and a margin). */
@@ -156,7 +172,7 @@ export class EmulatorSession {
   socket: SocketFactory | undefined;
   securePage: boolean | undefined;
   liveTiming: { backoffMs?: number; keepAliveSec?: number } = {};
-  /** For tests: config.json for the idle preview, instead of the workspace's. */
+  /** For tests: config.json for the idle device, instead of the workspace's. */
   readConfig: (() => string | null) | null = null;
   /** For tests: where the media comes from, instead of the device or the workspace (virtual-media.ts). */
   mediaSource: MediaSource | null = null;
@@ -178,7 +194,7 @@ export class EmulatorSession {
   private runToken = 0;
   private offs: Array<() => void> = [];
   private unlisten: Array<() => void> | null = null;
-  /** The device as config.json makes it, no script: shown while nothing runs. */
+  /** The device as config.json makes it, no script: laid out while nothing runs. */
   private idle: Emulator | null = null;
   private idleKey = '';
   private media: MediaCache | null = null;
@@ -189,12 +205,20 @@ export class EmulatorSession {
   private faceNote = '';
   /** The page the idle device shows (the stepper's). */
   private page = 1;
+  /** What the firmware of an emulator said that belongs under the virtual device (emulator/firmware-log.ts). */
+  private notes = new WeakMap<Emulator, FirmwareNotes>();
+  /** The firmware's warnings this Run wrote to the Virtual console: each once. */
+  private firmwareSaid = new Set<string>();
   private pressedAt = new Map<number, number>();
   private releases = new Map<number, ReturnType<typeof setTimeout>>();
+  /** Chosen before the first Run (the engine's MqttSession holds them after it): the mode (null: the stored one, else the default) and the switches. */
+  private early: { mode: PublishMode | null; sendRetained: boolean; announce: boolean; ownStates: boolean } = {
+    mode: null, sendRetained: false, announce: false, ownStates: false,
+  };
 
   snapshot(): EmulatorSnapshot {
     return {
-      status: this.status, identity: virtualDeviceId(), mqtt: this.mqtt?.currentMode ?? 'offline',
+      status: this.status, identity: virtualDeviceId(), mqtt: this.mqttMode(),
       mqttLink: this.mqtt?.linkState() ?? 'none', error: this.error, errors: this.errors,
       stale: this.stale, used: this.used,
     };
@@ -207,22 +231,49 @@ export class EmulatorSession {
 
   // ---- the face ---------------------------------------------------------------
 
-  /** The emulator whose displays the virtual device shows; null: none (the page draws its approximation). */
+  /** The emulator the virtual device is drawn from: the running one, else the idle one; null: none (the page lays out the config model itself). */
   face(): Emulator | null {
     if (this.status === 'running' && this.emu && canDraw()) return this.emu;
     return this.idle;
   }
 
   faceInfo(): FaceInfo {
-    const engine = this.face() !== null;
+    const face = this.face();
+    const engine = face !== null;
     return {
       state: engine ? 'engine' : this.faceState === 'engine' ? 'none' : this.faceState,
       note: engine ? '' : this.faceNote,
-      hint: engine ? virtualMedia.hint() : '',
+      hint: face ? [virtualMedia.hint(), this.notesOf(face).hint()].filter(Boolean).join('. ') : '',
     };
   }
 
-  /** The virtual device is on screen: draw config.json with the firmware, now and after every change of it. */
+  /**
+   * What the firmware of `emu` said about config.json and the font files:
+   * from its start (Emulator.bootLog) and, from the first call on, from
+   * every later line of its log.
+   */
+  private notesOf(emu: Emulator): FirmwareNotes {
+    let notes = this.notes.get(emu);
+    if (!notes) {
+      const made = notes = new FirmwareNotes(emu.bootLog);
+      this.notes.set(emu, made);
+      emu.on('log', (entry) => {
+        if (made.add(entry) && this.face() === emu) emit('emulator-face');
+      });
+    }
+    return notes;
+  }
+
+  /** A warning or an error of the running firmware: to the Virtual console, each text once per Run. */
+  private sayFirmware(entry: FirmwareLogEntry): void {
+    if (!isProblem(entry) || this.firmwareSaid.size >= FIRMWARE_LINES_MAX) return;
+    const message = logMessage(entry);
+    if (this.firmwareSaid.has(message)) return;
+    this.firmwareSaid.add(message);
+    this.say(`Firmware ${entry.level === 'E' ? 'error' : 'warning'}: ${message}`, entry.level === 'E' ? 'error' : 'warn');
+  }
+
+  /** The virtual device is on screen: lay out config.json with the firmware, now and after every change of it. */
   showPreview(): void {
     if (this.previewOn) return;
     this.previewOn = true;
@@ -231,7 +282,7 @@ export class EmulatorSession {
     this.queuePreview();
   }
 
-  /** The virtual device is gone: nothing is drawn any more. */
+  /** The virtual device is gone: nothing is laid out any more. */
   hidePreview(): void {
     this.previewOn = false;
     this.previewToken++;
@@ -240,14 +291,14 @@ export class EmulatorSession {
   }
 
   /**
-   * Show a page: on the idle device (the stepper looks through config.json's
-   * pages) or, while a script runs, on the running one, as the script's own
-   * display.showPage() would.
+   * Show a page of config.json on the idle device (the stepper looks through
+   * its pages while nothing runs). Never on the running device: its page is
+   * the script's own (display.showPage()), and a script that keeps the page
+   * in a variable of its own would draw nothing on a page it did not choose.
    */
   showPage(page: number): void {
     this.page = page;
-    const emu = this.face();
-    if (emu) showPageOn(emu, page);
+    if (this.idle && this.status !== 'running' && this.status !== 'starting') showPageOn(this.idle, page);
   }
 
   /** The main display as the firmware draws it now, at the device's resolution; null: no display is drawn by the firmware. */
@@ -298,7 +349,7 @@ export class EmulatorSession {
     try {
       config = JSON.parse(text);
     } catch {
-      // Mid-edit: what was drawn stays (the virtual device says the text is not valid JSON).
+      // Mid-edit: what was laid out stays.
       if (!this.idle) this.setIdle(null, 'failed', 'config.json is not valid JSON');
       return;
     }
@@ -331,7 +382,6 @@ export class EmulatorSession {
     }
   }
 
-  /** The page's media: one cache for every emulator, so a file is fetched once. */
   /**
    * The emulator's code and its wasm (about 320 KB compressed), fetched once.
    * Both come from the device when it serves the IDE, so each is one turn of
@@ -347,12 +397,17 @@ export class EmulatorSession {
     })().catch((error: unknown) => { this.loading = null; throw error; });
   }
 
+  /** The page's media: one cache for every emulator, so a file is fetched once. */
   private mediaCache(api: EmulatorModule): MediaCache {
     if (!this.media) {
       this.media = new api.MediaCache(this.mediaSource ?? { read: virtualMedia.read });
       virtualMedia.attach(this.media);
-      // A font that arrived late (or not at all) changes what the face has to say.
-      this.media.subscribe(() => emit('emulator-face'));
+      // A font that arrived late (or not at all) changes what the face has to say;
+      // of another version of a font file the firmware says again whether it can use it.
+      this.media.subscribe((bucket, key) => {
+        if (bucket === 'fonts') for (const emu of [this.idle, this.emu]) if (emu) this.notes.get(emu)?.fontChanged(key);
+        emit('emulator-face');
+      });
     }
     return this.media;
   }
@@ -418,15 +473,18 @@ export class EmulatorSession {
         statusChanged: () => this.publish(),
         say: (text, type) => this.say(text, type),
         ask: request => (this.ask ?? askInApp)(request),
-        storage: safeStorage(),
+        storage: browserStorage(),
+        start: { ...this.early, mode: this.chosenMode() },
         will: index => this.emu?.lastWill(index),
         ...(this.socket ? { socket: this.socket } : {}),
         ...(this.securePage !== undefined ? { securePage: this.securePage } : {}),
         ...this.liveTiming,
       });
-      // Other brokers than the run before: offline again. The same: the connection and the mode stay.
+      // Other brokers than the run before: their connections end. The same: the connection stays.
       mqtt.configure(source.config);
       if (source.config.trim() !== '') virtualMedia.useConfig(JSON.parse(source.config), path => workspace.readQuietly(path));
+      // A font or raster that was not there (or could not be read) is asked for again.
+      virtualMedia.askAgain();
       const connectors = connectorKinds(getConnectors());
       this.emu = await api.Emulator.create({
         config: source.config.trim() === '' ? {} : source.config,
@@ -452,8 +510,17 @@ export class EmulatorSession {
     }
     const emu = this.emu;
     this.basePages = parseConfigText(source.config)?.pages ?? [];
+    this.firmwareSaid.clear();
     this.follow(emu);
-    this.say(`Virtual device ${emu.identity} started (MQTT offline: in-page broker)`, 'info');
+    const mode = this.mqttMode();
+    const brokers = this.mqtt?.status().brokers ?? [];
+    const where = mode === 'offline'
+      ? (brokers.length === 0 ? 'MQTT offline: config.json has no brokers' : 'MQTT offline: in-page broker')
+      : `MQTT ${mode === 'live-publish' ? 'live' : 'live, read-only'}: connecting to ${brokers.map(b => b.wsUrl).join(', ')}`;
+    this.say(`Virtual device ${emu.identity} started (${where})`, 'info');
+    // What the firmware said while it read config.json and the fonts: no listener heard it.
+    for (const entry of emu.bootLog) this.sayFirmware(entry);
+    this.notesOf(emu);
     const result = emu.run(source.script);
     if (!result.ok && !emu.running) {
       // Nothing runs (compile or load error; the error event said why).
@@ -465,13 +532,15 @@ export class EmulatorSession {
     this.status = 'running';
     this.startedAt = Date.now();
     this.built = { version: emu.state.firmware, model: emu.state.model, timezone: emu.state.timezone };
+    // The script runs: the real brokers are connected to now (not for a script that did not start).
+    this.mqtt?.begin();
     this.publish();
     emit('emulator-face');
     emit('emulator-state');
     emit('emulator-mqtt');
   }
 
-  /** Stop the script and release the engine. The device shows config.json again. */
+  /** Stop the script and release the engine. The device shows config.json's outlines again. */
   stop(): void {
     this.runToken++;
     const was = this.status;
@@ -479,11 +548,11 @@ export class EmulatorSession {
     this.status = 'idle';
     this.error = '';
     this.stale = null;
-    // Nothing runs: no connection to a real broker stays open, and the next start is offline.
+    // Nothing runs: no connection to a real broker stays open. The mode stays for the next Run.
     this.mqtt?.stop();
     if (was === 'running') this.say('Virtual device stopped', 'info');
     this.publish();
-    // The idle device is shown again, on the page looked at, with config.json as it is now.
+    // The idle device is laid out again, on the page looked at, with config.json as it is now.
     if (this.idle) showPageOn(this.idle, this.page);
     emit('emulator-face');
     this.queuePreview();
@@ -499,7 +568,7 @@ export class EmulatorSession {
     const emu = this.emu;
     const base = {
       identity: virtualDeviceId(), status: this.status, error: this.status === 'error' ? this.error : '',
-      mqtt: this.mqtt?.currentMode ?? 'offline', mqttLink: this.mqtt?.linkState() ?? 'none',
+      mqtt: this.mqttMode(), mqttLink: this.mqtt?.linkState() ?? 'none',
     };
     if (!emu || this.status !== 'running') {
       return {
@@ -531,7 +600,7 @@ export class EmulatorSession {
     };
   }
 
-  /** Whether what is shown fits the device: LVGL's pool and the texts it could not draw. */
+  /** Whether what is laid out fits the device: LVGL's pool and the texts it could not draw. */
   private fit(stats = this.face()?.stats()): Pick<VirtualInfo, 'lvgl' | 'textCollapsed' | 'textSkipped'> {
     if (!stats || !this.face() || stats.lvglTotal <= 0) return { lvgl: null, textCollapsed: 0, textSkipped: 0 };
     return {
@@ -595,35 +664,97 @@ export class EmulatorSession {
     return this.mqtt?.entries() ?? [];
   }
 
-  /** The mode, the connections and what is allowed; null before the first Run. */
-  mqttStatus(): MqttStatus | null {
-    return this.mqtt?.status() ?? null;
+  /** The mode chosen: in this page, else the one the browser remembers, else the default (live publish). */
+  private chosenMode(): PublishMode {
+    return this.mqtt?.chosenMode ?? this.early.mode ?? readStoredMode() ?? defaultStartMode();
   }
 
-  /** offline / live read-only / live publish, while a script runs. '' when done, else why not. */
+  /** The mode in use, or the one the next Run starts in. */
+  private mqttMode(): PublishMode {
+    return this.mqtt && (this.status === 'running' || this.status === 'starting') ? this.mqtt.currentMode : this.chosenMode();
+  }
+
+  /**
+   * The mode, the brokers with their connections, and what is allowed.
+   * While a script runs: of the config it runs with. Else: of config.json
+   * as the workspace has it now, no connection (what the next Run uses).
+   */
+  mqttStatus(): MqttStatus {
+    if (this.mqtt && (this.status === 'running' || this.status === 'starting')) return this.mqtt.status();
+    const text = this.readConfig ? this.readConfig() : workspace.configText();
+    const brokers = brokerConfigs(text ?? '').map((b, index) => ({ ...brokerSummary(b, index), state: 'disconnected' as const, error: null }));
+    const optIns = this.mqtt?.optIns ?? this.early;
+    return {
+      mode: this.chosenMode(), sendRetained: optIns.sendRetained, announce: optIns.announce, ownStates: optIns.ownStates,
+      announced: 0, securePage: this.securePage ?? (typeof location !== 'undefined' && location.protocol === 'https:'), brokers,
+    };
+  }
+
+  /**
+   * Live publish / live read-only / offline. Running or not: while nothing
+   * runs it holds for the next Run. The browser remembers it. '' when done,
+   * else why it is not in use now.
+   */
   setMqttMode(mode: PublishMode): string {
-    if (!this.running || !this.mqtt) return 'Run the virtual device first';
-    return this.mqtt.setMode(mode);
+    writeStoredMode(mode);
+    if (this.mqtt) return this.mqtt.setMode(mode);
+    this.early.mode = mode;
+    if (mode !== 'live-publish') this.early = { mode, sendRetained: false, announce: false, ownStates: false };
+    this.publish();
+    return '';
   }
 
-  /** The broker's WebSocket address (kept by the browser per broker host). */
-  setBrokerUrl(index: number, url: string): void {
-    this.mqtt?.setWsUrl(index, url);
+  /** What the browser keeps for a broker host (address, user name, password); null: nothing, config.json's values are used. */
+  brokerSettings(host: string): BrokerSettings | null {
+    return readBrokerSettings(host);
+  }
+
+  /**
+   * Keep an address, user name and password for a broker host (an empty
+   * field: config.json's value). A running connection that used other
+   * values is made again. '' when kept, else why not.
+   */
+  saveBrokerSettings(host: string, settings: BrokerSettings): string {
+    if (!writeBrokerSettings(host, settings)) return 'Could not store the settings (browser storage blocked?)';
+    this.brokerSettingsChanged(host);
+    return '';
+  }
+
+  /** Forget what the browser keeps for a broker host: config.json's values again. */
+  resetBrokerSettings(host: string): void {
+    clearBrokerSettings(host);
+    this.brokerSettingsChanged(host);
+  }
+
+  private brokerSettingsChanged(host: string): void {
+    this.mqtt?.settingsChanged();
+    emit('virtual-broker-change', { host });
+    this.publish();
   }
 
   /** live publish: keep the retain flag of what is published. */
   setSendRetained(on: boolean): void {
-    this.mqtt?.setSendRetained(on);
+    if (this.mqtt) this.mqtt.setSendRetained(on);
+    else this.setEarly({ sendRetained: on });
   }
 
-  /** live publish: let Home Assistant discovery and availability through. */
+  /** live publish: send Home Assistant discovery and the availability messages (never by itself: config.json "hassdiscovery" does not switch it on). */
   setAnnounce(on: boolean): void {
-    this.mqtt?.setAnnounce(on);
+    if (this.mqtt) this.mqtt.setAnnounce(on);
+    else this.setEarly({ announce: on });
   }
 
   /** live publish: let the firmware's own sensor and state reports through. */
   setOwnStates(on: boolean): void {
-    this.mqtt?.setOwnStates(on);
+    if (this.mqtt) this.mqtt.setOwnStates(on);
+    else this.setEarly({ ownStates: on });
+  }
+
+  /** A switch set before the first Run: only in live publish, as after it. */
+  private setEarly(change: Partial<{ sendRetained: boolean; announce: boolean; ownStates: boolean }>): void {
+    const publishing = this.chosenMode() === 'live-publish';
+    for (const [key, on] of Object.entries(change)) this.early[key as 'sendRetained' | 'announce' | 'ownStates'] = on && publishing;
+    this.publish();
   }
 
   removeAnnouncement(): string {
@@ -697,12 +828,14 @@ export class EmulatorSession {
     this.unlisten = null;
     this.used = false;
     this.mqtt = null;
+    this.early = { mode: null, sendRetained: false, announce: false, ownStates: false };
     this.publish();
   }
 
   private follow(emu: Emulator): void {
     this.offs.push(
       emu.on('console', line => this.say(line, 'log')),
+      emu.on('log', entry => this.sayFirmware(entry)),
       emu.on('error', error => this.onError(error)),
       emu.on('state', () => this.queueState()),
       // What the next publish is (who made it, what kind): the broker link decides with it.
@@ -777,7 +910,7 @@ export class EmulatorSession {
     showRuntimeError(null);
   }
 
-  private say(text: string, type: 'log' | 'info' | 'error' | 'result'): void {
+  private say(text: string, type: 'log' | 'info' | 'warn' | 'error' | 'result'): void {
     emit('console-line', { text, type, to: 'virtual' });
   }
 
@@ -808,9 +941,10 @@ export function _forgetCanDraw(): void {
 }
 
 /**
- * Show a page of the main display. The firmware changes its page only when
- * a script asks (display.showPage): an idle device gets a script of that one
- * line, a running one has it evaluated.
+ * Show a page of the idle device's main display. The firmware changes its
+ * page only when a script asks (display.showPage): the idle device gets a
+ * script of that one line (evaluated, once it has run one). Only for the
+ * idle device: never for a device a user's script runs in.
  */
 function showPageOn(emu: Emulator, page: number): void {
   if (!emu.state.connectors.includes(2) || emu.state.shownPage === page) return;
@@ -826,14 +960,6 @@ async function readFromWorkspace(): Promise<RunSource | null> {
   const script = await text(MAIN_SCRIPT_KEY);
   if (script === null) return null;
   return { script, config: (await text(CONFIG_KEY)) ?? '' };
-}
-
-/** The browser's storage, looked up at each use (it can be absent or blocked). */
-function safeStorage(): Pick<Storage, 'getItem' | 'setItem'> {
-  return {
-    getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
-    setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* not kept */ } },
-  };
 }
 
 /** The IDE's in-app question dialog. */

@@ -1,9 +1,9 @@
 /**
- * The virtual device drawn by the firmware (the real wasm): its displays on
- * canvases, the transparent boxes over the entries for editing, the idle
- * device made again on every config edit, and the page's own drawing when
- * the firmware cannot draw. happy-dom has no 2D canvas: fake-canvas.ts keeps
- * the pixels that are put.
+ * The virtual device made by the firmware in the page (the real wasm). While
+ * nothing runs: its layout as outlines with names, no pixels. While a script
+ * runs: its displays on canvases. The idle device made again on every config
+ * edit, and the page's own layout when the firmware cannot start. happy-dom
+ * has no 2D canvas: fake-canvas.ts keeps the pixels that are put.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import '../fb-virtual-device.js';
@@ -22,7 +22,7 @@ import { virtualMedia } from '../../js/virtual-media.js';
 import type { Emulator, LayoutRect } from '../../js/emulator';
 import { emulatorModule } from '../../js/__tests__/emulator-helpers';
 import { repoMedia, testRaster } from '../../js/__tests__/emulator-pixels';
-import { canvasDrawn, canvasPixels, installFakeCanvas } from './fake-canvas';
+import { canvasPixels, installFakeCanvas } from './fake-canvas';
 
 const CONFIG = `{
   "info": { "connectors": [{ "id": 0, "type": 2 }, { "id": 1, "type": 1 }] },
@@ -64,8 +64,8 @@ const CONFIG = `{
 `;
 
 const SCRIPT = `
-  fb.key("light").button.onClick(function () {
-    fb.key("light").display.setLabel("On");
+  fb.button("light").button.onClick(function () {
+    fb.button("light").display.setLabel("On");
     fb.bars[0].left.led.setColor(0, 255, 0);
   });
 `;
@@ -107,7 +107,10 @@ function setText(text: string) {
 const face = (): Emulator => emulatorSession.face()!;
 const screen = (el: HTMLElement) => el.querySelector('[data-screen]') as HTMLElement;
 const drawnBy = (el: HTMLElement) => screen(el)?.getAttribute('data-drawn-by');
-const box = (el: HTMLElement, ref: string) => el.querySelector(`[data-overlay][data-ref="${ref}"]`) as HTMLElement;
+const laidOutBy = (el: HTMLElement) => screen(el)?.getAttribute('data-layout');
+/** The box of an entry on the main display: its outline (nothing runs) or the box over the canvas (a script runs). */
+const box = (el: HTMLElement, ref: string) => el.querySelector(`fb-tft-display [data-ref="${ref}"]`) as HTMLElement;
+const front = (el: HTMLElement) => el.querySelector('.device-flip-front') as HTMLElement;
 const mainCanvas = (el: HTMLElement) => el.querySelector('canvas[data-display="main"]') as HTMLCanvasElement;
 const keyCell = (el: HTMLElement, position: number) => el.querySelector(`fb-button-grid [data-position="${position}"]`) as HTMLElement;
 const note = (el: HTMLElement) => el.querySelector('[data-testid="face-note"]') as HTMLElement | null;
@@ -115,11 +118,21 @@ const rectOf = (ref: string): LayoutRect => face().layout('main').find(r => r.re
 const lit = (pixels: Uint8ClampedArray) => { let n = 0; for (let i = 0; i < pixels.length; i += 4) if (pixels[i]! + pixels[i + 1]! + pixels[i + 2]! > 0) n++; return n; };
 const parsed = (): Record<string, Array<Record<string, unknown>>> => JSON.parse(getCode());
 
-/** The virtual device, mounted and drawn by the firmware. */
+/** The virtual device, mounted and laid out by the firmware (nothing runs: outlines). */
 async function device(): Promise<HTMLElement> {
   const el = document.createElement('fb-virtual-device');
   document.body.appendChild(el);
-  await until('the firmware to draw', () => drawnBy(el) === 'firmware');
+  await until('the firmware\'s layout', () => laidOutBy(el) === 'firmware' && el.querySelector('[data-outline]'));
+  return el;
+}
+
+/** The same, with SCRIPT running in it. */
+async function runningDevice(script = SCRIPT): Promise<HTMLElement> {
+  emulatorSession.readSource = async () => ({ script, config: getCode() });
+  const el = await device();
+  await emulatorSession.run();
+  await until('the running device', () => emulatorSession.running && face().running && drawnBy(el) === 'firmware');
+  await wait(0);
   return el;
 }
 
@@ -167,13 +180,75 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-describe('the face is the firmware\'s displays', () => {
-  it('a canvas per display, device pixels 1:1, showing exactly the engine\'s frame; the LEDs stay DOM', async () => {
+describe('nothing runs: outlines with names, no pixels', () => {
+  it('no canvas and no text of the config: an outline per entry with its name; the keys too, LEDs off', async () => {
     openConfig(CONFIG);
     const el = await device();
     const emu = face();
     expect(emu.running).toBe(false);
     expect(emu.displays().map(d => d.id)).toEqual(['main', 'key3', 'key4']);
+    expect(drawnBy(el)).toBe('outline');
+    // The firmware drew its displays (the layout comes from that), but none of its pixels are shown.
+    expect(lit(emu.readPixels('main'))).toBeGreaterThan(300);
+    expect(el.querySelector('canvas')).toBeNull();
+    expect([...el.querySelectorAll<HTMLElement>('fb-tft-display [data-outline]')].map(b => b.textContent!.trim()).sort())
+      .toEqual(['later', 'scenes', 'temp', 'weather']);
+    // Labels, top labels and list items are data: not shown.
+    for (const data of ['Temp', 'Light', 'Room', 'Blind', 'Power']) expect(front(el).textContent).not.toContain(data);
+    expect(front(el).textContent).not.toMatch(/\bA\b|\bB\b/);
+    for (const [position, name] of [[3, 'light'], [4, 'blind']] as const) {
+      const key = keyCell(el, position).querySelector('button')!;
+      expect(key.getAttribute('data-drawn-by')).toBe('outline');
+      expect(key.textContent!.trim()).toBe(name);
+      expect(keyCell(el, position).querySelector('[data-led]')!.hasAttribute('data-led-on')).toBe(false);
+    }
+    expect(keyCell(el, 3).querySelector('button')!.getAttribute('aria-label')).toBe('Key 3 light');
+    expect(note(el)).toBeNull();
+  });
+
+  it('names: "name", else "#<displayitemid>", else "displayitems[i]"; a key "Key <position>"; the clock "clock"', async () => {
+    openConfig(JSON.stringify({
+      info: { connectors: [{ id: 0, type: 2 }, { id: 1, type: 1 }] },
+      buttons: [{ position: 3, page: 1, label: 'Light' }],
+      displayitems: [
+        { name: 'temp', displayitemid: 7, page: 1, x: 0, y: 0, width: 30, label: 'Temp' },
+        { displayitemid: 8, page: 1, x: 0, y: 30, width: 30, label: 'Humidity' },
+        { page: 1, x: 0, y: 60, width: 30, label: 'Wind' },
+      ],
+      clocks: [{ x: 200, y: 20, width: 100, height: 100, page: 1 }],
+    }));
+    const el = await device();
+    expect(box(el, 'displayitems:0').textContent!.trim()).toBe('temp');
+    expect(box(el, 'displayitems:1').textContent!.trim()).toBe('#8');
+    expect(box(el, 'displayitems:2').textContent!.trim()).toBe('displayitems[2]');
+    for (const data of ['Temp', 'Humidity', 'Wind', 'Light']) expect(front(el).textContent).not.toContain(data);
+    expect(keyCell(el, 3).querySelector('button')!.textContent!.trim()).toBe('Key 3');
+    // A position without a configured key stays empty.
+    expect(keyCell(el, 4).querySelector('button')!.getAttribute('data-drawn-by')).toBe('none');
+    expect(keyCell(el, 4).querySelector('button')!.textContent!.trim()).toBe('');
+    const clock = box(el, 'clocks:0');
+    expect(clock.getAttribute('data-outline')).toBe('clock');
+    expect(clock.textContent!.trim()).toBe('clock');
+    expect([clock.style.left, clock.style.top, clock.style.width, clock.style.height]).toEqual(['200px', '20px', '100px', '100px']);
+    expect(clock.getAttribute('aria-label')).toBe('Clock clock, x 200, y 20');
+    // It can be found in config.json; it is not moved here.
+    const reveals: unknown[] = [];
+    const onReveal = (e: Event) => reveals.push((e as CustomEvent).detail.ref);
+    window.addEventListener('config-reveal', onReveal);
+    clock.click();
+    clock.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    window.removeEventListener('config-reveal', onReveal);
+    expect(reveals).toEqual([{ kind: 'clock', list: 'clocks', index: 0 }]);
+    await wait(30);
+    expect(parsed().clocks![0]!.x).toBe(200);
+  });
+});
+
+describe('a script runs: the face is the firmware\'s displays', () => {
+  it('a canvas per display, showing exactly the engine\'s frame; a key\'s display at the key panel\'s scale; the LEDs stay DOM', async () => {
+    openConfig(CONFIG);
+    const el = await runningDevice();
+    const emu = face();
     expect([...el.querySelectorAll<HTMLCanvasElement>('canvas[data-display]')].map(c => [c.dataset.display, c.width, c.height])).toEqual([
       ['main', 320, 240], ['key3', 160, 80], ['key4', 160, 80],
     ]);
@@ -181,24 +256,37 @@ describe('the face is the firmware\'s displays', () => {
       const pixels = canvasPixels(canvas);
       expect(lit(pixels)).toBeGreaterThan(300);
       expect(Array.from(pixels)).toEqual(Array.from(emu.readPixels(canvas.dataset.display!)));
-      expect(canvas.style.imageRendering).toBe('pixelated');
     }
+    // The main display a CSS px per device pixel; a key's 160 x 80 on 120 x 60 (pitch 0.135 mm against 0.180 mm).
+    expect([screen(el).style.width, screen(el).style.height]).toEqual(['320px', '240px']);
+    const key = keyCell(el, 3).querySelector('button') as HTMLElement;
+    expect([key.style.width, key.style.height]).toEqual(['120px', '60px']);
     // A key's canvas is inside its button; its LED is an element next to it.
-    expect(keyCell(el, 3).querySelector('button canvas[data-display="key3"]')).not.toBeNull();
-    expect(keyCell(el, 3).querySelector('button')!.getAttribute('aria-label')).toBe('Key 3 light');
+    expect(key.querySelector('canvas[data-display="key3"]')).not.toBeNull();
+    expect(key.getAttribute('aria-label')).toBe('Key 3 light');
     expect(keyCell(el, 3).querySelector('[data-led]')).not.toBeNull();
-    // Nothing of the page's own drawing is left on the screen.
-    expect(el.querySelector('[data-display-item], [data-list], [data-image]')).toBeNull();
+    // No outlines over the running device.
+    expect(el.querySelector('[data-outline]')).toBeNull();
     expect(note(el)).toBeNull();
   });
 
-  it('square pixels when a device pixel is a whole number of screen pixels, smoothed otherwise', async () => {
+  it('square pixels per display: only where a device pixel is a whole number of screen pixels', async () => {
     openConfig(CONFIG);
-    Object.defineProperty(window, 'devicePixelRatio', { value: 1.5, configurable: true });
+    const el = await runningDevice();
+    const rendering = async (dpr: number) => {
+      Object.defineProperty(window, 'devicePixelRatio', { value: dpr, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+      (el as unknown as { requestUpdate(): void }).requestUpdate();
+      await wait(0);
+      await wait(0);
+      return [mainCanvas(el).style.imageRendering, (keyCell(el, 3).querySelector('canvas') as HTMLCanvasElement).style.imageRendering];
+    };
     try {
-      const el = await device();
-      expect(mainCanvas(el).style.imageRendering).toBe('auto');
-      expect((keyCell(el, 3).querySelector('canvas') as HTMLCanvasElement).style.imageRendering).toBe('auto');
+      // 1x: the main display 1 screen pixel per device pixel, a key's 0.75.
+      expect(await rendering(1)).toEqual(['pixelated', 'auto']);
+      expect(await rendering(1.5)).toEqual(['auto', 'auto']);
+      // 4x: 4 and 3 screen pixels.
+      expect(await rendering(4)).toEqual(['pixelated', 'pixelated']);
     } finally {
       Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true });
     }
@@ -217,6 +305,7 @@ describe('the face is the firmware\'s displays', () => {
       { position: 4, page: 1, label: 'Blind', topLabel: '', ledOn: true, ledColor: 'rgb(255,0,0)' },
     ];
     grid.engine = engine as unknown as Emulator;
+    grid.pressable = true;
     document.body.appendChild(grid);
     await grid.updateComplete;
     expect(grid.querySelector('[data-position="3"] canvas[data-display="key3"]')).not.toBeNull();
@@ -240,15 +329,15 @@ describe('the face is the firmware\'s displays', () => {
   });
 });
 
-describe('editing on top of the canvas', () => {
-  it('one transparent box per entry the firmware laid out, at its rectangle; focusable, labelled', async () => {
+describe('editing on the outlines', () => {
+  it('one outline per entry the firmware laid out, at its rectangle; focusable, labelled', async () => {
     openConfig(CONFIG);
     const el = await device();
     const rects = face().layout('main').filter(r => r.ref && r.visible && r.kind !== 'clock');
     expect(rects.map(r => r.kind).sort()).toEqual(['displayitem', 'image', 'list']);
-    const boxes = [...el.querySelectorAll<HTMLElement>('[data-overlay]:not([data-empty])')];
+    const boxes = [...el.querySelectorAll<HTMLElement>('[data-outline]:not([data-empty])')];
     expect(boxes.map(b => [b.dataset.ref, b.style.left, b.style.top, b.style.width, b.style.height])).toEqual(
-      rects.map(r => [`${r.ref!.list}:${r.ref!.index}`, `${r.x}px`, `${r.y}px`, `${r.width}px`, `${r.height}px`]));
+      rects.map(r => [`${r.ref!.list}:${r.ref!.index}`, `${r.x}px`, `${r.y}px`, `${r.width}px`, `${Math.max(r.height, 14)}px`]));
     // The firmware's rule for a display item: x and y are % of 320 x 240.
     expect([rectOf('displayitems:0').x, rectOf('displayitems:0').y, rectOf('displayitems:0').width]).toEqual([32, 24, 128]);
     const temp = box(el, 'displayitems:0');
@@ -258,9 +347,10 @@ describe('editing on top of the canvas', () => {
     expect(box(el, 'lists:0').getAttribute('aria-label')).toBe('List scenes, x 4, y 60');
     expect(box(el, 'images:0').getAttribute('aria-label')).toBe('Image weather, x 250, y 150');
     expect(temp.childElementCount).toBe(0);
+    expect(temp.textContent!.trim()).toBe('temp');
   });
 
-  it('an entry the firmware draws nothing of yet (no caption, no value) has a place holder with its name, where it will be', async () => {
+  it('an entry the firmware draws nothing of yet (no caption, no value) has an outline too, with its name, where it will be', async () => {
     openConfig(CONFIG);
     const el = await device();
     const later = face().layout('main').find(r => r.ref?.index === 2 && r.kind === 'displayitem')!;
@@ -295,7 +385,7 @@ describe('editing on top of the canvas', () => {
     expect(box(el, 'displayitems:0').hasAttribute('data-selected')).toBe(false);
   });
 
-  it('a drag moves the box with a copy of the entry\'s pixels; the drop writes x and y and the firmware draws it there', async () => {
+  it('a drag moves the outline; the drop writes x and y and the firmware lays it out there', async () => {
     openConfig(CONFIG);
     const el = await device();
     const before = face();
@@ -308,10 +398,7 @@ describe('editing on top of the canvas', () => {
     expect(el.querySelector('[data-testid="move-position"]')?.textContent?.trim()).toBe('x 40 · y 30 %');
     const moving = box(el, 'displayitems:0');
     expect([moving.style.left, moving.style.top]).toEqual([`${from.x + 96}px`, `${from.y + 48}px`]);
-    const ghost = moving.querySelector('canvas[data-ghost]') as HTMLCanvasElement;
-    expect([ghost.width, ghost.height]).toEqual([from.width, from.height]);
-    expect(canvasDrawn(ghost)).toEqual([{ source: mainCanvas(el), sx: from.x, sy: from.y, sw: from.width, sh: from.height }]);
-    expect(el.querySelector('[data-move-origin]')).not.toBeNull();
+    expect(moving.textContent!.trim()).toBe('temp');
     expect(getCode()).toBe(CONFIG);                      // nothing written before the drop
     expect(face()).toBe(before);                         // and nothing drawn again
 
@@ -323,9 +410,8 @@ describe('editing on top of the canvas', () => {
     await wait(0);
     const dropped = box(el, 'displayitems:0');
     expect([dropped.style.left, dropped.style.top]).toEqual(['128px', '72px']);
-    expect(dropped.querySelector('canvas')).toBeNull();
     expect(el.querySelector('[data-testid="move-position"]')).toBeNull();
-    expect(Array.from(canvasPixels(mainCanvas(el)))).toEqual(Array.from(face().readPixels('main')));
+    expect(el.querySelector('canvas')).toBeNull();
   });
 
   it('Escape cancels a drag: the box goes back, nothing is written', async () => {
@@ -414,11 +500,7 @@ describe('editing on top of the canvas', () => {
 
   it('while a script runs nothing can be moved; a press on the screen is the main display\'s key', async () => {
     openConfig(CONFIG);
-    emulatorSession.readSource = async () => ({ script: SCRIPT, config: getCode() });
-    const el = await device();
-    await emulatorSession.run();
-    await until('the running device', () => emulatorSession.running && face().running);
-    await wait(0);
+    const el = await runningDevice();
     expect(drawnBy(el)).toBe('firmware');
     const temp = box(el, 'displayitems:0');
     temp.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
@@ -433,18 +515,19 @@ describe('editing on top of the canvas', () => {
 });
 
 describe('the idle device follows config.json', () => {
-  it('an edit of config.json makes a new device; the old one is disposed; the canvases show the new frame', async () => {
+  it('an edit of config.json makes a new device; the old one is disposed; the outlines follow its layout', async () => {
     openConfig(CONFIG);
     const el = await device();
     const before = face();
     const dispose = vi.spyOn(before, 'dispose');
-    const frame = Array.from(canvasPixels(mainCanvas(el)));
-    setText(CONFIG.replace('"label": "Temp"', '"label": "Kitchen"'));
+    expect(box(el, 'displayitems:0').style.width).toBe('128px');
+    setText(CONFIG.replace('"width": 40,\n      "align": 1,\n      "boxtype": 1,\n      "label": "Temp"', '"width": 50,\n      "align": 1,\n      "boxtype": 1,\n      "label": "Kitchen"'));
     await until('a new device', () => face() !== before);
     await wait(0);
     expect(dispose).toHaveBeenCalledTimes(1);
-    expect(Array.from(canvasPixels(mainCanvas(el)))).not.toEqual(frame);
-    expect(Array.from(canvasPixels(mainCanvas(el)))).toEqual(Array.from(face().readPixels('main')));
+    expect(box(el, 'displayitems:0').style.width).toBe('160px');
+    expect(box(el, 'displayitems:0').textContent!.trim()).toBe('temp');
+    expect(front(el).textContent).not.toContain('Kitchen');
     // The same text again: nothing is made.
     const same = face();
     showDraft();
@@ -452,20 +535,23 @@ describe('the idle device follows config.json', () => {
     expect(face()).toBe(same);
   });
 
-  it('text that is not valid JSON keeps the last frame; valid again, it is drawn', async () => {
+  it('text that is not valid JSON keeps the last layout, and the device says nothing of it; valid again, it is laid out', async () => {
     openConfig(CONFIG);
     const el = await device();
     const before = face();
     setText(CONFIG.replace('"buttons"', '"buttons'));
     await wait(80);
     expect(face()).toBe(before);
-    expect(drawnBy(el)).toBe('firmware');
-    expect(el.querySelector('[data-testid="preview-hint"]')?.getAttribute('data-state')).toBe('stale');
+    expect(laidOutBy(el)).toBe('firmware');
+    expect(box(el, 'displayitems:0')).not.toBeNull();
+    // Invalid JSON is the editor's to show.
+    expect(el.querySelector('[data-testid="preview-hint"]')).toBeNull();
+    expect(el.textContent).not.toMatch(/unsaved|invalid/i);
     setText(CONFIG.replace('"label": "Temp"', '"label": "Hall"'));
     await until('a new device', () => face() !== before);
   });
 
-  it('Run shows the running device, Stop the idle one again; removing the element disposes both', async () => {
+  it('Run shows the running device\'s pixels, Stop the idle one\'s outlines again; removing the element disposes both', async () => {
     openConfig(CONFIG);
     emulatorSession.readSource = async () => ({ script: SCRIPT, config: getCode() });
     const el = await device();
@@ -473,10 +559,16 @@ describe('the idle device follows config.json', () => {
     await emulatorSession.run();
     await until('the running device', () => face() !== idle && face().running);
     const running = face();
+    await until('the pixels', () => drawnBy(el) === 'firmware' && mainCanvas(el));
+    expect(el.querySelector('[data-outline]')).toBeNull();
     emulatorSession.stop();
     await wait(0);
     expect(face()).toBe(idle);
-    expect(drawnBy(el)).toBe('firmware');
+    expect(drawnBy(el)).toBe('outline');
+    expect(el.querySelector('canvas')).toBeNull();
+    expect([...el.querySelectorAll<HTMLElement>('fb-tft-display [data-outline]')].map(b => b.textContent!.trim()).sort())
+      .toEqual(['later', 'scenes', 'temp', 'weather']);
+    expect(keyCell(el, 3).querySelector('button')!.textContent!.trim()).toBe('light');
     const disposeIdle = vi.spyOn(idle, 'dispose');
     expect(running.running).toBe(false);
     el.remove();
@@ -508,20 +600,42 @@ describe('the idle device follows config.json', () => {
     expect(keyCell(el, 4).querySelector('[data-led]')!.hasAttribute('data-led-on')).toBe(false);
   });
 
-  it('the stepper, while a script runs, shows that page on the running device', async () => {
+  it('while a script runs the page is the script\'s: the stepper says which, its buttons are off; after Stop it picks a page of config.json again', async () => {
     openConfig(CONFIG);
-    emulatorSession.readSource = async () => ({ script: SCRIPT, config: getCode() });
-    const el = await device();
-    await emulatorSession.run();
-    await until('the running device', () => emulatorSession.running && face().running);
-    (el.querySelector('[data-testid="page-next"]') as HTMLElement).click();
-    await until('page 2', () => emulatorSession.shownPage() === 2 && box(el, 'displayitems:1'));
-    expect(face().eval('fb.main.display.getShownPage()')).toEqual({ ok: true, value: '2' });
+    const el = await runningDevice();
+    const stepper = el.querySelector('[data-testid="page-stepper"]') as HTMLElement;
+    const next = el.querySelector('[data-testid="page-next"]') as HTMLButtonElement;
+    const prev = el.querySelector('[data-testid="page-prev"]') as HTMLButtonElement;
+    const label = () => el.querySelector('[data-testid="page-label"]')!.textContent!.trim();
+    expect(stepper.dataset.mode).toBe('shown');
+    expect([prev.disabled, next.disabled]).toEqual([true, true]);
+    expect(next.title).toBe('The script decides the page while it runs');
+    expect(label()).toBe('Page 1 of 2');
+    // Nothing here changes the running device's page.
+    const evaluated = vi.spyOn(face(), 'eval');
+    next.click();
+    next.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await wait(30);
+    expect(evaluated).not.toHaveBeenCalled();
+    evaluated.mockRestore();
+    expect(emulatorSession.shownPage()).toBe(1);
+    // The script goes to page 2: the stepper follows.
+    face().eval('fb.main.display.showPage(2)');
+    await until('page 2', () => label() === 'Page 2 of 2' && box(el, 'displayitems:1'));
+    expect([prev.disabled, next.disabled]).toEqual([true, true]);
+    // Stop: the page of config.json looked at before, and the stepper selects again.
+    emulatorSession.stop();
+    await until('the outlines', () => drawnBy(el) === 'outline' && label() === 'Page 1 of 2');
+    expect((el.querySelector('[data-testid="page-stepper"]') as HTMLElement).dataset.mode).toBe('select');
+    expect(next.disabled).toBe(false);
+    expect(next.title).toBe('Next page');
+    next.click();
+    await until('page 2 of config.json', () => face().state.shownPage === 2 && box(el, 'displayitems:1')?.hasAttribute('data-outline'));
   });
 });
 
-describe('when the firmware cannot draw: the page\'s own preview', () => {
-  it('no 2D canvas: the config model is drawn, the same layout, with a small note; editing works as before', async () => {
+describe('when the firmware cannot start: the page\'s own layout', () => {
+  it('no 2D canvas: the outlines are laid out from the config model, with a small note; editing works as before', async () => {
     restoreCanvas?.();
     restoreCanvas = null;
     _forgetCanDraw();
@@ -529,14 +643,16 @@ describe('when the firmware cannot draw: the page\'s own preview', () => {
     const el = document.createElement('fb-virtual-device');
     document.body.appendChild(el);
     await until('the note', () => note(el));
-    expect(drawnBy(el)).toBe('model');
+    expect([drawnBy(el), laidOutBy(el)]).toEqual(['outline', 'model']);
     expect(note(el)!.dataset.state).toBe('failed');
-    expect(note(el)!.textContent).toContain('Approximate preview');
+    expect(note(el)!.textContent).toContain('Approximate layout');
     expect(note(el)!.textContent).toContain('no 2D canvas');
     expect(el.querySelector('canvas')).toBeNull();
-    const temp = el.querySelector('[data-display-item="temp"]') as HTMLElement;
-    expect([temp.style.left, temp.style.top, temp.style.width]).toEqual(['10%', '10%', '40%']);
-    expect(keyCell(el, 3).querySelector('[data-label]')!.textContent).toContain('Light');
+    const temp = box(el, 'displayitems:0');
+    expect(temp.textContent!.trim()).toBe('temp');
+    expect([temp.style.left, temp.style.top, temp.style.width]).toEqual(['32px', '24px', '128px']);
+    expect(front(el).textContent).not.toContain('Temp');
+    expect(keyCell(el, 3).querySelector('button')!.textContent!.trim()).toBe('light');
     temp.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
     await until('the edit', () => parsed().displayitems![0]!.x === 11);
     expect(emulatorSession.face()).toBeNull();
@@ -548,21 +664,23 @@ describe('when the firmware cannot draw: the page\'s own preview', () => {
     const el = document.createElement('fb-virtual-device');
     document.body.appendChild(el);
     await until('the note', () => note(el));
-    expect(drawnBy(el)).toBe('model');
+    expect([drawnBy(el), laidOutBy(el)]).toEqual(['outline', 'model']);
     expect(note(el)!.dataset.state).toBe('failed');
-    expect(el.querySelector('[data-display-item="temp"]')).not.toBeNull();
+    expect(box(el, 'displayitems:0').textContent!.trim()).toBe('temp');
     expect(el.querySelector('[data-testid="face-loading"]')).toBeNull();
   });
 
-  it('no config.json: the sample is drawn, no note, and the engine is not loaded', async () => {
+  it('no config.json: the sample\'s outlines, no note, and the engine is not loaded', async () => {
     emulatorSession.readConfig = () => null;
     const el = document.createElement('fb-virtual-device');
     document.body.appendChild(el);
     await wait(60);
-    expect(drawnBy(el)).toBe('model');
+    expect([drawnBy(el), laidOutBy(el)]).toEqual(['outline', 'model']);
     expect(note(el)).toBeNull();
     expect(emulatorSession.faceInfo().state).toBe('none');
-    expect(el.querySelectorAll('[data-display-item]').length).toBeGreaterThan(0);
+    expect([...el.querySelectorAll('fb-tft-display [data-outline]')].map(b => b.textContent!.trim())).toEqual(['displayitems[0]', 'displayitems[1]']);
+    // The sample's texts and its clock value are data.
+    expect(front(el).textContent).not.toMatch(/Amsterdam|67005|Tolomeo|\d:\d\d/);
   });
 });
 
@@ -575,7 +693,7 @@ describe('media of the virtual device', () => {
     expect(note(el)!.dataset.state).toBe('hint');
     expect(note(el)!.textContent).toContain('fallback font');
     expect(virtualMedia.missingFonts()).toContain('medium.ttf');
-    expect(lit(canvasPixels(mainCanvas(el)))).toBeGreaterThan(100);
+    expect(lit(face().readPixels('main'))).toBeGreaterThan(100);
     expect(face().state.fonts.some(f => f.loaded === false)).toBe(true);
   });
 
@@ -589,8 +707,7 @@ describe('media of the virtual device', () => {
     virtualMedia.changed('images', 'ico-sun-48x48.bin', testRaster(48, 48, 'a8'));
     await until('the icon', () => lit(emu.readPixels('main', at)) > 100);
     expect(face()).toBe(emu);
-    await wait(60);
-    expect(Array.from(canvasPixels(mainCanvas(el)))).toEqual(Array.from(emu.readPixels('main')));
+    expect(el.querySelector('canvas')).toBeNull();
   });
 });
 

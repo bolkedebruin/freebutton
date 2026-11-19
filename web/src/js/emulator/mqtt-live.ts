@@ -87,7 +87,7 @@ export interface MqttLiveOptions {
 
 /** What a CONNACK return code other than 0 means. */
 export function connackError(code: number): LinkError {
-  if (code === 4 || code === 5) return { kind: 'auth', message: 'The broker refused the user name or password (config.json "brokers": username, password)' };
+  if (code === 4 || code === 5) return { kind: 'auth', message: 'The broker refused the user name or password (the MQTT settings on the back of the virtual device, or config.json "brokers": username, password)' };
   if (code === 2) return { kind: 'client-id', message: 'The broker refused the client id' };
   return { kind: 'refused', message: `The broker refused the connection (CONNACK return code ${code})` };
 }

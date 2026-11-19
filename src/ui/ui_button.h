@@ -5,6 +5,7 @@ extern "C" {
 #endif
 
 #include "lvgl.h"
+#include "style_logic.h"
 
 /**
  * @brief Button descriptor structure containing UI elements
@@ -20,17 +21,18 @@ typedef struct {
      * is then hidden). */
     lv_obj_t *rich_title;
     lv_obj_t *rich_text;
-    const lv_font_t *title_font; /**< ui_button_set_fonts(); NULL = the shared style */
+    const lv_font_t *title_font; /**< ui_button_set_fonts(); NULL = the shared styles' */
     const lv_font_t *text_font;
-    int16_t title_face, title_px; /**< base font of the top label's spans (ui_button_set_base_fonts) */
-    int16_t text_face, text_px;
+    /* What a label's text starts from (ui_button_set_base): the face
+     * (fonts.h) and px of its spans, and its line-height (x100, 0 = no
+     * style sets one). */
+    int8_t title_face, text_face;
+    uint8_t title_px, text_px;
+    uint16_t title_line_height, text_line_height;
     bool icon_shown;              /**< the icon replaces the bottom text */
-    /* Named styles of the two parts (ui_style.h ref, 0 = none): what the
-     * two labels carry (ui_button_set_styles(); also each label's user
-     * data), and what a row of spans is given. style_pending: a label or a
-     * row could not take its style for lack of LVGL pool.
-     * (Three bytes of the struct's padding.) */
-    uint8_t title_style, text_style;
+    /* A label or a row of spans could not take the item's styles for lack
+     * of LVGL pool (ui_button_set_styles). Which styles a label carries is
+     * its user data (ui_text.h). */
     bool style_pending;
 } button_dsc_t;
 
@@ -66,36 +68,40 @@ void ui_button_set_text(lv_obj_t *button, const char *text);
 #define UI_BUTTON_TEXT_MAX 127
 
 /**
- * @brief The face (fonts.h) and px of the bottom and the top label: what a
- *        span of a text with markup starts from (\s and \f change it).
+ * @brief What the bottom and the top label start from: the face (fonts.h)
+ *        and px of a span of a text with markup (\s and \f change it), and
+ *        the label's line-height (x100; 0 = none, LVGL's own line space).
  *        Call it before the texts are set (LVGL lock held).
+ * @return true when one of them changed: the texts have to be set again.
  */
-void ui_button_set_base_fonts(lv_obj_t *button, int text_face, int text_px, int title_face, int title_px);
+bool ui_button_set_base(lv_obj_t *button, int text_face, int text_px, int text_line_height, int title_face,
+                        int title_px, int title_line_height);
 
 /**
- * @brief The named styles of the bottom and the top label (ui_style.h ref,
- *        0 = none): added to the labels after the key.label / key.toplabel
- *        style, and to the rows of spans when the texts are set. Call it
- *        before the texts are set (LVGL lock held).
- *        A style the LVGL pool has no room for is not added: see
+ * @brief The item's styles (ui_style.h list): the bottom label carries
+ *        their main blocks, the top label their "title" blocks, after the
+ *        button element styles; so do the rows of spans when the texts are
+ *        set. Call it before the texts are set (LVGL lock held).
+ *        Styles the LVGL pool has no room for are not added: see
  *        ui_button_get_styles() and ui_button_styles_pending().
  * @return true when the caller has to set the texts again (a row of spans
- *         is drawn with the style it was rendered with): a label's style
- *         changed, or a style was pending before this call.
+ *         is drawn with the styles it was rendered with): a label's styles
+ *         changed, or styles were pending before this call.
  */
-bool ui_button_set_styles(lv_obj_t *button, uint8_t text_style, uint8_t title_style);
+bool ui_button_set_styles(lv_obj_t *button, style_list_t styles);
 
 /**
- * @brief The named styles the two labels carry now (ui_style.h ref, 0 =
- *        none): what ui_button_set_styles() asked for, except a style the
- *        LVGL pool had no room for. The caller computes the labels' fonts
- *        from these, so that font and colour are those of one look.
+ * @brief The style lists the two labels carry now: what
+ *        ui_button_set_styles() asked for, except where the LVGL pool had
+ *        no room (the label then carries what it carried). The caller
+ *        computes the labels' fonts from these, so that font and colour
+ *        are those of one look.
  */
-void ui_button_get_styles(lv_obj_t *button, uint8_t *text_style, uint8_t *title_style);
+void ui_button_get_styles(lv_obj_t *button, style_list_t *text_styles, style_list_t *title_styles);
 
 /**
- * @brief True when a label or a row of spans could not take its named style
- *        for lack of LVGL pool since the last ui_button_set_styles(): the
+ * @brief True when a label or a row of spans could not take the styles for
+ *        lack of LVGL pool since the last ui_button_set_styles(): the
  *        caller calls ui_button_set_styles() again later (once per walk of
  *        the pending renders at most) and sets the texts again.
  */
@@ -104,20 +110,23 @@ bool ui_button_styles_pending(lv_obj_t *button);
 /**
  * @brief Fonts of the bottom label and the top label (LVGL lock held)
  * @param button Button object created with ui_button_create()
- * @param text_font Bottom label font (a local style), or NULL for the
- *        shared key.label style, or the label's named style where that holds a
- *        font (ui_style.h)
- * @param title_font Top label font, or NULL for the shared key.toplabel
- *        style (or the named style)
+ * @param text_font Bottom label font (a local style), or NULL when the
+ *        shared styles the label carries give the font (ui_style.h)
+ * @param title_font Top label font, or NULL likewise
+ * @return true when one of them changed. The fonts are only kept here: a
+ *         label gets its font when its text is set (ui_button_set_text,
+ *         ui_button_set_title), where a font from the text's markup wins.
+ *         So set the texts again after a change.
  */
-void ui_button_set_fonts(lv_obj_t *button, const lv_font_t *text_font, const lv_font_t *title_font);
+bool ui_button_set_fonts(lv_obj_t *button, const lv_font_t *text_font, const lv_font_t *title_font);
 
 /**
  * @brief Show a raster icon in the button's bottom area, instead of the
  *        bottom label (ui/MediaImage.h; LVGL lock held)
  * @param button Button object created with ui_button_create()
  * @param dsc Raster to show at its own size, or NULL to hide the icon and
- *        show the label again. An A8 raster is tinted in the label colour.
+ *        show the label again. An A8 raster is tinted in the "icon" colour
+ *        of the button's styles, else in the label colour.
  */
 void ui_button_set_icon(lv_obj_t *button, const lv_image_dsc_t *dsc);
 

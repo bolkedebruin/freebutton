@@ -1,7 +1,7 @@
 import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { on } from '../js/app-state';
-import { emulatorSession, type BrokerStatus, type MqttLogEntry, type MqttStatus } from '../js/emulator-session';
+import { emit, on } from '../js/app-state';
+import { emulatorSession, type MqttLogEntry, type MqttStatus } from '../js/emulator-session';
 
 const INPUT = 'min-w-0 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-text-default font-mono outline-none focus:border-purple-80';
 const BUTTON = 'shrink-0 px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-text-default hover:bg-white/10 transition-colors '
@@ -25,10 +25,13 @@ function clock(time: number): string {
 
 /**
  * The running virtual device's inputs from outside: its sensors and its
- * MQTT brokers. The brokers are in this page ("offline"): what the script
- * publishes is recorded here and sent nowhere; a message is given to the
- * script by injecting it. A session (what came in, what went out, the
- * retained messages) can be saved as a file and replayed.
+ * MQTT messages. The log lists what the script received and what was
+ * published (sent to the real broker, held, or kept in the page: the note
+ * says which); a message is given to the script by injecting it, which is
+ * local in every mode. A session (what came in, what went out, the retained
+ * messages) can be saved as a file and replayed. Where MQTT goes is not set
+ * here: a line says it, and "Settings" shows the back of the virtual
+ * device, where the mode, the brokers and the switches are.
  */
 @customElement('fb-emulator-panel')
 export class FbEmulatorPanel extends LitElement {
@@ -117,98 +120,26 @@ export class FbEmulatorPanel extends LitElement {
       </details>`;
   }
 
-  private _setMode(mode: MqttStatus['mode']) {
-    this._message = emulatorSession.setMqttMode(mode);
-  }
-
-  /** Why a broker is not connected, with what to do about it. */
-  private _renderLinkError(b: BrokerStatus) {
-    const e = b.error;
-    if (!e) return '';
-    return html`
-      <div class="text-[11px] leading-snug text-status-red" role="alert" data-testid="mqtt-link-error" data-error=${e.kind}>
-        ${e.message}
-        ${e.kind === 'unreachable' || e.kind === 'not-mqtt' ? html`
-          <span class="block mt-1 text-gray-100">Mosquitto needs a websockets listener (mosquitto.conf), and the address above its port as this computer reaches it:</span>
-          <pre class="mt-1 px-2 py-1 rounded bg-white/5 font-mono text-[11px] text-text-default" data-testid="mqtt-listener-help">listener 1884
-protocol websockets</pre>` : ''}
-        ${e.kind === 'taken-over' ? html`<span class="block mt-1 text-gray-100">Stop the virtual device in the other tab or window.</span>` : ''}
-      </div>`;
-  }
-
   /**
-   * Where MQTT goes: the in-page broker (offline), or the real broker of
-   * config.json, read-only or publishing. Per broker: the WebSocket address
-   * and the state of the connection. In live publish: what else may be sent.
+   * Where MQTT goes now, in a line: the mode and the connection. Read-only:
+   * the mode, the brokers' addresses and what may be sent are set on the
+   * back of the virtual device ("Settings" shows it).
    */
-  private _renderMode(status: MqttStatus | null) {
-    if (!status) return '';
+  private _renderState(status: MqttStatus) {
     const mode = status.mode;
-    const identity = emulatorSession.snapshot().identity;
-    const option = (value: MqttStatus['mode'], label: string, title: string) => {
-      const on = mode === value;
-      const color = !on ? 'text-gray-100 hover:text-text-default'
-        : value === 'live-publish' ? 'bg-status-orange text-black font-semibold' : 'bg-purple-90 text-white';
-      return html`<button role="radio" aria-checked=${on ? 'true' : 'false'} data-mode=${value} title=${title}
-        class="px-2 py-0.5 rounded-md text-[11px] whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-purple-80 ${color}"
-        @click=${() => this._setMode(value)}>${label}</button>`;
-    };
-    const words = mode === 'offline' ? html`In-page broker: nothing leaves this page.`
-      : mode === 'live-readonly' ? html`Connected to the real broker as <span class="font-mono">${identity}</span>. It subscribes; nothing is published (publishes are listed as WOULD).`
-        : html`<span class="text-status-orange">The virtual device publishes to the real broker</span> as <span class="font-mono">${identity}</span>.`;
-    const chip = (b: BrokerStatus) => mode === 'offline' ? html`<span class="text-gray-100">not connected</span>`
-      : b.state === 'connected' ? html`<span class="text-status-green">connected</span>`
-        : b.error && b.state === 'disconnected' ? html`<span class="text-status-red">not connected</span>`
-          : html`<span class="text-gray-100">connecting…</span>`;
+    const down = status.brokers.filter(b => b.state !== 'connected');
+    const failed = down.some(b => b.error && b.state === 'disconnected');
+    const link = mode === 'offline' ? 'offline' : down.length === 0 ? 'connected' : failed ? 'error' : 'connecting';
+    const words = mode === 'offline' ? 'Offline: the broker in this page, nothing leaves it'
+      : `${mode === 'live-publish' ? 'Live, publishing' : 'Live, read-only'} · ${link === 'connected' ? 'connected' : link === 'error' ? 'not connected' : 'connecting…'}`;
+    const color = link === 'error' ? 'text-status-red' : 'text-gray-100';
     return html`
-      <div class="flex flex-col gap-1.5" data-testid="mqtt-mode" data-mode=${mode}>
-        <div class="flex items-center gap-2 flex-wrap">
-          <h3 class=${HEADING}>MQTT</h3>
-          <div class="flex rounded-lg p-0.5 bg-white/5 border border-white/10" role="radiogroup" aria-label="MQTT mode">
-            ${option('offline', 'Offline', 'The broker in this page. The mode at every start.')}
-            ${option('live-readonly', 'Live read-only', 'Connect to the real broker and listen. Nothing is published.')}
-            ${option('live-publish', 'Live publish', 'Connect to the real broker and publish what the script publishes.')}
-          </div>
-        </div>
-        <p class="text-[11px] leading-snug text-gray-100" data-testid="mqtt-mode-words">${words}</p>
-        ${status.securePage ? html`<p class="text-[11px] leading-snug text-status-orange" data-testid="mqtt-secure-page">This page was loaded over https: the browser blocks ws:// addresses. Open the IDE over http, or use a wss:// address.</p>` : ''}
-        ${status.brokers.map(b => html`
-          <div class="flex flex-col gap-1" data-broker-status=${b.index}>
-            <label class="flex items-center gap-1.5 text-[11px]">
-              <span class="font-mono shrink-0 max-w-[96px] truncate" title="config.json broker ${b.name} (${b.host})">${b.name}</span>
-              <input class="${INPUT} flex-1" spellcheck="false" autocomplete="off" data-testid="mqtt-ws-url" aria-label="WebSocket address of broker ${b.name}"
-                title="The broker's WebSocket (websockets listener) address. Kept by this browser for ${b.host}."
-                placeholder="ws://host:1884" .value=${b.wsUrl}
-                @change=${(e: Event) => emulatorSession.setBrokerUrl(b.index, (e.target as HTMLInputElement).value)} />
-              <span class="shrink-0" data-testid="mqtt-link-state" data-state=${mode === 'offline' ? 'offline' : b.state}>${chip(b)}</span>
-            </label>
-            ${mode !== 'offline' ? this._renderLinkError(b) : ''}
-            ${b.configClientId ? html`<p class="text-[10px] leading-snug text-gray-100" data-testid="mqtt-client-id-note">config.json gives this broker the client id
-              <span class="font-mono">${b.configClientId}</span>: not used here. The virtual device always connects as <span class="font-mono">${identity}</span>.</p>` : ''}
-          </div>`)}
-        ${mode === 'live-publish' ? html`
-          <div class="flex flex-col gap-1 pl-2 border-l-2 border-status-orange/60" data-testid="mqtt-optins">
-            <p class="text-[10px] leading-snug text-gray-100">Sent: what the script publishes and a key's own press topics. Not sent unless switched on here: the retain flag, announcements, the device's own states. A topic of a real device (btn_…) asks first.</p>
-            <label class="flex items-start gap-1.5 text-[11px]">
-              <input type="checkbox" class="mt-0.5" data-testid="mqtt-send-retained" .checked=${status.sendRetained}
-                @change=${(e: Event) => emulatorSession.setSendRetained((e.target as HTMLInputElement).checked)} />
-              <span>Send retained <span class="block text-[10px] leading-snug text-gray-100">A retained message stays on the broker, for a device that does not exist.</span></span>
-            </label>
-            <label class="flex items-start gap-1.5 text-[11px]">
-              <input type="checkbox" class="mt-0.5" data-testid="mqtt-announce" .checked=${status.announce}
-                @change=${(e: Event) => emulatorSession.setAnnounce((e.target as HTMLInputElement).checked)} />
-              <span>Announce to Home Assistant <span class="block text-[10px] leading-snug text-gray-100">Discovery and "online" make entities for the virtual device in Home Assistant, with a last will. Reconnects. Remove them afterwards.</span></span>
-            </label>
-            <label class="flex items-start gap-1.5 text-[11px]">
-              <input type="checkbox" class="mt-0.5" data-testid="mqtt-own-states" .checked=${status.ownStates}
-                @change=${(e: Event) => emulatorSession.setOwnStates((e.target as HTMLInputElement).checked)} />
-              <span>Publish the virtual device's own states <span class="block text-[10px] leading-snug text-gray-100">Its sensors report about eight messages a second under its own id: harmless, and noisy.</span></span>
-            </label>
-            ${status.announced > 0 ? html`
-              <button class="${BUTTON} self-start" data-testid="mqtt-remove-announcement"
-                title="Switch announcing off and publish an empty retained message to each announcement topic sent in this session: Home Assistant removes the entities"
-                @click=${() => { this._message = emulatorSession.removeAnnouncement(); }}>Remove announcement (${status.announced})</button>` : ''}
-          </div>` : ''}
+      <div class="flex items-center gap-2 flex-wrap text-[11px]" data-testid="mqtt-state" data-mode=${mode} data-link=${link}>
+        <h3 class=${HEADING}>MQTT</h3>
+        <span class=${color} role="status" data-testid="mqtt-state-words">${words}</span>
+        <button class="ml-auto underline underline-offset-2 text-gray-100 hover:text-text-default rounded outline-none focus-visible:ring-2 focus-visible:ring-purple-80"
+          data-testid="mqtt-settings" title="The mode, the brokers' addresses and what may be sent: on the back of the virtual device"
+          @click=${() => emit('virtual-device-settings')}>Settings</button>
       </div>`;
   }
 
@@ -288,20 +219,23 @@ protocol websockets</pre>` : ''}
       // Stopped: what was logged can still be read; nothing can be sent.
       return html`
         <div class="p-3 flex flex-col gap-3 bg-bg-default min-h-full text-text-default" data-testid="emulator-panel">
-          <p class="text-[11px] text-status-orange" data-testid="mqtt-stopped">The virtual device is not running: Run to use its MQTT and sensors. The log below is of the last run.</p>
+          <p class="text-[11px] text-status-orange" data-testid="mqtt-stopped">The virtual device is not running: Run to use its MQTT and sensors. The log below is of the last run.
+            <button class="underline underline-offset-2 text-gray-100 hover:text-text-default rounded outline-none focus-visible:ring-2 focus-visible:ring-purple-80"
+              data-testid="mqtt-settings" title="The mode, the brokers' addresses and what may be sent: on the back of the virtual device"
+              @click=${() => emit('virtual-device-settings')}>MQTT settings</button></p>
           ${this._renderLog()}
         </div>`;
     }
     const brokers = emulatorSession.brokers();
     const status = emulatorSession.mqttStatus();
-    const live = !!status && status.mode !== 'offline';
+    const live = status.mode !== 'offline';
     const topics = [...new Set(brokers.flatMap(b => b.subscriptions.map(s => s.topic)))];
     return html`
       <div class="p-3 flex flex-col gap-3 bg-bg-default min-h-full text-text-default" data-testid="emulator-panel">
         ${this._renderSensors()}
 
         <section class="flex flex-col gap-2" aria-label="MQTT">
-          ${this._renderMode(status)}
+          ${this._renderState(status)}
 
           ${brokers.length === 0 ? html`<p class="text-[11px] text-gray-100" data-testid="mqtt-no-broker">config.json has no "brokers": the script cannot use MQTT.</p>` : html`
             ${brokers.map(b => html`
@@ -344,7 +278,7 @@ protocol websockets</pre>` : ''}
             <div class="flex items-center gap-1.5 flex-wrap">
               ${live ? html`<span class="mr-auto"></span>` : html`
               <label class="flex items-center gap-1 text-[11px] text-gray-100 mr-auto"
-                title="As a real broker does: a message the script publishes comes back to its own matching subscriptions">
+                title="Offline only. As a real broker does: a message the script publishes comes back to its own matching subscriptions">
                 <input type="checkbox" data-testid="mqtt-loopback" .checked=${emulatorSession.loopback}
                   @change=${(e: Event) => emulatorSession.setLoopback((e.target as HTMLInputElement).checked)} />loopback</label>`}
               <button class=${BUTTON} data-testid="mqtt-export" title="Save what came in and went out, and the retained messages, as a JSON file"

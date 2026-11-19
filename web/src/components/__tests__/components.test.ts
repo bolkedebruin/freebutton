@@ -22,6 +22,7 @@ import type { WorkspaceSnapshot } from '../../js/app-state.js';
 import { LOCAL_MESSAGE, workspace } from '../../js/workspace.js';
 import { loadDefaultConfig, setPreviewConfig } from '../../js/device-config.js';
 import { configToModel, mapImage, mapList } from '../../js/config-model.js';
+import { fontStyles } from '../../js/font-config.js';
 import { setIconSources, _clearIconSources } from '../../js/icon-sync.js';
 
 function createElement<T extends HTMLElement>(tag: string): T {
@@ -579,6 +580,12 @@ describe('fb-button-grid with explicit positions', () => {
     await nextFrame();
     const keys = Array.from(el.querySelectorAll('[data-position]')).map((n: any) => n.getAttribute('data-position'));
     expect(keys).toEqual(['7', '8']);
+    // Nothing runs: the configured key is an outline with its name (none here: "Key 7"), never its labels.
+    expect(el.querySelector('[data-position="7"]').textContent.trim()).toBe('Key 7');
+    expect(el.querySelector('[data-position="8"]').textContent.trim()).toBe('');
+    // While a script runs a key without a display of the firmware has its labels drawn from the model.
+    el.pressable = true;
+    await nextFrame();
     expect(el.querySelector('[data-position="7"]').textContent).toContain('Raam');
     expect(el.querySelector('[data-position="8"]').textContent.trim()).toBe('');
   });
@@ -605,8 +612,9 @@ describe('fb-virtual-device layout from config.json', () => {
     expect(grids).toEqual(['3']);
     expect(el.querySelector('fb-tft-display')?.getAttribute('data-connector')).toBe('2');
     await nextFrame();
-    expect(el.textContent).toContain('Open');
-    expect(el.textContent).toContain('Dicht');
+    expect(Array.from(el.querySelectorAll('fb-button-grid button')).map(b => b.textContent?.trim())).toEqual(['Key 7', 'Key 8']);
+    expect(el.textContent).not.toContain('Open');
+    expect(el.textContent).not.toContain('Dicht');
     // Only page 1 exists now.
     expect(el.querySelector('[data-testid="page-label"]')?.textContent?.trim()).toBe('Page 1 of 1');
     // Restore the sample layout for later tests.
@@ -810,25 +818,6 @@ describe('fb-virtual-device', () => {
     expect(Array.from(tabs.querySelectorAll('button')).every(b => (b as HTMLButtonElement).disabled)).toBe(true);
   });
 
-  it('shows the device name on the TFT once the device reported it', async () => {
-    const el = createElement('fb-virtual-device');
-    await nextFrame();
-    expect(el.querySelector('[data-testid="tft-device-name"]')?.textContent?.trim()).toBe('');
-
-    window.dispatchEvent(new CustomEvent('device-info', {
-      detail: {
-        data: {
-          deviceName: 'btn_a00001', ipv4: '1.1.1.1', ipv6: '::1', ssid: 's', rssi: -50,
-          mac: 'a', firmware: 'f', uptime: 1,
-          heapFree: 1, heapTotal: 2, heapMinFree: 1, lvglFree: 1, lvglTotal: 2,
-        },
-      },
-    }));
-    await nextFrame();
-    await nextFrame();
-    expect(el.querySelector('[data-testid="tft-device-name"]')?.textContent?.trim()).toBe('btn_a00001');
-  });
-
   it('outlines the config entry under the editor cursor and reveals an entry on click', async () => {
     const el = createElement('fb-virtual-device');
     await nextFrame();
@@ -911,46 +900,135 @@ describe('fb-virtual-device', () => {
   });
 });
 
-describe('fb-tft-display', () => {
-  it('renders display items', async () => {
+describe('fb-tft-display: nothing runs', () => {
+  const outlines = (el: Element) => Array.from(el.querySelectorAll('[data-outline]')) as HTMLElement[];
+
+  it('an outline per display item with its name; no label, no value, no time', async () => {
     const el = createElement('fb-tft-display') as any;
     el.displayItems = [
-      { x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: 'time', fontSize: 42 },
-      { x: 0, y: 50, width: 100, height: 50, type: 'number', label: 'Button+ Likes', value: '67005', fontSize: 18 },
+      { x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: 'time', valueFont: { face: 0, px: 42 } },
+      { x: 0, y: 50, width: 100, height: 50, type: 'number', label: 'Button+ Likes', value: '67005', name: 'likes', valueFont: { face: 0, px: 18 } },
     ];
     await nextFrame();
-
-    expect(el.textContent).toContain('Amsterdam');
-    expect(el.textContent).toContain('Button+ Likes');
+    expect(outlines(el).map(b => b.textContent?.trim())).toEqual(['displayitems[0]', 'likes']);
+    expect(el.textContent).not.toMatch(/Amsterdam|Likes|67005|\d+:\d{2}/);
+    expect(el.querySelector('canvas')).toBeNull();
+    expect(el.querySelector('[data-screen]').getAttribute('data-drawn-by')).toBe('outline');
   });
 
-  it('shows live time', async () => {
+  it('nothing here runs on a timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const el = createElement('fb-tft-display') as any;
+      el.displayItems = [{ x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: 'time' }];
+      await el.updateComplete;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('without the firmware\'s layout: placed as config.json says, the height from the fonts of the item\'s styles', async () => {
+    const model = configToModel({
+      styles: { big: { 'font-size': 40 } },
+      displayitems: [
+        { name: 'temp', style: 'big', label: 'Temp', x: 10, y: 10, width: 40 },
+        { name: 'bare', x: 50, y: 50, width: 25 },
+      ],
+    });
     const el = createElement('fb-tft-display') as any;
-    el.displayItems = [
-      { x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: 'time', fontSize: 42 },
+    el.displayItems = model.pages[0]!.displayItems;
+    await nextFrame();
+    const [temp, bare] = outlines(el);
+    expect([temp!.style.left, temp!.style.top, temp!.style.width]).toEqual(['32px', '24px', '128px']);
+    // A caption line (14 px font) and a value line (40 px), 1.22 times the size each, and the paddings.
+    expect(parseFloat(temp!.style.height)).toBeGreaterThanOrEqual(Math.round((14 + 40) * 1.22));
+    expect([bare!.style.left, bare!.style.top, bare!.style.width]).toEqual(['160px', '120px', '80px']);
+    expect(parseFloat(bare!.style.height)).toBeLessThan(parseFloat(temp!.style.height));
+    expect(parseFloat(bare!.style.height)).toBeGreaterThanOrEqual(14);
+  });
+
+  it('a list: its rows high, its name, none of its items', async () => {
+    const styles = fontStyles({ styles: { scenes: { 'font-size': 32 }, wide: { 'line-height': 1.5 } } });
+    const list = (over: Record<string, unknown> = {}) => mapList({
+      name: 'scenes', x: 4, y: 18, width: 92, rows: 3, style: 'scenes', items: ['Bed Time', 'Evening', 'Movie'], selected: 1, ...over,
+    }, styles)!;
+    const el = createElement('fb-tft-display') as any;
+    el.lists = [list(), list({ name: 'wide', style: 'scenes wide', y: 60 })];
+    await nextFrame();
+    const [box, wide] = outlines(el);
+    expect(box!.getAttribute('data-outline')).toBe('list');
+    expect(box!.textContent?.trim()).toBe('scenes');
+    expect([box!.style.left, box!.style.top, box!.style.width]).toEqual(['12px', '43px', '294px']);
+    // A row: the line of the 32 px font (1.22 times its size) times "line-height", 1.25 unless a style sets it.
+    expect(parseFloat(box!.style.height)).toBeCloseTo(3 * 32 * 1.22 * 1.25, 0);
+    expect(parseFloat(wide!.style.height)).toBeCloseTo(3 * 32 * 1.22 * 1.5, 0);
+    expect(el.textContent).not.toMatch(/Bed Time|Evening|Movie/);
+  });
+
+  it('an image: at device pixels, its size (40 x 40 without one), its name; no icon and no file name', async () => {
+    const el = createElement('fb-tft-display') as any;
+    el.images = [
+      mapImage({ name: 'radar', x: 160, y: 120, width: 64, height: 32, icon: 'rain' }),
+      mapImage({ name: 'pic', x: 10, y: 20, src: 'photo.bin' }),
     ];
     await nextFrame();
+    const [radar, pic] = outlines(el);
+    expect([radar!.style.left, radar!.style.top, radar!.style.width, radar!.style.height]).toEqual(['160px', '120px', '64px', '32px']);
+    expect(radar!.textContent?.trim()).toBe('radar');
+    expect([pic!.style.left, pic!.style.top, pic!.style.width, pic!.style.height]).toEqual(['10px', '20px', '40px', '40px']);
+    expect(pic!.textContent?.trim()).toBe('pic');
+    expect(el.querySelector('img, svg image, [data-icon-missing]')).toBeNull();
+    expect(el.textContent).not.toContain('photo.bin');
+  });
 
-    // Time should contain a colon (HH:MM format)
-    const text = el.textContent || '';
-    expect(text).toMatch(/\d+:\d{2}/);
+  it('the clock: at x, y in pixels; centred with "align": 9', async () => {
+    const el = createElement('fb-tft-display') as any;
+    el.clocks = configToModel({ clocks: [{ x: 20, y: 30, width: 100, height: 100 }] }).pages[0]!.clocks;
+    await nextFrame();
+    let clock = el.querySelector('[data-outline="clock"]') as HTMLElement;
+    expect([clock.style.left, clock.style.top, clock.style.width, clock.style.height, clock.textContent?.trim()])
+      .toEqual(['20px', '30px', '100px', '100px', 'clock']);
+    el.clocks = configToModel({ clocks: [{ x: 20, y: 30, width: 100, height: 100, align: 9 }] }).pages[0]!.clocks;
+    await nextFrame();
+    clock = el.querySelector('[data-outline="clock"]') as HTMLElement;
+    expect([clock.style.left, clock.style.top]).toEqual(['110px', '70px']);
   });
 });
 
-describe('fb-tft-display fonts', () => {
+// A script runs and no canvas can show the firmware's display: the running device is drawn from the model.
+function runningTft(): any {
+  const el = createElement('fb-tft-display') as any;
+  el.running = true;
+  return el;
+}
+
+describe('fb-tft-display, a script runs without a canvas: fonts', () => {
   const scale = 1;   // a CSS px per device pixel
   const fontPx = (el: Element | null) => parseFloat((el as HTMLElement).style.fontSize);
 
-  it('draws value and caption at the configured sizes, markup as spans', async () => {
-    setPreviewConfig(configToModel({
-      style: { fonts: [{ name: 'roboto', src: 'roboto.ttf' }] },
-      displayitems: [{ name: 'temp', font: 'roboto', fontsize: 40, label: 'Temp', unit: '\\s{20}°C' }],
-    }));
-    const el = createElement('fb-tft-display') as any;
-    const item = configToModel({
-      style: { fonts: [{ name: 'roboto', src: 'roboto.ttf' }] },
-      displayitems: [{ name: 'temp', font: 'roboto', fontsize: 40, label: 'Temp', unit: '\\s{20}°C' }],
-    }).pages[0]!.displayItems[0]!;
+  it('renders display items with their label and value', async () => {
+    const el = runningTft();
+    el.displayItems = [
+      { x: 0, y: 5, width: 100, height: 50, type: 'text', label: 'Amsterdam', value: '12:30', valueFont: { face: 0, px: 42 } },
+      { x: 0, y: 50, width: 100, height: 50, type: 'number', label: 'Button+ Likes', value: '67005', valueFont: { face: 0, px: 18 } },
+    ];
+    await nextFrame();
+    expect(el.querySelector('[data-screen]').getAttribute('data-drawn-by')).toBe('model');
+    expect(el.textContent).toContain('Amsterdam');
+    expect(el.textContent).toContain('Button+ Likes');
+    expect(el.textContent).toContain('67005');
+  });
+
+  it('draws value and caption at the sizes of the item\'s styles, markup as spans', async () => {
+    const model = configToModel({
+      fonts: [{ name: 'roboto', src: 'roboto.ttf' }],
+      styles: { big: { 'font-family': 'roboto', 'font-size': 40 } },
+      displayitems: [{ name: 'temp', style: 'big', label: 'Temp', unit: '\\s{20}°C' }],
+    });
+    setPreviewConfig(model);
+    const el = runningTft();
+    const item = model.pages[0]!.displayItems[0]!;
     el.displayItems = [{ ...item, value: '21\\cff0000!' }];
     await nextFrame();
     const box = el.querySelector('[data-display-item="temp"]')!;
@@ -965,23 +1043,32 @@ describe('fb-tft-display fonts', () => {
     loadDefaultConfig();
   });
 
-  it('uses the legacy size of fontsize without a font (fontsize no longer ignored)', async () => {
-    const el = createElement('fb-tft-display') as any;
-    el.displayItems = [{ x: 0, y: 0, width: 50, height: 0, type: 'text', label: 'L', value: 'v', fontSize: 4 }];
+  it('does not read "font" and "fontsize" of an item: the value has the font of "displayitem"', async () => {
+    const model = configToModel({
+      fonts: [{ name: 'roboto', src: 'roboto.ttf' }],
+      displayitems: [{ name: 'd', font: 'roboto', fontsize: 4, labelfont: 'roboto', labelfontsize: 4, label: 'L' }],
+    });
+    const el = runningTft();
+    el.displayItems = model.pages[0]!.displayItems.map(i => ({ ...i, value: 'v' }));
     await nextFrame();
-    expect(fontPx(el.querySelector('[data-value] span'))).toBeCloseTo(48 * scale, 1);
+    expect(model.pages[0]!.displayItems[0]).toMatchObject({ valueFont: { face: 0, px: 14 }, labelFont: { face: 1, px: 14 } });
+    expect(fontPx(el.querySelector('[data-value] span'))).toBeCloseTo(14 * scale, 1);
+    expect(fontPx(el.querySelector('[data-caption] span'))).toBeCloseTo(14 * scale, 1);
   });
 
-  it('a list at a px fontsize', async () => {
-    const el = createElement('fb-tft-display') as any;
-    el.lists = [mapList({ name: 'l', fontsize: 20, items: ['a'] })];
+  it('a list at the font-size of its style', async () => {
+    const cfg = { styles: { small: { 'font-size': 20 } } };
+    const el = runningTft();
+    el.lists = [mapList({ name: 'l', style: 'small', items: ['a'] }, fontStyles(cfg))];
     await nextFrame();
     expect(fontPx(el.querySelector('[data-list="l"]'))).toBeCloseTo(20 * scale, 1);
   });
 });
 
-describe('previews follow config.json "style"', () => {
+describe('a script runs without a canvas: what is drawn from the model follows config.json "styles"', () => {
   const scale = 1;   // a CSS px per device pixel
+  // CSS px per device px of a key's display (display-geometry.ts KEY_SCALE).
+  const mini = 0.75;
   const fontPx = (el: Element | null) => parseFloat((el as HTMLElement).style.fontSize);
   const rgb = (el: Element | null) => (el as HTMLElement).style.color;
 
@@ -993,7 +1080,8 @@ describe('previews follow config.json "style"', () => {
     });
     const grid = createElement('fb-button-grid') as any;
     grid.buttons = model.pages[0]!.buttons;
-    const tft = createElement('fb-tft-display') as any;
+    grid.pressable = true;
+    const tft = runningTft();
     tft.displayItems = model.pages[0]!.displayItems.map(i => ({ ...i, value: '21' }));
     await nextFrame();
     expect(rgb(grid.querySelector('[data-top-label]'))).toMatch(/#ffd700|255, 215, 0/);
@@ -1003,15 +1091,15 @@ describe('previews follow config.json "style"', () => {
     expect(tft.innerHTML).not.toContain('255,211,95');
   });
 
-  it('a style changes fonts, sizes and colours of items without their own fields', async () => {
+  it('the styles of the kinds change fonts, sizes and colours of items without a style of their own', async () => {
     const cfg = {
-      style: {
-        title: { text_color: '#00ff00' },
-        key: { label: { text_size: 40, text_color: '#ff0000' } },
-        display: { value: { text_size: 30 }, unit: { text_size: 12, text_color: '#0000ff' } },
-        list: { text_color: '#112233', selected: { bg_color: '#445566', text_color: '#ffffff', text_size: 20 } },
+      styles: {
+        button: { 'font-size': 40, color: '#ff0000', title: { color: '#00ff00' } },
+        displayitem: { 'font-size': 30, title: { color: '#00ff00' }, unit: { 'font-size': 12, color: '#0000ff' } },
+        list: { color: '#112233', selected: { 'background-color': '#445566', color: '#ffffff', 'font-size': 20 } },
+        small: { 'font-size': 24 },
       },
-      buttons: [{ position: 1, label: 'A', toplabel: 'T' }, { position: 2, label: 'B', fontsize: 24 }],
+      buttons: [{ position: 1, label: 'A', toplabel: 'T' }, { position: 2, label: 'B', style: 'small' }],
       displayitems: [{ name: 'd', label: 'Temp', unit: '°C' }],
       lists: [{ name: 'l', items: ['a', 'b'], selected: 0 }],
     };
@@ -1019,13 +1107,13 @@ describe('previews follow config.json "style"', () => {
     setPreviewConfig(model);
     const grid = createElement('fb-button-grid') as any;
     grid.buttons = model.pages[0]!.buttons;
-    const tft = createElement('fb-tft-display') as any;
+    grid.pressable = true;
+    const tft = runningTft();
     tft.displayItems = model.pages[0]!.displayItems.map(i => ({ ...i, value: '21' }));
     tft.lists = model.pages[0]!.lists;
     await nextFrame();
-    const mini = 1;   // a CSS px per device pixel
     expect(fontPx(grid.querySelector('[data-position="1"] [data-label]'))).toBeCloseTo(40 * mini, 1);
-    expect(fontPx(grid.querySelector('[data-position="2"] [data-label]'))).toBeCloseTo(24 * mini, 1); // local wins
+    expect(fontPx(grid.querySelector('[data-position="2"] [data-label]'))).toBeCloseTo(24 * mini, 1); // the item's style wins
     expect(rgb(grid.querySelector('[data-position="1"] [data-label]'))).toMatch(/#ff0000|255, 0, 0/);
     expect(rgb(grid.querySelector('[data-top-label]'))).toMatch(/#00ff00|0, 255, 0/);
     expect(rgb(tft.querySelector('[data-caption]'))).toMatch(/#00ff00|0, 255, 0/);
@@ -1043,35 +1131,51 @@ describe('previews follow config.json "style"', () => {
 });
 
 describe('fb-button-grid fonts', () => {
-  it('label medium 32 / top semibold 18 by default, scaled; configured fonts otherwise', async () => {
-    const scale = 1;   // a CSS px per device pixel
-    const model = configToModel({ buttons: [
-      { position: 1, label: 'A', toplabel: 'T' },
-      { position: 2, label: 'B', toplabel: 'U', fontsize: 24, topfontsize: 12 },
-    ] });
+  it('label medium 32 / top semibold 18 by default, scaled; the sizes of a style otherwise', async () => {
+    const scale = 0.75;   // CSS px per device pixel of a key's display (display-geometry.ts KEY_SCALE)
+    const model = configToModel({
+      styles: { small: { 'font-size': 24, title: { 'font-size': 12 } } },
+      buttons: [
+        { position: 1, label: 'A', toplabel: 'T' },
+        { position: 2, label: 'B', toplabel: 'U', style: 'small' },
+        // "fontsize" and "topfontsize" are not read.
+        { position: 3, label: 'C', toplabel: 'V', fontsize: 24, topfontsize: 12 },
+      ],
+    });
     const el = createElement('fb-button-grid') as any;
     el.buttons = model.pages[0]!.buttons;
+    el.pressable = true;
     await nextFrame();
     const px = (sel: string, pos: number) => parseFloat((el.querySelector(`[data-position="${pos}"] ${sel}`) as HTMLElement).style.fontSize);
     expect(px('[data-label]', 1)).toBeCloseTo(32 * scale, 1);
     expect(px('[data-top-label]', 1)).toBeCloseTo(18 * scale, 1);
     expect(px('[data-label]', 2)).toBeCloseTo(24 * scale, 1);
     expect(px('[data-top-label]', 2)).toBeCloseTo(12 * scale, 1);
+    expect(px('[data-label]', 3)).toBeCloseTo(32 * scale, 1);
+    expect(px('[data-top-label]', 3)).toBeCloseTo(18 * scale, 1);
     expect((el.querySelector('[data-position="1"] [data-top-label]') as HTMLElement).style.fontWeight).toBe('600');
   });
 });
 
-describe('fb-tft-display lists', () => {
+describe('fb-tft-display, a script runs without a canvas: lists', () => {
+  const STYLES = fontStyles({ styles: {
+    scenes: { 'font-size': 32, color: '#808080', selected: { 'background-color': '#ffd45f', color: '#000000' } },
+    centred: { 'text-align': 'center', 'line-height': 1.5 },
+    // For the selected row: what the rows set, what "selected" sets itself, and an alignment in "selected".
+    under: { 'text-decoration': 'underline', opacity: 0.5, 'letter-spacing': 4 },
+    own: { selected: { 'text-decoration': 'none', opacity: 1, 'letter-spacing': 0 } },
+    sel_right: { selected: { 'text-align': 'right' } },
+  } });
   const list = (over: Record<string, unknown> = {}) => mapList({
-    name: 'scenes', x: 4, y: 18, width: 92, rows: 3, fontsize: 3,
-    items: ['Bed Time', 'Evening', 'Movie'], selected: 1,
-    color: '808080', focuscolor: 'ffd45f', focustextcolor: '000000', ...over,
-  })!;
-  // fontsize 3 = 32 px on the 320 px screen, drawn a CSS px per device pixel.
-  const rowH = 32 * 1.25;
+    name: 'scenes', x: 4, y: 18, width: 92, rows: 3, style: 'scenes',
+    items: ['Bed Time', 'Evening', 'Movie'], selected: 1, ...over,
+  }, STYLES)!;
+  // A row: the line of the 32 px font (1.22 times its size) times "line-height", 1.25 unless a style sets it;
+  // drawn a CSS px per device pixel.
+  const rowH = 32 * 1.22 * 1.25;
 
   it('renders a roller: rows tall, the selected item in the middle row on the focus bar', async () => {
-    const el = createElement('fb-tft-display') as any;
+    const el = runningTft();
     el.lists = [list()];
     await nextFrame();
     const box = el.querySelector('[data-list="scenes"]') as HTMLElement;
@@ -1095,21 +1199,82 @@ describe('fb-tft-display lists', () => {
   });
 
   it('does not wrap: the first item selected leaves the rows above empty', async () => {
-    const el = createElement('fb-tft-display') as any;
+    const el = runningTft();
     el.lists = [list({ selected: 0, rows: 5 })];
     await nextFrame();
     const strip = el.querySelector('[data-list-item]').parentElement as HTMLElement;
     const shift = parseFloat(/translateY\((-?[\d.]+)px\)/.exec(strip.style.transform)![1]);
     expect(shift).toBeCloseTo(2 * rowH, 1);
   });
+
+  it('rows are left aligned unless a style aligns them; "line-height" sets the height of a row', async () => {
+    const el = runningTft();
+    el.lists = [list(), list({ name: 'middle', style: 'scenes centred' })];
+    await nextFrame();
+    const row = (name: string) => el.querySelector(`[data-list="${name}"] [data-list-item]`) as HTMLElement;
+    expect(row('scenes').classList.contains('text-left')).toBe(true);
+    expect(row('scenes').style.textAlign).toBe('');
+    expect(row('middle').classList.contains('text-left')).toBe(false);
+    expect(row('middle').style.textAlign).toBe('center');
+    expect(parseFloat(row('scenes').style.height)).toBeCloseTo(rowH, 1);
+    expect(parseFloat(row('middle').style.height)).toBeCloseTo(32 * 1.22 * 1.5, 1);
+    expect(parseFloat((el.querySelector('[data-list="middle"]') as HTMLElement).style.height)).toBeCloseTo(3 * 32 * 1.22 * 1.5, 1);
+  });
+
+  it('the selected row follows the device: placed as the rows are, with the rows\' opacity, letter-spacing and text-decoration unless "selected" sets them', async () => {
+    const el = runningTft();
+    el.lists = [
+      list({ name: 'plain' }), list({ name: 'under', style: 'scenes under' }), list({ name: 'own', style: 'scenes under own' }),
+      list({ name: 'selright', style: 'scenes sel_right' }), list({ name: 'middle', style: 'scenes centred sel_right' }),
+    ];
+    await nextFrame();
+    const rows = (name: string) => {
+      const box = el.querySelector(`[data-list="${name}"]`) as HTMLElement;
+      return { row: box.querySelector('[data-list-item="0"]') as HTMLElement, selected: box.querySelector('[data-selected]') as HTMLElement };
+    };
+    // Nothing set: no decoration, no spacing, solid.
+    expect(rows('plain').selected.style.textDecoration).toBe('');
+    expect(rows('plain').selected.style.letterSpacing).toBe('');
+    expect(rows('plain').selected.style.color).toMatch(/#000000|rgb\(0, 0, 0\)/);
+    // The rows' three properties show on the selected row; the colour stays its own.
+    const under = rows('under');
+    expect(under.row.style.textDecoration).toContain('underline');
+    expect(under.selected.style.textDecoration).toContain('underline');
+    expect(under.selected.style.letterSpacing).toBe(under.row.style.letterSpacing);
+    expect(under.selected.style.letterSpacing).not.toBe('');
+    expect(under.row.style.color).toMatch(/rgba\(128, 128, 128, 0\.5/);
+    expect(under.selected.style.color).toMatch(/rgba\(0, 0, 0, 0\.5/);
+    // "selected" sets them: its own.
+    const own = rows('own');
+    expect(own.row.style.textDecoration).toContain('underline');
+    expect(own.selected.style.textDecoration).toBe('');
+    expect(own.selected.style.letterSpacing).toBe('');
+    expect(own.selected.style.color).toMatch(/#000000|rgb\(0, 0, 0\)/);
+    // "text-align" in "selected" is ignored: the selected row is where the rows are.
+    expect(rows('selright').selected.style.textAlign).toBe('');
+    expect(rows('selright').selected.classList.contains('text-left')).toBe(true);
+    expect(rows('middle').row.style.textAlign).toBe('center');
+    expect(rows('middle').selected.style.textAlign).toBe('center');
+  });
+
+  it('does not read "fontsize", "color", "focuscolor" and "focustextcolor" of a list: it has the look of "list"', async () => {
+    const el = runningTft();
+    el.lists = [list({ style: undefined, fontsize: 20, color: 'ff0000', focuscolor: '00ff00', focustextcolor: '0000ff' })];
+    await nextFrame();
+    const box = el.querySelector('[data-list="scenes"]') as HTMLElement;
+    expect(parseFloat(box.style.fontSize)).toBeCloseTo(32, 1);
+    expect((box.querySelector('[data-list-focus]') as HTMLElement).style.background).toMatch(/ffd700|255, 215, 0/i);
+    expect((box.querySelector('[data-selected]') as HTMLElement).style.color).toMatch(/#000000|0, 0, 0/);
+    expect((box.querySelector('[data-list-item="0"]') as HTMLElement).style.color).toMatch(/#808080|128, 128, 128/);
+  });
 });
 
-describe('fb-tft-display images', () => {
+describe('fb-tft-display, a script runs without a canvas: images', () => {
   const scale = 1;   // a CSS px per device pixel
 
   it('places an image at device pixels: placeholder until the SVG is known, then the icon', async () => {
     _clearIconSources();
-    const el = createElement('fb-tft-display') as any;
+    const el = runningTft();
     el.images = [mapImage({ name: 'radar', x: 160, y: 120, width: 64, height: 32, icon: 'rain' })];
     await nextFrame();
     const box = el.querySelector('[data-image="radar"]') as HTMLElement;
@@ -1126,7 +1291,7 @@ describe('fb-tft-display images', () => {
   });
 
   it('shows a src image as a labelled box', async () => {
-    const el = createElement('fb-tft-display') as any;
+    const el = runningTft();
     el.images = [mapImage({ name: 'pic', width: 10, height: 10, src: 'photo.bin' })];
     await nextFrame();
     expect(el.querySelector('[data-image="pic"]')?.textContent?.trim()).toBe('photo.bin');
@@ -1141,10 +1306,11 @@ describe('fb-virtual-device lists', () => {
       lists: [{ name: 'scenes', page: 2, items: ['Bed Time', 'Evening'], selected: 1 }],
     }));
     await nextFrame();
-    expect(el.querySelector('[data-list="scenes"]')).toBeNull();
+    expect(el.querySelector('[data-outline="list"]')).toBeNull();
     (el.querySelector('[data-testid="page-next"]') as HTMLElement).click();
     await nextFrame();
-    expect(el.querySelector('[data-list="scenes"] [data-selected]')?.textContent?.trim()).toBe('Evening');
+    expect(el.querySelector('[data-outline="list"]')?.textContent?.trim()).toBe('scenes');
+    expect(el.textContent).not.toContain('Evening');
     loadDefaultConfig();
   });
 });
@@ -1166,9 +1332,19 @@ describe('fb-button-grid', () => {
     expect(buttons.length).toBe(4);
   });
 
-  it('shows button labels', async () => {
+  it('nothing runs: an outline with the key\'s name per key, no labels, the LEDs off', async () => {
+    const el = createElement('fb-button-grid') as any;
+    el.buttons = [{ ...testButtons[0], name: 'desk' }, ...testButtons.slice(1)];
+    await nextFrame();
+    expect(Array.from(el.querySelectorAll('button')).map((b: any) => b.textContent.trim())).toEqual(['desk', 'Key 6', 'Key 7', 'Key 8']);
+    expect(el.textContent).not.toMatch(/Tolomeo|Green Lamp|Virtual|Like!|Kantoor/);
+    expect(Array.from(el.querySelectorAll('[data-led]')).map((l: any) => l.hasAttribute('data-led-on'))).toEqual([false, false, false, false]);
+  });
+
+  it('a script runs: shows button labels', async () => {
     const el = createElement('fb-button-grid') as any;
     el.buttons = testButtons;
+    el.pressable = true;
     await nextFrame();
 
     expect(el.textContent).toContain('Tolomeo');
@@ -1177,9 +1353,10 @@ describe('fb-button-grid', () => {
     expect(el.textContent).toContain('Kantoor');
   });
 
-  it('shows LED indicators', async () => {
+  it('a script runs: shows LED indicators', async () => {
     const el = createElement('fb-button-grid') as any;
     el.buttons = testButtons;
+    el.pressable = true;
     await nextFrame();
 
     // LED on = its colour, LED off = black

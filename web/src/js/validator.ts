@@ -11,15 +11,14 @@
  * - ES5 feature set with limited ES6+ extensions
  *
  * Validates against actual MQuickJS and FreeButton stdlib from generated sources.
- * With a config.json loaded, a string literal passed to fb.key() or as the
- * first argument of fb.main.display.setValue() etc. must be a name in it, a
- * font given to setFont / setTopFont must be a font of it (built-ins
- * included), and a \f{font} escape in a string passed to
- * fb.main.display.setValue / setLabel / setUnit should name one (warning).
- * The named-style calls (setStyle / setTopStyle / setLabelStyle /
- * setFocusStyle, fb.style.set) need named styles in config.json
- * ("style.styles"): the device has them only then; a style given to them
- * must be one of those.
+ * With a config.json loaded, a string literal passed to fb.button() or as
+ * the first argument of fb.main.display.setValue() etc. must be a name in
+ * it, and a \f{font} escape in a string passed to fb.main.display.setValue
+ * / setLabel / setUnit should name a font of it (warning). The style calls
+ * (setStyle, addStyle, removeStyle, display.create, fb.style.set) are
+ * checked against config.json "styles" with the firmware's rules and error
+ * texts; only literal arguments are checked. A call the firmware no longer
+ * has (fb.key, setFont, ...) is reported with what replaces it.
  */
 
 import * as acorn from 'acorn';
@@ -27,8 +26,8 @@ import type { Node } from 'acorn';
 import stdlib from './stdlib.json';
 import { DISPLAY_NAME_METHODS, IMAGE_NAME_METHODS, LIST_NAME_METHODS, STYLE_METHODS, type ConfigNames } from './config-model';
 import { getConfigNames } from './device-config';
-import { SYSTEM_FONTS, FONTSIZE_MAX } from './font-config';
-import { namedSetStatus, styleValueRule } from './style-config';
+import { SYSTEM_FONTS } from './font-config';
+import { parseScriptStyleList, scriptSetNoPartMessage, scriptSetStatus, splitStyleProp, styleKind, styleValueRule } from './style-config';
 import { parseTextSpans, TEXT_FONT_UNKNOWN } from './text-spans';
 
 export interface ValidationError {
@@ -171,7 +170,7 @@ const MQuickJSParser = acorn.Parser.extend(mquickjsStricterMode);
 
 /**
  * Validate JavaScript code against MQuickJS stricter mode requirements.
- * `names`: key / display item names to check fb.key("x") and
+ * `names`: button / display item names to check fb.button("x") and
  * fb.main.display.setValue("x", ...) against; defaults to the loaded
  * config.json, null skips the check.
  */
@@ -189,6 +188,7 @@ export function validateCode(code: string, names: ConfigNames | null = getConfig
         });
 
         // Walk the AST to check for MQuickJS violations
+        buttonVariables = collectButtonVariables(ast);
         walkAST(ast, errors, undefined, undefined, names);
 
     } catch (err: any) {
@@ -525,6 +525,7 @@ function walkAST(node: any, errors: ValidationError[], scope?: Scope, parent?: a
     if (node.type === 'CallExpression') {
         const callee = node.callee;
 
+        checkRemovedCall(node, errors);
         if (names) checkConfigName(node, names, errors);
 
         // Check for API method calls to validate argument types
@@ -622,7 +623,7 @@ function checkNameArg(arg: any, what: string, known: string[], errors: Validatio
 
 /**
  * Icon names: fb.main.display.setIcon(item, "icon"), fb.main.image.setIcon(image,
- * "icon") and <side>.display.setIcon("icon") (a key's display). "" hides the
+ * "icon") and <side>.display.setIcon("icon") (a button's display). "" hides the
  * icon. Only checked when config.json has an "icons" table.
  */
 function checkIconName(node: any, names: ConfigNames, errors: ValidationError[]): void {
@@ -658,185 +659,314 @@ function locOf(node: any): { line?: number; column?: number } {
 }
 
 /**
- * Fonts: fb.main.display.setFont(item, font, size), fb.main.list.setFont(list,
- * font, size) and <side>.display.setFont / setTopFont(font, size) (a key's
- * display): a literal font name or id must be a font of config.json ("" =
- * restore the configured font and size)
- * (the system fonts montserrat / montserrat_semibold always are, and every
- * "style.fonts" entry); the device throws ReferenceError
- * otherwise. \f{font} in a string literal given to fb.main.display.setValue /
- * setLabel / setUnit: a warning when it names no font (the device keeps the
- * item's font).
+ * \f{font} in a string literal given to fb.main.display.setValue / setLabel /
+ * setUnit: a warning when it names no font of config.json (the system fonts
+ * montserrat / montserrat_semibold always are, and every "fonts" entry); the
+ * device keeps the item's font.
  */
-function checkFontArgs(node: any, names: ConfigNames, errors: ValidationError[]): void {
+function checkTextFonts(node: any, names: ConfigNames, errors: ValidationError[]): void {
     const callee = node.callee;
-    if (callee?.type !== 'MemberExpression' || callee.computed || callee.property?.type !== 'Identifier') return;
+    if (!isMainMethod(callee, 'display', DISPLAY_TEXT_METHODS)) return;
     const fonts = names.fonts ?? SYSTEM_FONT_NAMES;
     const ids = names.fontIds ?? [];
-    const method = callee.property.name;
-
-    if (isMainMethod(callee, 'display', DISPLAY_TEXT_METHODS)) {
-        const arg = node.arguments?.[1];
-        if (arg?.type !== 'Literal' || typeof arg.value !== 'string' || !arg.value.includes('\\f')) return;
-        const unknown = new Set<string>();
-        parseTextSpans(arg.value, (name, isId, id) => {
-            if (isId ? ids.includes(id) : fonts.includes(name)) return 0;
-            unknown.add(name);
-            return TEXT_FONT_UNKNOWN;
+    const arg = node.arguments?.[1];
+    if (arg?.type !== 'Literal' || typeof arg.value !== 'string' || !arg.value.includes('\\f')) return;
+    const unknown = new Set<string>();
+    parseTextSpans(arg.value, (name, isId, id) => {
+        if (isId ? ids.includes(id) : fonts.includes(name)) return 0;
+        unknown.add(name);
+        return TEXT_FONT_UNKNOWN;
+    });
+    for (const name of unknown) {
+        errors.push({
+            message: `unknown font "${name}" in \\f{${name}} (not a system font or a config.json "fonts" entry; the item's font is used)`,
+            ...locOf(arg),
+            severity: 'warning'
         });
-        for (const name of unknown) {
-            errors.push({
-                message: `unknown font "${name}" in \\f{${name}} (not a system font or a config.json "style.fonts" entry; the item's font is used)`,
-                ...locOf(arg),
-                severity: 'warning'
-            });
-        }
-        return;
-    }
-
-    let arg: any;
-    let sizeArg: any;
-    if (method === 'setFont' && (isMainMethod(callee, 'display', ['setFont']) || isMainMethod(callee, 'list', ['setFont']))) {
-        arg = node.arguments?.[1];
-        sizeArg = node.arguments?.[2];
-    } else if ((method === 'setFont' || method === 'setTopFont') && isMember(callee.object, null, 'display')
-        && !isMember(callee.object.object, 'fb', 'main')) {
-        arg = node.arguments?.[0];
-        sizeArg = node.arguments?.[1];
-    } else {
-        return;
-    }
-    // "" = back to the configured font and size (the size is not used then).
-    if (arg?.type === 'Literal' && arg.value === '') return;
-    // A literal size must be an integer 1..72 (1-5: the legacy steps); the device throws TypeError.
-    const size = literalNumber(sizeArg);
-    if (size !== null && !(Number.isInteger(size) && size >= 1 && size <= FONTSIZE_MAX)) {
-        errors.push({ message: `font size ${size} must be an integer 1..${FONTSIZE_MAX} (1-5: the sizes 14/24/32/48/72 px, else px)`, ...locOf(sizeArg) });
-    }
-    if (arg?.type !== 'Literal') return;
-    if (typeof arg.value === 'string' && !fonts.includes(arg.value)) {
-        errors.push({ message: `unknown font "${arg.value}" in config.json`, ...locOf(arg) });
-    } else if (typeof arg.value === 'number' && !ids.includes(arg.value)) {
-        errors.push({ message: `unknown font id ${arg.value} in config.json`, ...locOf(arg) });
     }
 }
 
 /**
- * Named styles (config.json "style.styles"): fb.main.display.setStyle /
- * setLabelStyle(item, style), fb.main.list.setStyle / setFocusStyle(list,
- * style), <side>.display.setStyle / setTopStyle(style) (a key's display)
- * and fb.style.set(style, property, value).
- *  - Without named styles in config.json the device has none of them (the
- *    engine's "not a function" error): every such call is an error.
- *  - A literal style must be a named style ("" = none; the device throws
- *    ReferenceError), a string (TypeError), and on a key or a display item
- *    not one that sets bg_color / bg_opa (TypeError).
- *  - fb.style.set: a literal property must be one the style sets in
- *    config.json, not text_font / text_size, and a literal value one that
- *    config.json takes for it: a string or a number, never true / false /
- *    null (TypeError).
- * A key's display is recognised as checkFontArgs recognises it for setFont /
- * setTopFont: any `<expr>.display.setStyle(...)` that is not fb.main's. The
- * receiver is not traced back to fb.key() / fb.bars, so a user object with a
- * `display.setStyle` of its own is checked as a key too.
+ * An expression that is provably a button of the device: fb.button(...),
+ * fb.main.left / .right, fb.bars[...].left / .right.
  */
-function checkStyleArgs(node: any, names: ConfigNames, errors: ValidationError[]): void {
+function isButtonExpression(node: any): boolean {
+    if (node?.type === 'CallExpression') return isMember(node.callee, 'fb', 'button');
+    if (!isMember(node, null, 'left') && !isMember(node, null, 'right')) return false;
+    const owner = node.object;
+    return isMember(owner, 'fb', 'main')
+        || (owner?.type === 'MemberExpression' && owner.computed && isMember(owner.object, 'fb', 'bars'));
+}
+
+/**
+ * The variables of the script that hold a button and nothing else: every
+ * declaration with a value and every assignment of the name, anywhere in
+ * the script, gives it a button expression (isButtonExpression). By name,
+ * without scopes: a name that is also a parameter, a function, a catch
+ * variable or the target of a destructuring, a loop or an update anywhere is
+ * left out. So `var b = fb.button("x"); b.display.setStyle(...)` is checked,
+ * and anything less certain is not.
+ */
+function collectButtonVariables(ast: any): Set<string> {
+    const buttons = new Set<string>();
+    const other = new Set<string>();
+    const bindNames = (pattern: any): void => {
+        if (!pattern) return;
+        if (pattern.type === 'Identifier') other.add(pattern.name);
+        else if (pattern.type === 'ObjectPattern') pattern.properties.forEach((p: any) => bindNames(p.value ?? p.argument));
+        else if (pattern.type === 'ArrayPattern') pattern.elements.forEach(bindNames);
+        else if (pattern.type === 'AssignmentPattern') bindNames(pattern.left);
+        else if (pattern.type === 'RestElement') bindNames(pattern.argument);
+    };
+    const give = (target: any, value: any): void => {
+        if (target?.type !== 'Identifier') {
+            bindNames(target);
+        } else if (isButtonExpression(value)) {
+            buttons.add(target.name);
+        } else {
+            other.add(target.name);
+        }
+    };
+    const visit = (node: any): void => {
+        if (!node || typeof node.type !== 'string') return;
+        switch (node.type) {
+            case 'VariableDeclarator':
+                // `var b;` gives it nothing yet; the assignments decide.
+                if (node.init) give(node.id, node.init);
+                else if (node.id?.type !== 'Identifier') bindNames(node.id);
+                break;
+            case 'AssignmentExpression':
+                if (node.operator === '=') give(node.left, node.right);
+                else bindNames(node.left);
+                break;
+            case 'UpdateExpression':
+                bindNames(node.argument);
+                break;
+            case 'FunctionDeclaration':
+            case 'FunctionExpression':
+            case 'ArrowFunctionExpression':
+                bindNames(node.id);
+                node.params.forEach(bindNames);
+                break;
+            case 'CatchClause':
+                bindNames(node.param);
+                break;
+            case 'ForInStatement':
+            case 'ForOfStatement':
+                if (node.left?.type === 'VariableDeclaration') node.left.declarations.forEach((d: any) => bindNames(d.id));
+                else bindNames(node.left);
+                break;
+            case 'ClassDeclaration':
+                bindNames(node.id);
+                break;
+        }
+        for (const key of Object.keys(node)) {
+            if (key === 'loc' || key === 'type') continue;
+            const child = node[key];
+            if (Array.isArray(child)) child.forEach(visit);
+            else if (child && typeof child === 'object') visit(child);
+        }
+    };
+    visit(ast);
+    for (const name of other) buttons.delete(name);
+    return buttons;
+}
+
+/** collectButtonVariables() of the script that is being validated. */
+let buttonVariables = new Set<string>();
+
+/**
+ * `callee` is `<button>.display.<method>`, where <button> is provably a
+ * button of the device: fb.button(...), fb.main.left / .right,
+ * fb.bars[...].left / .right, or a variable that only ever holds one of
+ * these. Any other `<expr>.display.<method>` is the script's own object (or
+ * one that cannot be traced), and nothing is said about it.
+ */
+function isButtonDisplay(callee: any): boolean {
+    if (!isMember(callee.object, null, 'display')) return false;
+    const owner = callee.object.object;
+    return isButtonExpression(owner) || (owner?.type === 'Identifier' && buttonVariables.has(owner.name));
+}
+
+const STYLE_REPLACES_FONT = 'give the item a style that sets "font-family" / "font-size" (config.json "styles": "style" in config.json, or setStyle())';
+
+/**
+ * Calls the firmware no longer has: the engine answers "not a function".
+ * Each is reported with what replaces it. A button's display is recognised
+ * only where the receiver provably is a button (isButtonDisplay): a
+ * `display` member of the script's own objects is not touched.
+ */
+function checkRemovedCall(node: any, errors: ValidationError[]): void {
     const callee = node.callee;
     if (callee?.type !== 'MemberExpression' || callee.computed || callee.property?.type !== 'Identifier') return;
     const method: string = callee.property.name;
-    const isSet = method === 'set' && isMember(callee.object, 'fb', 'style');
-    let call: string;
+    const onDisplay = isMainMethod(callee, 'display', [method]);
+    const onList = isMainMethod(callee, 'list', [method]);
+    const onButton = !onDisplay && isButtonDisplay(callee);
+    let message: string | null = null;
+    if (isMember(callee, 'fb', 'key')) {
+        message = 'fb.key() no longer exists: use fb.button("name")';
+    } else if (method === 'setFont' && (onDisplay || onList || onButton)) {
+        message = `setFont() no longer exists: ${STYLE_REPLACES_FONT}`;
+    } else if (method === 'setTopFont' && onButton) {
+        message = 'setTopFont() no longer exists: give the button a style whose "title" block sets "font-family" / "font-size"';
+    } else if (method === 'setTopStyle' && onButton) {
+        message = 'setTopStyle() no longer exists: use setStyle() with a style that has a "title" block';
+    } else if (method === 'setLabelStyle' && onDisplay) {
+        message = 'setLabelStyle() no longer exists: use setStyle() with a style that has a "title" block';
+    } else if (method === 'setFocusStyle' && onList) {
+        message = 'setFocusStyle() no longer exists: use setStyle() with a style that has a "selected" block';
+    } else if ((method === 'addStyle' || method === 'removeStyle') && onList) {
+        message = `fb.main.list.${method}() does not exist: a list has setStyle() only`;
+    }
+    if (message) errors.push({ message, ...locOf(callee.property) });
+}
+
+/** A literal that is no string; and what a string literal holds. */
+function literalString(node: any): string | null {
+    return node?.type === 'Literal' && typeof node.value === 'string' ? node.value : null;
+}
+
+function isLiteral(node: any): boolean {
+    return node?.type === 'Literal' || literalNumber(node) !== null;
+}
+
+/**
+ * The style calls, with the firmware's rules and error texts
+ * (src/scripting/js/style_arg.h, freebutton_device.c, freebutton_displayitem.c):
+ *  - setStyle(styles) on a button's display, fb.main.display.setStyle(item,
+ *    styles), fb.main.list.setStyle(list, styles) and the fifth argument of
+ *    fb.main.display.create: a string of up to four style names ("" = the
+ *    list of config.json). Not a string, or "button" / "displayitem" /
+ *    "list": TypeError; an unknown style: ReferenceError; a fifth name:
+ *    RangeError.
+ *  - addStyle(style) / removeStyle(style) on a button's display and on
+ *    fb.main.display: one style name; "" is a TypeError.
+ *  - fb.style.set(style, property, value): the style (a reserved one too),
+ *    a property ("color", "title.color", "icon.color") in a block the style
+ *    has, never font-family, font-size or line-height, and a value as
+ *    config.json takes it. A property the block does not set in config.json
+ *    is added by the call. The checks run in the firmware's order: the
+ *    property name, the three fixed properties, the block, the value.
+ * Only literal arguments are checked; without the config's styles
+ * (names.styles absent) nothing is.
+ */
+function checkStyleArgs(node: any, names: ConfigNames, errors: ValidationError[]): void {
+    const callee = node.callee;
+    const styles = names.styles;
+    if (!styles || callee?.type !== 'MemberExpression' || callee.computed || callee.property?.type !== 'Identifier') return;
+    const method: string = callee.property.name;
+    const args: any[] = node.arguments ?? [];
+    const named = { has: (name: string) => Object.prototype.hasOwnProperty.call(styles, name) && !styleKind(name) };
+    const kindError = (what: string, name: string) => `${what}(): "${name}" is the style of a kind and cannot be named by an item`;
+
+    if (method === 'set' && isMember(callee.object, 'fb', 'style')) {
+        checkStyleSet(node, styles, errors);
+        return;
+    }
+
+    let what: string;
     let arg: any;
-    /** A style with bg_* is refused here (a key, a display item). */
-    let noBackground = false;
-    if (isSet) {
-        call = 'fb.style.set';
-        arg = node.arguments?.[0];
-    } else if (isMainMethod(callee, 'display', [...STYLE_METHODS.display])) {
-        call = `fb.main.display.${method}`;
-        arg = node.arguments?.[1];
-        noBackground = true;
+    if (isMainMethod(callee, 'display', [...STYLE_METHODS.display])) {
+        what = `display.${method}`;
+        arg = args[1];
+    } else if (isMainMethod(callee, 'display', ['create'])) {
+        what = 'display.create';
+        arg = args[4];
     } else if (isMainMethod(callee, 'list', [...STYLE_METHODS.list])) {
-        call = `fb.main.list.${method}`;
-        arg = node.arguments?.[1];
-    } else if ((STYLE_METHODS.key as readonly string[]).includes(method) && isMember(callee.object, null, 'display')
-        && !isMember(callee.object.object, 'fb', 'main')) {
-        call = `display.${method}`;
-        arg = node.arguments?.[0];
-        noBackground = true;
+        what = `fb.main.list.${method}`;
+        arg = args[1];
+    } else if ((STYLE_METHODS.button as readonly string[]).includes(method) && isButtonDisplay(callee)) {
+        what = method;
+        arg = args[0];
     } else {
         return;
     }
-    const styles = names.styles;
-    if (!styles) {
-        errors.push({
-            message: `${call}() needs named styles: config.json has no "style.styles", so the device does not have this call`,
-            ...locOf(callee.property)
-        });
+    if (!isLiteral(arg)) return;
+    const text = literalString(arg);
+
+    if (method === 'addStyle' || method === 'removeStyle') {
+        if (text === null || text === '') {
+            errors.push({ message: `${what}() requires a style name (a string)`, ...locOf(arg) });
+        } else if (styleKind(text)) {
+            errors.push({ message: kindError(what, text), ...locOf(arg) });
+        } else if (!named.has(text)) {
+            errors.push({ message: `unknown style "${text}"`, ...locOf(arg) });
+        }
         return;
     }
-    if (arg?.type !== 'Literal') return;
-    if (typeof arg.value !== 'string') {
-        errors.push({ message: `${call}(): the style must be a string (the name of a "style.styles" entry)`, ...locOf(arg) });
+    if (text === null) {
+        errors.push({ message: `${what}() requires style names (a string)`, ...locOf(arg) });
         return;
     }
-    // "" = no named style on the part; fb.style.set has no such style.
-    if (arg.value === '' && !isSet) return;
-    const has = Object.prototype.hasOwnProperty.call(styles, arg.value) ? styles[arg.value]! : null;
-    if (!has) {
-        errors.push({ message: `unknown style "${arg.value}" in config.json`, ...locOf(arg) });
+    const list = parseScriptStyleList(text, named);
+    if (list.ok) return;
+    errors.push({
+        message: list.error === 'reserved' ? kindError(what, list.name)
+            : list.error === 'too-many' ? `${what}(): an item has at most 4 styles`
+            : `unknown style "${list.name}"`,
+        ...locOf(arg)
+    });
+}
+
+/** fb.style.set(style, property, value): see checkStyleArgs. */
+function checkStyleSet(node: any, styles: Record<string, string[]>, errors: ValidationError[]): void {
+    const args: any[] = node.arguments ?? [];
+    const REQUIRES = 'fb.style.set() requires a style name, a property name and a value';
+    if (args.some(a => a?.type === 'SpreadElement')) return;
+    if (args.length < 3) {
+        errors.push({ message: REQUIRES, ...locOf(node) });
         return;
     }
-    if (noBackground && has.some(p => p.startsWith('bg_'))) {
-        errors.push({
-            message: `style "${arg.value}" sets ${has.filter(p => p.startsWith('bg_')).join(' and ')}: it is for lists only (a key or display item has no background)`,
-            ...locOf(arg)
-        });
+    const [styleArg, propArg, valueArg] = args;
+    for (const arg of [styleArg, propArg]) {
+        if (isLiteral(arg) && literalString(arg) === null) {
+            errors.push({ message: REQUIRES, ...locOf(arg) });
+            return;
+        }
     }
-    if (!isSet) return;
-    // A literal true / false / null as the value: the device takes a string or a
-    // number only and throws TypeError, whatever the property is.
-    const literalValue = node.arguments?.[2];
-    if (literalValue?.type === 'Literal' && !literalValue.regex
-        && (typeof literalValue.value === 'boolean' || literalValue.value === null)) {
-        errors.push({ message: 'fb.style.set(): the value must be a string or a number', ...locOf(literalValue) });
+    const style = literalString(styleArg);
+    if (style === '') {
+        errors.push({ message: REQUIRES, ...locOf(styleArg) });
         return;
     }
-    const prop = node.arguments?.[1];
-    if (prop?.type !== 'Literal') return;
-    if (typeof prop.value !== 'string') {
-        errors.push({ message: 'fb.style.set(): the property must be a string ("text_color", ...)', ...locOf(prop) });
+    const has = style !== null && Object.prototype.hasOwnProperty.call(styles, style) ? styles[style]! : null;
+    if (style !== null && !has) {
+        errors.push({ message: `unknown style "${style}"`, ...locOf(styleArg) });
         return;
     }
-    const valueNode = node.arguments?.[2];
-    const number = literalNumber(valueNode);
-    const value: string | number | null = number !== null ? number
-        : valueNode?.type === 'Literal' && typeof valueNode.value === 'string' ? valueNode.value : null;
-    // Without a literal value: the property alone (any valid value stands in).
-    const settable = has.filter(p => p !== 'text_font' && p !== 'text_size');
-    switch (namedSetStatus(has, prop.value, value ?? (prop.value.endsWith('_color') ? '#000000' : 0))) {
-        case 'unknown':
-            errors.push({ message: `"${prop.value}" is not a style property`, ...locOf(prop) });
-            break;
-        case 'fixed':
-            errors.push({ message: `fb.style.set() cannot change ${prop.value}: use another named style for another font or size`, ...locOf(prop) });
-            break;
-        case 'not-in-style':
-            errors.push({
-                message: `style "${arg.value}" does not set ${prop.value} in config.json: fb.style.set() changes only what the style sets`
-                    + (settable.length ? ` (${settable.join(', ')})` : ''),
-                ...locOf(prop)
-            });
-            break;
+    // A literal true / false / null: the device takes a string or a number only.
+    if (valueArg?.type === 'Literal' && !valueArg.regex && (typeof valueArg.value === 'boolean' || valueArg.value === null)) {
+        errors.push({ message: 'fb.style.set(): the value must be a string or a number', ...locOf(valueArg) });
+        return;
+    }
+    const prop = literalString(propArg);
+    if (prop === null) return;
+    const value: string | number | null = literalNumber(valueArg) ?? literalString(valueArg);
+    // Without a literal style: what holds for every style (the property's name, the fixed ones, the value).
+    const status = scriptSetStatus(has ?? [prop], prop, value);
+    switch (status) {
         case 'ok':
             break;
+        case 'unknown':
+            errors.push({ message: `fb.style.set(): unknown property "${prop}"`, ...locOf(propArg) });
+            break;
+        case 'fixed':
+            errors.push({ message: `fb.style.set(): "${prop}" cannot be changed by a script`, ...locOf(propArg) });
+            break;
+        case 'no-part':
+            errors.push({ message: scriptSetNoPartMessage(style!, prop), ...locOf(propArg) });
+            break;
         default:
-            if (value !== null) errors.push({ message: `${prop.value} ${styleValueRule(prop.value)}`, ...locOf(valueNode) });
+            errors.push({
+                message: `fb.style.set(): not a valid value for "${prop}" (it takes ${styleValueRule(splitStyleProp(prop).name)})`,
+                ...locOf(valueArg)
+            });
     }
 }
 
 /**
- * fb.key("x") / fb.main.display.<DISPLAY_NAME_METHODS>("x", ...) /
+ * fb.button("x") / fb.main.display.<DISPLAY_NAME_METHODS>("x", ...) /
  * fb.main.list.<LIST_NAME_METHODS>("x", ...) / fb.main.image.<IMAGE_NAME_METHODS>("x", ...):
  * a string literal name must be in config.json, and so must an icon name
  * given to setIcon (checkIconName). Other arguments (and numeric indexes)
@@ -847,10 +977,10 @@ function checkConfigName(node: any, names: ConfigNames, errors: ValidationError[
     let what: string;
     let known: string[];
     checkIconName(node, names, errors);
-    checkFontArgs(node, names, errors);
+    checkTextFonts(node, names, errors);
     checkStyleArgs(node, names, errors);
-    if (isMember(callee, 'fb', 'key')) {
-        what = 'key';
+    if (isMember(callee, 'fb', 'button')) {
+        what = 'button';
         known = names.keys;
     } else if (isMainMethod(callee, 'display', DISPLAY_NAME_METHODS)) {
         what = 'display item';

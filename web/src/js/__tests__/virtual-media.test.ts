@@ -81,7 +81,7 @@ describe('virtual media', () => {
 
   it('what the IDE uploads or deletes reaches the page\'s cache; another device or a changed SVG empties it', async () => {
     const { media } = make({}, new Set());
-    const cache = { set: vi.fn(), clear: vi.fn() };
+    const cache = { set: vi.fn(), forget: vi.fn(), clear: vi.fn() };
     const stale = vi.fn();
     media.attach(cache);
     media.onStale = stale;
@@ -100,5 +100,75 @@ describe('virtual media', () => {
     expect(media.generation).toBe(generation + 1);
     media.setDevice(null);
     expect(stale).toHaveBeenCalledTimes(3);
+  });
+  it('a request that failed is not "absent": said so, asked again later, and given to the cache when it arrives', async () => {
+    let fail = 2;
+    const gets: string[] = [];
+    const media = new VirtualMedia({
+      list: async () => ['icons.ttf'],
+      get: async (_base, bucket, key) => {
+        gets.push(`${bucket}/${key}`);
+        if (fail-- > 0) throw new Error('not reachable');
+        return bytes(7);
+      },
+      rasterize: async (_svg, w, h) => new Uint8ClampedArray(w * h * 4),
+      knownFonts: async () => null,
+    }, [5, 5]);
+    const cache = { set: vi.fn(), forget: vi.fn(), clear: vi.fn() };
+    media.attach(cache);
+    media.setDevice('http://device');
+    expect(await media.read('fonts', 'icons.ttf')).toBeNull();
+    expect(media.failedFonts()).toEqual(['icons.ttf']);
+    expect(media.hint()).toContain('Could not be read from the device: icons.ttf');
+    await vi.waitFor(() => expect(cache.set).toHaveBeenCalledWith('fonts', 'icons.ttf', bytes(7)));
+    expect(gets).toHaveLength(3);
+    expect(media.missingFonts()).toEqual([]);
+    expect(media.hint()).toBe('');
+  });
+
+  it('the retries end; another device ends them too', async () => {
+    const gets: string[] = [];
+    const media = new VirtualMedia({
+      list: async () => ['a.ttf'],
+      get: async (base, _bucket, key) => { gets.push(`${base} ${key}`); throw new Error('not reachable'); },
+      rasterize: async (_svg, w, h) => new Uint8ClampedArray(w * h * 4),
+      knownFonts: async () => null,
+    }, [5]);
+    media.setDevice('http://one');
+    await media.read('fonts', 'a.ttf');
+    await new Promise(resolve => setTimeout(resolve, 40));
+    expect(gets).toEqual(['http://one a.ttf', 'http://one a.ttf']);
+    expect(media.failedFonts()).toEqual(['a.ttf']);
+    await media.read('fonts', 'a.ttf');
+    media.setDevice('http://two');
+    await new Promise(resolve => setTimeout(resolve, 40));
+    expect(gets).toHaveLength(3);
+    expect(media.missingFonts()).toEqual([]);
+  });
+
+  it('askAgain: what is missing is forgotten by the cache and asked from a listing made now, not the one made elsewhere', async () => {
+    const files: Record<string, Uint8Array> = { 'fonts/medium.ttf': bytes(1) };
+    const { media, calls } = make(files, new Set(['medium.ttf']));
+    const cache = { set: vi.fn(), forget: vi.fn(), clear: vi.fn() };
+    media.attach(cache);
+    media.setDevice('http://device');
+    // Nothing missing: nothing happens.
+    await media.read('fonts', 'medium.ttf');
+    media.askAgain();
+    expect(cache.forget).not.toHaveBeenCalled();
+    expect(await media.read('fonts', 'icons.ttf')).toBeNull();
+    expect(calls).toEqual(['get fonts/medium.ttf']);
+    // The font reaches the device by another way than this page.
+    files['fonts/icons.ttf'] = bytes(2);
+    media.askAgain();
+    expect(cache.forget).toHaveBeenCalledWith('fonts', 'icons.ttf');
+    expect(media.missingFonts()).toEqual([]);
+    expect(await media.read('fonts', 'icons.ttf')).toEqual(bytes(2));
+    expect(calls.slice(1)).toEqual(['list fonts', 'get fonts/icons.ttf']);
+    // Without a device there is nothing to ask again.
+    media.setDevice(null);
+    await media.read('fonts', 'medium.ttf');
+    media.askAgain();
+    expect(cache.forget).toHaveBeenCalledTimes(1);
   });
 });

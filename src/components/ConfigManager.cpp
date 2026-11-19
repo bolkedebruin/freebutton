@@ -4,6 +4,7 @@
 //
 
 #include "ConfigManager.h"
+#include "ConfigLogic.h"
 #include "json/FilteredReaderHandler.h"
 #include <algorithm>
 #include <esp_log.h>
@@ -13,6 +14,10 @@
 #include "Clock.h"
 #include "drivers/LvglDisplay.h"
 #include "ui/ui_style.h"
+
+extern "C" {
+#include "ui/fonts/fonts.h"
+}
 #include "ui/MainPage.h"
 #include "ui/PendingRender.h"
 #include "drivers/ButtonLed.h"
@@ -35,7 +40,7 @@ SemaphoreHandle_t displayItemsMutex() {
     return handle;
 }
 
-// One entry of config.json "style.fonts" -> def. false (logged) when it cannot be
+// One entry of config.json "fonts" -> def. false (logged) when it cannot be
 // one: not an object, no usable name or src, an id that is not an integer.
 // The registry checks the rest (name rules, duplicates, chains).
 bool parseFontDef(const JsonVariantConst entry, font_def_t& def) {
@@ -102,127 +107,154 @@ bool parseFontDef(const JsonVariantConst entry, font_def_t& def) {
     return true;
 }
 
-// style_logic text_font resolver: the registry (configured first).
+// style_logic font-family resolver: the registry (configured first).
 int resolveStyleFont(const char* name, const size_t len, const bool is_id, const int32_t id, void*) {
     return is_id ? fonts_find_id(id) : fonts_find(name, len);
 }
 
-// One style block ({"text_font": ..., ...}) into p. `skip`: a key that is
-// not a property here (list's "selected"), or nullptr.
-void parseStyleProps(const JsonObjectConst block, style_props_t& p, const bool allow_bg, const char* where,
-                     const char* skip) {
+void warnStyleProp(const style_prop_status_t st, const char* style, const char* part, const char* prop) {
     static constexpr auto TAG = "ConfigManager";
+    const char* dot = part != nullptr ? "." : "";
+    const char* partName = part != nullptr ? part : "";
+    switch (st) {
+        case STYLE_PROP_OK:
+            break;
+        case STYLE_PROP_UNKNOWN:
+            ESP_LOGW(TAG, "styles.%s%s%s: unknown property \"%.32s\", ignored", style, dot, partName, prop);
+            break;
+        case STYLE_PROP_UNKNOWN_FONT:
+            ESP_LOGW(TAG, "styles.%s%s%s.%s: unknown font, ignored", style, dot, partName, prop);
+            break;
+        default:
+            ESP_LOGW(TAG, "styles.%s%s%s.%s: bad value, ignored", style, dot, partName, prop);
+            break;
+    }
+}
+
+// One block ({"color": ..., "font-size": ...}) into p. `part`: the name of
+// the sub-block, or nullptr for the style's main block, whose sub-block
+// keys ("title", "unit", "selected", "icon") are not properties.
+void parseStyleProps(const JsonObjectConst block, style_props_t& p, const char* style, const char* part) {
     for (const auto kv : block) {
         const char* prop = kv.key().c_str();
-        if (skip != nullptr && std::strcmp(prop, skip) == 0) {
+        if (part == nullptr && style_logic_part(prop) >= 0) {
             continue;
         }
         const auto v = kv.value();
-        style_prop_status_t st;
+        style_prop_status_t st = STYLE_PROP_BAD_VALUE;
+        int32_t number = 0;
         if (v.is<const char*>()) {
-            st = style_logic_set_string(&p, prop, v.as<const char*>(), allow_bg, resolveStyleFont, nullptr);
-        } else if (v.is<int32_t>()) {
-            st = style_logic_set_number(&p, prop, v.as<int32_t>(), allow_bg, resolveStyleFont, nullptr);
-        } else {
-            st = STYLE_PROP_BAD_VALUE;
+            st = style_logic_set_string(&p, prop, v.as<const char*>(), resolveStyleFont, nullptr);
+        } else if (style_logic_prop_scale(prop) == 0) {
+            // not a number property: unknown, or it takes a string
+            st = style_logic_set_number(&p, prop, 0, resolveStyleFont, nullptr);
+        } else if ((v.is<double>() || v.is<int32_t>()) &&
+                   styleref::scaled(v.as<double>(), style_logic_prop_scale(prop), number)) {
+            st = style_logic_set_number(&p, prop, number, resolveStyleFont, nullptr);
         }
-        switch (st) {
-            case STYLE_PROP_OK:
-                break;
-            case STYLE_PROP_UNKNOWN:
-                ESP_LOGW(TAG, "style.%s: unknown property \"%.32s\", ignored", where, prop);
-                break;
-            case STYLE_PROP_UNKNOWN_FONT:
-                ESP_LOGW(TAG, "style.%s.%s: unknown font, ignored", where, prop);
-                break;
-            default:
-                ESP_LOGW(TAG, "style.%s.%s: bad value, ignored", where, prop);
-                break;
-        }
+        warnStyleProp(st, style, part, prop);
     }
 }
 
-// config.json "style" minus "fonts" and "styles" -> sheet (layers 2 and 3).
-void parseStyleSheet(const JsonObjectConst style, style_sheet_t& sheet) {
+// An "icon" block: its colour into `icon`.
+void parseStyleIcon(const JsonObjectConst block, uint32_t& icon, const char* style) {
+    for (const auto kv : block) {
+        const auto v = kv.value();
+        warnStyleProp(v.is<const char*>() ? style_logic_icon_set_string(&icon, kv.key().c_str(), v.as<const char*>())
+                                          : style_logic_icon_set_string(&icon, kv.key().c_str(), nullptr),
+                      style, "icon", kv.key().c_str());
+    }
+}
+
+const char* const kPartNames[STYLE_PART_COUNT + 1] = {nullptr, "title", "unit", "selected", "icon"};
+
+// The sub-block `part` of a style, when it is an object with something in it.
+JsonObjectConst styleSubBlock(const JsonObjectConst block, const int part) {
+    const auto sub = block[kPartNames[part]];
+    return sub.is<JsonObjectConst>() ? sub.as<JsonObjectConst>() : JsonObjectConst();
+}
+
+// Which blocks of properties a style has: main when it has a key that is
+// not a sub-block, and each of "title" / "unit" / "selected" that is an
+// object with at least one key. Used to size the table and to fill it, so
+// that both agree.
+size_t styleParts(const JsonObjectConst block, bool has[STYLE_PART_COUNT]) {
+    size_t count = 0;
+    has[STYLE_PART_MAIN] = false;
+    for (const auto kv : block) {
+        if (style_logic_part(kv.key().c_str()) < 0) {
+            has[STYLE_PART_MAIN] = true;
+            break;
+        }
+    }
+    count += has[STYLE_PART_MAIN] ? 1 : 0;
+    for (int part = STYLE_PART_TITLE; part < STYLE_PART_COUNT; part++) {
+        has[part] = styleSubBlock(block, part).size() > 0;
+        count += has[part] ? 1 : 0;
+    }
+    return count;
+}
+
+// A reserved style ("button", "displayitem", "list") into the sheet that is
+// resolved into the kind's elements. A sub-block the kind does not have is
+// logged and ignored.
+void parseKindStyle(const JsonObjectConst block, const style_kind_t kind, const char* name, style_sheet_t& sheet) {
     static constexpr auto TAG = "ConfigManager";
-    for (const auto kv : style) {
-        const char* key = kv.key().c_str();
-        if (std::strcmp(key, "fonts") == 0 || std::strcmp(key, "styles") == 0) {
-            continue;  // the font table and the named styles: loadStyle()
-        }
-        const auto block = kv.value();
-        if (!block.is<JsonObjectConst>()) {
-            ESP_LOGW(TAG, "style.%.32s is not an object, ignored", key);
+    parseStyleProps(block, sheet.element[style_logic_element(kind, STYLE_PART_MAIN)], name, nullptr);
+    for (int part = STYLE_PART_TITLE; part <= STYLE_PART_ICON; part++) {
+        const auto sub = block[kPartNames[part]];
+        if (sub.isNull()) {
             continue;
         }
-        const auto obj = block.as<JsonObjectConst>();
-        if (const int role = style_logic_role(key); role >= 0) {
-            parseStyleProps(obj, sheet.role[role], false, key, nullptr);
+        if (!sub.is<JsonObjectConst>()) {
+            ESP_LOGW(TAG, "styles.%s.%s is not an object, ignored", name, kPartNames[part]);
             continue;
         }
-        if (std::strcmp(key, "list") == 0) {
-            parseStyleProps(obj, sheet.element[STYLE_EL_LIST], false, "list", "selected");
-            const auto selected = obj["selected"];
-            if (selected.is<JsonObjectConst>()) {
-                parseStyleProps(selected.as<JsonObjectConst>(), sheet.element[STYLE_EL_LIST_SELECTED], true,
-                                "list.selected", nullptr);
-            } else if (!selected.isNull()) {
-                ESP_LOGW(TAG, "style.list.selected is not an object, ignored");
-            }
+        if (part == STYLE_PART_ICON && kind != STYLE_KIND_LIST) {
+            parseStyleIcon(sub.as<JsonObjectConst>(), sheet.icon[kind], name);
             continue;
         }
-        if (std::strcmp(key, "key") != 0 && std::strcmp(key, "display") != 0) {
-            ESP_LOGW(TAG, "style: unknown key \"%.32s\", ignored", key);
+        const int el = part == STYLE_PART_ICON ? -1 : style_logic_element(kind, static_cast<style_part_t>(part));
+        if (el < 0) {
+            ESP_LOGW(TAG, "styles.%s.%s: a %s has no such part, ignored", name, kPartNames[part], name);
             continue;
         }
-        for (const auto el : obj) {
-            const char* name = el.key().c_str();
-            const int e = style_logic_element(key, name);
-            if (e < 0) {
-                ESP_LOGW(TAG, "style.%s: unknown element \"%.32s\", ignored", key, name);
-                continue;
-            }
-            if (!el.value().is<JsonObjectConst>()) {
-                ESP_LOGW(TAG, "style.%s.%.32s is not an object, ignored", key, name);
-                continue;
-            }
-            char where[48];
-            std::snprintf(where, sizeof(where), "%s.%s", key, name);
-            parseStyleProps(el.value().as<JsonObjectConst>(), sheet.element[e], false, where, nullptr);
-        }
+        parseStyleProps(sub.as<JsonObjectConst>(), sheet.element[el], name, kPartNames[part]);
     }
 }
 
-// config.json "style.styles" (name -> properties): calls fn(name, length,
-// properties) for each entry the table takes, in file order. An entry that
-// is not taken (a bad name, not an object, more than STYLE_NAMED_MAX) is
-// skipped, with a warning when `warn`. Walked twice by parseNamedStyles(): to
-// size the table, then to fill it.
+// config.json "styles" (name -> style) minus the reserved names: calls
+// fn(name, length, style) for each entry the table takes, in file order. An
+// entry that is not taken (a bad name, not an object, more than
+// STYLE_NAMED_MAX) is skipped, with a warning when `warn`. Walked twice by
+// parseStyleTable(): to size the table, then to fill it.
 template <typename Fn>
-void forEachNamedStyle(const JsonObjectConst styles, const bool warn, Fn&& fn) {
+void forEachTableStyle(const JsonObjectConst styles, const bool warn, Fn&& fn) {
     static constexpr auto TAG = "ConfigManager";
     size_t count = 0;
     for (const auto kv : styles) {
         const char* name = kv.key().c_str();
         const size_t len = kv.key().size();
+        if (style_logic_kind(name, len) >= 0) {
+            continue;  // parseKindStyle
+        }
         const style_named_status_t st = style_logic_named_check(name, len, count);
         if (st == STYLE_NAMED_BAD_NAME) {
             if (warn) {
-                ESP_LOGW(TAG, "style.styles: \"%.32s\" is not a style name (letters, digits, _; not starting with "
+                ESP_LOGW(TAG, "styles: \"%.32s\" is not a style name (letters, digits, _; not starting with "
                               "a digit; max %d), skipped", name, STYLE_NAME_MAX);
             }
             continue;
         }
         if (st == STYLE_NAMED_FULL) {
             if (warn) {
-                ESP_LOGW(TAG, "style.styles: more than %d styles, \"%s\" and the rest are left out", STYLE_NAMED_MAX,
-                         name);
+                ESP_LOGW(TAG, "styles: more than %d styles, \"%s\" and the rest are left out", STYLE_MAX, name);
             }
             break;
         }
         if (!kv.value().is<JsonObjectConst>()) {
             if (warn) {
-                ESP_LOGW(TAG, "style.styles.%s is not an object, skipped", name);
+                ESP_LOGW(TAG, "styles.%s is not an object, skipped", name);
             }
             continue;
         }
@@ -231,38 +263,54 @@ void forEachNamedStyle(const JsonObjectConst styles, const bool warn, Fn&& fn) {
     }
 }
 
-// config.json "style.styles" -> the named-style table (ui/ui_style.h), after
-// the fonts (text_font names) and before the items (they refer to the
-// styles by name). In two steps, so that the style document is gone before
-// anything is made in the LVGL pool (loadStyle): parseNamedStyles() sizes
-// the table, allocates it and parses the properties into it (plain data);
-// applyNamedStyles() then fills the lv_style_t of each. Both take the LVGL
-// lock. Without named styles nothing is allocated; a previous table is
-// freed either way. Returns the number of styles in the table.
-size_t parseNamedStyles(const JsonVariantConst styles) {
+// config.json "styles" -> the reserved styles into `sheet`, the others into
+// the style table (ui/ui_style.h); after the fonts (font-family names) and
+// before the items (they refer to the styles by name). In two steps, so
+// that the styles document is gone before anything is made in the LVGL pool
+// (loadStyles): parseStyleTable() sizes the table, allocates it and parses
+// the properties into it (plain data); applyStyleTable() then fills the
+// lv_style_t of each part. Both take the LVGL lock. A config with only
+// reserved styles allocates nothing; a previous table is freed either way.
+// Returns the number of styles in the table.
+size_t parseStyleTable(const JsonVariantConst styles, style_sheet_t& sheet) {
     static constexpr auto TAG = "ConfigManager";
     auto& display = FreeButton::getLvglDisplay();
     size_t count = 0;
+    size_t parts = 0;
     size_t nameBytes = 0;
     const bool isObject = styles.is<JsonObjectConst>();
     if (!isObject && !styles.isNull()) {
-        ESP_LOGW(TAG, "style.styles is not an object, ignored");
+        ESP_LOGW(TAG, "\"styles\" is not an object, ignored");
     }
     if (isObject) {
-        forEachNamedStyle(styles.as<JsonObjectConst>(), false, [&](const char*, const size_t len, JsonObjectConst) {
+        for (const auto kv : styles.as<JsonObjectConst>()) {
+            const int kind = style_logic_kind(kv.key().c_str(), kv.key().size());
+            if (kind < 0) {
+                continue;
+            }
+            if (!kv.value().is<JsonObjectConst>()) {
+                ESP_LOGW(TAG, "styles.%s is not an object, ignored", kv.key().c_str());
+                continue;
+            }
+            parseKindStyle(kv.value().as<JsonObjectConst>(), static_cast<style_kind_t>(kind), kv.key().c_str(), sheet);
+        }
+        forEachTableStyle(styles.as<JsonObjectConst>(), false,
+                          [&](const char*, const size_t len, const JsonObjectConst block) {
+            bool has[STYLE_PART_COUNT];
             count++;
+            parts += styleParts(block, has);
             nameBytes += 1 + len;
         });
     }
     display.lock();
-    const bool allocated = ui_style_named_alloc(count, nameBytes);
+    const bool allocated = ui_style_table_alloc(count, parts, nameBytes);
     // The LVGL task refills a style a script changed, before the widgets
-    // of that walk draw (fb.style.set).
-    ui::setWalkHooks(allocated && count > 0 ? ui_style_named_refresh : nullptr,
-                     allocated && count > 0 ? ui_style_named_refresh_done : nullptr);
+    // of that walk draw (fb.style.set). Always: the styles of the kinds
+    // exist without a table.
+    ui::setWalkHooks(ui_style_refresh, ui_style_refresh_done);
     display.unlock();
     if (!allocated) {
-        ESP_LOGE(TAG, "style.styles: no memory for %u named styles, the device runs without them",
+        ESP_LOGE(TAG, "styles: no memory for %u styles, the device runs with the reserved ones only",
                  static_cast<unsigned>(count));
         return 0;
     }
@@ -270,31 +318,54 @@ size_t parseNamedStyles(const JsonVariantConst styles) {
         return 0;
     }
     // Parsed straight into the table (no copy). Names and properties are
-    // plain data until applyNamedStyles(); no item exists yet.
-    forEachNamedStyle(styles.as<JsonObjectConst>(), true,
+    // plain data until applyStyleTable(); no item exists yet.
+    forEachTableStyle(styles.as<JsonObjectConst>(), true,
                       [](const char* name, const size_t len, const JsonObjectConst block) {
-        style_props_t* props = ui_style_named_add(name, len);
-        if (props == nullptr) {
+        const uint8_t ref = ui_style_table_add(name, len);
+        if (ref == 0) {
             return;  // cannot happen: the table was sized by the same walk
         }
-        char where[8 + STYLE_NAME_MAX];
-        std::snprintf(where, sizeof(where), "styles.%s", name);
-        parseStyleProps(block, *props, true, where, nullptr);
+        bool has[STYLE_PART_COUNT];
+        styleParts(block, has);
+        if (has[STYLE_PART_MAIN]) {
+            if (style_props_t* props = ui_style_table_part(ref, STYLE_PART_MAIN)) {
+                parseStyleProps(block, *props, name, nullptr);
+            }
+        }
+        for (int part = STYLE_PART_TITLE; part <= STYLE_PART_ICON; part++) {
+            const auto sub = block[kPartNames[part]];
+            if (sub.isNull()) {
+                continue;
+            }
+            if (!sub.is<JsonObjectConst>()) {
+                ESP_LOGW("ConfigManager", "styles.%s.%s is not an object, ignored", name, kPartNames[part]);
+                continue;
+            }
+            if (part == STYLE_PART_ICON) {
+                if (uint32_t* icon = ui_style_table_icon(ref)) {
+                    parseStyleIcon(sub.as<JsonObjectConst>(), *icon, name);
+                }
+            } else if (has[part]) {
+                if (style_props_t* props = ui_style_table_part(ref, static_cast<style_part_t>(part))) {
+                    parseStyleProps(sub.as<JsonObjectConst>(), *props, name, kPartNames[part]);
+                }
+            }
+        }
     });
     return count;
 }
 
-// The second step: `count` = what parseNamedStyles() returned (0: nothing to
+// The second step: `count` = what parseStyleTable() returned (0: nothing to
 // do). A style that finds no room in the LVGL pool is dropped; one log line
 // names them all.
-void applyNamedStyles(const size_t count) {
+void applyStyleTable(const size_t count) {
     static constexpr auto TAG = "ConfigManager";
     if (count == 0) {
         return;
     }
     auto& display = FreeButton::getLvglDisplay();
     display.lock();
-    const uint16_t dropped = ui_style_named_apply();
+    const uint32_t dropped = ui_style_table_apply();
     display.unlock();
     if (dropped != 0) {
         // Up to STYLE_NAMED_MAX names, each with ", ".
@@ -302,7 +373,7 @@ void applyNamedStyles(const size_t count) {
         size_t at = 0;
         for (size_t i = 0; i < count; i++) {
             size_t len = 0;
-            const char* name = (dropped & (1u << i)) ? ui_style_named_name(static_cast<uint8_t>(i + 1), &len) : nullptr;
+            const char* name = (dropped & (1u << i)) ? ui_style_name(static_cast<uint8_t>(i + 1), &len) : nullptr;
             if (name == nullptr || at + len + 3 > sizeof(names)) {
                 continue;
             }
@@ -314,12 +385,47 @@ void applyNamedStyles(const size_t count) {
             at += len;
         }
         names[at] = '\0';
-        ESP_LOGE(TAG, "style.styles: dropped for lack of LVGL memory (the pool is too low to hold their "
+        ESP_LOGE(TAG, "styles: dropped for lack of LVGL memory (the pool is too low to hold their "
                       "properties): %s. Items and scripts that name them get \"unknown style\"", names);
     }
-    ESP_LOGI(TAG, "Loaded %u named styles (%u bytes)", static_cast<unsigned>(ui_style_named_count()),
-             static_cast<unsigned>(ui_style_named_bytes()));
+    ESP_LOGI(TAG, "Loaded %u styles (%u bytes)", static_cast<unsigned>(ui_style_count()),
+             static_cast<unsigned>(ui_style_table_bytes()));
 }
+
+// Keys the config no longer has (style_logic_removed_key): each is logged
+// once per key name, with what to use instead. Fed by the reader of
+// loadStyles() with every key of the file; nothing is built for a key that
+// is reported here (its value is skipped like any key without a filter).
+struct RemovedKeyScan {
+    int itemScope = -1;    // the scope of the entries of the top-level key being read, -1 = none
+    uint32_t warned = 0;   // bit i: removed key i was logged
+
+    static void observe(void* context, const char* key, const size_t length, const int depth) {
+        auto& scan = *static_cast<RemovedKeyScan*>(context);
+        if (depth == 1) {
+            scan.report(CONFIG_SCOPE_TOP, key, length);
+            const std::string_view name(key, length);
+            scan.itemScope = name == "buttons"        ? CONFIG_SCOPE_BUTTON
+                             : name == "displayitems" ? CONFIG_SCOPE_DISPLAYITEM
+                             : name == "lists"        ? CONFIG_SCOPE_LIST
+                             : name == "brokers"      ? CONFIG_SCOPE_BROKER
+                                                      : -1;
+        } else if (depth == 3 && scan.itemScope >= 0) {
+            // root object 1, the array 2, an entry 3
+            scan.report(static_cast<config_scope_t>(scan.itemScope), key, length);
+        }
+    }
+
+    void report(const config_scope_t scope, const char* key, const size_t length) {
+        const char* hint = "";
+        const int index = style_logic_removed_key(scope, key, length, &hint);
+        if (index < 0 || (warned & (1u << index))) {
+            return;
+        }
+        warned |= 1u << index;
+        ESP_LOGW("ConfigManager", "\"%.*s\" is no longer read: %s", static_cast<int>(length), key, hint);
+    }
+};
 
 } // namespace
 
@@ -337,9 +443,9 @@ void ConfigManager::loadFromFile(const std::string& filename) {
     // Clear existing components
     clear();
 
-    // Style first: items resolve their "font" names and build on the
-    // element styles.
-    loadStyle(filename);
+    // Fonts and styles first: the items refer to the styles by name and
+    // build on the kinds' element styles.
+    loadStyles(filename);
 
     // Use FilteredReaderHandler for memory-efficient streaming processing
     json::FilteredReaderHandler handler;
@@ -350,28 +456,16 @@ void ConfigManager::loadFromFile(const std::string& filename) {
             processCoreFilter(path, json);
         });
 
-    handler.addFilter({"mqttbrokers"},
-        [this](const std::vector<std::string>& path, const std::string& json) {
-            processMqttBrokersFilter(path, json);
-        });
     handler.addFilter({"brokers"},
     [this](const std::vector<std::string>& path, const std::string& json) {
         processMqttBrokersFilter(path, json);
     });
 
-    handler.addFilter({"mqttdisplays"},
-        [this](const std::vector<std::string>& path, const std::string& json) {
-            processDisplayItemsFilter(path, json);
-        });
     handler.addFilter({"displayitems"},
     [this](const std::vector<std::string>& path, const std::string& json) {
         processDisplayItemsFilter(path, json);
     });
 
-    handler.addFilter({"mqttbuttons"},
-        [this](const std::vector<std::string>& path, const std::string& json) {
-            processButtonsFilter(path, json);
-        });
     handler.addFilter({"buttons"},
         [this](const std::vector<std::string>& path, const std::string& json) {
             processButtonsFilter(path, json);
@@ -418,21 +512,30 @@ void ConfigManager::loadFromFile(const std::string& filename) {
              getDisplayItemCount(), buttons.size(), clocks.size());
 }
 
-void ConfigManager::loadStyle(const std::string& filename) {
-    // "style" is small: one transient document of it (the rest of the file
-    // is only scanned).
-    JsonDocument doc;
-    bool found = false;
+void ConfigManager::loadStyles(const std::string& filename) {
+    // "fonts" and "styles" are small: one transient document of each (the
+    // rest of the file is only scanned).
+    JsonDocument fontsDoc;
+    JsonDocument stylesDoc;
     json::FilteredReaderHandler handler;
-    handler.addFilter({"style"},
+    handler.addFilter({"fonts"},
         [&](const std::vector<std::string>& path, const std::string& json) {
-            if (const auto error = deserializeJson(doc, json)) {
-                ESP_LOGE(TAG, "Failed to parse style JSON: %s", error.c_str());
-                doc.clear();
-                return;
+            if (const auto error = deserializeJson(fontsDoc, json)) {
+                ESP_LOGE(TAG, "Failed to parse fonts JSON: %s", error.c_str());
+                fontsDoc.clear();
             }
-            found = true;
         });
+    handler.addFilter({"styles"},
+        [&](const std::vector<std::string>& path, const std::string& json) {
+            if (const auto error = deserializeJson(stylesDoc, json)) {
+                ESP_LOGE(TAG, "Failed to parse styles JSON: %s", error.c_str());
+                stylesDoc.clear();
+            }
+        });
+    // The same read reports the keys that are no longer read. They have no
+    // filter, so nothing is built for them.
+    RemovedKeyScan removed;
+    handler.setKeyObserver(&RemovedKeyScan::observe, &removed);
 
     FreeButton::BusAwareFile file = FreeButton::getBusAwareFileSystem().open(filename.c_str(), "r");
     if (!file) {
@@ -441,37 +544,30 @@ void ConfigManager::loadStyle(const std::string& filename) {
         const bool success = handler.parse(file);
         file.close();
         if (!success) {
-            ESP_LOGE(TAG, "Failed to parse JSON file for style: %s", filename.c_str());
+            ESP_LOGE(TAG, "Failed to parse JSON file for fonts and styles: %s", filename.c_str());
         }
     }
-    if (found && !doc.is<JsonObject>()) {
-        ESP_LOGW(TAG, "\"style\" is not an object, ignored");
-        found = false;
-    }
-    const auto style = doc.as<JsonObjectConst>();
 
-    // style.fonts. Heap only while loading (FONTS_MAX_FACES x ~165 B); the
+    // 1. "fonts". Heap only while loading (FONTS_MAX_FACES x ~165 B); the
     // registry copies what it keeps.
     font_def_t* defs = nullptr;
     size_t count = 0;
-    if (found) {
-        const auto fonts = style["fonts"];
-        if (!fonts.isNull() && !fonts.is<JsonArrayConst>()) {
-            ESP_LOGW(TAG, "style.fonts is not an array, ignored");
-        } else if (fonts.size() > 0) {
-            // malloc, not new(std::nothrow): that aborts with -fno-exceptions
-            defs = static_cast<font_def_t*>(std::malloc(sizeof(font_def_t) * FONTS_MAX_FACES));
-            if (defs == nullptr) {
-                ESP_LOGE(TAG, "fonts: no memory to load them, the system fonts are used");
-            } else {
-                for (const auto entry : fonts.as<JsonArrayConst>()) {
-                    if (count == FONTS_MAX_FACES) {
-                        ESP_LOGW(TAG, "fonts: more than %d entries, the rest is left out", FONTS_MAX_FACES);
-                        break;
-                    }
-                    if (parseFontDef(entry, defs[count])) {
-                        count++;
-                    }
+    const auto fonts = fontsDoc.as<JsonVariantConst>();
+    if (!fonts.isNull() && !fonts.is<JsonArrayConst>()) {
+        ESP_LOGW(TAG, "\"fonts\" is not an array, ignored");
+    } else if (fonts.size() > 0) {
+        // malloc, not new(std::nothrow): that aborts with -fno-exceptions
+        defs = static_cast<font_def_t*>(std::malloc(sizeof(font_def_t) * FONTS_MAX_FACES));
+        if (defs == nullptr) {
+            ESP_LOGE(TAG, "fonts: no memory to load them, the system fonts are used");
+        } else {
+            for (const auto entry : fonts.as<JsonArrayConst>()) {
+                if (count == FONTS_MAX_FACES) {
+                    ESP_LOGW(TAG, "fonts: more than %d entries, the rest is left out", FONTS_MAX_FACES);
+                    break;
+                }
+                if (parseFontDef(entry, defs[count])) {
+                    count++;
                 }
             }
         }
@@ -484,31 +580,29 @@ void ConfigManager::loadStyle(const std::string& filename) {
     const size_t accepted = fonts_configure(defs, count);
     display.unlock();
     std::free(defs);
+    fontsDoc.clear();
     if (count > 0) {
         ESP_LOGI(TAG, "Loaded %u of %u fonts", static_cast<unsigned>(accepted), static_cast<unsigned>(count));
     }
 
-    // The roles and elements: their text_font names resolve against the
-    // registry configured above.
+    // 2. "styles": their font-family names resolve against the registry
+    // configured above. The reserved styles go into the sheet, the others
+    // into the table, which is sized, allocated and parsed while the
+    // document is still there. A config with only reserved styles
+    // allocates nothing.
     style_sheet_t sheet;
     std::memset(&sheet, 0, sizeof(sheet));
-    if (found) {
-        parseStyleSheet(style, sheet);
-    }
+    const size_t tableStyles = parseStyleTable(stylesDoc.as<JsonVariantConst>(), sheet);
     style_props_t resolved[STYLE_EL_COUNT];
     style_logic_resolve(&sheet, resolved);
-    // style.styles (layer 3a): its table is sized, allocated and parsed while
-    // the document is still there. Without named styles this allocates
-    // nothing.
-    const size_t namedStyles = parseNamedStyles(found ? style["styles"] : JsonVariantConst());
     // The document goes before the styles are applied: ui_style_apply and
-    // applyNamedStyles create font instances (FreeType faces, glyph caches),
+    // applyStyleTable create font instances (FreeType faces, glyph caches),
     // and the document must not sit on the heap during that peak.
-    doc.clear();
+    stylesDoc.clear();
     display.lock();
-    ui_style_apply(resolved);
+    ui_style_apply(resolved, sheet.icon);
     display.unlock();
-    applyNamedStyles(namedStyles);
+    applyStyleTable(tableStyles);
 }
 
 void ConfigManager::clear() {
@@ -640,7 +734,7 @@ bool ConfigManager::removeDisplayItem(unsigned long id) {
 // destructor of a script-made item, outside it, takes the LVGL lock;
 // 2. the LVGL lock, once, for all display items and keys (only stores and
 // flags; the LVGL task draws afterwards; inside it the text slots' writer
-// spinlock per reset slot), also for the named styles' values; 3. the
+// spinlock per reset slot), also for the styles' values; 3. the
 // lists' items mutex, per list.
 // No heap is allocated; memory is only given back.
 void ConfigManager::restoreConfigState() {
@@ -691,7 +785,7 @@ void ConfigManager::restoreConfigState() {
         }
         // The values fb.style.set changed: the config's again (frees the
         // copy; the LVGL task refills the styles in its next walk).
-        ui_style_named_restore();
+        ui_style_restore();
         display.unlock();
     }
 
@@ -814,6 +908,13 @@ void ConfigManager::loadButtons(const ArduinoJson::JsonArray& buttonsArray) {
             continue;
         }
 
+        // The position says which key this is. Without one there is no
+        // button: nothing is built, subscribed or named for the entry.
+        if (!configlogic::buttonHasPosition(buttonElement)) {
+            ESP_LOGW(TAG, "A button has no \"position\": it is not shown");
+            continue;
+        }
+
         auto button = Button::fromJson(buttonElement.as<ArduinoJson::JsonObject>());
         if (button) {
             ESP_LOGD(TAG, "Created Button: id=%lu, label='%s', topLabel='%s'",
@@ -881,14 +982,10 @@ void ConfigManager::loadBrokers(const ArduinoJson::JsonArray& brokersArray) {
         const char* username = brokerObj["username"] | "";
         const char* password = brokerObj["password"] | "";
 
-        // Button+ configs (and Broker::toJson) use "hassdiscovery"; "autoDiscovery"
-        // is accepted as a legacy alias. Absent = enabled (previous behaviour).
-        bool autoDiscovery = true;
-        if (!brokerObj["hassdiscovery"].isNull()) {
-            autoDiscovery = brokerObj["hassdiscovery"].as<bool>();
-        } else if (!brokerObj["autoDiscovery"].isNull()) {
-            autoDiscovery = brokerObj["autoDiscovery"].as<bool>();
-        }
+        // "hassdiscovery" (what Broker::toJson writes). Absent = enabled;
+        // otherwise the value as a boolean (0 and false: off). Not
+        // `| true`: that reads every value that is no JSON boolean as true.
+        const bool autoDiscovery = configlogic::hassDiscovery(brokerObj["hassdiscovery"]);
 
         // Check if broker already exists (auto-registered by components)
         uint8_t existingId = MqttBrokerRegistry::getBrokerId(brokerId);

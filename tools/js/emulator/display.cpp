@@ -393,6 +393,16 @@ FBE_EXPORT(fbe_lvgl_stats) void fbe_lvgl_stats(uint32_t* out) {
     out[9] = lv_anim_count_running();
 }
 
+// For tests of what the firmware leaves in the LVGL pool: the number of
+// blocks in use. Unlike the free bytes it does not move with fragmentation
+// (every free block costs a header, so the same blocks in another order give
+// another free figure).
+FBE_EXPORT(fbe_lvgl_used_blocks) uint32_t fbe_lvgl_used_blocks() {
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    return static_cast<uint32_t>(mon.used_cnt);
+}
+
 // For tests of the firmware's low-memory paths: takes `bytes` out of the LVGL
 // pool (0 gives them back). Returns what is free afterwards.
 FBE_EXPORT(fbe_lvgl_hold) uint32_t fbe_lvgl_hold(const uint32_t bytes) {

@@ -7,6 +7,7 @@ import '../fb-toolbar.js';
 import { RUN_SHORTCUT, STOP_SHORTCUT } from '../fb-toolbar.js';
 import { emulatorModule, BASIC_CONFIG } from '../../js/__tests__/emulator-helpers';
 import { emulatorSession, virtualDeviceId } from '../../js/emulator-session.js';
+import { setDefaultStartMode } from '../../js/virtual-broker.js';
 import { configToModel } from '../../js/config-model.js';
 import { clearPreviewConfig, loadDefaultConfig, setPreviewConfig } from '../../js/device-config.js';
 import { currentPopover } from '../../js/popover.js';
@@ -18,13 +19,13 @@ const CONFIG = JSON.stringify(BASIC_CONFIG);
 
 const SCRIPT = `
   var n = 0;
-  fb.key("light").button.onClick(function () {
+  fb.button("light").button.onClick(function () {
     n++;
-    fb.key("light").display.setLabel("On " + n);
+    fb.button("light").display.setLabel("On " + n);
     fb.bars[0].left.led.setColor(0, 255, 0);
     fb.main.display.setLabel("temp", "Clicked");
   });
-  fb.key("light").button.onLongPress(function () { fb.main.display.showPage(2); });
+  fb.button("light").button.onLongPress(function () { fb.main.display.showPage(2); });
   fb.main.left.button.onClick(function () { fb.main.display.setValue("temp", "left"); });
   fb.main.right.button.onClick(function () { fb.main.display.setValue("temp", "right"); });
   mqtt.subscribe(0, "home/temp", function (topic, payload) {
@@ -203,7 +204,7 @@ describe('virtual device: header, glow and info side', () => {
   });
 
   it('running: the face glows; still no badge, heap readout or error line in the header', async () => {
-    use('fb.key("light").button.onClick(function () { throw new Error("boom"); });');
+    use('fb.button("light").button.onClick(function () { throw new Error("boom"); });');
     const el = await mount('fb-virtual-device');
     await run(el);
     expect(face(el).classList.contains('fb-device-running')).toBe(true);
@@ -243,7 +244,7 @@ describe('virtual device: header, glow and info side', () => {
     expect(el.querySelector('fb-device-info')).toBeNull();
     expect(field(el, 'identity')).toBe(virtualDeviceId());
     expect(field(el, 'state')).toBe('not running');
-    expect(field(el, 'source-script')).toBe('the editor (unsaved changes)');
+    expect(field(el, 'source-script')).toBe('the editor');
     expect(field(el, 'source-config')).toBe('the stored file');
     expect(field(el, 'mqtt')).toBe('offline: in-page broker');
     for (const real of ['IPv4', 'MAC', 'SSID', 'Firmware', 'Uptime']) expect(el.querySelector(`[data-field="${real}"]`)).toBeNull();
@@ -439,17 +440,27 @@ describe('virtual device: keys and drawing while a script runs', () => {
     expect(value.length).toBeGreaterThan(40);
   });
 
-  it('Stop: the device shows config.json again', async () => {
+  it('Stop: the outlines of config.json again, with names; nothing of what the script showed, no labels, the LEDs off', async () => {
     const el = await mount('fb-virtual-device');
+    const outlineNames = () => [...el.querySelectorAll('fb-tft-display [data-outline]')].map(b => b.textContent!.trim());
+    const before = outlineNames();
+    expect(before).toContain('temp');
     await run(el);
+    expect(el.querySelector('[data-outline]')).toBeNull();
     pointer('pointerdown', key(el, 3));
     await wait(60);
     pointer('pointerup', key(el, 3));
     await wait(120);
+    expect(key(el, 3).textContent).toContain('On 1');
+    expect(key(el, 3).querySelector('[data-led]')!.hasAttribute('data-led-on')).toBe(true);
     emulatorSession.stop();
     await settle();
-    expect(key(el, 3).textContent).toContain('Light');
-    expect(item(el, 'temp').textContent).toContain('Temperature');
+    expect(outlineNames()).toEqual(before);
+    expect(el.querySelector('[data-display-item]')).toBeNull();
+    expect(key(el, 3).querySelector('button')!.getAttribute('data-drawn-by')).toBe('outline');
+    expect(key(el, 3).querySelector('button')!.textContent!.trim()).toBe('light');
+    const front = el.querySelector('.device-flip-front')!.textContent!;
+    for (const data of ['On 1', 'Clicked', 'Light', 'Temperature']) expect(front).not.toContain(data);
     expect(key(el, 3).querySelector('[data-led]')!.hasAttribute('data-led-on')).toBe(false);
   });
 });
@@ -487,7 +498,7 @@ describe('virtual device: editing while a script runs', () => {
   });
 
   it('an item a script made has no config entry: it cannot be selected; config items keep their ref', async () => {
-    use('fb.main.display.create(5, 60, 30, 0, 2, 1, "Made", "kW", 0, 1);');
+    use('fb.main.display.create(5, 60, 30, 0, "", 1, "Made", "kW", 0, 1);');
     const el = await mount('fb-virtual-device');
     await run(el);
     const made = Array.from(el.querySelectorAll('[data-display-item]')).find(n => n.textContent?.includes('Made')) as HTMLElement;
@@ -724,7 +735,9 @@ describe('the consoles: Device and Virtual are separate', () => {
     expect(tab(pane, 'mqtt').getAttribute('aria-selected')).toBe('true');
     const panel = pane.querySelector('fb-emulator-panel') as HTMLElement;
     expect(panel.getAttribute('role')).toBe('tabpanel');
-    expect(panel.querySelector('[data-testid="mqtt-mode-words"]')?.textContent).toContain('In-page broker: nothing leaves this page');
+    // Where MQTT goes is said in a line; it is not set here.
+    expect(panel.querySelector('[data-testid="mqtt-state"]')?.getAttribute('data-mode')).toBe('offline');
+    expect(panel.querySelector('[data-testid="mqtt-state-words"]')?.textContent).toContain('Offline: the broker in this page');
     expect(Array.from(panel.querySelectorAll('[data-subscription]')).map(n => n.textContent)).toEqual(['home/temp']);
     // So far the log has only the firmware's birth message.
     expect(Array.from(panel.querySelectorAll('[data-testid="mqtt-log"] li')).map(li => [li.getAttribute('data-origin'), li.querySelector('[data-topic]')?.textContent]))
@@ -790,11 +803,11 @@ describe('the consoles: Device and Virtual are separate', () => {
   });
 });
 
-describe('MQTT tab: live modes', () => {
+describe('MQTT: the settings on the back of the virtual device, the messages in the MQTT tab', () => {
   let broker: TestBroker;
   const LIVE_SCRIPT = `
     mqtt.subscribe(0, "home/temp", function (t, p) { fb.main.display.setValue("temp", p); });
-    fb.key("light").button.onClick(function () {
+    fb.button("light").button.onClick(function () {
       mqtt.publish(0, "home/light/set", "ON", 0, 1);
       mqtt.publish(0, "buttonplus/btn_a00001/cover/raam/set", "stop", 0, 0);
     });
@@ -806,6 +819,7 @@ describe('MQTT tab: live modes', () => {
     emulatorSession.socket = nodeSocket;
     emulatorSession.securePage = false;
     emulatorSession.liveTiming = { backoffMs: 20 };
+    emulatorSession.readConfig = () => CONFIG;
     use(LIVE_SCRIPT);
   });
 
@@ -814,20 +828,38 @@ describe('MQTT tab: live modes', () => {
     emulatorSession.socket = undefined;
     emulatorSession.securePage = undefined;
     emulatorSession.ask = null;
+    emulatorSession.readConfig = null;
     await broker.stop();
   });
 
-  async function openPanel() {
+  /** The device with its back shown (the settings), the toolbar and the console pane; `start`: Run first. */
+  async function open(start = true) {
     const el = await mount('fb-virtual-device');
     const bar = await mount('fb-toolbar');
     const pane = await mount('fb-console-pane');
-    await run();
-    (pane.querySelector('[data-testid="tab-mqtt"]') as HTMLElement).click();
-    await wait(80);
-    const panel = pane.querySelector('fb-emulator-panel') as HTMLElement;
-    const mode = (name: string) => panel.querySelector(`[role="radio"][data-mode="${name}"]`) as HTMLElement;
-    return { el, bar, pane, panel, mode };
+    if (start) await run();
+    (el.querySelector('[data-testid="gear-icon"]') as HTMLElement).click();
+    await settle();
+    const back = el.querySelector('fb-virtual-info') as HTMLElement;
+    const mode = (name: string) => back.querySelector(`[role="radio"][data-mode="${name}"]`) as HTMLElement;
+    const panel = async () => {
+      (pane.querySelector('[data-testid="tab-mqtt"]') as HTMLElement).click();
+      await wait(80);
+      return pane.querySelector('fb-emulator-panel') as HTMLElement;
+    };
+    return { el, bar, pane, back, mode, panel };
   }
+
+  const q = <T extends HTMLElement = HTMLElement>(root: HTMLElement, id: string) => root.querySelector(`[data-testid="${id}"]`) as T;
+  const type = async (input: HTMLInputElement, value: string) => {
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+  };
+  const submit = async (form: HTMLElement) => {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await settle();
+  };
 
   async function pressKey(el: HTMLElement) {
     pointer('pointerdown', key(el, 3));
@@ -836,88 +868,207 @@ describe('MQTT tab: live modes', () => {
     await wait(120);
   }
 
-  it('offline by default: the mode control, the broker with its WebSocket address, no live mark anywhere', async () => {
-    const { el, bar, pane, panel, mode } = await openPanel();
-    const group = panel.querySelector('[role="radiogroup"][aria-label="MQTT mode"]') as HTMLElement;
+  it('the MQTT tab has the messages and Inject only: no mode, address or switches; a line says where MQTT goes, "Settings" shows the back', async () => {
+    const el = await mount('fb-virtual-device');
+    const pane = await mount('fb-console-pane');
+    await run();
+    (pane.querySelector('[data-testid="tab-mqtt"]') as HTMLElement).click();
+    await wait(80);
+    const panel = pane.querySelector('fb-emulator-panel') as HTMLElement;
+    for (const gone of ['mqtt-mode', 'mqtt-ws-url', 'mqtt-optins', 'mqtt-send-retained', 'mqtt-announce', 'mqtt-own-states', 'mqtt-link-error',
+      'mqtt-listener-help', 'mqtt-secure-page', 'mqtt-remove-announcement', 'mqtt-broker-form']) {
+      expect(panel.querySelector(`[data-testid="${gone}"]`), gone).toBeNull();
+    }
+    expect(panel.querySelector('[role="radiogroup"][aria-label="MQTT mode"]')).toBeNull();
+    expect(panel.querySelector('input[type="password"]')).toBeNull();
+    for (const kept of ['mqtt-inject', 'mqtt-export', 'mqtt-import', 'mqtt-clear', 'mqtt-log', 'mqtt-loopback']) {
+      expect(panel.querySelector(`[data-testid="${kept}"]`), kept).not.toBeNull();
+    }
+    expect(q(panel, 'mqtt-state').getAttribute('data-mode')).toBe('offline');
+    // "Settings" flips the device to its back, where they are.
+    expect(el.querySelector('.device-flip-inner')!.classList.contains('flipped')).toBe(false);
+    q(panel, 'mqtt-settings').click();
+    await settle();
+    expect(el.querySelector('.device-flip-inner')!.classList.contains('flipped')).toBe(true);
+    expect(el.querySelector('fb-virtual-info [data-testid="mqtt-settings-section"]')).not.toBeNull();
+    // Again: it stays on the back. And the stepper is off while the back shows.
+    q(panel, 'mqtt-settings').click();
+    await settle();
+    expect(el.querySelector('.device-flip-inner')!.classList.contains('flipped')).toBe(true);
+    const stepper = q(el, 'page-stepper');
+    expect([stepper.classList.contains('invisible'), stepper.getAttribute('aria-hidden')]).toEqual([true, 'true']);
+    expect(Array.from(stepper.querySelectorAll('button')).every(b => (b as HTMLButtonElement).disabled)).toBe(true);
+    // The back scrolls inside the face: the card itself does not grow or spill.
+    expect(q(el, 'info-card').classList.contains('overflow-hidden')).toBe(true);
+    expect(q(el, 'info-scroll').classList.contains('overflow-y-auto')).toBe(true);
+    expect(q(el, 'info-scroll').querySelector('fb-virtual-info')).not.toBeNull();
+    // Stopped: the link to the settings stays.
+    emulatorSession.stop();
+    await settle();
+    expect(q(panel, 'mqtt-stopped').querySelector('[data-testid="mqtt-settings"]')).not.toBeNull();
+  });
+
+  it('nothing runs: the back lists the brokers of config.json with their defaults; the mode and the switches are set for the next Run', async () => {
+    localStorage.clear();
+    emulatorSession.readConfig = () => JSON.stringify({ ...BASIC_CONFIG, brokers: [
+      { brokerid: 'ha', url: 'mqtt://10.0.0.5/', port: 1883, wsport: 1884, username: 'hauser', password: 'hapass', hassdiscovery: true },
+      { brokerid: 'tls', url: 'mqtts://10.0.0.5:8883/' },
+      { brokerid: 'cloud', url: 'wss://broker.lan/mqtt', clientid: 'btn_a00001' },
+    ] });
+    const { back, mode } = await open(false);
+    const group = back.querySelector('[role="radiogroup"][aria-label="MQTT mode"]') as HTMLElement;
     expect(Array.from(group.querySelectorAll('[role="radio"]')).map(r => [r.textContent?.trim(), r.getAttribute('aria-checked')]))
-      .toEqual([['Offline', 'true'], ['Live read-only', 'false'], ['Live publish', 'false']]);
-    expect((panel.querySelector('[data-testid="mqtt-ws-url"]') as HTMLInputElement).value).toBe(broker.url);
-    expect(panel.querySelector('[data-testid="mqtt-link-state"]')?.getAttribute('data-state')).toBe('offline');
-    expect(panel.querySelector('[data-testid="mqtt-optins"]')).toBeNull();
-    expect(panel.querySelector('[data-testid="mqtt-loopback"]')).not.toBeNull();
-    expect(bar.querySelector('[data-testid="toolbar-live"]')).toBeNull();
-    expect(pane.querySelector('[data-testid="tab-live"]')).toBeNull();
-    expect(el.querySelector('.fb-device-live')).toBeNull();
-    expect(mode('offline').classList.contains('bg-purple-90')).toBe(true);
-  });
-
-  it('live read-only: connected, marked "read" in the toolbar and on the tab; no opt-ins; a message from the broker shows', async () => {
-    const { el, bar, pane, panel, mode } = await openPanel();
-    mode('live-readonly').click();
-    await until(() => emulatorSession.snapshot().mqttLink === 'connected');
+      .toEqual([['Live publish', 'false'], ['Live read-only', 'false'], ['Offline', 'true']]);
+    const forms = Array.from(back.querySelectorAll('[data-testid="mqtt-broker-form"]')) as HTMLFormElement[];
+    expect(forms.map(f => [q(f, 'mqtt-broker-name').textContent, f.getAttribute('data-host'), f.getAttribute('autocomplete')]))
+      .toEqual([['ha', '10.0.0.5', 'off'], ['tls', '10.0.0.5', 'off'], ['cloud', 'broker.lan', 'off']]);
+    // Empty fields, config.json's values as placeholders; nothing a password manager takes for the device's access key.
+    const fields = (f: HTMLElement) => ['mqtt-ws-url', 'mqtt-user', 'mqtt-pass'].map(id => q<HTMLInputElement>(f, id));
+    expect(forms.map(f => fields(f).map(i => [i.value, i.placeholder]))).toEqual([
+      [['', 'ws://10.0.0.5:1884'], ['', 'hauser'], ['', 'from config.json']],
+      [['', 'ws://10.0.0.5:9001'], ['', 'none'], ['', 'none']],
+      [['', 'wss://broker.lan/mqtt'], ['', 'none'], ['', 'none']],
+    ]);
+    expect(fields(forms[0]!).map(i => [i.name, i.type, i.getAttribute('autocomplete')])).toEqual([
+      ['mqtt-ws', 'text', 'off'], ['mqtt-user', 'text', 'off'], ['mqtt-pass', 'password', 'new-password'],
+    ]);
+    expect(back.querySelector('input[name="username"], input[name="password"], input[autocomplete="current-password"]')).toBeNull();
+    expect(forms.map(f => [q(f, 'mqtt-broker-source').textContent, q<HTMLButtonElement>(f, 'mqtt-save').disabled, q<HTMLButtonElement>(f, 'mqtt-reset').disabled]))
+      .toEqual(Array(3).fill(['from config.json', true, true]));
+    expect(forms.map(f => q(f, 'mqtt-link-state').getAttribute('data-state'))).toEqual(['offline', 'offline', 'offline']);
+    expect(q(forms[2]!, 'mqtt-client-id-note').textContent!.replace(/\s+/g, ' ')).toContain(`btn_a00001: not used here. The virtual device always connects as ${virtualDeviceId()}`);
+    // The password can be looked at.
+    q(forms[0]!, 'mqtt-pass-show').click();
     await settle();
-    expect(mode('live-readonly').getAttribute('aria-checked')).toBe('true');
-    expect(panel.querySelector('[data-testid="mqtt-link-state"]')?.getAttribute('data-state')).toBe('connected');
-    expect(panel.querySelector('[data-testid="mqtt-mode-words"]')?.textContent).toContain('nothing is published');
-    expect(panel.querySelector('[data-testid="mqtt-optins"]')).toBeNull();
-    expect(bar.querySelector('[data-testid="toolbar-live"]')?.textContent?.trim()).toBe('read');
-    expect(pane.querySelector('[data-testid="tab-live"]')?.textContent?.trim()).toBe('read');
-    expect(el.querySelector('.fb-device-live')).toBeNull();
-    // Inject is local; loopback is the in-page broker's.
-    expect(panel.querySelector('[data-testid="mqtt-inject-button"]')?.textContent?.trim()).toBe('Inject (local)');
-    expect(panel.querySelector('[data-testid="mqtt-loopback"]')).toBeNull();
-
-    await until(() => broker.subscriptionsOf(virtualDeviceId()).length === 1);
-    broker.publish('home/temp', '18.5');
-    await until(() => item(el, 'temp').textContent!.includes('18.5'));
+    expect(q<HTMLInputElement>(forms[0]!, 'mqtt-pass').type).toBe('text');
+    q(forms[0]!, 'mqtt-pass-show').click();
     await settle();
-    const first = panel.querySelector('[data-testid="mqtt-log"] li') as HTMLElement;
-    expect([first.getAttribute('data-kind'), first.querySelector('[data-note]')?.textContent]).toEqual(['delivered', 'from the broker']);
+    expect(q<HTMLInputElement>(forms[0]!, 'mqtt-pass').type).toBe('password');
 
-    await pressKey(el);
+    // Save: kept per host (the two entries of 10.0.0.5 share it); Reset: config.json's again.
+    await type(q<HTMLInputElement>(forms[0]!, 'mqtt-ws-url'), 'ws://10.0.0.5:8083');
+    await type(q<HTMLInputElement>(forms[0]!, 'mqtt-pass'), 'mine');
+    expect(q<HTMLButtonElement>(forms[0]!, 'mqtt-save').disabled).toBe(false);
+    expect(localStorage.getItem('freebutton.virtualBroker:10.0.0.5')).toBeNull();
+    await submit(forms[0]!);
+    expect(JSON.parse(localStorage.getItem('freebutton.virtualBroker:10.0.0.5')!)).toEqual({ url: 'ws://10.0.0.5:8083', username: '', password: 'mine' });
+    expect(emulatorSession.mqttStatus().brokers.map(b => [b.wsUrl, b.username, b.overridden])).toEqual([
+      ['ws://10.0.0.5:8083', 'hauser', true], ['ws://10.0.0.5:8083', '', true], ['wss://broker.lan/mqtt', '', false],
+    ]);
+    expect(forms.map(f => [q<HTMLInputElement>(f, 'mqtt-ws-url').value, q(f, 'mqtt-broker-source').textContent])).toEqual([
+      ['ws://10.0.0.5:8083', 'kept by this browser'], ['ws://10.0.0.5:8083', 'kept by this browser'], ['', 'from config.json'],
+    ]);
+    q(forms[1]!, 'mqtt-reset').click();
     await settle();
-    expect(broker.published).toEqual([]);
-    expect(Array.from(panel.querySelectorAll('[data-testid="mqtt-log"] li')).slice(0, 2).map(li => li.getAttribute('data-kind')))
-      .toEqual(['would-publish', 'would-publish']);
-  });
+    expect(localStorage.getItem('freebutton.virtualBroker:10.0.0.5')).toBeNull();
+    expect(forms.map(f => q<HTMLInputElement>(f, 'mqtt-ws-url').value)).toEqual(['', '', '']);
+    expect(emulatorSession.mqttStatus().brokers[0]).toMatchObject({ wsUrl: 'ws://10.0.0.5:1884', overridden: false });
 
-  it('live publish: marked "live" in the warning colour (toolbar, tab, glow); the opt-ins with what they cost', async () => {
-    const { el, bar, pane, panel, mode } = await openPanel();
+    // The mode: for the next Run, and remembered. The switches come with live publish, all off: also with "hassdiscovery": true.
+    expect(q(back, 'mqtt-optins')).toBeNull();
     mode('live-publish').click();
+    await settle();
+    expect(localStorage.getItem('fb-mqtt-mode')).toBe('live-publish');
+    expect(mode('live-publish').getAttribute('aria-checked')).toBe('true');
+    expect(q(back, 'mqtt-mode-words').textContent).toContain('Used at the next Run');
+    expect(forms.map(f => q(f, 'mqtt-link-state').getAttribute('data-state'))).toEqual(['idle', 'idle', 'idle']);
+    const optins = q(back, 'mqtt-optins');
+    expect(Array.from(optins.querySelectorAll('label')).map(l => l.querySelector('span')!.firstChild!.textContent!.trim()))
+      .toEqual(['Send Home Assistant discovery', 'Send retained', 'Publish the virtual device\'s own states']);
+    expect(['mqtt-announce', 'mqtt-send-retained', 'mqtt-own-states'].map(id => q<HTMLInputElement>(optins, id).checked)).toEqual([false, false, false]);
+    expect(optins.textContent).toContain('Never sent by itself, also not with "hassdiscovery" in config.json');
+    const retained = q<HTMLInputElement>(optins, 'mqtt-send-retained');
+    retained.checked = true;
+    retained.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(emulatorSession.mqttStatus()).toMatchObject({ mode: 'live-publish', sendRetained: true, announce: false });
+    // Nothing connected: nothing runs.
+    expect(emulatorSession.snapshot()).toMatchObject({ status: 'idle', mqtt: 'live-publish', mqttLink: 'none' });
+    expect(q(back, 'mqtt-use-offline')).toBeNull();
+  });
+
+  it('a config without brokers: said on the back; nothing to connect to', async () => {
+    emulatorSession.readConfig = () => JSON.stringify({ ...BASIC_CONFIG, brokers: [] });
+    const { back } = await open(false);
+    expect(q(back, 'mqtt-no-broker').textContent).toContain('config.json has no "brokers"');
+    expect(back.querySelector('[data-testid="mqtt-broker-form"]')).toBeNull();
+  });
+
+  it('Run connects by default (live publish), with no mark of its own on the toolbar, tab or glow; the switches are off', async () => {
+    setDefaultStartMode('live-publish');
+    const { el, bar, pane, back, mode, panel } = await open();
+    expect([bar.querySelector('[data-testid="toolbar-live"]'), pane.querySelector('[data-testid="tab-live"]'), el.querySelector('.fb-device-live')]).toEqual([null, null, null]);
     await until(() => emulatorSession.snapshot().mqttLink === 'connected');
     await settle();
-    expect(mode('live-publish').classList.contains('bg-status-orange')).toBe(true);
-    const pill = bar.querySelector('[data-testid="toolbar-live"]') as HTMLElement;
-    expect([pill.textContent?.trim(), pill.getAttribute('data-mode'), pill.classList.contains('bg-status-orange')]).toEqual(['live', 'live-publish', true]);
-    expect(bar.querySelector('[data-testid="toolbar-virtual"]')!.classList.contains('border-status-orange')).toBe(true);
-    expect(pane.querySelector('[data-testid="tab-live"]')?.textContent?.trim()).toBe('live');
-    expect(el.querySelector('.device-flip-container')!.classList.contains('fb-device-live')).toBe(true);
+    expect(mode('live-publish').getAttribute('aria-checked')).toBe('true');
+    expect(q(back, 'mqtt-link-state').getAttribute('data-state')).toBe('connected');
+    expect(q<HTMLInputElement>(back, 'mqtt-ws-url').value).toBe(broker.url);
+    const mqtt = back.querySelector('[data-field="mqtt"]') as HTMLElement;
+    expect(mqtt.textContent).toBe('live, publishing (connected)');
+    expect(broker.connects.map(c => c.will)).toEqual([undefined]);
 
-    const optins = panel.querySelector('[data-testid="mqtt-optins"]') as HTMLElement;
+    const optins = q(back, 'mqtt-optins');
     expect(optins.textContent).toContain('A retained message stays on the broker');
     expect(optins.textContent).toContain('make entities for the virtual device in Home Assistant');
     expect(optins.textContent).toContain('about eight messages a second');
-    expect((optins.querySelector('[data-testid="mqtt-own-states"]') as HTMLInputElement).checked).toBe(false);
-    const retained = optins.querySelector('[data-testid="mqtt-send-retained"]') as HTMLInputElement;
-    expect(retained.checked).toBe(false);
-    expect((optins.querySelector('[data-testid="mqtt-announce"]') as HTMLInputElement).checked).toBe(false);
+    expect(['mqtt-announce', 'mqtt-send-retained', 'mqtt-own-states'].map(id => q<HTMLInputElement>(optins, id).checked)).toEqual([false, false, false]);
+    const retained = q<HTMLInputElement>(optins, 'mqtt-send-retained');
     retained.checked = true;
     retained.dispatchEvent(new Event('change', { bubbles: true }));
-    expect(emulatorSession.mqttStatus()!.sendRetained).toBe(true);
+    expect(emulatorSession.mqttStatus().sendRetained).toBe(true);
+    // The MQTT tab says it in its line.
+    const tab = await panel();
+    expect([q(tab, 'mqtt-state').getAttribute('data-mode'), q(tab, 'mqtt-state').getAttribute('data-link')]).toEqual(['live-publish', 'connected']);
+    expect(q(tab, 'mqtt-state-words').textContent).toBe('Live, publishing · connected');
+    expect(q(tab, 'mqtt-inject-button').textContent?.trim()).toBe('Inject (local)');
+    expect(tab.querySelector('[data-testid="mqtt-loopback"]')).toBeNull();
 
-    // Stop: every mark is gone.
+    // Stop: the mode stays for the next Run.
     emulatorSession.stop();
     await settle();
-    expect(bar.querySelector('[data-testid="toolbar-live"]')).toBeNull();
-    expect(pane.querySelector('[data-testid="tab-live"]')).toBeNull();
-    expect(el.querySelector('.fb-device-live')).toBeNull();
+    expect(mode('live-publish').getAttribute('aria-checked')).toBe('true');
+    expect(back.querySelector('[data-field="mqtt"]')!.textContent).toBe('live, publishing (connects at Run)');
+  });
+
+  it('live read-only, chosen on the back while it runs: connected; no switches; a message from the broker shows in the tab', async () => {
+    const { el, bar, pane, back, mode, panel } = await open();
+    expect([bar.querySelector('[data-testid="toolbar-live"]'), pane.querySelector('[data-testid="tab-live"]'), el.querySelector('.fb-device-live')]).toEqual([null, null, null]);
+    expect(mode('offline').getAttribute('aria-checked')).toBe('true');
+    mode('live-readonly').click();
+    await until(() => emulatorSession.snapshot().mqttLink === 'connected');
+    await settle();
+    expect(localStorage.getItem('fb-mqtt-mode')).toBe('live-readonly');
+    expect(mode('live-readonly').getAttribute('aria-checked')).toBe('true');
+    expect(q(back, 'mqtt-link-state').getAttribute('data-state')).toBe('connected');
+    expect(q(back, 'mqtt-mode-words').textContent).toContain('nothing is published');
+    expect(q(back, 'mqtt-optins')).toBeNull();
+
+    const tab = await panel();
+    await until(() => broker.subscriptionsOf(virtualDeviceId()).length === 1);
+    broker.publish('home/temp', '18.5');
+    await until(() => emulatorSession.pages()![0]!.displayItems[0]!.value === '18.5');
+    await settle();
+    const first = tab.querySelector('[data-testid="mqtt-log"] li') as HTMLElement;
+    expect([first.getAttribute('data-kind'), first.querySelector('[data-note]')?.textContent]).toEqual(['delivered', 'from the broker']);
+
+    (el.querySelector('[data-testid="gear-icon"]') as HTMLElement).click();     // the front: its keys
+    await settle();
+    await pressKey(el);
+    await settle();
+    expect(broker.published).toEqual([]);
+    expect(Array.from(tab.querySelectorAll('[data-testid="mqtt-log"] li')).slice(0, 2).map(li => li.getAttribute('data-kind')))
+      .toEqual(['would-publish', 'would-publish']);
   });
 
   it('a real device\'s topic: the in-app dialog asks; "Once" publishes it', async () => {
     const confirm = vi.fn();
     (window as unknown as { confirm: unknown }).confirm = confirm;
-    const { el, panel, mode } = await openPanel();
-    mode('live-publish').click();
+    setDefaultStartMode('live-publish');
+    const el = await mount('fb-virtual-device');
+    const pane = await mount('fb-console-pane');
+    await run();
+    (pane.querySelector('[data-testid="tab-mqtt"]') as HTMLElement).click();
+    await wait(80);
+    const panel = pane.querySelector('fb-emulator-panel') as HTMLElement;
     await until(() => emulatorSession.snapshot().mqttLink === 'connected');
     await pressKey(el);
     await until(() => !!document.querySelector('fb-dialog [data-testid="dialog"]'));
@@ -938,50 +1089,87 @@ describe('MQTT tab: live modes', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it('no websockets listener at the address: the error with the two Mosquitto lines; a corrected address connects', async () => {
+  it('no websockets listener at the address: the error and the Mosquitto lines on the back, it keeps trying; a corrected address, saved, connects', async () => {
     const closed = await TestBroker.start();
     const dead = closed.url;
     await closed.stop();
     localStorage.setItem('fb-mqtt-ws:broker.test', dead);
-    const { panel, mode } = await openPanel();
-    mode('live-readonly').click();
+    setDefaultStartMode('live-publish');
+    const { back, panel } = await open();
     await until(() => emulatorSession.snapshot().mqttLink === 'error');
     await settle();
-    const error = panel.querySelector('[data-testid="mqtt-link-error"]') as HTMLElement;
+    const error = q(back, 'mqtt-link-error');
     expect(error.getAttribute('data-error')).toBe('unreachable');
     expect(error.getAttribute('role')).toBe('alert');
-    expect(panel.querySelector('[data-testid="mqtt-listener-help"]')?.textContent).toBe('listener 1884\nprotocol websockets');
-    expect(panel.querySelector('[data-testid="mqtt-link-state"]')?.textContent?.trim()).toBe('not connected');
+    expect(q(back, 'mqtt-listener-help').textContent).toBe(`listener ${new URL(dead).port}\nprotocol websockets`);
+    expect(q(back, 'mqtt-link-state').textContent?.trim()).toBe('not connected');
+    // No fall back to the in-page broker: the mode is what it was, and "Use offline" is offered.
+    expect(emulatorSession.snapshot().mqtt).toBe('live-publish');
+    expect(q(back, 'mqtt-use-offline').textContent?.trim()).toBe('Use offline');
+    const tab = await panel();
+    expect(['error', 'connecting']).toContain(q(tab, 'mqtt-state').getAttribute('data-link'));
 
-    const input = panel.querySelector('[data-testid="mqtt-ws-url"]') as HTMLInputElement;
-    input.value = broker.url;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
+    // The address the browser kept is in the form; another one is typed and saved.
+    const form = q(back, 'mqtt-broker-form');
+    const input = q<HTMLInputElement>(form, 'mqtt-ws-url');
+    expect(input.value).toBe(dead);
+    await type(input, broker.url);
+    await submit(form);
     await until(() => emulatorSession.snapshot().mqttLink === 'connected');
     await settle();
-    expect(panel.querySelector('[data-testid="mqtt-link-error"]')).toBeNull();
-    expect(localStorage.getItem('fb-mqtt-ws:broker.test')).toBe(broker.url);
+    expect(q(back, 'mqtt-link-error')).toBeNull();
+    expect(q(back, 'mqtt-use-offline')).toBeNull();
+    expect(JSON.parse(localStorage.getItem('freebutton.virtualBroker:broker.test')!)).toEqual({ url: broker.url, username: '', password: '' });
+    expect(localStorage.getItem('fb-mqtt-ws:broker.test')).toBeNull();
   });
 
-  it('https page: said in the panel; a client id in config.json: said that it is not used', async () => {
+  it('"Use offline": the in-page broker from then on, remembered', async () => {
+    const closed = await TestBroker.start();
+    localStorage.setItem('fb-mqtt-ws:broker.test', closed.url);
+    await closed.stop();
+    setDefaultStartMode('live-publish');
+    const { back, mode } = await open();
+    await until(() => emulatorSession.snapshot().mqttLink === 'error');
+    await settle();
+    q(back, 'mqtt-use-offline').click();
+    await settle();
+    expect(emulatorSession.snapshot()).toMatchObject({ mqtt: 'offline', mqttLink: 'none' });
+    expect(localStorage.getItem('fb-mqtt-mode')).toBe('offline');
+    expect(mode('offline').getAttribute('aria-checked')).toBe('true');
+    expect(q(back, 'mqtt-link-error')).toBeNull();
+    expect(q(back, 'mqtt-use-offline')).toBeNull();
+    expect(q(back, 'mqtt-link-state').getAttribute('data-state')).toBe('offline');
+  });
+
+  it('a password the broker refuses: said on the back; the right one, saved in the form, connects', async () => {
+    await broker.stop();
+    broker = await TestBroker.start({ users: { ha: 'secret' } });
+    localStorage.setItem('fb-mqtt-ws:broker.test', broker.url);
+    use(LIVE_SCRIPT, JSON.stringify({ ...BASIC_CONFIG, brokers: [{ brokerid: 'local', url: 'mqtt://broker.test/', username: 'ha', password: 'wrong' }] }));
+    setDefaultStartMode('live-readonly');
+    const { back } = await open();
+    await until(() => emulatorSession.snapshot().mqttLink === 'error');
+    await settle();
+    expect(q(back, 'mqtt-link-error').getAttribute('data-error')).toBe('auth');
+    expect(q(back, 'mqtt-link-error').textContent).toContain('Correct the user name or the password above and Save');
+    const form = q(back, 'mqtt-broker-form');
+    expect(q<HTMLInputElement>(form, 'mqtt-user').placeholder).toBe('ha');
+    await type(q<HTMLInputElement>(form, 'mqtt-pass'), 'secret');
+    await submit(form);
+    await until(() => emulatorSession.snapshot().mqttLink === 'connected', 3000, 'the connection with the new password');
+    expect(broker.connects[broker.connects.length - 1]).toMatchObject({ username: 'ha', password: 'secret' });
+    await settle();
+    expect(q(back, 'mqtt-link-error')).toBeNull();
+    expect(q(back, 'mqtt-link-state').getAttribute('data-state')).toBe('connected');
+  });
+
+  it('https page: said on the back, and nothing is tried', async () => {
     emulatorSession.securePage = true;
-    use(LIVE_SCRIPT, JSON.stringify({ ...BASIC_CONFIG, brokers: [{ brokerid: 'local', url: 'mqtt://broker.test/', clientid: 'btn_a00001' }] }));
-    const { panel, mode } = await openPanel();
-    expect(panel.querySelector('[data-testid="mqtt-secure-page"]')?.textContent).toContain('https');
-    expect(panel.querySelector('[data-testid="mqtt-client-id-note"]')?.textContent?.replace(/\s+/g, ' ')).toContain(`btn_a00001: not used here. The virtual device always connects as ${virtualDeviceId()}`);
-    mode('live-readonly').click();
+    setDefaultStartMode('live-readonly');
+    const { back } = await open();
     await settle();
-    expect(panel.querySelector('[data-testid="mqtt-link-error"]')?.getAttribute('data-error')).toBe('mixed-content');
+    expect(q(back, 'mqtt-secure-page').textContent).toContain('https');
+    expect(q(back, 'mqtt-link-error').getAttribute('data-error')).toBe('mixed-content');
     expect(broker.connects).toEqual([]);
-  });
-
-  it('the info side says where MQTT goes', async () => {
-    const { el, mode } = await openPanel();
-    mode('live-publish').click();
-    await until(() => emulatorSession.snapshot().mqttLink === 'connected');
-    (el.querySelector('[data-testid="gear-icon"]') as HTMLElement).click();
-    await settle();
-    const mqtt = el.querySelector('fb-virtual-info [data-field="mqtt"]') as HTMLElement;
-    expect(mqtt.textContent).toBe('live, publishing (connected)');
-    expect(mqtt.classList.contains('text-status-orange')).toBe(true);
   });
 });

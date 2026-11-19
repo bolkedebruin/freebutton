@@ -48,6 +48,8 @@ export { DEFAULT_WASM_URL, EngineInstance, loadEmulatorModule, type WasmSource }
 
 /** The device's JS heap (src/main.cpp). */
 export const DEVICE_HEAP_BYTES = 16 * 1024;
+/** How many log lines of the start are kept (Emulator.bootLog). */
+const BOOT_LOG_LINES = 200;
 
 export interface ScriptError {
   /**
@@ -234,7 +236,7 @@ export interface EmulatorOptions {
   sampleSensors?: boolean;
   /**
    * The device's media store: fonts (bucket "fonts": "medium.ttf",
-   * "semibold.ttf", the files of config.json "style.fonts") and image rasters
+   * "semibold.ttf", the files of config.json "fonts") and image rasters
    * (bucket "images": "ico-<name>-<w>x<h>.bin", user files), as the firmware
    * reads them. A source may answer with a promise: create() waits for the
    * files the config uses. Pass one MediaCache to every emulator of a page so
@@ -282,6 +284,12 @@ export class Emulator {
   };
   /** The fonts and images the firmware reads. */
   readonly media: MediaCache;
+  /**
+   * The firmware's log lines of its start (hardware scan, config.json, the
+   * fonts): written before create() resolves, so no 'log' listener heard them.
+   */
+  readonly bootLog: Array<{ level: LogLevel; tag: string; text: string }> = [];
+  private booting = true;
   private displayList: Array<DisplayInfo & { pixels: number }> = [];
   private displayTimer: TimerHandle | null = null;
   private displayDue = 0;
@@ -373,6 +381,7 @@ export class Emulator {
     this.stopMedia = media.subscribe((bucket, key) => this.mediaChanged(bucket, key));
     // The configured state is on the displays when create() resolves.
     this.enter(() => engine.exports.fbe_display_render());
+    this.booting = false;
     this.scheduleDisplay();
   }
 
@@ -440,6 +449,16 @@ export class Emulator {
    */
   layout(display: string | number): readonly LayoutRect[] {
     return this.state.layout(this.displayOf(display).index);
+  }
+
+  /**
+   * @internal For tests of what the firmware leaves in LVGL's pool: the number of blocks in use.
+   * It does not move with fragmentation, as the free bytes of stats() do.
+   */
+  lvglUsedBlocks(): number {
+    this.assertNotInEngine('lvglUsedBlocks');
+    const engine = this.requireEngine();
+    return this.enter(() => engine.exports.fbe_lvgl_used_blocks()) ?? 0;
   }
 
   /** @internal For tests of the firmware's low-memory paths: takes bytes out of LVGL's pool (0 gives them back). Returns what is free. */
@@ -1117,7 +1136,11 @@ export class Emulator {
           this.consoleLine = lines.pop() ?? '';
           for (const line of lines) this.emit('console', line);
         },
-        log: (level, tag, text) => this.emit('log', { level, tag, text: text.replace(/\n$/, '') }),
+        log: (level, tag, text) => {
+          const entry = { level, tag, text: text.replace(/\n$/, '') };
+          if (this.booting && this.bootLog.length < BOOT_LOG_LINES) this.bootLog.push(entry);
+          this.emit('log', entry);
+        },
         scriptError: (where, message, stack) => {
           const error: ScriptError = { where, message, ...(stack ? { stack } : {}) };
           Object.assign(error, parsePosition(error));

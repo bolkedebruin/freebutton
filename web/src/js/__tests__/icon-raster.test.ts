@@ -166,7 +166,7 @@ const SAMPLE = {
     { position: 4, iconsize: 40 },                 // dynamic icon later: 40
     { position: 5, iconsize: 0 },                  // <= 0: the default, 48
   ],
-  mqttdisplays: [
+  displayitems: [
     { displayitemid: 1, icon: 'sun' },             // 32
     { displayitemid: 2, icon: 'rain', iconsize: 2000 }, // invalid: skipped
   ],
@@ -184,7 +184,7 @@ describe('wantedRasters', () => {
 
   it('collects size slots from keys, display items and images', () => {
     expect(iconSizeSlots(SAMPLE).map(s => `${s.where}:${s.w}x${s.h}`)).toEqual([
-      'buttons[0]:48x48', 'buttons[1]:48x48', 'buttons[3]:40x40', 'buttons[4]:48x48', 'mqttdisplays[0]:32x32', 'images[0]:120x80',
+      'buttons[0]:48x48', 'buttons[1]:48x48', 'buttons[3]:40x40', 'buttons[4]:48x48', 'displayitems[0]:32x32', 'images[0]:120x80',
     ]);
   });
 

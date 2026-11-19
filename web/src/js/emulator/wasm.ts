@@ -83,6 +83,7 @@ export interface EngineExports {
   /** out: uint32[10] (display.cpp fbe_lvgl_stats). */
   fbe_lvgl_stats(out: number): void;
   fbe_lvgl_hold(bytes: number): number;
+  fbe_lvgl_used_blocks(): number;
   fbe_media_changed(bucket: number, key: number): void;
 }
 

@@ -2,7 +2,7 @@ import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { on, type WorkspaceFile, type WorkspaceSnapshot } from '../js/app-state.js';
 import { workspace } from '../js/workspace.js';
-import { FONT_PX } from '../js/config-model.js';
+import { STEP_PX } from '../js/text-spans.js';
 import { isSystemFontSrc } from '../js/font-config.js';
 import { fontNameForKey } from '../js/fs-rules.js';
 import { formatFileSize } from '../js/virtual-fs.js';
@@ -145,7 +145,7 @@ export class FbFontView extends LitElement {
           </div>
           ${system ? '' : html`
             <button class="px-2.5 py-1 rounded-md text-[11px] bg-white/5 text-text-default hover:bg-white/10 disabled:opacity-40"
-              title='Add { "name": "${name}", "src": "${font.key}" } to config.json "style.fonts" (asks first)'
+              title='Add { "name": "${name}", "src": "${font.key}" } to config.json "fonts" (asks first)'
               data-testid="font-add" ?disabled=${this._ws.busy}
               @click=${() => workspace.addFontToConfig(font.key)}>Add to config.json</button>
             <button class="px-2.5 py-1 rounded-md text-[11px] bg-status-red/15 text-status-red hover:bg-status-red/25 disabled:opacity-40"
@@ -180,7 +180,7 @@ export class FbFontView extends LitElement {
           </label>
           <div class="flex items-center gap-1" role="group" aria-label="Size in pixels on the device">
             <span class="text-xs text-gray-100 mr-1">Size</span>
-            ${FONT_PX.map(px => html`
+            ${STEP_PX.map(px => html`
               <button class="px-2 py-1 rounded-md text-xs font-mono transition-colors ${px === this._px ? 'bg-white/90 text-bg-default' : 'bg-white/5 text-gray-100 hover:bg-white/10'}"
                 aria-pressed=${px === this._px ? 'true' : 'false'} data-font-px=${px}
                 @click=${() => { this._px = px; }}>${px}</button>

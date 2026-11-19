@@ -22,6 +22,55 @@
 export const SCREEN_W = 320;
 export const SCREEN_H = 240;
 
+/** A key's display (device pixels). */
+export const KEY_W = 160;
+export const KEY_H = 80;
+
+/**
+ * The physical sizes behind the virtual device's proportions.
+ *
+ * The two kinds of panel have a different pixel pitch, so a device pixel of
+ * a key's display is smaller than one of the main display. The main display
+ * is drawn a CSS px per device pixel (the editing boxes lie on it), and a
+ * key's display at KEY_SCALE of that: 160 x 80 device pixels take 120 x 60
+ * CSS px, as large next to the main display as on the device.
+ *
+ * The main display is a 2.8" panel: its diagonal is about 70 mm, measured
+ * by the owner on the device. 320 x 240 pixels on 57.6 x 43.2 mm is a pitch
+ * of 0.180 mm. A key's display is the 0.96" 160 x 80 panel, 0.135 mm.
+ * Correct a pitch here and every size follows.
+ */
+export const MAIN_PITCH_MM = 0.180;
+export const KEY_PITCH_MM = 0.135;
+/** CSS px per device px of the main display. */
+export const MAIN_SCALE = 1;
+/** CSS px per device px of a key's display (0.75). */
+export const KEY_SCALE = MAIN_SCALE * KEY_PITCH_MM / MAIN_PITCH_MM;
+
+/**
+ * The main display's width as a part of the front's width: about 0.77, read
+ * from a photo of the device. (From the sizes in mm, 57.6 of an 86 mm front,
+ * the face would be about 478 px wide: too wide for the pane.)
+ */
+export const MAIN_FACE_RATIO = 0.77;
+/** The front of the device (CSS px): its width, the bezel at each side of the main display, a bar's height, the gap between modules. */
+export const FACE_W = Math.round(SCREEN_W * MAIN_SCALE / MAIN_FACE_RATIO);
+export const BEZEL_W = (FACE_W - SCREEN_W * MAIN_SCALE) / 2;
+export const BAR_H = 87;
+export const MODULE_GAP = 6.72;
+
+/**
+ * Whether a display drawn at `scale` CSS px per device px keeps square
+ * pixels: only when a device pixel is a whole number of screen pixels.
+ * `screenPerCss` = the face's zoom times the screen's devicePixelRatio. At
+ * any other ratio the browser smooths (text with uneven pixel widths reads
+ * worse).
+ */
+export function squarePixels(scale: number, screenPerCss: number): boolean {
+  const perPixel = scale * screenPerCss;
+  return perPixel >= 0.99 && Math.abs(perPixel - Math.round(perPixel)) <= 0.01;
+}
+
 export type PlacedKind = 'displayitem' | 'list' | 'image';
 
 export interface Units { x: number; y: number }

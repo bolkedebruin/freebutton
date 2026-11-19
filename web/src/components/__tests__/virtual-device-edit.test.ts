@@ -17,10 +17,12 @@ const SCALE = 1;   // the screen is drawn a CSS px per device pixel
 const move = (ux: number, uy: number) => ({ dx: ux * 3.2 * SCALE, dy: uy * 2.4 * SCALE });
 
 const CONFIG = `{
-  "style": {
-    "fonts": [
-      { "name": "pacifico", "src": "pacifico.ttf" }
-    ]
+  "fonts": [
+    { "name": "pacifico", "src": "pacifico.ttf" }
+  ],
+  "styles": {
+    "big": { "font-family": "pacifico", "font-size": 48 },
+    "alarm": { "color": "#ff0000", "selected": { "background-color": "#ff0000" } }
   },
   "buttons": [
     { "name": "up", "position": 1, "page": 1, "label": "Up", "toplabel": "Volume" }
@@ -84,8 +86,9 @@ async function device(): Promise<HTMLElement> {
   return el;
 }
 
+/** The outline of the entry named `name` on the main display (nothing runs: every entry is an outline with its name). */
 function item(el: HTMLElement, name: string): HTMLElement {
-  return el.querySelector(`[data-display-item="${name}"], [data-list="${name}"], [data-image="${name}"]`) as HTMLElement;
+  return [...el.querySelectorAll<HTMLElement>('fb-tft-display [data-outline]')].find(b => b.textContent!.trim() === name) as HTMLElement;
 }
 
 function pointer(type: string, target: EventTarget, x: number, y: number, init: Record<string, unknown> = {}) {
@@ -152,7 +155,9 @@ describe('page stepper', () => {
       expect(label().textContent?.trim()).toBe(`Page ${count} of ${count}`);
       expect(next.disabled).toBe(true);
       expect(prev.disabled).toBe(count === 1);
-      expect(el.querySelector(`[data-display-item]`)?.textContent).toContain(`p${count}`);
+      // The page's entry, by its place in config.json (it has no name): never its label.
+      expect(el.querySelector('[data-outline]')?.textContent?.trim()).toBe(`displayitems[${count - 1}]`);
+      expect(el.querySelector('fb-tft-display')?.textContent).not.toContain(`p${count}`);
     });
   }
 
@@ -232,8 +237,8 @@ describe('moving a display item', () => {
     drag(target, dx, dy, {}, false);
     await frame();
     expect(el.querySelector('[data-testid="move-position"]')?.textContent?.trim()).toBe('x 40 · y 30 %');
-    expect(target.style.left).toBe('40%');
-    expect(target.style.top).toBe('30%');
+    expect(target.style.left).toBe('128px');
+    expect(target.style.top).toBe('72px');
     expect(getCode()).toBe(CONFIG);                      // nothing written before the drop
 
     pointer('pointerup', window, 100 + dx, 100 + dy);
@@ -244,7 +249,7 @@ describe('moving a display item', () => {
     expect(reveals).toEqual([]);
     // Exactly the two values changed; the rest of the text is as it was.
     expect(getCode()).toBe(CONFIG.replace('"x": 10,\n      "y": 10,', '"x": 40,\n      "y": 30,'));
-    expect(item(el, 'temp').style.left).toBe('40%');
+    expect(item(el, 'temp').style.left).toBe('128px');
     expect(el.querySelector('[data-testid="move-position"]')).toBeNull();
 
     // One step for undo.
@@ -269,12 +274,12 @@ describe('moving a display item', () => {
     const { dx, dy } = move(30, 20);
     drag(target, dx, dy, {}, false);
     await frame();
-    expect(target.style.left).toBe('40%');
+    expect(target.style.left).toBe('128px');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     pointer('pointerup', window, 100 + dx, 100 + dy);
     target.click();
     await frame();
-    expect(target.style.left).toBe('10%');
+    expect(target.style.left).toBe('32px');
     expect(el.querySelector('[data-testid="move-position"]')).toBeNull();
     expect(getCode()).toBe(CONFIG);
   });
@@ -294,14 +299,14 @@ describe('moving a display item', () => {
     openConfig(CONFIG);
     const el = await device();
     const target = item(el, 'right');
-    expect(target.style.right).toBe('10%');
-    expect(target.style.left).toBe('');
+    // 20 % wide (64 px), 10 % (32 px) from the right edge.
+    expect(target.style.left).toBe('224px');
     const { dx, dy } = move(-25, 10);
     drag(target, dx, dy);
     await frame();
     await frame();
     expect(parsed().displayitems[1]).toMatchObject({ x: -35, y: 60, align: 3 });
-    expect(item(el, 'right').style.right).toBe('35%');
+    expect(item(el, 'right').style.left).toBe('144px');
     // Cannot leave the screen to the right: the offset stops at 0.
     const far = move(200, 0);
     drag(item(el, 'right'), far.dx, far.dy);
@@ -385,15 +390,14 @@ describe('moving a display item', () => {
     expect(parsed().displayitems[0]).toMatchObject({ x: 20, y: 20 });
   });
 
-  it('legacy "mqttdisplays": moved in place under that name', async () => {
-    const legacy = '{\n\t"mqttdisplays": [\n\t\t{ "x": 0, "y": 0, "width": 50, "label": "Temp" }\n\t]\n}';
-    openConfig(legacy);
+  it('"mqttdisplays" is not read: its entries are not shown, so nothing moves them', async () => {
+    const text = '{\n\t"mqttdisplays": [\n\t\t{ "x": 0, "y": 0, "width": 50, "label": "Temp" }\n\t]\n}';
+    openConfig(text);
     const el = await device();
-    const { dx, dy } = move(12, 34);
-    drag(el.querySelector('[data-ref="mqttdisplays:0"]') as HTMLElement, dx, dy);
-    await frame();
-    await frame();
-    expect(getCode()).toBe('{\n\t"mqttdisplays": [\n\t\t{ "x": 12, "y": 34, "width": 50, "label": "Temp" }\n\t]\n}');
+    expect(el.querySelector('[data-ref^="mqttdisplays"]')).toBeNull();
+    expect(el.querySelector('[data-ref^="displayitems"]')).toBeNull();
+    expect(el.textContent).not.toContain('Temp');
+    expect(getCode()).toBe(text);
   });
 
   it('invalid JSON: no drag, no nudge, no menu; a hint says why and nothing is thrown', async () => {
@@ -404,13 +408,14 @@ describe('moving a display item', () => {
     showDraft();
     await frame();
     const notice = () => el.querySelector('[data-testid="device-notice"]')?.textContent?.trim();
-    expect(el.querySelector('[data-testid="preview-hint"]')?.getAttribute('data-state')).toBe('stale');
+    // The device says nothing of the invalid text itself: that is the editor's.
+    expect(el.querySelector('[data-testid="preview-hint"]')).toBeNull();
 
     const { dx, dy } = move(30, 20);
     drag(item(el, 'temp'), dx, dy);
     await frame();
     expect(notice()).toContain('not valid JSON');
-    expect(item(el, 'temp').style.left).toBe('10%');
+    expect(item(el, 'temp').style.left).toBe('32px');
     expect(getCode()).toBe(broken);
 
     item(el, 'temp').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
@@ -431,7 +436,7 @@ describe('moving a display item', () => {
     await frame();
     await frame();
     expect(open).toHaveBeenCalledWith('config.json');
-    expect(item(el, 'temp').style.left).toBe('10%');
+    expect(item(el, 'temp').style.left).toBe('32px');
   });
 });
 
@@ -444,6 +449,13 @@ describe('item properties popover', () => {
     await frame();
     return document.querySelector('[data-testid="item-popover"]') as HTMLElement;
   }
+
+  /** The data-field of every control of the popover, in order. */
+  const fieldKeys = (pop: HTMLElement) => Array.from(pop.querySelectorAll('[data-field]')).map(i => i.getAttribute('data-field'));
+  /** The style toggles of the popover: name -> pressed. */
+  const toggles = (pop: HTMLElement) => Array.from(pop.querySelectorAll('[data-style]'))
+    .map(b => [b.getAttribute('data-style'), b.getAttribute('aria-pressed')]);
+  const toggle = (pop: HTMLElement, name: string) => (pop.querySelector(`[data-style="${name}"]`) as HTMLElement).click();
 
   function type(pop: HTMLElement, key: string, value: string, event = 'input') {
     const input = pop.querySelector(`[data-field="${key}"]`) as HTMLInputElement;
@@ -463,10 +475,10 @@ describe('item properties popover', () => {
     expect(value('label')).toBe('Temp');
     expect(value('width')).toBe('20');
     expect(value('align')).toBe('1');
-    expect(value('fontsize')).toBe('');
-    // The fonts of style.fonts and the system fonts.
-    const fonts = Array.from(pop.querySelectorAll('[data-field="font"] option')).map(o => (o as HTMLOptionElement).value);
-    expect(fonts).toEqual(['', 'montserrat', 'montserrat_semibold', 'pacifico']);
+    // Fonts, sizes and colours are not fields of an entry: one "style" field, and a toggle per style of the config.
+    expect(fieldKeys(pop)).toEqual(['name', 'label', 'unit', 'style', 'align', 'width', 'x', 'y']);
+    expect(value('style')).toBe('');
+    expect(toggles(pop)).toEqual([['big', 'false'], ['alarm', 'false']]);
     // Every field has a label.
     for (const input of Array.from(pop.querySelectorAll('[data-field]'))) {
       expect(pop.querySelector(`label[for="${input.id}"]`)).not.toBeNull();
@@ -481,29 +493,99 @@ describe('item properties popover', () => {
     const pop = await openMenu(el, item(el, 'temp'));
     type(pop, 'label', 'Buiten');
     await frame();
-    expect(item(el, 'temp').textContent).toContain('Buiten');
+    expect(parsed().displayitems[0]!.label).toBe('Buiten');
+    // The label is data: the outline keeps the entry's name.
+    expect(item(el, 'temp').textContent!.trim()).toBe('temp');
+    expect(el.querySelector('fb-tft-display')!.textContent).not.toContain('Buiten');
     type(pop, 'unit', '°C');
-    type(pop, 'font', 'pacifico', 'change');
-    type(pop, 'fontsize', '48');
+    toggle(pop, 'big');
     type(pop, 'width', '30');
     await frame();
     expect(parsed().displayitems[0]).toEqual({
-      name: 'temp', page: 1, x: 10, y: 10, width: 30, align: 1, boxtype: 1, fontsize: 48, font: 'pacifico', label: 'Buiten', unit: '°C',
+      name: 'temp', page: 1, x: 10, y: 10, width: 30, align: 1, boxtype: 1, style: 'big', label: 'Buiten', unit: '°C',
     });
-    expect(item(el, 'temp').style.width).toBe('30%');
+    expect(item(el, 'temp').style.width).toBe('96px');
+    expect((pop.querySelector('[data-field="style"]') as HTMLInputElement).value).toBe('big');
+    expect(toggles(pop)).toEqual([['big', 'true'], ['alarm', 'false']]);
     // The other entries are untouched.
     expect(getCode().slice(getCode().indexOf('"name": "right"'))).toBe(CONFIG.slice(CONFIG.indexOf('"name": "right"')));
 
-    // Empty size and "Style's font": the keys go.
-    type(pop, 'fontsize', '', 'change');
-    type(pop, 'font', '', 'change');
+    // A second style goes last; the text field sets the order.
+    toggle(pop, 'alarm');
     await frame();
-    expect(Object.keys(parsed().displayitems[0])).not.toContain('fontsize');
-    expect(Object.keys(parsed().displayitems[0])).not.toContain('font');
+    expect(parsed().displayitems[0].style).toBe('big alarm');
+    type(pop, 'style', ' alarm  big ', 'change');
+    await frame();
+    expect(parsed().displayitems[0].style).toBe('alarm big');
+    expect(toggles(pop)).toEqual([['big', 'true'], ['alarm', 'true']]);
+
+    // No style left: the key goes.
+    toggle(pop, 'alarm');
+    await frame();
+    expect(parsed().displayitems[0].style).toBe('big');
+    toggle(pop, 'big');
+    await frame();
+    expect(Object.keys(parsed().displayitems[0])).not.toContain('style');
 
     // Undo takes one change back.
     undo(getEditorView()!);
-    expect(parsed().displayitems[0].font).toBe('pacifico');
+    expect(parsed().displayitems[0].style).toBe('big');
+  });
+
+  it('the style toggles: only the styles an entry can name; a fifth is disabled; names are counted as the device counts them', async () => {
+    const cfg = (style: unknown) => JSON.stringify({
+      styles: {
+        // The styles of the kinds are no styles of an entry: no toggle for them.
+        button: { color: '#ffffff' }, displayitem: { 'font-size': 24 }, list: { color: '#808080' },
+        a: { color: '#ff0000' }, b: { color: '#00ff00' }, c: { color: '#0000ff' }, d: { 'font-size': 20 }, e: { opacity: 0.5 },
+      },
+      displayitems: [{ name: 'temp', page: 1, x: 10, y: 10, width: 20, label: 'Temp', ...(style === undefined ? {} : { style }) }],
+    }, null, 2);
+    const state = (pop: HTMLElement) => Array.from(pop.querySelectorAll('[data-style]'))
+      .map(b => `${b.getAttribute('data-style')}:${b.getAttribute('aria-pressed') === 'true' ? 'on' : 'off'}${(b as HTMLButtonElement).disabled ? ':disabled' : ''}`);
+    const value = (pop: HTMLElement) => (pop.querySelector('[data-field="style"]') as HTMLInputElement).value;
+
+    // Four styles: the fifth cannot be added; the four can be taken out.
+    openConfig(cfg('a b c d'));
+    let el = await device();
+    let pop = await openMenu(el, item(el, 'temp'));
+    expect(state(pop)).toEqual(['a:on', 'b:on', 'c:on', 'd:on', 'e:off:disabled']);
+    expect((pop.querySelector('[data-style="e"]') as HTMLElement).title).toBe('An entry has at most 4 styles');
+    toggle(pop, 'e');
+    await frame();
+    expect(parsed().displayitems[0].style).toBe('a b c d');
+    toggle(pop, 'b');
+    await frame();
+    expect(parsed().displayitems[0].style).toBe('a c d');
+    expect(state(pop)).toEqual(['a:on', 'b:off', 'c:on', 'd:on', 'e:off']);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await frame();
+    el.remove();
+
+    // "a a a a" is one style on the device: the toggles are not disabled.
+    openConfig(cfg('a a a a'));
+    el = await device();
+    pop = await openMenu(el, item(el, 'temp'));
+    expect(value(pop)).toBe('a a a a');
+    expect(state(pop)).toEqual(['a:on', 'b:off', 'c:off', 'd:off', 'e:off']);
+    toggle(pop, 'e');
+    await frame();
+    expect(parsed().displayitems[0].style).toBe('a e');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await frame();
+    el.remove();
+
+    // A "style" that is no string: shown as empty (not as "7"), with the problem; a press writes a list.
+    openConfig(cfg(7));
+    el = await device();
+    pop = await openMenu(el, item(el, 'temp'));
+    expect(value(pop)).toBe('');
+    expect(state(pop)).toEqual(['a:off', 'b:off', 'c:off', 'd:off', 'e:off']);
+    expect(pop.querySelector('[data-field-problem="style"]')?.textContent).toBe('"style" is not a string of style names, ignored (it is 7)');
+    toggle(pop, 'c');
+    await frame();
+    expect(parsed().displayitems[0].style).toBe('c');
+    expect(pop.querySelector('[data-field-problem="style"]')).toBeNull();
   });
 
   it('a new align keeps the item where it is', async () => {
@@ -514,7 +596,7 @@ describe('item properties popover', () => {
     await frame();
     // 20 % wide at x = 10: its right edge is 70 % from the right.
     expect(parsed().displayitems[0]).toMatchObject({ align: 3, x: -70, y: 10 });
-    expect(item(el, 'temp').style.right).toBe('70%');
+    expect(item(el, 'temp').style.left).toBe('32px');
   });
 
   it('Escape closes it and the focus is back on the item; a press outside closes it too', async () => {
@@ -546,42 +628,58 @@ describe('item properties popover', () => {
     expect(document.querySelector('[data-testid="item-popover-title"]')?.textContent).toContain('List');
   });
 
-  it('a list: items, rows and colours ("rrggbb"); an image: size and colour ("#rrggbb")', async () => {
+  it('a list: items, rows and styles; an image: size and colour ("#rrggbb")', async () => {
     openConfig(CONFIG);
     const el = await device();
+    const oneRow = parseFloat(item(el, 'scenes').style.height);
     let pop = await openMenu(el, item(el, 'scenes'));
+    // A list has no colour fields: its colours are those of its styles.
+    expect(fieldKeys(pop)).toEqual(['name', 'items', 'style', 'width', 'rows', 'x', 'y']);
     expect((pop.querySelector('[data-field="items"]') as HTMLTextAreaElement).value).toBe('A\nB');
     type(pop, 'items', 'One\nTwo\nThree', 'change');
     type(pop, 'rows', '3');
-    type(pop, 'focuscolor', '#ff0000');
+    toggle(pop, 'alarm');
     await frame();
-    expect(parsed().lists[0]).toMatchObject({ items: ['One', 'Two', 'Three'], rows: 3, focuscolor: 'ff0000' });
-    expect(item(el, 'scenes').textContent).toContain('Three');
-    // Reset: the key goes, the style's colour applies again.
-    (document.querySelector('[data-clear="focuscolor"]') as HTMLElement).click();
+    expect(parsed().lists[0]).toEqual({
+      name: 'scenes', page: 1, x: 4, y: 70, width: 50, rows: 3, items: ['One', 'Two', 'Three'], style: 'alarm',
+    });
+    // Three rows now: the outline is higher; the items are data and are not shown.
+    expect(parseFloat(item(el, 'scenes').style.height)).toBeGreaterThan(oneRow * 2.5);
+    expect(el.querySelector('fb-tft-display')!.textContent).not.toContain('Three');
+    toggle(pop, 'alarm');
     await frame();
-    expect(Object.keys(parsed().lists[0])).not.toContain('focuscolor');
+    expect(Object.keys(parsed().lists[0])).not.toContain('style');
 
     currentPopover()?.close();
     pop = await openMenu(el, item(el, 'logo'));
-    expect(Array.from(pop.querySelectorAll('[data-field]')).map(i => i.getAttribute('data-field'))).toEqual(['width', 'height', 'x', 'y', 'color']);
+    // An image takes no styles; "color" is its own key.
+    expect(fieldKeys(pop)).toEqual(['name', 'width', 'height', 'x', 'y', 'color']);
+    expect(pop.querySelector('[data-style]')).toBeNull();
     type(pop, 'color', '#00ff00');
     type(pop, 'width', '64');
     await frame();
     expect(parsed().images[0]).toMatchObject({ width: 64, color: '#00ff00' });
+    // Reset: the key goes, the image has its own colours again.
+    (document.querySelector('[data-clear="color"]') as HTMLElement).click();
+    await frame();
+    expect(Object.keys(parsed().images[0])).not.toContain('color');
   });
 
-  it('keys: label and top label are edited the same way', async () => {
+  it('buttons: label, top label and styles are edited the same way', async () => {
     openConfig(CONFIG);
     const el = await device();
     const key = el.querySelector('[data-ref="buttons:0"] button') as HTMLElement;
     const pop = await openMenu(el, key);
-    expect(pop.querySelector('[data-testid="item-popover-title"]')?.textContent).toContain('Key');
+    expect(pop.querySelector('[data-testid="item-popover-title"]')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Button up');
+    expect(fieldKeys(pop)).toEqual(['name', 'label', 'toplabel', 'style']);
     type(pop, 'label', 'Louder');
     type(pop, 'toplabel', 'Vol');
     await frame();
     expect(parsed().buttons[0]).toMatchObject({ label: 'Louder', toplabel: 'Vol', position: 1 });
     expect(getCode()).toContain('{ "name": "up", "position": 1, "page": 1, "label": "Louder", "toplabel": "Vol" }');
+    toggle(pop, 'big');
+    await frame();
+    expect(parsed().buttons[0]).toEqual({ name: 'up', position: 1, page: 1, label: 'Louder', toplabel: 'Vol', style: 'big' });
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(document.activeElement).toBe(key);
   });
@@ -608,7 +706,7 @@ describe('item properties popover', () => {
     await frame();
     await frame();
     expect(parsed().displayitems.map(d => d.name)).toEqual(['right']);
-    expect(item(el, 'temp')).toBeNull();
+    expect(item(el, 'temp') ?? null).toBeNull();
     expect(confirm).not.toHaveBeenCalled();
     undo(getEditorView()!);
     expect(getCode()).toBe(CONFIG);

@@ -157,15 +157,15 @@ describe('timers', () => {
 
 describe('stop and restart', () => {
   const script = `
-    var made = fb.main.display.create(0, 0, 50, 0, 2, 0, "Made", "", 0, 1);
+    var made = fb.main.display.create(0, 0, 50, 0, "", 0, "Made", "", 0, 1);
     print("made", made);
     fb.main.display.setValue("temp", "21.5");
-    fb.key("light").display.setLabel("On");
+    fb.button("light").display.setLabel("On");
     fb.bars[0].left.led.setColor(255, 0, 0);
     fb.main.display.showPage(2);
     mqtt.subscribe(0, "home/#", function () {});
     setTimeout(function () { print("timer"); }, 100);
-    fb.key("light").button.onClick(function () { print("click"); });
+    fb.button("light").button.onClick(function () { print("click"); });
   `;
 
   it('stop: timers, handlers and subscriptions are gone; the device state stays', async () => {
@@ -221,7 +221,7 @@ describe('stop and restart', () => {
       fb.main.display.setValue("temp", "1"); fb.main.display.setLabel("temp", "T"); fb.main.display.setUnit("temp", "K");
       fb.main.display.setPosition("temp", 1, 2); fb.main.display.setPage("temp", 3);
       fb.main.display.remove("power");
-      fb.key("light").display.setTopLabel("x");
+      fb.button("light").display.setTopLabel("x");
       fb.main.list.setItems("scenes", ["a"]);
       fb.main.image.setIcon("weather", "moon");
       fb.bars[0].right.backLed.setColor(1, 2, 3);
@@ -253,9 +253,9 @@ describe('stop and restart', () => {
 
 describe('keys', () => {
   const handlers = `
-    fb.key("light").button.onClick(function () { print("click"); });
-    fb.key("light").button.onLongPress(function () { print("long"); });
-    fb.key("light").button.onRelease(function () { print("release"); });
+    fb.button("light").button.onClick(function () { print("click"); });
+    fb.button("light").button.onLongPress(function () { print("long"); });
+    fb.button("light").button.onRelease(function () { print("release"); });
   `;
   // src/drivers/PushButton.h; the scan period comes from the wasm (ButtonManager.h).
   const header = readRepoFile('src/drivers/PushButton.h')!;
@@ -309,9 +309,9 @@ describe('keys', () => {
   it('a handler returning false prevents the firmware\'s own press event; any other value does not', async () => {
     const { emu, clock, rec } = await makeEmulator();
     emu.run(`
-      fb.key("light").button.onClick(function () { return false; });
-      fb.key("blind").button.onClick(function () { return true; });
-      fb.key("blind").button.onRelease(function () { return 0; });
+      fb.button("light").button.onClick(function () { return false; });
+      fb.button("blind").button.onClick(function () { return true; });
+      fb.button("blind").button.onRelease(function () { return 0; });
     `);
     emu.press('light');
     emu.press('blind');
@@ -345,7 +345,7 @@ describe('keys', () => {
 
   it('reports an exception in a key handler; the press event is not prevented', async () => {
     const { emu, rec } = await makeEmulator();
-    emu.run('fb.key("light").button.onClick(function () { broken(); return false; });');
+    emu.run('fb.button("light").button.onClick(function () { broken(); return false; });');
     emu.click('light');
     expect(rec.errors).toMatchObject([{ where: 'key', message: "ReferenceError: variable 'broken' is not defined" }]);
     expect(rec.keys[0]).toBe('3:click');

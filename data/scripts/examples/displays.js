@@ -25,7 +25,9 @@ var hasBar = false;
 // function declared inside an if / else block is not defined on the device.
 function show(value) {
     var rounded = Math.round(value * 10) / 10;                   // 1 decimal
-    fb.main.display.setValue(item, rounded);                     // main: numeric, by id
+    // main, by id. "\\s{40}" is text markup: this text at 40 px (the item
+    // has no style, so its own size is the 14 px of "displayitem").
+    fb.main.display.setValue(item, "\\s{40}" + rounded);
     if (hasBar) fb.bars[0].left.display.setLabel(rounded + " C"); // bar: label text
 }
 
@@ -35,9 +37,14 @@ if (tempId < 0) {
     print("Temperature sensor id=" + tempId);
 
     // Main TFT: one display item for the temperature.
-    // create(x, y, width, boxType, fontSize, alignment, label, unit, round, page)
+    // create(x, y, width, boxType, styles, alignment, label, unit, round, page)
+    //   styles: names of config.json "styles" separated by spaces, "" for none.
+    //           This example runs on any config, so it names no style and
+    //           sizes the value with markup in show(). With "styles":
+    //           {"big": {"font-size": 40}} in config.json, "big" here does
+    //           the same without markup.
     //   alignment: 0=left 1=center 2=right | round: decimals | page: 1-based
-    item = fb.main.display.create(20, 20, 220, 0, 40, 1, "Temperature", "C", 1, 1);
+    item = fb.main.display.create(20, 20, 220, 0, "", 1, "Temperature", "C", 1, 1);
 
     hasBar = fb.bars && fb.bars.length > 0;
     if (hasBar) fb.bars[0].left.display.setTopLabel("Temp");

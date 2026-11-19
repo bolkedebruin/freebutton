@@ -115,7 +115,7 @@ describe('emulator session: run and stop', () => {
   });
 
   it('an error at the top level: reported with its line; the script context stays (handlers run), as on the device', async () => {
-    await start('fb.key("light").button.onClick(function () { print("clicked"); });\nundefinedFunction();\n');
+    await start('fb.button("light").button.onClick(function () { print("clicked"); });\nundefinedFunction();\n');
     const snap = session.snapshot();
     expect(snap.status).toBe('running');
     expect(snap.errors).toBe(1);
@@ -211,12 +211,12 @@ describe('emulator session: info (the virtual device\'s info side)', () => {
 describe('emulator session: keys, console, staleness', () => {
   const SCRIPT = `
     var n = 0;
-    fb.key("light").button.onClick(function () {
+    fb.button("light").button.onClick(function () {
       n++;
-      fb.key("light").display.setLabel("On " + n);
+      fb.button("light").display.setLabel("On " + n);
       fb.bars[0].left.led.setColor(0, 255, 0);
     });
-    fb.key("light").button.onLongPress(function () { print("long"); });
+    fb.button("light").button.onLongPress(function () { print("long"); });
   `;
 
   it('a short press is a click: label and LED follow', async () => {
@@ -361,7 +361,7 @@ describe('emulator session: MQTT (in-page broker) and sensors', () => {
   it('loopback: a publish comes back to the script\'s own subscription', async () => {
     await start(`
       mqtt.subscribe(0, "loop/#", function (t, p) { print("back " + p); });
-      fb.key("light").button.onClick(function () { mqtt.publish(0, "loop/a", "1"); });
+      fb.button("light").button.onClick(function () { mqtt.publish(0, "loop/a", "1"); });
     `);
     const click = async () => { session.press(3); await wait(80); session.release(3); await wait(80); };
     await click();

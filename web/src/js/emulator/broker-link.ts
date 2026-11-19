@@ -74,11 +74,18 @@ export class BrokerLink implements MqttTransport {
   private readonly stateListeners = new Set<(state: TransportState) => void>();
   private pendingAbout: (PublishAbout & { topic: string }) | null = null;
   private liveUrl = '';
+  /** What the connection was made with besides the address: will, session, user name, password. */
   private liveWill = '';
 
   private matcher: MockBrokerOptions['matches'];
 
-  constructor(readonly index: number, options: MockBrokerOptions, private readonly hooks: LinkHooks) {
+  /**
+   * mode: the mode the link starts in. A live mode without a connection yet
+   * (setMode makes it): the firmware finds no broker until that one is up,
+   * and never hears "connected" from the in-page broker first.
+   */
+  constructor(readonly index: number, options: MockBrokerOptions, private readonly hooks: LinkHooks, mode: PublishMode = 'offline') {
+    this.current = mode;
     this.matcher = options.matches;
     // The filter match is the running emulator's (the firmware's): see adopt().
     this.mock = new MockBroker({ ...options, matches: (filter, topic) => this.matcher(filter, topic) });
@@ -111,7 +118,9 @@ export class BrokerLink implements MqttTransport {
 
   /**
    * Change the mode. A live mode needs `live` (the address) unless the link
-   * is live already; between the two live modes the connection stays.
+   * has a connection already; between the two live modes the connection
+   * stays, unless the address, the user name, the password, the will or
+   * `session` changed.
    * identity: the MQTT client id, the emulator's virtual identity.
    */
   setMode(mode: PublishMode, identity: string, live?: LiveOptions): void {
@@ -124,7 +133,8 @@ export class BrokerLink implements MqttTransport {
       this.refresh();
       return;
     }
-    const will = live ? JSON.stringify([live.will ?? null, live.session ?? '']) : '';
+    // Everything the connection is made with: a corrected password connects again.
+    const will = live ? JSON.stringify([live.will ?? null, live.session ?? '', live.username ?? '', live.password ?? '']) : '';
     const reuse = this.client && (!live || (live.url === this.liveUrl && will === this.liveWill)) && this.clientId === identity;
     this.current = mode;
     this.clientId = identity;

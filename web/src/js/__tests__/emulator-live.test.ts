@@ -1,7 +1,10 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { emulatorModule, BASIC_CONFIG } from './emulator-helpers';
 import { EmulatorSession, virtualDeviceId, type RunSource } from '../emulator-session';
-import { brokerConfigs, brokerHost, type AskRequest } from '../emulator/live-session';
+import type { AskRequest } from '../emulator/live-session';
+import {
+  brokerAccess, brokerConfigs, brokerHost, defaultWsUrl, readBrokerSettings, setDefaultStartMode, writeBrokerSettings,
+} from '../virtual-broker';
 import type { BrokerLink } from '../emulator/broker-link';
 import type { ConsoleLine } from '../app-state';
 import { TestBroker, nodeSocket, until } from './mqtt-test-broker';
@@ -9,7 +12,7 @@ import { TestBroker, nodeSocket, until } from './mqtt-test-broker';
 const SCRIPT = `
   mqtt.subscribe(0, "home/temp", function (t, p) { fb.main.display.setValue("temp", p); });
   mqtt.subscribe(0, "home/+/state", function (t, p) { print(t + "=" + p); });
-  fb.key("light").button.onClick(function () {
+  fb.button("light").button.onClick(function () {
     mqtt.publish(0, "home/light/set", "ON", 0, 1);
     mqtt.publish(0, "buttonplus/" + system.id() + "/key", "press", 1, 0);
     mqtt.publish(0, "buttonplus/btn_a00001/cover/raam/set", "stop", 0, 0);
@@ -91,25 +94,220 @@ describe('broker settings', () => {
   it('the host of a broker url; the brokers of config.json', () => {
     expect(['mqtt://192.168.1.10/', '192.168.1.10', 'mqtts://user:pw@broker.lan:8883/x', 'mqtt://[fe80::1]:1883'].map(brokerHost))
       .toEqual(['192.168.1.10', '192.168.1.10', 'broker.lan', '[fe80::1]']);
-    expect(brokerConfigs(JSON.stringify({ brokers: [{ brokerid: 'ha', url: 'mqtt://10.0.0.5/', port: 1883, username: 'u', password: 'p', clientid: 'btn_a00001' }, 5] })))
-      .toEqual([{ name: 'ha', url: 'mqtt://10.0.0.5/', host: '10.0.0.5', username: 'u', password: 'p', clientId: 'btn_a00001' }]);
+    expect(brokerConfigs(JSON.stringify({ brokers: [{ brokerid: 'ha', url: 'mqtt://10.0.0.5/', port: 1883, wsport: 9443, username: 'u', password: 'p', clientid: 'btn_a00001' }, 5] })))
+      .toEqual([{ name: 'ha', url: 'mqtt://10.0.0.5/', host: '10.0.0.5', wsPort: 9443, username: 'u', password: 'p', clientId: 'btn_a00001' }]);
     expect(brokerConfigs('not json')).toEqual([]);
   });
 
-  it('the WebSocket address: ws://<host>:1884 by default, what the user set for that host after that (kept by the browser)', async () => {
+  it('the WebSocket address config.json gives: its "wsport", else 9001; a ws:// or wss:// url as it is', () => {
+    const of = (broker: Record<string, unknown>) => defaultWsUrl(brokerConfigs(JSON.stringify({ brokers: [broker] }))[0]!);
+    expect(of({ url: 'mqtt://10.0.0.5/', port: 1883, wsport: 1884 })).toBe('ws://10.0.0.5:1884');
+    expect(of({ url: 'mqtt://10.0.0.5/', port: 1883 })).toBe('ws://10.0.0.5:9001');
+    expect(of({ url: 'mqtt://10.0.0.5/', wsport: 0 })).toBe('ws://10.0.0.5:9001');
+    expect(of({ url: '10.0.0.5', wsport: '8083' })).toBe('ws://10.0.0.5:8083');
+    expect(of({ url: 'ws://10.0.0.5:8080/mqtt', wsport: 1884 })).toBe('ws://10.0.0.5:8080/mqtt');
+    expect(of({ url: 'wss://broker.lan/mqtt' })).toBe('wss://broker.lan/mqtt');
+    expect(of({ url: '' })).toBe('');
+  });
+
+  it('what the browser keeps for a host wins, per field; empty fields are config.json\'s; the address set before the records is still read', () => {
+    const [b] = brokerConfigs(JSON.stringify({ brokers: [{ url: 'mqtt://10.0.0.5/', wsport: 1884, username: 'u', password: 'p' }] }));
+    expect(brokerAccess(b!)).toEqual({ url: 'ws://10.0.0.5:1884', username: 'u', password: 'p' });
+    // The key of before: the address only.
+    localStorage.setItem('fb-mqtt-ws:10.0.0.5', 'ws://10.0.0.5:32768');
+    expect(readBrokerSettings('10.0.0.5')).toEqual({ url: 'ws://10.0.0.5:32768', username: '', password: '' });
+    expect(brokerAccess(b!)).toEqual({ url: 'ws://10.0.0.5:32768', username: 'u', password: 'p' });
+    // A record: its fields win; the old key goes.
+    expect(writeBrokerSettings('10.0.0.5', { url: ' ws://10.0.0.5:9002 ', username: '', password: 'other' })).toBe(true);
+    expect(JSON.parse(localStorage.getItem('freebutton.virtualBroker:10.0.0.5')!)).toEqual({ url: 'ws://10.0.0.5:9002', username: '', password: 'other' });
+    expect(localStorage.getItem('fb-mqtt-ws:10.0.0.5')).toBeNull();
+    expect(brokerAccess(b!)).toEqual({ url: 'ws://10.0.0.5:9002', username: 'u', password: 'other' });
+    // Nothing in any field: the record goes.
+    writeBrokerSettings('10.0.0.5', { url: '', username: '', password: '' });
+    expect(localStorage.getItem('freebutton.virtualBroker:10.0.0.5')).toBeNull();
+    expect(readBrokerSettings('10.0.0.5')).toBeNull();
+    // Something unreadable in the store is no record.
+    localStorage.setItem('freebutton.virtualBroker:10.0.0.5', '{nope');
+    expect(brokerAccess(b!)).toEqual({ url: 'ws://10.0.0.5:1884', username: 'u', password: 'p' });
+  });
+
+  it('the status lists the brokers with what they connect with; saved settings are kept per host and announced; reset goes back to config.json', async () => {
     localStorage.clear();
+    const changes: string[] = [];
+    const onChange = (e: Event) => changes.push((e as CustomEvent<{ host: string }>).detail.host);
+    window.addEventListener('virtual-broker-change', onChange);
     await start();
-    expect(session.mqttStatus()!.brokers[0]).toMatchObject({ name: 'local', host: 'broker.test', wsUrl: 'ws://broker.test:1884', state: 'disconnected' });
-    session.setBrokerUrl(0, ' ws://broker.test:32768 ');
-    expect(session.mqttStatus()!.brokers[0]!.wsUrl).toBe('ws://broker.test:32768');
-    expect(localStorage.getItem('fb-mqtt-ws:broker.test')).toBe('ws://broker.test:32768');
-    // Nothing else about MQTT is stored.
-    expect(localStorage.length).toBe(2);   // this and the virtual device's id
+    expect(session.mqttStatus().brokers[0]).toMatchObject({
+      name: 'local', host: 'broker.test', wsUrl: 'ws://broker.test:9001', defaultWsUrl: 'ws://broker.test:9001', username: '', overridden: false, state: 'disconnected',
+    });
+    expect(session.brokerSettings('broker.test')).toBeNull();
+    expect(session.saveBrokerSettings('broker.test', { url: ' ws://broker.test:32768 ', username: 'me', password: 'pw' })).toBe('');
+    expect(session.mqttStatus().brokers[0]).toMatchObject({
+      wsUrl: 'ws://broker.test:32768', defaultWsUrl: 'ws://broker.test:9001', username: 'me', defaultUsername: '', overridden: true, hasCredentials: true,
+    });
+    expect(session.brokerSettings('broker.test')).toEqual({ url: 'ws://broker.test:32768', username: 'me', password: 'pw' });
+    expect(JSON.parse(localStorage.getItem('freebutton.virtualBroker:broker.test')!)).toEqual({ url: 'ws://broker.test:32768', username: 'me', password: 'pw' });
+    session.resetBrokerSettings('broker.test');
+    expect(session.mqttStatus().brokers[0]).toMatchObject({ wsUrl: 'ws://broker.test:9001', username: '', overridden: false });
+    expect(localStorage.getItem('freebutton.virtualBroker:broker.test')).toBeNull();
+    expect(changes).toEqual(['broker.test', 'broker.test']);
+    window.removeEventListener('virtual-broker-change', onChange);
+  });
+
+  it('while nothing runs the status is of config.json as the workspace has it: its brokers, the mode of the next Run', () => {
+    localStorage.clear();
+    session.readConfig = () => JSON.stringify({ brokers: [
+      { brokerid: 'ha', url: 'mqtt://10.0.0.5/', wsport: 1884, username: 'u', password: 'p' },
+      { brokerid: 'same-host', url: 'mqtts://10.0.0.5:8883/' },
+      { brokerid: 'ws', url: 'wss://broker.lan/mqtt' },
+    ] });
+    expect(session.mqttStatus()).toMatchObject({ mode: 'offline', sendRetained: false, announce: false, ownStates: false, announced: 0 });
+    expect(session.mqttStatus().brokers.map(b => [b.name, b.host, b.wsUrl, b.defaultUsername, b.configPassword, b.state])).toEqual([
+      ['ha', '10.0.0.5', 'ws://10.0.0.5:1884', 'u', true, 'disconnected'],
+      ['same-host', '10.0.0.5', 'ws://10.0.0.5:9001', '', false, 'disconnected'],
+      ['ws', 'broker.lan', 'wss://broker.lan/mqtt', '', false, 'disconnected'],
+    ]);
+    // Two entries with one host share the record.
+    session.saveBrokerSettings('10.0.0.5', { url: 'ws://10.0.0.5:8083', username: '', password: '' });
+    expect(session.mqttStatus().brokers.map(b => [b.wsUrl, b.overridden])).toEqual([
+      ['ws://10.0.0.5:8083', true], ['ws://10.0.0.5:8083', true], ['wss://broker.lan/mqtt', false],
+    ]);
+    session.readConfig = () => null;
+    expect(session.mqttStatus().brokers).toEqual([]);
+  });
+});
+
+describe('the mode a Run starts in', () => {
+  const DISCOVERY = { ...BASIC_CONFIG, brokers: [{ ...BASIC_CONFIG.brokers[0], hassdiscovery: true }] };
+  const own = () => `buttonplus/${virtualDeviceId()}`;
+
+  it('by default a Run connects to the broker of config.json, live publish, without a last will; the firmware never talks to the in-page broker first', async () => {
+    setDefaultStartMode('live-publish');
+    expect(session.snapshot()).toMatchObject({ status: 'idle', mqtt: 'live-publish', mqttLink: 'none' });
+    await start();
+    expect(session.snapshot()).toMatchObject({ status: 'running', mqtt: 'live-publish' });
+    expect(lines.some(l => l.text.includes(`started (MQTT live: connecting to ${broker.url})`))).toBe(true);
+    await until(() => session.snapshot().mqttLink === 'connected', 3000, 'the live connection');
+    await until(() => broker.subscriptionsOf(virtualDeviceId()).length >= 2, 3000, 'the subscriptions');
+    expect(broker.connects.map(c => [c.clientId, c.cleanSession, c.will])).toEqual([[virtualDeviceId(), true, undefined]]);
+    expect(session.mqttStatus()).toMatchObject({ mode: 'live-publish', sendRetained: false, announce: false, ownStates: false, announced: 0 });
+    // The birth message was put to the real broker's rules (held: discovery is off), never to the in-page broker.
+    expect(session.mqttLog().some(e => e.kind === 'published')).toBe(false);
+    expect(session.mqttLog().filter(e => e.what === 'availability').map(e => [e.kind, e.payload, e.note])).toEqual([
+      ['blocked', 'online', 'not sent: Home Assistant discovery is off'],
+    ]);
+    answer = null;
+    await click();
+    await until(() => scriptPublished().length === 2);
+    expect(sent()).toEqual([['home/light/set', 'ON', 0, false], [`${own()}/key`, 'press', 1, false]]);
+    // Nothing was stored as a choice: the default is not one.
+    expect(localStorage.getItem('fb-mqtt-mode')).toBeNull();
+  });
+
+  it('"hassdiscovery": true in config.json sends no discovery by itself: no will, no birth message, no config topics', async () => {
+    setDefaultStartMode('live-publish');
+    await start(SCRIPT, DISCOVERY);
+    await until(() => session.snapshot().mqttLink === 'connected', 3000, 'the live connection');
+    await until(() => broker.subscriptionsOf(virtualDeviceId()).includes(`${own()}/button_3/set`));
+    await wait(1600);                        // discovery starts a second after the connect
+    expect(session.mqttStatus().announce).toBe(false);
+    expect(broker.connects.map(c => c.will)).toEqual([undefined]);
+    expect(broker.published).toEqual([]);
+    expect(broker.retained.size).toBe(0);
+    const log = session.mqttLog();
+    expect(log.find(e => e.what === 'discovery')).toMatchObject({ kind: 'blocked', note: 'not sent: Home Assistant discovery is off' });
+    expect(log.find(e => e.what === 'discovery')!.count).toBeGreaterThan(10);
+    expect(log.find(e => e.what === 'availability')).toMatchObject({ kind: 'blocked', payload: 'online' });
+    broker.cut(virtualDeviceId());
+    await wait(80);
+    expect(broker.wills).toEqual([]);
+  });
+
+  it('a config without brokers starts offline, whatever the mode', async () => {
+    setDefaultStartMode('live-publish');
+    await start('print("up");', { ...BASIC_CONFIG, brokers: [] });
+    expect(session.snapshot()).toMatchObject({ status: 'running', mqtt: 'offline', mqttLink: 'none' });
+    expect(lines.some(l => l.text.includes('started (MQTT offline: config.json has no brokers)'))).toBe(true);
+    await wait(60);
+    expect(broker.connects).toEqual([]);
+  });
+
+  it('the mode chosen is remembered: Offline holds over Stop, Run again and a new page', async () => {
+    setDefaultStartMode('live-publish');
+    expect(session.setMqttMode('offline')).toBe('');          // nothing runs: for the next Run
+    expect(localStorage.getItem('fb-mqtt-mode')).toBe('offline');
+    await start();
+    expect(session.snapshot()).toMatchObject({ mqtt: 'offline', mqttLink: 'none' });
+    expect(lines.some(l => l.text.includes('started (MQTT offline: in-page broker)'))).toBe(true);
+    session.stop();
+    await start();
+    expect(session.snapshot()).toMatchObject({ mqtt: 'offline', mqttLink: 'none' });
+    // A reload: another session object, the same browser storage.
+    session.destroy();
+    session = new EmulatorSession();
+    session.wasm = emulatorModule();
+    session.socket = nodeSocket;
+    session.securePage = false;
+    expect(session.snapshot().mqtt).toBe('offline');
+    await start();
+    expect(session.snapshot()).toMatchObject({ mqtt: 'offline', mqttLink: 'none' });
+    await click();
+    await wait(60);
+    expect(broker.connects).toEqual([]);
+    expect(session.mqttLog().filter(e => e.origin === 'script').every(e => e.kind === 'published')).toBe(true);
+  });
+
+  it('a remembered Read-only is the mode of the next Run: connected, nothing published', async () => {
+    localStorage.setItem('fb-mqtt-mode', 'live-readonly');
+    setDefaultStartMode('live-publish');
+    await start();
+    await until(() => session.snapshot().mqttLink === 'connected', 3000, 'the live connection');
+    expect(session.snapshot().mqtt).toBe('live-readonly');
+    await click();
+    await wait(60);
+    expect(broker.published).toEqual([]);
+    expect(logged().slice(0, 4).map(l => l[0])).toEqual(Array(4).fill('would-publish'));
+    // Something else in the store is not a mode: the default.
+    localStorage.setItem('fb-mqtt-mode', 'everything');
+    session.destroy();
+    session = new EmulatorSession();
+    expect(session.snapshot().mqtt).toBe('live-publish');
+  });
+
+  it('the switches can be set before Run and hold for it: discovery on connects with the firmware\'s will; Stop keeps them', async () => {
+    setDefaultStartMode('live-publish');
+    session.setAnnounce(true);
+    session.setOwnStates(true);
+    expect(session.mqttStatus()).toMatchObject({ mode: 'live-publish', announce: true, ownStates: true, sendRetained: false });
+    await start(SCRIPT, DISCOVERY);
+    await until(() => session.snapshot().mqttLink === 'connected', 3000, 'the live connection');
+    expect(broker.connects.length).toBe(1);
+    expect(broker.connects[0]!.will).toEqual({ topic: `${own()}/status`, payload: 'offline', qos: 1, retain: false });
+    await until(() => broker.published.some(p => p.topic === `${own()}/status` && p.payload === 'online'), 3000, 'the birth message');
+    expect(session.mqttStatus()).toMatchObject({ announce: true, ownStates: true });
+    session.stop();
+    expect(session.mqttStatus()).toMatchObject({ mode: 'live-publish', announce: true, ownStates: true });
+    // Not in another mode: they belong to live publish.
+    session.setMqttMode('live-readonly');
+    expect(session.mqttStatus()).toMatchObject({ mode: 'live-readonly', announce: false, ownStates: false });
+    session.setAnnounce(true);
+    expect(session.mqttStatus().announce).toBe(false);
+  });
+
+  it('before the first Run too: a switch set in another mode than live publish is not set', () => {
+    session.setAnnounce(true);                 // the tests' default: offline
+    session.setSendRetained(true);
+    expect(session.mqttStatus()).toMatchObject({ mode: 'offline', announce: false, sendRetained: false });
+    session.setMqttMode('live-publish');
+    session.setSendRetained(true);
+    expect(session.mqttStatus()).toMatchObject({ mode: 'live-publish', sendRetained: true });
+    session.setMqttMode('offline');
+    expect(session.mqttStatus()).toMatchObject({ mode: 'offline', sendRetained: false });
   });
 });
 
 describe('modes', () => {
-  it('every start is offline: nothing connects, publishes go to the in-page broker', async () => {
+  it('offline: nothing connects, publishes go to the in-page broker; the mode can be changed while nothing runs', async () => {
     await start();
     expect(session.snapshot()).toMatchObject({ mqtt: 'offline', mqttLink: 'none' });
     expect(session.mqttStatus()).toMatchObject({ mode: 'offline', sendRetained: false, announce: false, announced: 0 });
@@ -121,9 +319,15 @@ describe('modes', () => {
     expect(session.mqttLog().filter(e => e.origin === 'firmware').map(e => [e.what, e.topic, e.payload])).toEqual([
       ['availability', `buttonplus/${virtualDeviceId()}/status`, 'online'],
     ]);
-    expect(session.setMqttMode('live-publish')).toBe('');
     session.stop();
-    expect(session.setMqttMode('live-publish')).toBe('Run the virtual device first');
+    // Stopped: the choice is for the next Run; nothing connects until then.
+    expect(session.setMqttMode('live-readonly')).toBe('');
+    expect(session.snapshot()).toMatchObject({ status: 'idle', mqtt: 'live-readonly', mqttLink: 'none' });
+    await wait(60);
+    expect(broker.connects).toEqual([]);
+    await start();
+    await until(() => session.snapshot().mqttLink === 'connected', 3000, 'the live connection');
+    expect(session.snapshot().mqtt).toBe('live-readonly');
   });
 
   it('live read-only: connected as the virtual identity, the script\'s subscriptions are made, messages arrive, nothing is published', async () => {
@@ -165,7 +369,7 @@ describe('modes', () => {
     expect(asked[0]!.choices.map(c => c.label)).toEqual(['Once', 'For this session']);
     expect(asked[0]!.cancel).toBe('No');
     expect(logged().slice(0, 4)).toEqual([
-      ['blocked', `homeassistant/sensor/${virtualDeviceId()}_t/config`, 'not sent: announcing to Home Assistant is off'],
+      ['blocked', `homeassistant/sensor/${virtualDeviceId()}_t/config`, 'not sent: Home Assistant discovery is off'],
       ['blocked', REAL_TOPIC, 'not sent: you said no to publishing as the real device btn_a00001'],
       ['sent', `buttonplus/${virtualDeviceId()}/key`, 'sent to the broker'],
       ['sent', 'home/light/set', 'sent to the broker · retain cleared'],
@@ -308,9 +512,9 @@ describe('modes', () => {
     expect(broker.published.map(p => p.topic)).toEqual([`${own}/button_3/state`]);
     expect(asked.length).toBe(1);
     expect(session.mqttLog().slice().reverse().map(e => [e.what, e.kind, e.note])).toEqual([
-      ['availability', 'blocked', 'not sent: announcing to Home Assistant is off'],
+      ['availability', 'blocked', 'not sent: Home Assistant discovery is off'],
       ['press', 'sent', 'sent to the broker'],
-      ['discovery', 'blocked', 'not sent: announcing to Home Assistant is off'],
+      ['discovery', 'blocked', 'not sent: Home Assistant discovery is off'],
       ['sensor', 'blocked', 'not sent: the virtual device\'s own states are off'],
       ['state', 'blocked', 'not sent: the virtual device\'s own states are off'],
       ['press', 'blocked', 'not sent: you said no to publishing as the real device btn_a00001'],
@@ -379,7 +583,7 @@ describe('live: discovery on in config.json', () => {
     ].sort());
     expect(broker.published.find(p => p.topic === `${own()}/button_3/state`)!.payload).toContain('click');
     const log = session.mqttLog();
-    expect(log.find(e => e.what === 'discovery')).toMatchObject({ kind: 'blocked', note: 'not sent: announcing to Home Assistant is off' });
+    expect(log.find(e => e.what === 'discovery')).toMatchObject({ kind: 'blocked', note: 'not sent: Home Assistant discovery is off' });
     expect(log.find(e => e.what === 'discovery')!.count).toBeGreaterThan(10);
     expect(log.find(e => e.what === 'availability')).toMatchObject({ kind: 'blocked', payload: 'online' });
     expect(log.filter(e => e.what === 'sensor').every(e => e.kind === 'blocked')).toBe(true);
@@ -390,7 +594,7 @@ describe('live: discovery on in config.json', () => {
   });
 
   it('a command on the virtual device\'s own key topic presses the key, as on the device', async () => {
-    await start('fb.key("light").button.onClick(function () { print("clicked"); });', DISCOVERY);
+    await start('fb.button("light").button.onClick(function () { print("clicked"); });', DISCOVERY);
     session.setMqttMode('live-readonly');
     await until(() => broker.subscriptionsOf(virtualDeviceId()).includes(`${own()}/button_3/set`), 3000);
     broker.publish(`${own()}/button_3/set`, 'PRESS');
@@ -476,33 +680,47 @@ describe('live: the rest of the session', () => {
     expect(session.mqttLog().some(e => e.topic === 'home/temp')).toBe(false);
   });
 
-  it('Stop ends the connection (a clean DISCONNECT); the next Run is offline', async () => {
+  it('Stop ends the connection (a clean DISCONNECT); the next Run connects again in the same mode', async () => {
     await start();
     await live('live-publish');
     session.stop();
     await until(() => broker.disconnects === 1 && broker.clientIds.length === 0);
+    expect(session.snapshot()).toMatchObject({ status: 'idle', mqtt: 'live-publish', mqttLink: 'none' });
     await start();
-    expect(session.snapshot()).toMatchObject({ mqtt: 'offline', mqttLink: 'none' });
-    await click();
-    await wait(60);
-    expect(broker.published).toEqual([]);
-    expect(broker.connects.length).toBe(1);
+    expect(session.snapshot().mqtt).toBe('live-publish');
+    await until(() => session.snapshot().mqttLink === 'connected' && broker.subscriptionsOf(virtualDeviceId()).length >= 2, 3000, 'the connection of the second Run');
+    expect(broker.connects.length).toBe(2);
+    expect(broker.wills).toEqual([]);
   });
 
-  it('a config with other brokers: disconnected and offline', async () => {
-    await start();
-    await live('live-readonly');
-    await start(SCRIPT, { ...BASIC_CONFIG, brokers: [{ brokerid: 'other', url: 'mqtt://elsewhere.test/' }] });
-    expect(session.snapshot()).toMatchObject({ status: 'running', mqtt: 'offline', mqttLink: 'none' });
-    await until(() => broker.clientIds.length === 0);
+  it('a config with other brokers: the connection ends and one to the new broker is made, in the same mode', async () => {
+    const other = await TestBroker.start();
+    localStorage.setItem('fb-mqtt-ws:elsewhere.test', other.url);
+    try {
+      await start();
+      await live('live-readonly');
+      await start(SCRIPT, { ...BASIC_CONFIG, brokers: [{ brokerid: 'other', url: 'mqtt://elsewhere.test/' }] });
+      expect(session.snapshot()).toMatchObject({ status: 'running', mqtt: 'live-readonly' });
+      await until(() => broker.clientIds.length === 0 && other.clientIds.length === 1, 3000, 'the connection to move');
+      expect(session.mqttStatus().brokers.map(b => [b.name, b.wsUrl, b.state])).toEqual([['other', other.url, 'connected']]);
+    } finally {
+      session.stop();
+      await other.stop();
+    }
   });
 
-  it('a script that does not start ends the connection too', async () => {
+  it('a script that does not start ends the connection too, and makes none', async () => {
     await start();
     await live('live-publish');
     await start('var x = ;');
-    expect(session.snapshot()).toMatchObject({ status: 'error', mqtt: 'offline' });
+    expect(session.snapshot()).toMatchObject({ status: 'error', mqtt: 'live-publish', mqttLink: 'none' });
     await until(() => broker.clientIds.length === 0);
+    // From nothing: a script that does not compile never reaches the broker.
+    session.stop();
+    const before = broker.connects.length;
+    await start('var y = ;');
+    await wait(80);
+    expect(broker.connects.length).toBe(before);
   });
 
   it('back to offline: disconnects; the in-page broker takes over', async () => {
@@ -525,6 +743,31 @@ describe('live: the rest of the session', () => {
     expect(session.mqttStatus()!.brokers[0]).toMatchObject({ configClientId: 'btn_a00001', hasCredentials: true });
     await live('live-readonly');
     expect(broker.connects[0]).toMatchObject({ clientId: virtualDeviceId(), username: 'ha', password: 'secret' });
+  });
+
+  it('a wrong password in config.json: refused; the password saved in the settings connects again, with it', async () => {
+    await broker.stop();
+    broker = await TestBroker.start({ users: { ha: 'secret' } });
+    localStorage.setItem('fb-mqtt-ws:broker.test', broker.url);
+    await start(SCRIPT, { ...BASIC_CONFIG, brokers: [{ brokerid: 'local', url: 'mqtt://broker.test/', username: 'ha', password: 'wrong' }] });
+    session.setMqttMode('live-readonly');
+    await until(() => session.snapshot().mqttLink === 'error');
+    expect(session.mqttStatus().brokers[0]!.error).toMatchObject({ kind: 'auth' });
+    expect(broker.clientIds).toEqual([]);
+    // The password is given, no user name: config.json's user name stays.
+    expect(session.saveBrokerSettings('broker.test', { url: broker.url, username: '', password: 'secret' })).toBe('');
+    await until(() => session.snapshot().mqttLink === 'connected', 3000, 'the connection with the new password');
+    expect(broker.connects[broker.connects.length - 1]).toMatchObject({ username: 'ha', password: 'secret' });
+    expect(session.mqttStatus().brokers[0]).toMatchObject({ wsUrl: broker.url, username: 'ha', overridden: true, error: null });
+    // Saved again unchanged: the connection stays.
+    const connections = broker.connects.length;
+    session.saveBrokerSettings('broker.test', { url: broker.url, username: '', password: 'secret' });
+    await wait(80);
+    expect(broker.connects.length).toBe(connections);
+    // Another user name: connected again, and refused (the broker knows no such user).
+    session.saveBrokerSettings('broker.test', { url: broker.url, username: 'nobody', password: 'secret' });
+    await until(() => session.snapshot().mqttLink === 'error');
+    expect(broker.connects[broker.connects.length - 1]).toMatchObject({ username: 'nobody' });
   });
 
   it('the firmware\'s limits hold in a live mode: 8 subscriptions per broker, the size of a message', async () => {
@@ -554,16 +797,36 @@ describe('live: when it does not connect', () => {
     await broker.stop();
     broker = await TestBroker.start();
     localStorage.setItem('fb-mqtt-ws:broker.test', url);
+    localStorage.setItem('fb-mqtt-mode', 'live-readonly');
     await start();
-    session.setMqttMode('live-readonly');
     await until(() => session.snapshot().mqttLink === 'error');
     const b = session.mqttStatus()!.brokers[0]!;
     expect(b.error).toMatchObject({ kind: 'unreachable' });
     expect(lines.some(l => l.type === 'error' && l.text.includes('no websockets listener'))).toBe(true);
+    // Nothing falls back to the in-page broker: the mode stays, and it is tried again.
+    await wait(120);
+    expect(session.snapshot()).toMatchObject({ mqtt: 'live-readonly', mqttLink: expect.stringMatching(/error|connecting/) });
+    expect(session.mqttLog().some(e => e.kind === 'published')).toBe(false);
     // The address is corrected: it connects.
-    session.setBrokerUrl(0, broker.url);
+    expect(session.saveBrokerSettings('broker.test', { url: broker.url, username: '', password: '' })).toBe('');
     await until(() => session.snapshot().mqttLink === 'connected');
     expect(session.mqttStatus()!.brokers[0]!.error).toBeNull();
+  });
+
+  it('"Use offline" is the user\'s choice: the in-page broker takes over, and the browser remembers it', async () => {
+    const url = broker.url;
+    await broker.stop();
+    broker = await TestBroker.start();
+    localStorage.setItem('fb-mqtt-ws:broker.test', url);
+    setDefaultStartMode('live-publish');
+    await start();
+    await until(() => session.snapshot().mqttLink === 'error');
+    expect(session.snapshot().mqtt).toBe('live-publish');
+    expect(session.setMqttMode('offline')).toBe('');
+    expect(session.snapshot()).toMatchObject({ mqtt: 'offline', mqttLink: 'none' });
+    expect(localStorage.getItem('fb-mqtt-mode')).toBe('offline');
+    await click();
+    expect(session.mqttLog().filter(e => e.origin === 'script').every(e => e.kind === 'published')).toBe(true);
   });
 
   it('an https page and a ws:// address: said at once, nothing is tried', async () => {
@@ -586,8 +849,12 @@ describe('live: when it does not connect', () => {
     await until(() => session.pages()![0]!.displayItems[0]!.value === '5');
   });
 
-  it('a config without brokers cannot go live', async () => {
+  it('a config without brokers cannot go live: the choice is kept for a config that has one', async () => {
     await start('1;', { ...BASIC_CONFIG, brokers: [] });
     expect(session.setMqttMode('live-readonly')).toBe('config.json has no "brokers" to connect to');
+    expect(session.snapshot()).toMatchObject({ mqtt: 'offline', mqttLink: 'none' });
+    await start();
+    await until(() => session.snapshot().mqttLink === 'connected', 3000, 'the live connection');
+    expect(session.snapshot().mqtt).toBe('live-readonly');
   });
 });

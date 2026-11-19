@@ -6,14 +6,15 @@
 #include "ui_style.h"
 #include "ui_text.h"
 #include "text_spans.h"
+#include "style_logic.h"
 
 
 static lv_style_t style_container;
 static lv_style_t style_mini;
 static lv_style_t style_icon;
 
-/* LVGL lock held. The labels' text styles are ui_style.h's (key.label,
- * key.toplabel). */
+/* LVGL lock held. The labels' text styles are ui_style.h's (the button
+ * elements). */
 void ui_button_styles(void)
 {
     // Initialize container style for clean layout
@@ -77,12 +78,12 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
     b->rich_text = NULL;
     b->title_font = NULL;
     b->text_font = NULL;
-    b->title_face = (int16_t)ui_style_resolved(STYLE_EL_KEY_TOPLABEL)->face;
-    b->title_px = (int16_t)ui_style_resolved(STYLE_EL_KEY_TOPLABEL)->px;
-    b->text_face = (int16_t)ui_style_resolved(STYLE_EL_KEY_LABEL)->face;
-    b->text_px = (int16_t)ui_style_resolved(STYLE_EL_KEY_LABEL)->px;
+    b->title_face = (int8_t)ui_style_resolved(STYLE_EL_KEY_TOPLABEL)->face;
+    b->title_px = ui_style_resolved(STYLE_EL_KEY_TOPLABEL)->px;
+    b->text_face = (int8_t)ui_style_resolved(STYLE_EL_KEY_LABEL)->face;
+    b->text_px = ui_style_resolved(STYLE_EL_KEY_LABEL)->px;
+    b->title_line_height = b->text_line_height = 0;
     b->icon_shown = false;
-    b->title_style = b->text_style = 0;
     b->style_pending = false;
 
 	lv_obj_set_size(cont, 160, 80);
@@ -100,7 +101,7 @@ lv_obj_t *ui_button_create(lv_obj_t* parent) {
 	// CONTENT => TOP => LABEL
 	lv_obj_t * toplabel = lv_label_create(topobj);
 	b->title = toplabel;
-	lv_obj_add_style(toplabel, ui_style_get(STYLE_EL_KEY_TOPLABEL), 0); /* centred unless "style" aligns it */
+	lv_obj_add_style(toplabel, ui_style_get(STYLE_EL_KEY_TOPLABEL), 0); /* centred unless a style aligns it */
 	lv_obj_set_width(toplabel, lv_pct(100));
 	lv_obj_align(toplabel, LV_ALIGN_CENTER, 0, 0);
 
@@ -155,7 +156,7 @@ static size_t set_markup(button_dsc_t * b, const bool title, const char * raw)
     const style_element_t el = title ? STYLE_EL_KEY_TOPLABEL : STYLE_EL_KEY_LABEL;
     const int face = title ? b->title_face : b->text_face;
     const int px = title ? b->title_px : b->text_px;
-    const uint8_t named = title ? b->title_style : b->text_style;
+    const style_part_t part = title ? STYLE_PART_TITLE : STYLE_PART_MAIN;
     const bool hidden = !title && b->icon_shown;
 
     char in[UI_BUTTON_TEXT_MAX + 1];
@@ -183,13 +184,14 @@ static size_t set_markup(button_dsc_t * b, const bool title, const char * raw)
             }
         }
         if (*rich != NULL) {
-            /* `named` is what the label carries, and face / px follow it
-             * (Button::applyFonts). A row the pool has no room to add it
-             * to is drawn without its colour for now. */
-            if (!ui_text_set_named(*rich, named)) {
+            /* The row takes the styles the label carries, and face / px
+             * follow those (Button::applyFonts). A row the pool has no room
+             * to add them to is drawn without their colour for now. A text
+             * in several formats stays centred: no alignment is passed. */
+            if (!ui_text_set_styles(*rich, ui_text_styles(label), part)) {
                 b->style_pending = true;
             }
-            ui_render_text(*rich, in, ui_style_get(el), ui_text_named(*rich), face, px, title);
+            ui_render_text(*rich, in, ui_style_get(el), part, face, px, title, 0);
             lv_obj_set_hidden(*rich, hidden);
             lv_obj_set_hidden(label, true);
             return parsed.text_len;
@@ -222,6 +224,14 @@ static size_t set_markup(button_dsc_t * b, const bool title, const char * raw)
     } else {
         lv_obj_remove_local_style_prop(label, LV_STYLE_TEXT_ALIGN, 0);
     }
+    /* line-height: the gap depends on the font the label has now. */
+    const int line_height = title ? b->title_line_height : b->text_line_height;
+    if (line_height != 0) {
+        const lv_font_t * font = lv_obj_get_style_text_font(label, 0);
+        lv_obj_set_style_text_line_space(label, style_logic_line_space(font->line_height, line_height), 0);
+    } else {
+        lv_obj_remove_local_style_prop(label, LV_STYLE_TEXT_LINE_SPACE, 0);
+    }
     return parsed.text_len;
 }
 
@@ -251,55 +261,54 @@ void ui_button_set_text(lv_obj_t * button, const char * text)
 	set_markup(b, false, text);
 }
 
-void ui_button_set_base_fonts(lv_obj_t* button, const int text_face, const int text_px, const int title_face,
-                              const int title_px)
-{
-    button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
-    if (b == NULL) {
-        return;
-    }
-    b->text_face = (int16_t)text_face;
-    b->text_px = (int16_t)text_px;
-    b->title_face = (int16_t)title_face;
-    b->title_px = (int16_t)title_px;
-}
-
-/* The named style on a label, after its element style (ui_button_create),
- * so it wins over it. The ref the label carries now is its user data (0 on
- * a new label): only a change touches the object. Returns that ref: `named`,
- * or 0 when the LVGL pool had no room to add it (*pending set; nothing is
- * tried again here, see ui_button_styles_pending). */
-static uint8_t set_label_style(lv_obj_t* label, const uint8_t named, bool* pending)
-{
-    if (!ui_text_set_named(label, named)) {
-        *pending = true;
-    }
-    return ui_text_named(label);
-}
-
-bool ui_button_set_styles(lv_obj_t* button, const uint8_t text_style, const uint8_t title_style)
+bool ui_button_set_base(lv_obj_t* button, const int text_face, const int text_px, const int text_line_height,
+                        const int title_face, const int title_px, const int title_line_height)
 {
     button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
     if (b == NULL) {
         return false;
     }
-    /* A style that was pending: the texts are set again either way (a row
-     * of spans may have been the one without its style). */
-    const bool was_pending = b->style_pending;
-    b->style_pending = false;
-    const uint8_t text = set_label_style(b->text, text_style, &b->style_pending);
-    const uint8_t title = set_label_style(b->title, title_style, &b->style_pending);
-    const bool changed = b->text_style != text || b->title_style != title;
-    b->text_style = text;
-    b->title_style = title;
-    return changed || was_pending;
+    const bool changed = b->text_face != (int8_t)text_face || b->text_px != (uint8_t)text_px ||
+                         b->text_line_height != (uint16_t)text_line_height || b->title_face != (int8_t)title_face ||
+                         b->title_px != (uint8_t)title_px || b->title_line_height != (uint16_t)title_line_height;
+    b->text_face = (int8_t)text_face;
+    b->text_px = (uint8_t)text_px;
+    b->text_line_height = (uint16_t)text_line_height;
+    b->title_face = (int8_t)title_face;
+    b->title_px = (uint8_t)title_px;
+    b->title_line_height = (uint16_t)title_line_height;
+    return changed;
 }
 
-void ui_button_get_styles(lv_obj_t* button, uint8_t* text_style, uint8_t* title_style)
+bool ui_button_set_styles(lv_obj_t* button, const style_list_t list)
+{
+    button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
+    if (b == NULL) {
+        return false;
+    }
+    /* Styles that were pending: the texts are set again either way (a row
+     * of spans may have been the one without them). */
+    const bool was_pending = b->style_pending;
+    b->style_pending = false;
+    const style_list_t text_before = ui_text_styles(b->text);
+    const style_list_t title_before = ui_text_styles(b->title);
+    /* After the element styles (ui_button_create), so they win over them.
+     * The two labels together: when the LVGL pool has no room for both,
+     * both keep what they carried; nothing is tried again here
+     * (ui_button_styles_pending). */
+    lv_obj_t* const objs[] = {b->text, b->title};
+    static const style_part_t parts[] = {STYLE_PART_MAIN, STYLE_PART_TITLE};
+    if (!ui_text_set_styles_all(objs, parts, 2, list)) {
+        b->style_pending = true;
+    }
+    return was_pending || ui_text_styles(b->text) != text_before || ui_text_styles(b->title) != title_before;
+}
+
+void ui_button_get_styles(lv_obj_t* button, style_list_t* text_styles, style_list_t* title_styles)
 {
     const button_dsc_t* b = (const button_dsc_t*)lv_obj_get_user_data(button);
-    *text_style = b != NULL ? b->text_style : 0;
-    *title_style = b != NULL ? b->title_style : 0;
+    *text_styles = b != NULL ? ui_text_styles(b->text) : 0;
+    *title_styles = b != NULL ? ui_text_styles(b->title) : 0;
 }
 
 bool ui_button_styles_pending(lv_obj_t* button)
@@ -308,16 +317,20 @@ bool ui_button_styles_pending(lv_obj_t* button)
     return b != NULL && b->style_pending;
 }
 
-void ui_button_set_fonts(lv_obj_t* button, const lv_font_t* text_font, const lv_font_t* title_font)
+bool ui_button_set_fonts(lv_obj_t* button, const lv_font_t* text_font, const lv_font_t* title_font)
 {
     button_dsc_t* b = (button_dsc_t*)lv_obj_get_user_data(button);
     if (b == NULL) {
-        return;
+        return false;
     }
+    /* Only kept here. The labels get them when their texts are set
+     * (set_markup), which also knows whether the text's own markup gives
+     * the label another font: setting them on the labels here would take a
+     * markup font away from a text that is not drawn again. */
+    const bool changed = b->text_font != text_font || b->title_font != title_font;
     b->text_font = text_font;
     b->title_font = title_font;
-    set_label_font(b->text, text_font);
-    set_label_font(b->title, title_font);
+    return changed;
 }
 
 void ui_button_set_icon(lv_obj_t* button, const lv_image_dsc_t* dsc)
@@ -327,7 +340,13 @@ void ui_button_set_icon(lv_obj_t* button, const lv_image_dsc_t* dsc)
         printf("ui_button_set_icon: invalid button or icon object\n");
         return;
     }
-    ui_image_set_raster(b->icon, dsc, lv_obj_get_style_text_color(b->text, 0));
+    /* The "icon" colour of the styles the label carries, else of "button",
+     * else the label's colour. */
+    uint32_t rgb;
+    const lv_color_t tint = ui_style_icon_color(STYLE_KIND_BUTTON, ui_text_styles(b->text), &rgb)
+                                ? lv_color_hex(rgb)
+                                : lv_obj_get_style_text_color(b->text, 0);
+    ui_image_set_raster(b->icon, dsc, tint);
     b->icon_shown = dsc != NULL;
     lv_obj_set_hidden(b->icon, dsc == NULL);
     /* The bottom text is its label, or the row of a text with several formats. */

@@ -6,7 +6,48 @@
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { configToModel } from '../config-model';
+import { fontResolver, fontTable } from '../font-config';
+import { validateBody, validateConfigShape } from '../fs-rules';
+import { parseStyles, removedKeyProblems } from '../style-config';
 import { makeEmulator, readRepoFile, repoPath } from './emulator-helpers';
+
+describe('the factory config (data/config.json)', () => {
+  const text = readRepoFile('data/config.json')!;
+  const config = JSON.parse(text) as Record<string, unknown>;
+
+  it('has no config problem: the IDE would save it as it is', () => {
+    expect(validateConfigShape(config)).toEqual([]);
+    expect(validateBody('config.json', text)).toBeNull();
+    // No key of the old format, no problem in "styles" or in an entry's "style".
+    expect(removedKeyProblems(config)).toEqual([]);
+    expect(parseStyles(config, fontResolver(fontTable(config))).problems).toEqual([]);
+    // And the IDE's model of it has every entry of the file.
+    const model = configToModel(config);
+    expect(model.pages.reduce((n, p) => n + p.buttons.length, 0)).toBe((config.buttons as unknown[]).length);
+  });
+
+  it('boots and draws in the emulator: no error, something on every display it has', async () => {
+    const { emu, clock, rec } = await makeEmulator({ config });
+    clock.advance(200);
+    emu.render();
+    expect(rec.errors).toEqual([]);
+    expect(rec.logs.filter(line => /^E /.test(line))).toEqual([]);
+    expect(rec.logs.filter(line => /no longer read|unknown style|bad value|unknown property/.test(line))).toEqual([]);
+    // Every button of the file is a key of the device, and each key display shows its label.
+    expect(emu.state.keys.map(k => k.position).sort((a, b) => a - b))
+      .toEqual((config.buttons as { position: number }[]).map(b => b.position).sort((a, b) => a - b));
+    const shown = emu.state.keys.filter(k => k.display);
+    expect(shown.length).toBeGreaterThan(0);
+    for (const key of shown) {
+      const shot = emu.screenshot(`key${key.position}`);
+      let lit = 0;
+      for (let i = 0; i < shot.data.length; i += 4) if (shot.data[i]! + shot.data[i + 1]! + shot.data[i + 2]! > 0) lit++;
+      expect(lit, `key ${key.position}`).toBeGreaterThan(0);
+    }
+    expect(emu.screenshot('main').width).toBe(320);
+  });
+});
 
 describe('the IDE example scripts', () => {
   const dir = repoPath('data/scripts/examples');
@@ -69,10 +110,14 @@ describe('the IDE example scripts', () => {
     expect(emu.run(readRepoFile('data/scripts/examples/displays.js')!)).toEqual({ ok: true });
     expect(rec.errors).toEqual([]);
     const item = emu.state.items.find(i => i.label === 'Temperature')!;
-    expect(item.value).toBe('21.5');
+    // The value at 40 px by markup: the example names no style, so that it runs on any config.
+    expect(item.value).toBe('\\s{40}21.5');
+    expect(item.style).toBe('');
+    expect(item.box!.value).toMatchObject({ plain: '21.5', runs: [{ text: '21.5', px: 40 }] });
     emu.setSensor(5, 23.44);
     clock.advance(2000);
-    expect(item.value).toBe('23.4');
+    expect(item.value).toBe('\\s{40}23.4');
+    expect(item.box!.value.plain).toBe('23.4');
     expect(rec.console).toContain('Temperature display running — updates on sensor change');
     expect(rec.errors).toEqual([]);
   });
