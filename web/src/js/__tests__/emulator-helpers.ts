@@ -91,3 +91,11 @@ export async function makeEmulator(options: Partial<EmulatorOptions> = {}): Prom
   emu.on('log', entry => rec.logs.push(`${entry.level} ${entry.tag}: ${entry.text}`));
   return { emu, clock, rec };
 }
+
+/**
+ * The portal ID in the Victron topics of the device scripts
+ * ("victron/N/<portal ID>/..."). It belongs to one installation, so the tests
+ * read it from the device files (docs/DEVICES.md) and do not carry it.
+ */
+export const VICTRON_PORTAL =
+  /victron\/N\/([0-9a-f]{12})\//.exec(readRepoFile('devices/btn_a00001/btn_a00001.js') ?? '')?.[1] ?? '0123456789ab';

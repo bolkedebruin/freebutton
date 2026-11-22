@@ -10,7 +10,7 @@ import { configToModel } from '../config-model';
 import { fontResolver, fontTable } from '../font-config';
 import { validateBody, validateConfigShape } from '../fs-rules';
 import { parseStyles, removedKeyProblems } from '../style-config';
-import { makeEmulator, readRepoFile, repoPath } from './emulator-helpers';
+import { makeEmulator, readRepoFile, repoPath, VICTRON_PORTAL } from './emulator-helpers';
 
 describe('the factory config (data/config.json)', () => {
   const text = readRepoFile('data/config.json')!;
@@ -166,7 +166,7 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00002/btn_a00002.js')))('devi
   it('takes other payloads on its topics without an error', async () => {
     const { emu, clock, rec } = await load();
     emu.broker(0).inject('buttonplus/btn_a00001/sensor/sts35_1/state', '21.4');
-    emu.broker(0).inject('victron/N/0123456789ab/system/0/Ac/Grid/L1/Power', '{"value":412}');
+    emu.broker(0).inject(`victron/N/${VICTRON_PORTAL}/system/0/Ac/Grid/L1/Power`, '{"value":412}');
     emu.broker(0).inject('home/weather/current/icon', 'weather-sunny');
     emu.broker(0).inject('buttonplus/btn_a00001/cover/raam/state', 'open');
     emu.broker(0).inject('buttonplus/btn_a00001/filter/state', 'ON');
@@ -201,7 +201,7 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00003/btn_a00003.js')))('devi
     const { emu, clock, rec } = await load();
     emu.broker(0).inject('buttonplus/btn_a00001/display/outside_temperature', '6');
     emu.broker(0).inject('buttonplus/btn_a00001/sensor/sts35_1/state', '21.4');
-    emu.broker(0).inject('victron/N/0123456789ab/system/0/Ac/Grid/L1/Power', '{"value":412}');
+    emu.broker(0).inject(`victron/N/${VICTRON_PORTAL}/system/0/Ac/Grid/L1/Power`, '{"value":412}');
     emu.broker(0).inject('home/weather/current/icon', 'weather-sunny');
     emu.broker(0).inject('buttonplus/btn_a00001/filter/state', 'change');
     clock.advance(0);
@@ -220,9 +220,9 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00003/btn_a00003.js')))('devi
 
   it('a main display key shows the battery page with the Victron values, and a minute later page 1 again', async () => {
     const { emu, clock, rec } = await load();
-    emu.broker(0).inject('victron/N/0123456789ab/system/0/Dc/Battery/Soc', '{"value":63.4}');
-    emu.broker(0).inject('victron/N/0123456789ab/system/0/Dc/Battery/Power', '{"value":810}');
-    emu.broker(0).inject('victron/N/0123456789ab/system/0/Ac/PvOnGrid/L1/Power', '{"value":1340}');
+    emu.broker(0).inject(`victron/N/${VICTRON_PORTAL}/system/0/Dc/Battery/Soc`, '{"value":63.4}');
+    emu.broker(0).inject(`victron/N/${VICTRON_PORTAL}/system/0/Dc/Battery/Power`, '{"value":810}');
+    emu.broker(0).inject(`victron/N/${VICTRON_PORTAL}/system/0/Ac/PvOnGrid/L1/Power`, '{"value":1340}');
     clock.advance(1100);
     expect(emu.state.item('btSoc')!.value).toBe('');   // page 1 is shown: not drawn
     expect(emu.press(1)).toBe(true);
@@ -309,8 +309,8 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00001/btn_a00001.js')))('devi
     broker.inject('buttonplus/btn_a00001/display/inside_temperature', '21.5');
     broker.inject('home/weather/current/condition', 'sunny');
     broker.inject('home/weather/forecast/today/1/condition', 'rainy');
-    broker.inject('victron/N/0123456789ab/system/0/Dc/Battery/Soc', '{"value":87}');
-    broker.inject('victron/N/0123456789ab/system/0/Ac/Grid/L1/Power', '{"value":412}');
+    broker.inject(`victron/N/${VICTRON_PORTAL}/system/0/Dc/Battery/Soc`, '{"value":87}');
+    broker.inject(`victron/N/${VICTRON_PORTAL}/system/0/Ac/Grid/L1/Power`, '{"value":412}');
     broker.inject('buttonplus/btn_a00001/cover/raam/state', 'open');
     broker.inject('buttonplus/btn_a00001/filter/state', 'ON');
     clock.advance(2000);

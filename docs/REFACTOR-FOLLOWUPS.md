@@ -99,7 +99,7 @@ Today one LittleFS `data` partition (4.6 MB in partition table v2) holds the IDE
 - **`ide` partition** (read-only for the firmware): `www/` and `fonts/`, built and updated as a whole image (`pio run -t buildfs` / filesystem OTA to that partition only). Size it for the bundle plus headroom (~2 MB), mounted e.g. at `/ide`, served by `serveStatic`; S3 lists it read-only (or not at all).
 - **`data` partition** (user): `config.json`, `scripts/`, user assets. Never rewritten by updates; formatted only on first boot / factory reset.
 - Partition table v2 has no free space left (16 MB fully allocated): an `ide` partition has to come out of `data` (4.6 MB) or `media` (5 MB).
-- Needs a partition-table change, so one serial flash per device (as with the earlier layout migration; Garage still has the old table and needs that anyway). Plan the migration: back up user files over S3, flash the new table + both images, restore. OTA for the app and the IDE image separately afterwards; `ota_fs.py` then becomes a plain IDE-image upload.
+- Needs a partition-table change, so one serial flash per device (as with the earlier layout migration). Plan the migration: back up user files over S3, flash the new table + both images, restore. OTA for the app and the IDE image separately afterwards; `ota_fs.py` then becomes a plain IDE-image upload.
 
 **One S3 bucket per kind of content — DONE (single partition).** The S3 API no longer has the one bucket `fs`; it has one bucket per kind of content, each a directory on today's `data` partition (table `s3::kBuckets` in `src/core/S3Logic.h`):
 

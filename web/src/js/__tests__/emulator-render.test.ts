@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   attachCanvas, Emulator, ManualClock, MediaCache, type CanvasContextLike, type MediaSource, type Screenshot,
 } from '../emulator';
-import { BASIC_CONFIG, emulatorModule, makeEmulator, readRepoFile, repoPath } from './emulator-helpers';
+import { BASIC_CONFIG, emulatorModule, makeEmulator, readRepoFile, repoPath, VICTRON_PORTAL } from './emulator-helpers';
 import { compareGolden, isPanelColours, litPixels, repoMedia, testRaster } from './emulator-pixels';
 
 const AT = Date.UTC(2026, 0, 15, 9, 10, 30);   // 10:10:30 on the device (Central European Time)
@@ -620,11 +620,11 @@ const REAL = [
       ['buttonplus/btn_a00001/filter/state', 'ok'],
       ['home/weather/current/condition', 'rainy'],
       ['home/weather/forecast/today/1/condition', 'partlycloudy'],
-      ['victron/N/0123456789ab/system/0/Dc/Battery/Soc', '{"value":94.0}'],
-      ['victron/N/0123456789ab/system/0/Dc/Battery/Power', '{"value":1000.0}'],
-      ['victron/N/0123456789ab/system/0/Ac/Grid/L1/Power', '{"value":17.0}'],
-      ['victron/N/0123456789ab/system/0/Ac/PvOnGrid/L1/Power', '{"value":1400.0}'],
-      ['victron/N/0123456789ab/system/0/Ac/Consumption/L1/Power', '{"value":227.0}'],
+      [`victron/N/${VICTRON_PORTAL}/system/0/Dc/Battery/Soc`, '{"value":94.0}'],
+      [`victron/N/${VICTRON_PORTAL}/system/0/Dc/Battery/Power`, '{"value":1000.0}'],
+      [`victron/N/${VICTRON_PORTAL}/system/0/Ac/Grid/L1/Power`, '{"value":17.0}'],
+      [`victron/N/${VICTRON_PORTAL}/system/0/Ac/PvOnGrid/L1/Power`, '{"value":1400.0}'],
+      [`victron/N/${VICTRON_PORTAL}/system/0/Ac/Consumption/L1/Power`, '{"value":227.0}'],
     ],
     shots: ['main', 'key3', 'key5'],
   },
