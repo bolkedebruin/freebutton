@@ -5,7 +5,7 @@ import {
   S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import {
-  _setClientFactory, createS3Client, listObjects, getObject, getObjectBytes, putObject, deleteObject, headObject,
+  _setClientFactory, createS3Client, listObjects, getObject, getObjectBytes, putObject, deleteObject, headObject, objectEtag,
   rebootDevice, mapError, endpointFor, rebootHeaderMiddleware, contentTypeFor,
   S3Error, StorageUnavailableError, APP_BUCKET, REBOOT_FIELD, USAGE_FIELD, usageFromHeaders,
 } from '../device-storage';
@@ -154,6 +154,15 @@ describe('device-storage with the S3 client mocked', () => {
     s3.on(HeadObjectCommand, { Key: 'b.js' }).rejects(sdkError('NotFound', 404));
     expect(await headObject('', 'a.js')).toBe(true);
     expect(await headObject('', 'b.js')).toBe(false);
+  });
+
+  it('objectEtag: the ETag of a HEAD; null on 404; undefined when the device gives none', async () => {
+    s3.on(HeadObjectCommand, { Key: 'a.js' }).resolves({ ETag: '"5-6af9cbd8"' });
+    s3.on(HeadObjectCommand, { Key: 'b.js' }).rejects(sdkError('NotFound', 404));
+    s3.on(HeadObjectCommand, { Key: 'c.js' }).resolves({});
+    expect(await objectEtag('', 'a.js')).toBe('"5-6af9cbd8"');
+    expect(await objectEtag('', 'b.js')).toBeNull();
+    expect(await objectEtag('', 'c.js')).toBeUndefined();
   });
 
   it('puts text with a content type and reports reboot-required', async () => {

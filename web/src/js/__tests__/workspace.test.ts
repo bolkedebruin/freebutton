@@ -21,6 +21,10 @@ function sdkError(name: string, status: number) {
  */
 function fakeDevice(initial: Record<string, string>, readOnly: Record<string, Record<string, string>> = {}) {
   const files = new Map(Object.entries(initial));
+  // The device's ETag is the file's size and time: a write changes it, also one of the same text (a deploy).
+  const times = new Map<string, number>();
+  const etagOf = (key: string) => `"${(files.get(key) ?? '').length}-${times.get(key) ?? 0}"`;
+  const touch = (key: string) => { times.set(key, (times.get(key) ?? 0) + 1); };
   const calls: string[] = [];
   const bases: string[] = [];
   const client: S3Like = {
@@ -47,14 +51,15 @@ function fakeDevice(initial: Record<string, string>, readOnly: Record<string, Re
         case 'GetObject': {
           const v = files.get(input.Key!);
           if (v === undefined) throw sdkError('NoSuchKey', 404);
-          return { Body: { transformToString: async () => v } };
+          return { Body: { transformToString: async () => v }, ETag: etagOf(input.Key!) };
         }
         case 'HeadObject':
           if (!files.has(input.Key!)) throw sdkError('NotFound', 404);
-          return {};
+          return { ETag: etagOf(input.Key!) };
         case 'PutObject':
           files.set(input.Key!, input.Body ?? '');
-          return input.Key === 'config.json' ? { [REBOOT_FIELD]: true } : {};
+          touch(input.Key!);
+          return { ETag: etagOf(input.Key!), ...(input.Key === 'config.json' ? { [REBOOT_FIELD]: true } : {}) };
         case 'DeleteObject':
           files.delete(input.Key!);
           return {};
@@ -63,7 +68,9 @@ function fakeDevice(initial: Record<string, string>, readOnly: Record<string, Re
     },
   };
   _setClientFactory((base) => { bases.push(base); return client; });
-  return { files, calls, bases, client };
+  /** Another tab or a deploy writes a file. */
+  const writtenElsewhere = (key: string, text: string) => { files.set(key, text); touch(key); };
+  return { files, calls, bases, client, writtenElsewhere };
 }
 
 function fakeEditor(): EditorAdapter & { content: string; kind: string } {
@@ -180,7 +187,7 @@ describe('workspace on a device', () => {
     const ed = await start(fakeEditor(), false);
     type(ed, 'print("mine");');
     // Another tab or a deploy writes the file.
-    dev.files.set('scripts/main.js', 'print("theirs");');
+    dev.writtenElsewhere('scripts/main.js', 'print("theirs");');
     expect(await ws.save()).toBe(false);
     expect(confirms[confirms.length - 1]).toContain('is not the version this editor opened');
     expect(dev.files.get('scripts/main.js')).toBe('print("theirs");');
@@ -191,13 +198,40 @@ describe('workspace on a device', () => {
     const dev = fakeDevice({ 'scripts/main.js': 'print("opened");' });
     const ed = await start();
     type(ed, 'print("mine");');
-    dev.files.set('scripts/main.js', 'print("theirs");');
+    dev.writtenElsewhere('scripts/main.js', 'print("theirs");');
     expect(await ws.save()).toBe(true);
     expect(confirms.filter(m => m.includes('is not the version'))).toHaveLength(1);
     expect(dev.files.get('scripts/main.js')).toBe('print("mine");');
     type(ed, 'print("mine 2");');
     expect(await ws.save()).toBe(true);
     expect(confirms.filter(m => m.includes('is not the version'))).toHaveLength(1);
+  });
+
+  it('Save of an unchanged file asks the device for its ETag only: the file is not read again', async () => {
+    const dev = fakeDevice({ 'scripts/main.js': 'print("opened");' });
+    const ed = await start();
+    type(ed, 'print("mine");');
+    dev.calls.length = 0;
+    expect(await ws.save()).toBe(true);
+    expect(dev.calls).toEqual(['HeadObject scripts/main.js', 'PutObject scripts/main.js', 'ListObjectsV2']);
+    // The ETag of its own write is the one the next Save compares with.
+    type(ed, 'print("mine 2");');
+    dev.calls.length = 0;
+    expect(await ws.save()).toBe(true);
+    expect(dev.calls).toEqual(['HeadObject scripts/main.js', 'PutObject scripts/main.js', 'ListObjectsV2']);
+    expect(confirms).toEqual([]);
+  });
+
+  it('a deploy wrote the same text again (another time, another ETag): the file is read, and Save does not ask', async () => {
+    const dev = fakeDevice({ 'scripts/main.js': 'print("opened");' });
+    const ed = await start();
+    type(ed, 'print("mine");');
+    dev.writtenElsewhere('scripts/main.js', 'print("opened");');
+    dev.calls.length = 0;
+    expect(await ws.save()).toBe(true);
+    expect(dev.calls.slice(0, 3)).toEqual(['HeadObject scripts/main.js', 'GetObject scripts/main.js', 'PutObject scripts/main.js']);
+    expect(confirms).toEqual([]);
+    expect(dev.files.get('scripts/main.js')).toBe('print("mine");');
   });
 
   it('save-request events save the open file', async () => {

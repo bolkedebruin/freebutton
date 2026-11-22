@@ -41,7 +41,7 @@ import {
   fontNameForKey, fontUploadKey,
 } from './fs-rules';
 import {
-  S3Error, StorageUnavailableError, deleteObject, getObject, headObject, listObjects, putObject, rebootDevice,
+  S3Error, StorageUnavailableError, deleteObject, getObject, headObject, listObjects, objectEtag, putObject, rebootDevice,
   FONTS_BUCKET, IMAGES_BUCKET, type ListResult, type ReadOnlyBucket,
 } from './device-storage';
 import { checkTtf, MAX_FONT_BYTES } from './ttf-check';
@@ -95,7 +95,11 @@ function usesIcons(cfg: unknown): boolean {
 interface Backend {
   exists(key: string): Promise<boolean>;
   read(key: string): Promise<string | null>;
-  write(key: string, text: string): Promise<{ rebootRequired: boolean }>;
+  /** A device: the text with the file's ETag (its size and modification time). */
+  readVersion?(key: string): Promise<{ text: string; etag?: string } | null>;
+  /** A device: the file's ETag without its text; null: no such file. */
+  etag?(key: string): Promise<string | null | undefined>;
+  write(key: string, text: string): Promise<{ rebootRequired: boolean; etag?: string }>;
   remove(key: string): Promise<void>;
 }
 
@@ -148,10 +152,14 @@ export class Workspace {
   private unread = false;
   /**
    * The open file's text as this page last read or wrote it (null: it did
-   * not exist). Save compares the device's file with it: a difference means
-   * another tab or a deploy wrote the file since.
+   * not exist), and the ETag the device gave for it (null: none). Save asks
+   * the device for the ETag first (no body); only when that differs is the
+   * file read and its text compared: a difference means another tab or a
+   * deploy wrote the file since. A deploy changes every file's time, so the
+   * ETag alone would report files whose text did not change.
    */
   private storedText: string | null = null;
+  private storedEtag: string | null = null;
   private storage: StorageUsage | null = null;
 
   private base = '';
@@ -327,8 +335,16 @@ export class Workspace {
 
     return this.withBusy(async () => {
       let text: string | null;
+      let etag: string | null = null;
       try {
-        text = await this.backend().read(key);
+        const backend = this.backend();
+        if (backend.readVersion) {
+          const got = await backend.readVersion(key);
+          text = got ? got.text : null;
+          etag = got?.etag ?? null;
+        } else {
+          text = await backend.read(key);
+        }
       } catch (err) {
         this.note(`Could not open ${displayPath(key)}: ${describeError(err)}`, 'error');
         // The editor does not hold this file's text: a save would replace the
@@ -346,7 +362,7 @@ export class Workspace {
         text = MAIN_SCRIPT_TEMPLATE;
         isNew = true;
       }
-      this.load(key, text, isNew);
+      this.load(key, text, isNew, isNew ? null : etag);
       return true;
     });
   }
@@ -375,8 +391,9 @@ export class Workspace {
     return this.withBusy(async () => {
       const rev = this.revision;
       if (this.mode === 'device' && !(await this.confirmOverwrite(key, text))) return false;
+      let written: { etag?: string };
       try {
-        await this.backend().write(key, text);
+        written = await this.backend().write(key, text);
       } catch (err) {
         this.note(`Save of ${displayPath(key)} failed: ${describeError(err)}`, 'error');
         return false;
@@ -384,6 +401,7 @@ export class Workspace {
       this.dirty = this.revision !== rev;
       this.isNew = false;
       this.storedText = text;
+      this.storedEtag = written.etag ?? null;
       const where = this.mode === 'device' ? 'on device' : 'in browser memory (no device)';
       this.note(`Saved ${displayPath(key)} (${utf8Length(text)} bytes) ${where}`, 'result');
       await this.listQuietly();
@@ -572,7 +590,7 @@ export class Workspace {
       this.note(`config.json: icon "${name}" = ${path}`, 'result');
       await this.listQuietly();
       // This page wrote it: the version a later Save compares with.
-      if (this.currentKey === CONFIG_KEY) this.storedText = next;
+      if (this.currentKey === CONFIG_KEY) { this.storedText = next; this.storedEtag = null; }
       if (this.currentKey === CONFIG_KEY && !this.dirty) this.load(CONFIG_KEY, next, false);
       // The firmware does not use the "icons" table itself (only the
       // rasters), so no reboot is needed for it.
@@ -750,7 +768,7 @@ export class Workspace {
       this.note(r.changed, 'result');
       await this.listQuietly();
       // This page wrote it: the version a later Save compares with.
-      if (this.currentKey === CONFIG_KEY) this.storedText = next;
+      if (this.currentKey === CONFIG_KEY) { this.storedText = next; this.storedEtag = null; }
       if (this.currentKey === CONFIG_KEY && !this.dirty) this.load(CONFIG_KEY, next, false);
       this.configStored(next);
       // The firmware reads config.json (and its "fonts" and "styles") at boot.
@@ -988,12 +1006,14 @@ export class Workspace {
     return {
       exists: (key) => headObject(this.base, key),
       read: async (key) => (await getObject(this.base, key))?.text ?? null,
+      readVersion: (key) => getObject(this.base, key),
+      etag: (key) => objectEtag(this.base, key),
       write: (key, text) => putObject(this.base, key, text),
       remove: (key) => deleteObject(this.base, key),
     };
   }
 
-  private load(key: string, text: string, isNew: boolean): void {
+  private load(key: string, text: string, isNew: boolean, etag: string | null = null): void {
     this.unread = false;
     this.suppressDirty = true;
     try {
@@ -1005,6 +1025,7 @@ export class Workspace {
     this.dirty = false;
     this.isNew = isNew;
     this.storedText = isNew ? null : text;
+    this.storedEtag = etag;
     // A (re)opened file: unsaved config.json edits are gone, show the stored config.
     this.preview.reset();
   }
@@ -1029,9 +1050,12 @@ export class Workspace {
    * that cannot be read now is not held back: the write reports its own error.
    */
   private async confirmOverwrite(key: string, text: string): Promise<boolean> {
+    const backend = this.backend();
     let now: string | null;
     try {
-      now = await this.backend().read(key);
+      // The same ETag: the same file. No body is asked for.
+      if (this.storedEtag && backend.etag && (await backend.etag(key)) === this.storedEtag) return true;
+      now = await backend.read(key);
     } catch {
       return true;
     }

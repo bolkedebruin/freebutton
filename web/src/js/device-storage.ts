@@ -392,6 +392,25 @@ export async function getObjectBytes(
   }
 }
 
+/**
+ * The ETag of an object (HEAD: no body is sent). For bucket app it is the
+ * file's size and modification time. null: no such object; undefined: the
+ * device gave none.
+ */
+export async function objectEtag(baseUrl: string, key: string, bucket: Bucket = APP_BUCKET): Promise<string | null | undefined> {
+  try {
+    const out = await oneAtATime(() => clientFor(baseUrl).send(new HeadObjectCommand({ Bucket: bucket, Key: key }))) as { ETag?: string };
+    // A read after this asks for this version, not for the one of the last
+    // listing out of the browser's cache.
+    const known = etagKey(baseUrl, bucket, key);
+    if (out?.ETag) knownEtags.set(known, out.ETag); else knownEtags.delete(known);
+    return out?.ETag || undefined;
+  } catch (err) {
+    if (statusOf(err as SdkErrorLike) === 404) return null;
+    throw mapError(err);
+  }
+}
+
 /** Whether an object exists (HEAD). */
 export async function headObject(baseUrl: string, key: string, bucket: Bucket = APP_BUCKET): Promise<boolean> {
   try {
