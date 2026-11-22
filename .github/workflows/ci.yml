@@ -113,10 +113,11 @@ jobs:
       # image from media/<bucket>/<key> here (no device: image only) and add it
       # (media.bin) to the artefacts below.
 
-      - name: Build native (compile check)
-        # Compile-only sanity check. test/ has no Unity suites, so `pio test`
-        # is intentionally NOT run here (it would fail with no tests).
-        run: pio run -e native
+      - name: Native tests
+        # The firmware logic that builds on the host (test/test_*, Unity).
+        # `pio run -e native` has nothing to build: the environment only
+        # compiles sources as part of a test.
+        run: pio test -e native
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
