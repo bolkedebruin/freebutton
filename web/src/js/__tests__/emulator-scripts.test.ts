@@ -181,6 +181,68 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00002/btn_a00002.js')))('devi
   });
 });
 
+describe.skipIf(!existsSync(repoPath('devices/btn_a00003/btn_a00003.js')))('device script btn_a00003', () => {
+  const load = async () => {
+    const source = readRepoFile('devices/btn_a00003/btn_a00003.js')!;
+    const config = JSON.parse(readRepoFile('devices/btn_a00003/config.json')!) as unknown;
+    const made = await makeEmulator({ config });
+    return { ...made, result: made.emu.run(source) };
+  };
+
+  it('compiles, starts without an error and subscribes to its topics', async () => {
+    const { emu, rec, result } = await load();
+    expect(emu.compile(readRepoFile('devices/btn_a00003/btn_a00003.js')!).ok).toBe(true);
+    expect(rec.errors).toEqual([]);
+    expect(result).toEqual({ ok: true });
+    expect(emu.broker(0).subscriptions.map(s => s.topic)).toContain('buttonplus/btn_a00001/display/#');
+  });
+
+  it('shows the values of the other device, the time, and takes key presses', async () => {
+    const { emu, clock, rec } = await load();
+    emu.broker(0).inject('buttonplus/btn_a00001/display/outside_temperature', '6');
+    emu.broker(0).inject('buttonplus/btn_a00001/sensor/sts35_1/state', '21.4');
+    emu.broker(0).inject('victron/N/0123456789ab/system/0/Ac/Grid/L1/Power', '{"value":412}');
+    emu.broker(0).inject('home/weather/current/icon', 'weather-sunny');
+    emu.broker(0).inject('buttonplus/btn_a00001/filter/state', 'change');
+    clock.advance(0);
+    expect(emu.state.item('outsideTemp')!.value).toBe('6°');
+    expect(emu.state.item('time')!.value).toBe('13:00');
+    expect(emu.state.item('gridPower')!.value).toContain(' 412 W');
+    expect(emu.state.keys.map(k => k.position)).toEqual([7, 8]);
+    for (const key of emu.state.keys) {
+      emu.press(key.position);
+      clock.advance(100);
+      emu.release(key.position);
+      clock.advance(100);
+    }
+    expect(rec.errors).toEqual([]);
+  });
+
+  it('a main display key shows the battery page with the Victron values, and a minute later page 1 again', async () => {
+    const { emu, clock, rec } = await load();
+    emu.broker(0).inject('victron/N/0123456789ab/system/0/Dc/Battery/Soc', '{"value":63.4}');
+    emu.broker(0).inject('victron/N/0123456789ab/system/0/Dc/Battery/Power', '{"value":810}');
+    emu.broker(0).inject('victron/N/0123456789ab/system/0/Ac/PvOnGrid/L1/Power', '{"value":1340}');
+    clock.advance(1100);
+    expect(emu.state.item('btSoc')!.value).toBe('');   // page 1 is shown: not drawn
+    expect(emu.press(1)).toBe(true);
+    clock.advance(100);
+    emu.release(1);
+    clock.advance(1100);
+    expect(emu.state.item('btTitle')!.value).toBe('Batterij');
+    expect(emu.state.item('btSoc')!.value).toBe('63%');
+    expect(emu.state.item('btCap')!.value).toBe('9,3 kWh');
+    expect(emu.state.item('btSolar')!.value).toContain(' 1,3 kW');
+    expect(emu.state.item('btBatt')!.value).toContain(' 810 W');
+    expect(emu.state.item('btIcon')!.icon).toBe('batt-60');
+    expect(emu.state.item('btSoc')!.box).not.toBeNull();
+    clock.advance(61_000);
+    expect(emu.state.item('btSoc')!.box).toBeNull();
+    expect(emu.state.item('time')!.box).not.toBeNull();
+    expect(rec.errors).toEqual([]);
+  });
+});
+
 describe.skipIf(!existsSync(repoPath('devices/btn_a00001/btn_a00001.js')))('device script btn_a00001', () => {
   const load = async () => {
     const source = readRepoFile('devices/btn_a00001/btn_a00001.js')!;
