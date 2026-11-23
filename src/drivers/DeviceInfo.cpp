@@ -1,3 +1,6 @@
+#if __has_include("fb_build_info.h")
+#include "fb_build_info.h"   // GIT_COMMIT, BUILD_DIRTY (generated per build)
+#endif
 #include "DeviceInfo.h"
 #include <WiFi.h>
 #include <esp_system.h>

@@ -1,6 +1,9 @@
 //
 // Created by Bolke de Bruin on 06/08/2025.
 //
+#if __has_include("fb_build_info.h")
+#include "fb_build_info.h"   // GIT_COMMIT, BUILD_DIRTY (generated per build)
+#endif
 #include "config.h"
 #include "ESPAsyncWebServer.h"
 #include "WifiManager.h"
@@ -485,7 +488,8 @@ void webserver_start() {
     // client to it, and it would answer e.g. GET /config as bucket "config".
     server.on("/config", HTTP_GET, handleConfig);
 
-    // Firmware/build metadata (defines injected by build_info_flags.py).
+    // Firmware/build metadata: FIRMWARE_VERSION is a define, the commit comes
+    // from the generated fb_build_info.h (tools/scripts/build_info_flags.py).
     server.on("/api/version", HTTP_GET, [](AsyncWebServerRequest *request){
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION FIRMWARE
