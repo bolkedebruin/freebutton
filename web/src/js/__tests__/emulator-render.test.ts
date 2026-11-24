@@ -642,7 +642,8 @@ const REAL = [
       ['buttonplus/btn_a00001/display/media_artist', 'Ravyn Lenae'],
       ['buttonplus/btn_a00001/display/volume_level_percent', '12'],
     ],
-    shots: ['main', 'key7', 'key8'],
+    // No golden image of its main display: that shows the name of a place.
+    shots: ['key7', 'key8'],
   },
 ] as const;
 
@@ -659,7 +660,7 @@ describe('golden images: the real device configs with their scripts', () => {
       const problems: string[] = [];
       emu.on('error', error => problems.push(error.message));
       // The design-time preview: what the config shows before any script.
-      expectGolden(emu, 'main', `${real.device}-idle-main`);
+      if ((real.shots as readonly string[]).includes('main')) expectGolden(emu, 'main', `${real.device}-idle-main`);
       expect(emu.run(script!)).toEqual({ ok: true });
       clock.advance(1000);
       for (const [topic, payload] of real.inject) emu.broker(0).inject(withDeviceIds(topic), payload);
