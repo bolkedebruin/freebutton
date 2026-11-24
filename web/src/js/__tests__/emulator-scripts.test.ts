@@ -10,7 +10,7 @@ import { configToModel } from '../config-model';
 import { fontResolver, fontTable } from '../font-config';
 import { validateBody, validateConfigShape } from '../fs-rules';
 import { parseStyles, removedKeyProblems } from '../style-config';
-import { makeEmulator, readRepoFile, repoPath, VICTRON_PORTAL } from './emulator-helpers';
+import { makeEmulator, readRepoFile, repoPath, VICTRON_PORTAL, withDeviceIds } from './emulator-helpers';
 
 describe('the factory config (data/config.json)', () => {
   const text = readRepoFile('data/config.json')!;
@@ -129,10 +129,10 @@ describe('the IDE example scripts', () => {
   });
 });
 
-describe.skipIf(!existsSync(repoPath('devices/btn_a00002/btn_a00002.js')))('device script btn_a00002', () => {
+describe.skipIf(!existsSync(repoPath(withDeviceIds('devices/btn_a00002/btn_a00002.js'))))('device script btn_a00002', () => {
   const load = async () => {
-    const source = readRepoFile('devices/btn_a00002/btn_a00002.js')!;
-    const config = JSON.parse(readRepoFile('devices/btn_a00002/config.json')!) as unknown;
+    const source = readRepoFile(withDeviceIds('devices/btn_a00002/btn_a00002.js'))!;
+    const config = JSON.parse(readRepoFile(withDeviceIds('devices/btn_a00002/config.json'))!) as unknown;
     const made = await makeEmulator({ config });
     return { ...made, result: made.emu.run(source) };
   };
@@ -141,13 +141,13 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00002/btn_a00002.js')))('devi
     const { emu, rec, result } = await load();
     expect(rec.errors).toEqual([]);
     expect(result).toEqual({ ok: true });
-    expect(emu.broker(0).subscriptions.map(s => s.topic)).toContain('buttonplus/btn_a00001/display/#');
+    expect(emu.broker(0).subscriptions.map(s => s.topic)).toContain(withDeviceIds('buttonplus/btn_a00001/display/#'));
   });
 
   it('shows the outside temperature it gets from the other device', async () => {
     const { emu, clock, rec } = await load();
     expect(emu.state.item('outsideTemp')).toBeDefined();
-    emu.broker(0).inject('buttonplus/btn_a00001/display/outside_temperature', '6');
+    emu.broker(0).inject(withDeviceIds('buttonplus/btn_a00001/display/outside_temperature'), '6');
     clock.advance(0);
     expect(emu.state.item('outsideTemp')!.value).toBe('6°');
     expect(rec.changes).toContainEqual({ kind: 'item', id: emu.state.item('outsideTemp')!.id, field: 'value' });
@@ -165,11 +165,11 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00002/btn_a00002.js')))('devi
 
   it('takes other payloads on its topics without an error', async () => {
     const { emu, clock, rec } = await load();
-    emu.broker(0).inject('buttonplus/btn_a00001/sensor/sts35_1/state', '21.4');
+    emu.broker(0).inject(withDeviceIds('buttonplus/btn_a00001/sensor/sts35_1/state'), '21.4');
     emu.broker(0).inject(`victron/N/${VICTRON_PORTAL}/system/0/Ac/Grid/L1/Power`, '{"value":412}');
     emu.broker(0).inject('home/weather/current/icon', 'weather-sunny');
-    emu.broker(0).inject('buttonplus/btn_a00001/cover/raam/state', 'open');
-    emu.broker(0).inject('buttonplus/btn_a00001/filter/state', 'ON');
+    emu.broker(0).inject(withDeviceIds('buttonplus/btn_a00001/cover/raam/state'), 'open');
+    emu.broker(0).inject(withDeviceIds('buttonplus/btn_a00001/filter/state'), 'ON');
     clock.advance(1000);
     for (const key of emu.state.keys) {
       emu.press(key.position);
@@ -181,29 +181,29 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00002/btn_a00002.js')))('devi
   });
 });
 
-describe.skipIf(!existsSync(repoPath('devices/btn_a00003/btn_a00003.js')))('device script btn_a00003', () => {
+describe.skipIf(!existsSync(repoPath(withDeviceIds('devices/btn_a00003/btn_a00003.js'))))('device script btn_a00003', () => {
   const load = async () => {
-    const source = readRepoFile('devices/btn_a00003/btn_a00003.js')!;
-    const config = JSON.parse(readRepoFile('devices/btn_a00003/config.json')!) as unknown;
+    const source = readRepoFile(withDeviceIds('devices/btn_a00003/btn_a00003.js'))!;
+    const config = JSON.parse(readRepoFile(withDeviceIds('devices/btn_a00003/config.json'))!) as unknown;
     const made = await makeEmulator({ config });
     return { ...made, result: made.emu.run(source) };
   };
 
   it('compiles, starts without an error and subscribes to its topics', async () => {
     const { emu, rec, result } = await load();
-    expect(emu.compile(readRepoFile('devices/btn_a00003/btn_a00003.js')!).ok).toBe(true);
+    expect(emu.compile(readRepoFile(withDeviceIds('devices/btn_a00003/btn_a00003.js'))!).ok).toBe(true);
     expect(rec.errors).toEqual([]);
     expect(result).toEqual({ ok: true });
-    expect(emu.broker(0).subscriptions.map(s => s.topic)).toContain('buttonplus/btn_a00001/display/#');
+    expect(emu.broker(0).subscriptions.map(s => s.topic)).toContain(withDeviceIds('buttonplus/btn_a00001/display/#'));
   });
 
   it('shows the values of the other device, the time, and takes key presses', async () => {
     const { emu, clock, rec } = await load();
-    emu.broker(0).inject('buttonplus/btn_a00001/display/outside_temperature', '6');
-    emu.broker(0).inject('buttonplus/btn_a00001/sensor/sts35_1/state', '21.4');
+    emu.broker(0).inject(withDeviceIds('buttonplus/btn_a00001/display/outside_temperature'), '6');
+    emu.broker(0).inject(withDeviceIds('buttonplus/btn_a00001/sensor/sts35_1/state'), '21.4');
     emu.broker(0).inject(`victron/N/${VICTRON_PORTAL}/system/0/Ac/Grid/L1/Power`, '{"value":412}');
     emu.broker(0).inject('home/weather/current/icon', 'weather-sunny');
-    emu.broker(0).inject('buttonplus/btn_a00001/filter/state', 'change');
+    emu.broker(0).inject(withDeviceIds('buttonplus/btn_a00001/filter/state'), 'change');
     clock.advance(0);
     expect(emu.state.item('outsideTemp')!.value).toBe('6°');
     expect(emu.state.item('time')!.value).toBe('13:00');
@@ -243,16 +243,16 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00003/btn_a00003.js')))('devi
   });
 });
 
-describe.skipIf(!existsSync(repoPath('devices/btn_a00001/btn_a00001.js')))('device script btn_a00001', () => {
+describe.skipIf(!existsSync(repoPath(withDeviceIds('devices/btn_a00001/btn_a00001.js'))))('device script btn_a00001', () => {
   const load = async () => {
-    const source = readRepoFile('devices/btn_a00001/btn_a00001.js')!;
-    const config = JSON.parse(readRepoFile('devices/btn_a00001/config.json')!) as unknown;
+    const source = readRepoFile(withDeviceIds('devices/btn_a00001/btn_a00001.js'))!;
+    const config = JSON.parse(readRepoFile(withDeviceIds('devices/btn_a00001/config.json'))!) as unknown;
     const made = await makeEmulator({ config });
     return { ...made, source, result: made.emu.run(source) };
   };
 
   it('without a script: what the firmware shows from config.json alone', async () => {
-    const config = JSON.parse(readRepoFile('devices/btn_a00001/config.json')!) as unknown;
+    const config = JSON.parse(readRepoFile(withDeviceIds('devices/btn_a00001/config.json'))!) as unknown;
     const { emu, clock, rec } = await makeEmulator({ config, sampleSensors: true });
     clock.advance(5000);
     const s = emu.state;
@@ -280,7 +280,7 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00001/btn_a00001.js')))('devi
     const kinds = new Map<string, number>();
     for (const p of rec.publishes) kinds.set(p.kind, (kinds.get(p.kind) ?? 0) + 1);
     expect(Object.fromEntries(kinds)).toEqual({ discovery: 52, sensor: 40 });
-    expect(rec.publishes.every(p => p.origin === 'firmware' && !p.topic.includes('btn_a00001'))).toBe(true);
+    expect(rec.publishes.every(p => p.origin === 'firmware' && !p.topic.includes(withDeviceIds('btn_a00001')))).toBe(true);
     expect(rec.errors).toEqual([]);
   });
 
@@ -305,14 +305,14 @@ describe.skipIf(!existsSync(repoPath('devices/btn_a00001/btn_a00001.js')))('devi
     const { emu, clock, rec } = await load();
     rec.changes.length = 0;
     const broker = emu.broker(0);
-    broker.inject('buttonplus/btn_a00001/display/outside_temperature', '6');
-    broker.inject('buttonplus/btn_a00001/display/inside_temperature', '21.5');
+    broker.inject(withDeviceIds('buttonplus/btn_a00001/display/outside_temperature'), '6');
+    broker.inject(withDeviceIds('buttonplus/btn_a00001/display/inside_temperature'), '21.5');
     broker.inject('home/weather/current/condition', 'sunny');
     broker.inject('home/weather/forecast/today/1/condition', 'rainy');
     broker.inject(`victron/N/${VICTRON_PORTAL}/system/0/Dc/Battery/Soc`, '{"value":87}');
     broker.inject(`victron/N/${VICTRON_PORTAL}/system/0/Ac/Grid/L1/Power`, '{"value":412}');
-    broker.inject('buttonplus/btn_a00001/cover/raam/state', 'open');
-    broker.inject('buttonplus/btn_a00001/filter/state', 'ON');
+    broker.inject(withDeviceIds('buttonplus/btn_a00001/cover/raam/state'), 'open');
+    broker.inject(withDeviceIds('buttonplus/btn_a00001/filter/state'), 'ON');
     clock.advance(2000);
     for (const key of emu.state.keys) {
       emu.press(key.position);

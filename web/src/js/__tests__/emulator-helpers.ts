@@ -93,9 +93,21 @@ export async function makeEmulator(options: Partial<EmulatorOptions> = {}): Prom
 }
 
 /**
+ * The tests name the devices of one installation by a placeholder id
+ * (btn_a00001 ...). `devices/test-devices.json`, in your own device
+ * repository (docs/DEVICES.md), maps a placeholder to the folder and id it
+ * stands for: {"btn_a00001": "btn_<your id>"}. Without it the placeholder is
+ * the folder name, and the tests of device files skip.
+ */
+const DEVICE_IDS = JSON.parse(readRepoFile('devices/test-devices.json') ?? '{}') as Record<string, string>;
+export const deviceId = (placeholder: string): string => DEVICE_IDS[placeholder] ?? placeholder;
+/** `text` with every placeholder id replaced by the id it stands for. */
+export const withDeviceIds = (text: string): string => text.replace(/btn_a0000\d/g, deviceId);
+
+/**
  * The portal ID in the Victron topics of the device scripts
  * ("victron/N/<portal ID>/..."). It belongs to one installation, so the tests
  * read it from the device files (docs/DEVICES.md) and do not carry it.
  */
 export const VICTRON_PORTAL =
-  /victron\/N\/([0-9a-f]{12})\//.exec(readRepoFile('devices/btn_a00001/btn_a00001.js') ?? '')?.[1] ?? '0123456789ab';
+  /victron\/N\/([0-9a-f]{12})\//.exec(readRepoFile(withDeviceIds('devices/btn_a00001/btn_a00001.js')) ?? '')?.[1] ?? '0123456789ab';

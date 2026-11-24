@@ -5,11 +5,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
-import { makeEmulator, repoPath } from './emulator-helpers';
+import { deviceId, makeEmulator, repoPath } from './emulator-helpers';
 import { repoMedia } from './emulator-pixels';
 import { ManualClock } from '../emulator/clock';
 
-const DIR = repoPath('devices/btn_a00001');
+const ID = deviceId('btn_a00001');
+const DIR = repoPath(`devices/${ID}`);
 const present = existsSync(`${DIR}/config.json`);   // the device folders are a repository of their own
 
 const sum = (d: Uint8ClampedArray): number => {
@@ -24,7 +25,7 @@ describe.skipIf(!present)('the clock of btn_a00001 moves', () => {
       const config = JSON.parse(readFileSync(`${DIR}/config.json`, 'utf8'));
       const clock = new ManualClock(Date.UTC(2026, 10, 16, 10, 0, 0));
       const { emu } = await makeEmulator({ config, clock, media: repoMedia({}, { icons: true }) });
-      if (mode === 'running') emu.run(readFileSync(`${DIR}/btn_a00001.js`, 'utf8'));
+      if (mode === 'running') emu.run(readFileSync(`${DIR}/${ID}.js`, 'utf8'));
       clock.advance(200);
       let last = sum(emu.readPixels('main'));
       let changes = 0;

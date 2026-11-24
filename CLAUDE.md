@@ -7,158 +7,102 @@ For the full operating protocol (session handoff, memory discipline, bug logging
 
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) in this repository.
 
-## Build System and Commands
+FreeButton is firmware for an ESP32-S3 smart button (16 MB flash, no PSRAM)
+and a web IDE that the device serves. Version: `VERSION` (alpha).
 
-This is an ESP32 IoT firmware project using PlatformIO with dual framework support (Arduino + ESP-IDF).
+## Commands
 
-### Common Development Commands
 ```bash
-# Build firmware for ESP32
-pio run
+# Firmware (PlatformIO Core 6.2+, platform pioarduino 55.03.313:
+# Arduino 3.3 as a component of ESP-IDF 5.5)
+pio run -e esp32                 # build
+pio run -e esp32 -t buildfs      # LittleFS image: web IDE, data/config.json, examples
+pio run -e esp32 -t upload       # USB: bootloader, partition table, firmware
+pio run -e esp32 -t uploadfs     # USB: LittleFS image
+pio test -e native               # firmware logic on the host (Unity)
+pio test -e native -f test_auth  # one suite
 
-# Build and upload to device
-pio run -e esp32 -t upload
+# Web IDE (Node.js 20)
+cd web && npm ci
+npm run build                    # prebuild regenerates the script API files
+npm test                         # vitest: IDE and the virtual device
+npm run dev                      # vite dev server
 
-# Monitor serial output
-pio run -t monitor -e esp32
-
-# Run native tests
-pio test -e native
-
-# Generate fonts (required before first build)
-cd tools/fonts && ./generatefonts.sh
-
-# Flash complete firmware
-pio run -e esp32 -t upload
-# Or using ESP-IDF tools: idf.py flash
-```
-
-### Build Environments
-- `esp32`: Main target for ESP32-S3 hardware with LVGL UI, MQTT, WiFi
-- `native`: Unit testing environment with Unity framework
-
-### Version Management
-```bash
-# Get current firmware version (repo-root VERSION is the source of truth)
-cat VERSION
-
-# Update firmware version (propagates to include/config.h + web/package.json)
+# Version: VERSION is the source; never edit the copies by hand
 python3 tools/scripts/sync_version.py "3.2.0"
-
-# Verify all locations are in lockstep
 python3 tools/scripts/sync_version.py --check
 ```
 
-## Architecture Overview
+CI (`.github/workflows/ci.yml`) runs: wasm/stdlib fingerprint check, web
+build, a diff check of the generated web files, web tests, firmware build,
+`buildfs`, a size check against the partition table, native tests.
 
-### Core System Architecture
-The project implements a modular IoT button system with these key architectural components:
+## Layout
 
-**Hardware Layer:**
-- ESP32-S3 based with 16MB flash
-- NeoPixel LED strips for visual feedback
-- I2C sensor bus (BME280 environmental sensors)
-- TFT display with LVGL UI framework
-- Physical button inputs
+| Path | Content |
+| --- | --- |
+| `src/main.cpp` | start-up order, task and heap budget |
+| `src/core/` | WiFi and setup portal, web server, S3-style file API (`S3Server`), SigV4 authentication (`Auth`), static files, NTP, mDNS, LittleFS |
+| `src/components/` | what `config.json` describes: buttons, display items, lists, images, clock, names, topics; `ConfigManager` loads it |
+| `src/drivers/` | displays (`DisplayManager`, `LvglDisplay`), keys, LEDs, sensors, hardware scan, device info |
+| `src/ui/` | LVGL widgets in C (`ui_*.c`), styles, text spans, modals, the main page |
+| `src/mqtt/` | brokers (`Registry`, `Broker`), subscribers and publishers (`Component`), Home Assistant discovery |
+| `src/scripting/` | the JavaScript engine (mquickjs): `ScriptEngine`, bindings (`*_binding.cpp`, `js/freebutton_*.c`), compiled-script store (`Bytecode*`) |
+| `src/media/` | media store: fonts and images in their own partition |
+| `src/json/` | SAX reading (`FilteredReaderHandler`) and streaming writing (`JsonWriter`) |
+| `lib/mquickjs` | the engine (git submodule); `/sync-mquickjs` updates it |
+| `data/` | default `config.json` and example scripts of a new device |
+| `media/fonts` | default fonts (Montserrat, Material Design Icons), unmodified upstream files |
+| `test/` | native test suites, one folder each |
+| `tools/scripts/` | build steps (`pre_build_js_stdlib.py`, `build_info_flags.py`, `assemble_littlefs.py`) and device tools (`ota_fs.py`, `media_sync.py`, `fb_sigv4.py`, `screenshot.py`, `flash_media.py`) |
+| `tools/js/` | wasm builds: the script compiler and the emulator (`build_emulator_wasm.sh`) |
+| `tools/partition_tables/button_v2.csv` | nvs, app0/app1 (3 MB each), coredump, `js_user` (compiled scripts), `media` (5 MB), `data` (LittleFS) |
+| `web/src/components/` | the IDE (Lit elements `fb-*`, CodeMirror 6, Tailwind) |
+| `web/src/js/` | IDE logic; `emulator/` runs the firmware's UI and script engine as wasm (the virtual device) |
+| `devices/` | git-ignored: the files of real devices, a repository of the owner (`docs/DEVICES.md`) |
 
-**Firmware Architecture:**
-- **Core Services** (`src/core/`): WiFi management, web server, hardware initialization, mDNS, LittleFS filesystem
-- **MQTT System** (`src/mqtt/`): Broker registry supporting multiple MQTT connections, component subscription system, Home Assistant auto-discovery
-- **Hardware Drivers** (`src/drivers/`): LED button controllers, sensor management, display management, device info, hardware scanning
-- **UI Layer** (`src/ui/`): LVGL-based interface with progress bars, modals, font rendering
-- **Utilities** (`src/utils/`, `src/json/`): Helper functions, async JSON parsing, color utilities
+Documentation is in `docs/` (index in `README.md`): names, styles, lists,
+emulator, authentication, script store, media store, partition migration.
 
-### Key Design Patterns
+## Rules
 
-**MQTT Component System:**
-- `MqttSubscriber` interface for components to receive MQTT messages
-- `MqttBrokerRegistry` for managing multiple broker connections
-- `HomeAssistantDiscovery` for automatic device registration
-- Components register topics and receive callbacks on message delivery
+**Memory.** The heap is very tight (tens of KB free at idle, a few KB at the
+worst moment).
+- Do not copy documents, strings or structs; work in place and generate
+  seldom-used data on demand.
+- No `std::string` or `std::function` in new code paths; fixed buffers and
+  `std::string_view`.
+- Never parse JSON into a RapidJSON `Document` (DOM): SAX only, with
+  `FilteredReaderHandler`.
+- The script engine is the main way a device gets its behaviour: its static
+  buffers stay.
 
-**LED Button Management:**
-- `LedButtonManager` coordinates multiple button controllers
-- `LedButtonController` handles individual button LED states and MQTT integration
-- `NeoPixelController` manages the actual LED hardware
+**No C++ exceptions.** The firmware builds with `-fno-exceptions`
+(`-std=gnu++23`). Use return values, `std::optional` or error enums.
 
-**Hardware Abstraction:**
-- `HardwareInitializer` orchestrates I2C bus setup and device detection
-- `DisplayManager` and `LvglDisplay` abstract display operations
-- `Sensors` namespace provides unified sensor reading interface
+**Logic that can run on the host goes in a header** (`*Logic.h`, `*_logic.c`)
+with a suite in `test/`; the ESP32 part stays thin.
 
-## Configuration and Hardware
+**Generated files, never edited by hand:** `web/src/js/freebutton.d.ts`,
+`web/src/js/autocomplete-data.ts`, `web/src/js/stdlib.json` (from the
+`@jsapi` comments in `src/scripting/js/*.c`, by `npm run build`), and
+`src/scripting/generated/`.
 
-### Pin Configuration
-Hardware pin assignments are defined in `src/pins.h` and `src/config.h` (files not present in current checkout but referenced in main.cpp).
+**Config format.** Only FreeButton's own `config.json` format is read
+(`docs/NAMES.md`, `docs/STYLE.md`). The format of the original firmware is
+not: a key of it is reported once at load and ignored.
 
-### Partition Table
-Custom partition layout in `tools/partition_tables/button_v1.csv` allocates space for:
-- Application firmware
-- LittleFS filesystem
-- Font storage partition
+**HTTP API.** No TLS on the device; requests are signed with AWS Signature
+Version 4 (`docs/AUTH.md`, client: `tools/scripts/fb_sigv4.py`). Credentials
+are never logged, printed or written to the repository.
 
-### Dependencies
-Key library dependencies managed via PlatformIO:
-- LVGL 9.6.0 for UI framework
-- ArduinoJson 7.4.2 for JSON handling
-- FastLED 3.7.7 for NeoPixel control
-- Adafruit sensor libraries (BME280, MCP23008)
-- ESPAsyncWebServer for web interface
-- Custom LovyanGFX display drivers
+**Settings that depend on the bootloader** (`sdkconfig`: flash mode, cache,
+partition table) are tested over USB on a bench device first, never sent
+over the network to a device in use.
 
-## Development Workflow
-
-### Font System
-LVGL fonts with Material Design Icons are generated via `tools/fonts/generatefonts.sh`. This creates multiple font sizes and integrates icon fonts. Run before building if fonts are modified.
-
-### Testing
-Native tests run with Unity framework in the `native` environment. Tests are isolated from ESP32-specific code through preprocessor flags.
-
-### Configuration Management
-The firmware uses ESP-IDF's sdkconfig system for low-level configuration, with defaults in `sdkconfig.defaults` and environment-specific overrides in `sdkconfig.esp32`.
-
-### JSON Processing Architecture
-The project includes a sophisticated JSON processing system in `src/json/` for configuration management:
-
-**Core Components:**
-- **JsonWriter** (`src/json/JsonWriter.h`): RapidJSON-based streaming writer with RAII scoped objects/arrays
-- **FilteredReaderHandler** (`src/json/FilteredReaderHandler.h`): SAX parser for selective JSON processing with path-based filtering
-- **AsyncJsonParser** (`src/json/AsyncJsonParser.h`): Asynchronous JSON parser using FreeRTOS tasks for large documents
-- **StreamWrappers** (`src/json/StreamWrappers.h`): Output stream adapters for AsyncWebServer and LittleFS File objects
-
-**Usage Patterns:**
-```cpp
-// Streaming write with automatic scoping
-rapidjson::Writer<FileOutputStream> writer(stream);
-JsonWriter jsonWriter(writer);
-auto doc = jsonWriter.Object();
-auto items = doc.Array("displayitems");
-auto item = items.Object();
-item.Add("x", 100);
-
-// Filtered SAX parsing for memory efficiency
-FilteredReaderHandler handler;
-handler.addFilter({"displayitems"}, [](const std::vector<std::string>& path, const std::string& json) {
-    // Process only displayitems section
-});
-handler.parse(jsonData, length);
-```
-
-**Backwards Compatibility:**
-- None: the vendor's original config format is not read. A key of that format is reported once at load and ignored (see docs/STYLE.md, "Changed from the old format")
-- Memory-efficient for ESP32 constraints using SAX parsing and filtering
-
-**ESP32 Firmware Constraints:**
-- **No C++ Exceptions**: ESP32 firmware builds with `-fno-exceptions`, so avoid try/catch blocks
-- **Memory Management**: Use RAII patterns and smart pointers instead of exception handling
-- **Error Handling**: Use return values, std::optional, or error enums instead of throwing exceptions
-- **JSON Parsing**: Never use RapidJSON Document (DOM) parsing as it explodes memory usage - always use SAX parsing with FilteredReaderHandler
-
-### CI/CD Integration
-GitHub Actions workflows handle:
-- Automated building and testing
-- Font generation
-- Release packaging with version management
-- Artifact upload for firmware binaries
+**Nothing of one installation in this repository:** no real device ids,
+addresses, host names or topic IDs. Examples use `192.168.1.x` and the
+placeholder ids `btn_a00001` to `btn_a00003`; tests that need real device
+files read them from `devices/` (`docs/DEVICES.md`).

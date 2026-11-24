@@ -7,6 +7,7 @@ import {
   addItem, applyChanges, itemRange, listKeyFor, readItem, removeItem, setItemProps, type EditResult,
 } from '../config-edit';
 import { configToModel } from '../config-model';
+import { deviceId } from './emulator-helpers';
 
 /** The modern style: two spaces, a key per line (devices/btn_a00001/config.json). */
 const MODERN = `{
@@ -406,7 +407,7 @@ describe('config-edit readItem / itemRange', () => {
 describe('config-edit on the example device configs', () => {
   for (const device of ['btn_a00001', 'btn_a00002']) {
     // Run from web/ (vitest's root); skipped where the device folders are not checked out.
-    const path = resolve(process.cwd(), `../devices/${device}/config.json`);
+    const path = resolve(process.cwd(), `../devices/${deviceId(device)}/config.json`);
     it.skipIf(!existsSync(path))(`${device}: moving every display item changes only its x and y lines`, () => {
       const text = readFileSync(path, 'utf8');
       const items = JSON.parse(text).displayitems as Array<Record<string, unknown>>;

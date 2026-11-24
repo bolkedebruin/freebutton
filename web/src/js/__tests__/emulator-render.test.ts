@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   attachCanvas, Emulator, ManualClock, MediaCache, type CanvasContextLike, type MediaSource, type Screenshot,
 } from '../emulator';
-import { BASIC_CONFIG, emulatorModule, makeEmulator, readRepoFile, repoPath, VICTRON_PORTAL } from './emulator-helpers';
+import { BASIC_CONFIG, emulatorModule, makeEmulator, readRepoFile, repoPath, VICTRON_PORTAL, deviceId, withDeviceIds } from './emulator-helpers';
 import { compareGolden, isPanelColours, litPixels, repoMedia, testRaster } from './emulator-pixels';
 
 const AT = Date.UTC(2026, 0, 15, 9, 10, 30);   // 10:10:30 on the device (Central European Time)
@@ -648,13 +648,13 @@ const REAL = [
 
 describe('golden images: the real device configs with their scripts', () => {
   for (const real of REAL) {
-    const config = readRepoFile(`devices/${real.device}/config.json`);
-    const script = readRepoFile(`devices/${real.device}/${real.device}.js`);
+    const config = readRepoFile(`devices/${deviceId(real.device)}/config.json`);
+    const script = readRepoFile(withDeviceIds(`devices/${real.device}/${real.device}.js`));
     it.skipIf(config === null || script === null)(`${real.device}: the config alone, then its script after its topics`, async () => {
       const clock = new ManualClock(AT);
       const emu = await Emulator.create({
         config: config!, wasm: emulatorModule(), identity: 'virt_btn_0a1b2c', clock, sampleSensors: false,
-        media: deviceMedia(real.device),
+        media: deviceMedia(deviceId(real.device)),
       });
       const problems: string[] = [];
       emu.on('error', error => problems.push(error.message));
@@ -662,7 +662,7 @@ describe('golden images: the real device configs with their scripts', () => {
       expectGolden(emu, 'main', `${real.device}-idle-main`);
       expect(emu.run(script!)).toEqual({ ok: true });
       clock.advance(1000);
-      for (const [topic, payload] of real.inject) emu.broker(0).inject(topic, payload);
+      for (const [topic, payload] of real.inject) emu.broker(0).inject(withDeviceIds(topic), payload);
       clock.advance(3000);
       for (const display of real.shots) expectGolden(emu, display, `${real.device}-run-${display}`);
       if (real.device === 'btn_a00001') {
@@ -694,7 +694,7 @@ describe('golden images: the real device configs with their scripts', () => {
 
         // Page 5, good morning: Home Assistant asks for it (the page keys do not
         // reach it). Date and time are the injected clock's.
-        emu.broker(0).inject('buttonplus/btn_a00001/display/morning', 'show');
+        emu.broker(0).inject(withDeviceIds('buttonplus/btn_a00001/display/morning'), 'show');
         clock.advance(3000);
         expect(emu.state.shownPage).toBe(5);
         expectGolden(emu, 'main', `${real.device}-run-main-page5`);

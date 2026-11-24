@@ -20,3 +20,18 @@ or let the tools create the directory:
 
 The factory configuration that ships in the filesystem image is
 `data/config.json`.
+
+## Tests on your device files
+
+Some tests of the web IDE run the config and script of real devices in the
+virtual device. They name those devices by a placeholder id (`btn_a00001`,
+`btn_a00002`, `btn_a00003`) and skip when the files are not there. To run
+them on your files, add `devices/test-devices.json`, which maps a placeholder
+to the folder (and device id) it stands for:
+
+```json
+{ "btn_a00001": "btn_<your id>" }
+```
+
+The assertions and golden images of those tests describe one installation;
+expect to adapt them to yours.
