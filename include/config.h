@@ -10,7 +10,7 @@
 
 #define BUTTON_COUNT 8
 #define MODEL "Model 1 Version 9"
-#define FIRMWARE "FreeButton 3.1.0-alpha.1"
+#define FIRMWARE "FreeButton 4.0.0"
 #define GAMMA (2.2)
 #define BASE_TOPIC "buttonplus/"
 #define BUTTONEVENTSUBSCRIBELIMIT 8

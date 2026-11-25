@@ -279,7 +279,9 @@ describe('Home Assistant discovery and availability', () => {
   it('payloads equal the native firmware test\'s fixtures, with the virtual identity', async () => {
     const source = readRepoFile('test/test_ha_discovery/test_ha_discovery.cpp')!;
     const table = readRepoFile('test/test_ha_discovery/ha_abbreviations.h')!;
-    const devFull = /#define DEV_FULL R"\((.*)\)"/.exec(source)![1]!;
+    // The fixture names a fixed version; the emulator reports the one it was built from.
+    const devFull = /#define DEV_FULL R"\((.*)\)"/.exec(source)![1]!
+      .replace(/"sw_version":"FreeButton [^"]*"/, `"sw_version":"FreeButton ${readRepoFile('VERSION')!.trim()}"`);
     const fixture = (name: string): Record<string, unknown> => {
       const raw = new RegExp(`static const char\\* ${name} = R"\\((.*?)\\)" DEV_FULL "}";`).exec(source)![1]!;
       return JSON.parse((raw + devFull + '}').replaceAll('btn_a00002', 'virt_btn_0a1b2c')) as Record<string, unknown>;
