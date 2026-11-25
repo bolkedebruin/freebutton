@@ -1,21 +1,22 @@
 name: Build and Release
 
+# Pushing a tag "v<version>" builds the firmware of that commit and creates
+# the GitHub release with the firmware package. The tag must be the content of
+# VERSION with a "v" in front (tools/scripts/sync_version.py sets VERSION):
+#   git tag v3.1.0 && git push github v3.1.0
+# A version with a suffix ("-alpha.1") becomes a pre-release.
+# "Run workflow" builds the package of a branch without creating a release.
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag for manual release'
-        required: true
-        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build-release:
     runs-on: ubuntu-latest
-
-    outputs:
-      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout code
@@ -62,24 +63,15 @@ jobs:
       # wasm assets are committed real files, so release does NOT build fonts
       # or run emcc.
 
-      - name: Extract version
-        id: version
+      - name: Check the tag against VERSION
+        # The release is built from the tagged commit as it is: the tag has to
+        # name the version that commit carries.
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-          else
-            VERSION="${{ github.event.inputs.version }}"
-          fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Version: ${VERSION}"
-
-      - name: Sync firmware version
-        # sync_version.py strips a leading 'v', writes VERSION, and propagates to
-        # include/config.h (preserving the "FreeButton " prefix) + web/package.json.
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          python tools/scripts/sync_version.py "${VERSION}"
           python tools/scripts/sync_version.py --check
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$(cat VERSION)" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match VERSION ($(cat VERSION)); expected v$(cat VERSION)"
+            exit 1
+          fi
 
       - name: Web install
         working-directory: web
@@ -99,7 +91,6 @@ jobs:
 
       - name: Create firmware package
         run: |
-          # Version as normalized by sync_version.py (leading 'v' stripped).
           VERSION="$(cat VERSION)"
           echo "package_version=${VERSION}" >> $GITHUB_ENV
           mkdir -p release
@@ -120,13 +111,17 @@ jobs:
           tar -czf "freebutton_${VERSION}_firmware.tar.gz" \
             firmware.bin firmware.elf bootloader.bin partitions.bin littlefs.bin FLASHING.txt
 
-      - name: Upload release assets
-        if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@v2
-        with:
-          file: release/freebutton_${{ env.package_version }}_firmware.tar.gz
-          asset_name: freebutton_${{ env.package_version }}_firmware.tar.gz
-          tag: ${{ github.event.release.tag_name }}
+      - name: Create the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=""
+          case "${package_version}" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "${GITHUB_REF_NAME}" \
+            "release/freebutton_${package_version}_firmware.tar.gz" \
+            --title "FreeButton ${package_version}" \
+            --generate-notes --verify-tag ${PRERELEASE}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

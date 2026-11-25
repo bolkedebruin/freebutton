@@ -75,18 +75,19 @@ The build pipeline automatically:
    - Checks out the mquickjs submodule
    - Builds and tests the web IDE, checks generated artifacts for engine drift
    - Builds firmware for ESP32 and the LittleFS image
-   - Compile-checks the native environment
+   - Runs the native tests
    - Checks firmware.bin against app0 and littlefs.bin against the `data` partition
    - Uploads build artifacts (firmware.bin, firmware.elf, bootloader.bin, partitions.bin, littlefs.bin)
    - Fonts and wasm assets are committed, so no font/emcc generation runs
 
 2. **Release Pipeline** (`.github/workflows/release.yml`):
-   - Triggered on GitHub releases or manual dispatch
-   - Syncs the firmware version via `sync_version.py`
+   - Runs when a tag `v<version>` is pushed (`git tag v3.1.0 && git push github v3.1.0`);
+     the tag must match `VERSION`, or the run fails
+   - Manual dispatch builds the package without a release
    - Builds the web IDE, firmware, and the LittleFS image
    - Packages firmware.bin, firmware.elf, bootloader.bin, partitions.bin, littlefs.bin
      and FLASHING.txt (flash offsets) together
-   - Uploads release assets
+   - Creates the GitHub release with the package (a pre-release when the version has a suffix)
 
 ## Local Development
 
