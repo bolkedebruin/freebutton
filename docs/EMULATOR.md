@@ -107,7 +107,7 @@ goes to the broker of `config.json` under the rules of "MQTT safety model"
   a script that keeps the page in a variable of its own would draw nothing
   on a page it did not choose. After Stop the page looked at before Run is
   shown again.
-- **Loading.** The engine (`fb-emulator.wasm`, 322 KB compressed, and 20 KB
+- **Loading.** The engine (`fb-emulator.wasm`, 328 KB compressed, and 20 KB
   of script) and the media are fetched when the virtual device is first
   drawn, not with the IDE's own code. Until the idle device is there, and
   whenever the firmware cannot start (no WebAssembly, no 2D canvas, the
@@ -196,7 +196,7 @@ goes to the broker of `config.json` under the rules of "MQTT safety model"
 
 ## What is the firmware's code, what is TypeScript
 
-`web/public/assets/fb-emulator.wasm` (764 KB, 322 KB gzipped; fetched at the
+`web/public/assets/fb-emulator.wasm` (776 KB, 328 KB gzipped; fetched at the
 first use only) is built by `tools/js/build_emulator_wasm.sh` from the
 firmware's own sources, unchanged, and LVGL 9.6.0 with the firmware's
 `src/lv_conf.h`. That is the device itself, down to where hardware begins:
