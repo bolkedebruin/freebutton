@@ -86,17 +86,24 @@ jobs:
         # bug-004 (esp_insights/esp_rainmaker crt.S ordering race).
         run: pio run -e esp32 || pio run -e esp32
 
+      - name: Keep the firmware files
+        # The next step (buildfs) can reconfigure the ESP-IDF build, which
+        # empties the build folder: copy what the firmware build made first.
+        run: |
+          mkdir -p release
+          cp .pio/build/esp32/firmware.bin .pio/build/esp32/firmware.elf \
+             .pio/build/esp32/bootloader.bin .pio/build/esp32/partitions.bin release/
+
       - name: Build LittleFS image (web IDE + config + examples)
-        run: pio run -e esp32 -t buildfs
+        run: |
+          pio run -e esp32 -t buildfs
+          cp .pio/build/esp32/littlefs.bin release/
 
       - name: Create firmware package
         run: |
           VERSION="$(cat VERSION)"
           echo "package_version=${VERSION}" >> $GITHUB_ENV
-          mkdir -p release
-          cd .pio/build/esp32
-          cp firmware.bin firmware.elf bootloader.bin partitions.bin littlefs.bin ../../../release/
-          cd ../../../release
+          cd release
           # Flash offsets of partition table v2 (tools/partition_tables/button_v2.csv).
           # firmware.elf is for reading core dumps (docs/MIGRATION-PARTITIONS-V2.md).
           printf '%s\n' \
