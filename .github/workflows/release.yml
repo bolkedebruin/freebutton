@@ -36,7 +36,7 @@ jobs:
       - name: Create and activate virtual environment
         run: |
           uv venv .venv
-          echo "VIRTUAL_ENV=.venv" >> $GITHUB_ENV
+          echo "VIRTUAL_ENV=$PWD/.venv" >> $GITHUB_ENV   # absolute: CMake of ESP-IDF reads $VIRTUAL_ENV/pyvenv.cfg from another folder
           echo "$PWD/.venv/bin" >> $GITHUB_PATH
 
       - name: Setup Node.js
